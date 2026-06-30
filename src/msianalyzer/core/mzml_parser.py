@@ -93,14 +93,16 @@ class MzmlFile:
 # Blob helpers (public — reused by downstream workers)
 # ---------------------------------------------------------------------------
 
-def array_to_blob(arr: np.ndarray) -> bytes:
+def array_to_blob(arr: np.ndarray, decimal_places: int = 4) -> bytes:
     """Compress a numpy array to a zlib-compressed float32 blob."""
+    arr = np.round(arr, decimals=decimal_places)
     return zlib.compress(arr.astype(np.float32).tobytes(), level=1)
 
 
-def blob_to_array(blob: bytes) -> np.ndarray:
+def blob_to_array(blob: bytes, decimal_places: int = 4) -> np.ndarray:
     """Decompress a zlib blob back to a float32 numpy array."""
-    return np.frombuffer(zlib.decompress(blob), dtype=np.float32)
+    arr = np.frombuffer(zlib.decompress(blob), dtype=np.float32)
+    return np.round(arr, decimals=decimal_places)
 
 
 # ---------------------------------------------------------------------------
@@ -178,11 +180,13 @@ class MzmlParser:
         ms2_db_path: Path | str,
         include_ms2: bool = True,
         progress_callback=None,
+        decimal_places: int = 4,
     ):
         self.ms1_db_path = Path(ms1_db_path)
         self.ms2_db_path = Path(ms2_db_path)
         self.include_ms2 = include_ms2
         self.progress_callback = progress_callback
+        self.decimal_places = decimal_places
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -217,15 +221,15 @@ class MzmlParser:
                     n_ms1 += 1
                     all_rts.append(sp["rt"])
                     if sp["mz_min"] is not None:
-                        ms1_mz_mins.append(sp["mz_min"])
-                        ms1_mz_maxs.append(sp["mz_max"])
+                        ms1_mz_mins.append(round(sp["mz_min"], self.decimal_places))
+                        ms1_mz_maxs.append(round(sp["mz_max"], self.decimal_places))
 
                 elif level == 2 and self.include_ms2:
                     self._insert_ms2(ms2_con, sp)
                     n_ms2 += 1
                     all_rts.append(sp["rt"])
                     if sp.get("precursor_mz") is not None:
-                        precursor_mzs.append(sp["precursor_mz"])
+                        precursor_mzs.append(round(sp["precursor_mz"], self.decimal_places))
 
                 if self.progress_callback:
                     self.progress_callback(n_ms1, n_ms2)
@@ -299,18 +303,15 @@ class MzmlParser:
             "n_peaks":         len(mz_arr) if mz_arr is not None else None,
             "mz_min":          float(mz_arr.min()) if mz_arr is not None and len(mz_arr) else None,
             "mz_max":          float(mz_arr.max()) if mz_arr is not None and len(mz_arr) else None,
-            "mz_blob":         array_to_blob(mz_arr)  if mz_arr  is not None else b"",
-            "intensity_blob":  array_to_blob(int_arr) if int_arr is not None else b"",
+            "mz_blob":         array_to_blob(mz_arr, decimal_places=self.decimal_places)  if mz_arr  is not None else b"",
+            "intensity_blob":  array_to_blob(int_arr, decimal_places=self.decimal_places) if int_arr is not None else b"",
             "tic":              _parse_tic(text),
             "polarity":        _parse_scan_polarity(text)
         }
 
         if sp["ms_level"] == 2:
-            sp["precursor_mz"]    = _parse_precursor_mz(text)
+            sp["precursor_mz"]    = _parse_precursor_mz(text, decimal_places=self.decimal_places)
             sp["precursor_charge"] = _parse_precursor_charge(text)
-            print("\nOriginal arrays:", mz_arr, int_arr)
-            print("Decoded arrays:", blob_to_array(sp["mz_blob"]), blob_to_array(sp["intensity_blob"]))
-            print("sp:", sp)
 
         return sp
 
@@ -433,9 +434,11 @@ def _parse_scan_id(text: str) -> int | str:
     return int(m2.group(1)) if m2 else id_str
 
 
-def _parse_precursor_mz(text: str) -> Optional[float]:
+def _parse_precursor_mz(text: str, decimal_places: int = 4) -> Optional[float]:
     m = _RE_PRECURSOR_MZ.search(text)
-    return float(m.group(1)) if m else None
+    if not m:
+        return None
+    return round(float(m.group(1)), decimal_places)
 
 
 def _parse_precursor_charge(text: str) -> Optional[int]:
