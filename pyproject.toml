@@ -18,6 +18,10 @@ build-backend = "pdm.backend"
 [tool.pdm]
 distribution = true
 
+[tool.pdm.dev-dependencies]
+dev = [
+    "-e file:///Users/matteomiotto/Desktop/metabolomics/libviz#egg=LibViz",
+]
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
