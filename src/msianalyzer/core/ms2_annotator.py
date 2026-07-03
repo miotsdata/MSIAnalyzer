@@ -89,7 +89,8 @@ class Annotation:
     n_matched_peaks: int
     n_library_peaks: int
     matched_fraction: float
-    rank: int  # 1 = best match for this scan_id
+    rank: int       # 1 = best match for this scan_id within its candidates
+    rank_group: int # 1 = best score across ALL scan_ids in this precursor m/z group
 
 
 # ---------------------------------------------------------------------------
@@ -155,18 +156,24 @@ def _process_group(group: Ms2Group, config: AnnotationConfig) -> list[Annotation
     Process a single MS2 group: load query spectra, filter library
     candidates, score them, return the best match(es) per query scan.
 
+    rank        — position of this hit among all candidates for this scan_id
+    rank_group  — position of this hit among all rank=1 hits in the group,
+                  ranked by score descending. Lets you find the single
+                  best-explained scan in a precursor m/z cluster.
+
     This function (and everything it calls) must be safe to run in a
     worker process: it opens its own DB / library connections and shares
     no state with the parent.
     """
-
     queries = _load_query_spectra(config.ms2_db_path, group.scan_ids)
     if not queries:
         return []
 
     libs = [_load_library(p) for p in config.library_paths]
 
+    # Collect rank=1 annotations first so we can assign rank_group after
     results: list[Annotation] = []
+
     for scan_id, query_mz, query_intensity, precursor_mz in queries:
         candidates = _gather_candidates(
             libs,
@@ -206,11 +213,30 @@ def _process_group(group: Ms2Group, config: AnnotationConfig) -> list[Annotation
                     n_library_peaks=match.n_library_peaks,
                     matched_fraction=match.matched_fraction,
                     rank=rank,
+                    rank_group=0,   # placeholder — filled below
                 )
             )
 
     for lib in libs:
         lib.engine.dispose()
+
+    # ------------------------------------------------------------------
+    # Assign rank_group: rank all rank=1 hits by score across the group,
+    # then propagate the same rank_group to their rank>1 siblings so
+    # every annotation row for a scan shares the same rank_group as its
+    # best hit.
+    # ------------------------------------------------------------------
+    top_hits = sorted(
+        [a for a in results if a.rank == 1],
+        key=lambda a: a.score,
+        reverse=True,
+    )
+    scan_to_rank_group = {a.scan_id: i + 1 for i, a in enumerate(top_hits)}
+
+    # Scans with no annotation (no candidates passed filters) get no row,
+    # so the dict is complete as-is.
+    for a in results:
+        a.rank_group = scan_to_rank_group.get(a.scan_id, 0)
 
     return results
 
@@ -241,7 +267,6 @@ def _load_query_spectra(
 
 def _load_library(path: Path):
     """Open a fresh libviz Library instance — one per worker, never shared."""
-
     from libviz.core.library import Library
     return Library.load_from_db(path)
 
@@ -257,13 +282,9 @@ def _gather_candidates(
     ppm_tolerance of the query's precursor_mz.
 
     Uses `Library.get_spectra_in_mz_range(mz_min, mz_max, polarity)`,
-    a public libviz method (added alongside this module) that returns a
-    list of dicts with at least:
+    a public libviz method that returns a list of dicts with at least:
         spectrum_id, compound_id, compound_name, compound_formula,
         inchikey, mz (array-like), intensity (array-like)
-
-    This keeps the annotator decoupled from libviz's internal schema/ORM
-    — if libviz's storage changes, only that one method needs updating.
     """
     tol_da = precursor_mz * ppm_tolerance * 1e-6
     lo, hi = precursor_mz - tol_da, precursor_mz + tol_da
@@ -311,11 +332,13 @@ def _init_annotations_db(path: Path) -> sqlite3.Connection:
             n_matched_peaks      INTEGER NOT NULL,
             n_library_peaks      INTEGER NOT NULL,
             matched_fraction     REAL NOT NULL,
-            rank                 INTEGER NOT NULL
+            rank                 INTEGER NOT NULL,
+            rank_group           INTEGER NOT NULL
         )
     """)
-    con.execute("CREATE INDEX IF NOT EXISTS idx_ann_scan_id ON annotations(scan_id)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_ann_score   ON annotations(score)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ann_scan_id   ON annotations(scan_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ann_score     ON annotations(score)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ann_rank_group ON annotations(rank_group)")
     con.commit()
     return con
 
@@ -332,14 +355,16 @@ def _write_annotations(path: Path, annotations: list[Annotation]) -> None:
             INSERT INTO annotations
               (scan_id, library_path, library_spectrum_id, compound_id,
                compound_name, compound_formula, inchikey,
-               score, n_matched_peaks, n_library_peaks, matched_fraction, rank)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               score, n_matched_peaks, n_library_peaks, matched_fraction,
+               rank, rank_group)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 (
                     a.scan_id, a.library_path, a.library_spectrum_id, a.compound_id,
                     a.compound_name, a.compound_formula, a.inchikey,
-                    a.score, a.n_matched_peaks, a.n_library_peaks, a.matched_fraction, a.rank,
+                    a.score, a.n_matched_peaks, a.n_library_peaks, a.matched_fraction,
+                    a.rank, a.rank_group,
                 )
                 for a in annotations
             ],
