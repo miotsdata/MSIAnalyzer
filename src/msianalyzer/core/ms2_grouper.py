@@ -14,6 +14,9 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,6 +77,9 @@ def group_ms2_by_precursor_ppm(
         Groups in ascending precursor m/z order. Scans with a NULL
         precursor_mz are skipped (cannot be grouped or matched).
     """
+
+    logger.debug("Grouping MS2 with a PPM tolerance of %d", ppm_tolerance)
+
     con = sqlite3.connect(f"file:{Path(ms2_db_path)}?mode=ro", uri=True)
     try:
         rows = con.execute(

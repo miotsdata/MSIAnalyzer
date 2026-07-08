@@ -93,15 +93,19 @@ class MzmlFile:
 # Blob helpers (public — reused by downstream workers)
 # ---------------------------------------------------------------------------
 
-def array_to_blob(arr: np.ndarray, decimal_places: int = 4) -> bytes:
+def array_to_blob(arr: np.ndarray, decimal_places: int = 4, compressed: bool = True) -> bytes:
     """Compress a numpy array to a zlib-compressed float32 blob."""
     arr = np.round(arr, decimals=decimal_places)
-    return zlib.compress(arr.astype(np.float32).tobytes(), level=1)
+    if compressed:
+        return zlib.compress(arr.astype(np.float32).tobytes(), level=1)
+    return arr.astype(np.float32).tobytes()
 
 
-def blob_to_array(blob: bytes, decimal_places: int = 4) -> np.ndarray:
+def blob_to_array(blob: bytes, decimal_places: int = 4, compressed: bool = True) -> np.ndarray:
     """Decompress a zlib blob back to a float32 numpy array."""
-    arr = np.frombuffer(zlib.decompress(blob), dtype=np.float32)
+    if compressed:
+        blob = zlib.decompress(blob)
+    arr = np.frombuffer(blob, dtype=np.float32)
     return np.round(arr, decimals=decimal_places)
 
 

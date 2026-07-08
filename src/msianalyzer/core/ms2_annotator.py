@@ -21,12 +21,15 @@ from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Optional
+import logging
 
 import numpy as np
 
 from msianalyzer.core.mzml_parser import blob_to_array
 from msianalyzer.core.ms2_grouper import Ms2Group, group_ms2_by_precursor_ppm
 from msianalyzer.core.spectral_matching import reverse_dot_product, MatchResult
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
