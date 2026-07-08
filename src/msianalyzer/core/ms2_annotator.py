@@ -19,6 +19,12 @@ from msianalyzer.core.ms2_grouper import Ms2Group, group_ms2_by_precursor_ppm
 from msianalyzer.core.spectral_matching import reverse_dot_product, MatchResult
 
 
+_LIBRARYS = None
+
+def init_worker(config):
+    global _LIBRARIES
+    _LIBRARIES = [_load_library(p) for p in config.library_paths]
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -81,18 +87,19 @@ def annotate_ms2(
     progress_callback=None,
 ) -> Path:
     annotations_db_path = Path(annotations_db_path)
+
     groups = group_ms2_by_precursor_ppm(
         config.ms2_db_path, ppm_tolerance=config.precursor_ppm_tolerance
     )
+
     con = _init_annotations_db(annotations_db_path)
     con.close()
 
-    worker_fn = partial(_process_group, config=config)
+    worker_fn = partial(_process_group, config=config, annotations_db_path=annotations_db_path)
     n_total, n_done = len(groups), 0
 
-    with Pool(processes=n_processes) as pool:
-        for group_annotations in pool.imap_unordered(worker_fn, groups):
-            _write_annotations(annotations_db_path, group_annotations)
+    with Pool(processes=n_processes, initializer=init_worker, initargs=(config,)) as pool:
+        for _ in pool.imap_unordered(worker_fn, groups):
             n_done += 1
             if progress_callback:
                 progress_callback(n_done, n_total)
@@ -104,21 +111,24 @@ def annotate_ms2(
 # Worker
 # ---------------------------------------------------------------------------
 
-def _process_group(group: Ms2Group, config: AnnotationConfig) -> list[Annotation]:
+def _process_group(group: Ms2Group, config: AnnotationConfig, annotations_db_path: Path) -> list[Annotation]:
     queries = _load_query_spectra(config.ms2_db_path, group.scan_ids)
     if not queries:
         return []
 
-    libs = [_load_library(p) for p in config.library_paths]
+    global _LIBRARIES
+    libs = _LIBRARIES
+
     results: list[Annotation] = []
 
-    for scan_id, query_mz, query_intensity, precursor_mz in queries:
-        candidates = _gather_candidates(
-            libs, precursor_mz=precursor_mz,
-            ppm_tolerance=config.precursor_ppm_tolerance,
-            polarity=config.polarity,
+    candidates = _gather_candidates(
+            libs, precursor_mz = np.mean([query[-1] for query in queries]),
+            ppm_tolerance = config.precursor_ppm_tolerance,
+            polarity = config.polarity,
         )
 
+    for scan_id, query_mz, query_intensity, _ in queries:
+        
         scored: list[tuple[MatchResult, dict]] = []
         for cand in candidates:
             match = reverse_dot_product(
@@ -171,8 +181,10 @@ def _process_group(group: Ms2Group, config: AnnotationConfig) -> list[Annotation
     scan_to_rank_group = {a.scan_id: i + 1 for i, a in enumerate(top_hits)}
     for a in results:
         a.rank_group = scan_to_rank_group.get(a.scan_id, 0)
+    
+    _write_annotations(annotations_db_path, results)
 
-    return results
+    return len(results)
 
 
 # ---------------------------------------------------------------------------
