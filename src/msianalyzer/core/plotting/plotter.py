@@ -330,8 +330,8 @@ class Plotter:
 
         mz_blob, int_blob, precursor_mz = row
         return {
-            "mz":          blob_to_array(mz_blob),
-            "intensity":   blob_to_array(int_blob),
+            "mz":          blob_to_array(mz_blob, compressed=True),
+            "intensity":   blob_to_array(int_blob, compressed=True),
             "precursor_mz": precursor_mz,
         }
 
@@ -343,7 +343,7 @@ class Plotter:
         con = sqlite3.connect(f"file:{lib_path}?mode=ro", uri=True)
         try:
             row = con.execute(
-                "SELECT mz_array, intensity_array FROM spectra WHERE id = ?",
+                "SELECT mz_array, intensity_array FROM spectrum WHERE id = ?",
                 (spectrum_id,),
             ).fetchone()
         finally:
@@ -353,8 +353,8 @@ class Plotter:
             raise ValueError(f"No spectrum id={spectrum_id} in {lib_path}")
 
         return {
-            "mz":       blob_to_array(row[0]),
-            "intensity": blob_to_array(row[1]),
+            "mz":       blob_to_array(row[0], compressed = False),
+            "intensity": blob_to_array(row[1], compressed = False),
         }
 
 

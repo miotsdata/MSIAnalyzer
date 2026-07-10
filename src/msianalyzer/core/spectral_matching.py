@@ -126,8 +126,12 @@ def reverse_dot_product(
             n_emp_peaks_raw=n_emp_raw, n_emp_peaks_filtered=0,
             filtered_mz=empty, filtered_intensity=empty,
         )
+    
+    # --- 1. Normalise empirical spectrum ---
+    query_intensity = query_intensity / query_intensity.max() if query_intensity.max() > 0 else query_intensity.copy()
+    library_intensity = library_intensity / library_intensity.max() if library_intensity.max() > 0 else library_intensity.copy()
 
-    # --- 1. noise-filter the empirical spectrum ---
+    # --- 2. noise-filter the empirical spectrum ---
     f_mz, f_int = _filter_noise(query_mz, query_intensity, noise_threshold)
     n_emp_filtered = len(f_mz)
 
@@ -141,19 +145,23 @@ def reverse_dot_product(
             filtered_mz=empty, filtered_intensity=empty,
         )
 
+    # --- 2. noise-filter the library spectrum ---
+    l_f_mz, l_f_int = _filter_noise(library_mz, library_intensity, noise_threshold)
+    n_lib_filtered = len(l_f_mz)
+
     # --- 2. align filtered empirical → library (lib_matched_mask) ---
     aligned_query_int, lib_matched_mask = _align_peaks(
-        f_mz, f_int, library_mz, library_intensity, ppm_tolerance
+        f_mz, f_int, l_f_mz, l_f_int, ppm_tolerance
     )
 
     # --- 3. align library → filtered empirical (emp_matched_mask) ---
     _, emp_matched_mask = _align_peaks(
-        library_mz, library_intensity, f_mz, f_int, ppm_tolerance
+        l_f_mz, l_f_int, f_mz, f_int, ppm_tolerance
     )
 
     # --- 4. reverse dot product on library's m/z axis ---
-    w_lib   = _weight(library_mz, library_intensity,   mz_power, int_power)
-    w_query = _weight(library_mz, aligned_query_int,   mz_power, int_power)
+    w_lib   = _weight(l_f_mz, l_f_int,   mz_power, int_power)
+    w_query = _weight(l_f_mz, aligned_query_int,   mz_power, int_power)
 
     denom = np.sqrt(np.sum(w_lib ** 2)) * np.sqrt(np.sum(w_query ** 2))
     if denom == 0.0:
@@ -165,14 +173,11 @@ def reverse_dot_product(
     n_matched    = int(lib_matched_mask.sum())
     n_emp_matched = int(emp_matched_mask.sum())
 
-    lib_coverage = n_matched     / n_lib          if n_lib          > 0 else 0.0
+    lib_coverage = n_matched     / n_lib_filtered          if n_lib_filtered          > 0 else 0.0
     emp_coverage = n_emp_matched / n_emp_filtered if n_emp_filtered > 0 else 0.0
     coverage_score = float(np.sqrt(lib_coverage * emp_coverage))
 
     score = float(np.clip(dot_score * coverage_score, 0.0, 1.0))
-
-    # Return filtered spectrum normalised to [0, 1] for plotting
-    f_int_norm = f_int / f_int.max() if f_int.max() > 0 else f_int.copy()
 
     return MatchResult(
         score=score,
@@ -181,11 +186,11 @@ def reverse_dot_product(
         emp_coverage=emp_coverage,
         coverage_score=coverage_score,
         n_matched_peaks=n_matched,
-        n_lib_peaks=n_lib,
+        n_lib_peaks=n_lib_filtered,
         n_emp_peaks_raw=n_emp_raw,
         n_emp_peaks_filtered=n_emp_filtered,
         filtered_mz=f_mz,
-        filtered_intensity=f_int_norm,
+        filtered_intensity=f_int,
     )
 
 
