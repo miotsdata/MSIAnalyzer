@@ -16,7 +16,7 @@ import re
 import sqlite3
 import zlib
 from base64 import b64decode
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -54,8 +54,6 @@ class MzmlFile:
         stored at parse time — no blob decoding needed).
     ms2_precursor_mz_range : tuple[float, float]
         Range of MS2 precursor m/z values stored.
-    instrument_info : dict
-        Key/value pairs extracted at parse time (best-effort).
     """
 
     source_path: Path
@@ -66,7 +64,6 @@ class MzmlFile:
     rt_range: tuple[float, float] = (0.0, 0.0)
     ms1_mz_range: tuple[float, float] = (0.0, 0.0)
     ms2_precursor_mz_range: tuple[float, float] = (0.0, 0.0)
-    instrument_info: dict = field(default_factory=dict)
 
     def ms1_connection(self) -> sqlite3.Connection:
         """Return a new read-only SQLite connection to the MS1 database."""
@@ -175,19 +172,19 @@ class MzmlParser:
         Store MS2 scans (default True).
     progress_callback : callable | None
         Optional ``fn(n_ms1: int, n_ms2: int)`` called after each stored
-        spectrum.  No Qt types — safe to call from any thread.
+        spectrum.
+    decimal_places : int
+        Round m/z and intensity values to this many decimal places before
+        storing in the SQLite database (default 4).  This reduces storage
+        size and improves compression, at the cost of some precision.
     """
 
     def __init__(
         self,
-        ms1_db_path: Path | str,
-        ms2_db_path: Path | str,
         include_ms2: bool = True,
         progress_callback=None,
         decimal_places: int = 4,
     ):
-        self.ms1_db_path = Path(ms1_db_path)
-        self.ms2_db_path = Path(ms2_db_path)
         self.include_ms2 = include_ms2
         self.progress_callback = progress_callback
         self.decimal_places = decimal_places
@@ -196,9 +193,9 @@ class MzmlParser:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def parse(self, mzml_path: Path | str) -> MzmlFile:
+    def parse(self, mzml_path: Path | str, ms1_db_path: Path | str, ms2_db_path: Path | str) -> MzmlFile:
         """
-        Stream-parse *mzml_path* and populate the two SQLite databases.
+        Stream-parse *mzml_path* and populate the two SQLite databases, one with ms1 data and one with ms2 data.
 
         Returns
         -------
@@ -207,8 +204,8 @@ class MzmlParser:
         """
         mzml_path = Path(mzml_path)
 
-        ms1_con = self._init_ms1_db()
-        ms2_con = self._init_ms2_db()
+        ms1_con = self._init_ms1_db(ms1_db_path)
+        ms2_con = self._init_ms2_db(ms2_db_path)
 
         n_ms1 = n_ms2 = 0
         all_rts: list[float]        = []
@@ -247,8 +244,8 @@ class MzmlParser:
 
         return MzmlFile(
             source_path=mzml_path,
-            ms1_db_path=self.ms1_db_path,
-            ms2_db_path=self.ms2_db_path,
+            ms1_db_path=ms1_db_path,
+            ms2_db_path=ms2_db_path,
             n_ms1=n_ms1,
             n_ms2=n_ms2,
             rt_range=(
@@ -323,8 +320,8 @@ class MzmlParser:
     # SQLite — schema
     # ------------------------------------------------------------------
 
-    def _init_ms1_db(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.ms1_db_path)
+    def _init_ms1_db(self, ms1_db_path: Path | str) -> sqlite3.Connection:
+        con = sqlite3.connect(ms1_db_path)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
         con.execute("""
@@ -348,8 +345,8 @@ class MzmlParser:
         con.commit()
         return con
 
-    def _init_ms2_db(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.ms2_db_path)
+    def _init_ms2_db(self, ms2_db_path: Path | str) -> sqlite3.Connection:
+        con = sqlite3.connect(ms2_db_path)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
         con.execute("""
