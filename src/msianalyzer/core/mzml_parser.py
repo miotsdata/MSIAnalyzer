@@ -12,6 +12,8 @@ MzmlParser
 
 from __future__ import annotations
 
+from datetime import datetime
+import json
 import re
 import sqlite3
 import zlib
@@ -21,6 +23,8 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 import numpy as np
+
+from msianalyzer.version import __version__ as SOFTWARE_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +68,7 @@ class MzmlFile:
     rt_range: tuple[float, float] = (0.0, 0.0)
     ms1_mz_range: tuple[float, float] = (0.0, 0.0)
     ms2_precursor_mz_range: tuple[float, float] = (0.0, 0.0)
+    instrument_info: dict[str, str] = None
 
     def ms1_connection(self) -> sqlite3.Connection:
         """Return a new read-only SQLite connection to the MS1 database."""
@@ -110,23 +115,57 @@ def blob_to_array(blob: bytes, decimal_places: int = 4, compressed: bool = True)
 # Regex patterns — compiled once at module level
 # ---------------------------------------------------------------------------
 
-
-# RT pattern that matches the actual mzML attribute order
+# --- Header / instrument ---
+_RE_INSTRUMENT_MODEL = re.compile(
+    r'<cvParam[^>]*accession="MS:1000031"[^>]*value="([^"]*)"'   # instrument model (generic)
+    r'|<cvParam[^>]*accession="MS:1000483"[^>]*value="([^"]*)"'  # Thermo Fisher model
+    r'|<cvParam[^>]*name="([^"]*instrument model[^"]*)"',
+    re.IGNORECASE,
+)
+_RE_SERIAL_NUMBER = re.compile(
+    r'<cvParam[^>]*accession="MS:1000529"[^>]*value="([^"]*)"'
+)
+_RE_IONIZATION = re.compile(
+    r'<cvParam[^>]*accession="MS:1000073"[^>]*name="([^"]*)"'    # ESI
+    r'|<cvParam[^>]*accession="MS:1000075"[^>]*name="([^"]*)"'   # MALDI
+    r'|<cvParam[^>]*accession="MS:1000398"[^>]*name="([^"]*)"',  # DESI
+)
+_RE_ANALYZER = re.compile(
+    r'<cvParam[^>]*accession="MS:1000484"[^>]*name="([^"]*)"'    # orbitrap
+    r'|<cvParam[^>]*accession="MS:1000079"[^>]*name="([^"]*)"'   # FT-ICR
+    r'|<cvParam[^>]*accession="MS:1000264"[^>]*name="([^"]*)"'   # ion trap
+    r'|<cvParam[^>]*accession="MS:1000081"[^>]*name="([^"]*)"'   # quadrupole
+    r'|<cvParam[^>]*accession="MS:1000084"[^>]*name="([^"]*)"',  # TOF
+)
+_RE_START_TIMESTAMP = re.compile(
+    r'startTimeStamp="([^"]+)"'
+)
+_RE_SOURCE_FILE_NAME = re.compile(
+    r'<sourceFile[^>]*name="([^"]*)"'
+)
+_RE_INSTRUMENT_CONFIG_END = re.compile(r'</instrumentConfigurationList>')
+ 
+# --- Per-spectrum ---
 _RE_RT = re.compile(
-    r'<cvParam[^>]*accession="MS:1000016"[^>]*value="([\d\.eE+\-]+)"[^>]*unitAccession="UO:(\d+)"'
-    r'|<cvParam[^>]*value="([\d\.eE+\-]+)"[^>]*accession="MS:1000016"[^>]*unitAccession="UO:(\d+)"'
+    r'<cvParam[^>]*accession="MS:1000016"[^>]*value="([\d\.eE+\-]+)"'
+    r'[^>]*unitAccession="UO:(\d+)"'
+    r'|<cvParam[^>]*value="([\d\.eE+\-]+)"[^>]*accession="MS:1000016"'
+    r'[^>]*unitAccession="UO:(\d+)"'
 )
-
-_RE_TIC = re.compile(r'<cvParam[^>]*accession="MS:1000285"[^>]*value="([\d\.eE+\-]+)"[^>]* />')
-_RE_SCAN_POLARITY = re.compile(
-    r'<cvParam\s+cvRef="MS"\s+accession="MS:1000130"[^>]*\bname="(\w+) scan"'
-)
-
 _RE_MS_LEVEL = re.compile(r'accession="MS:1000511"[^>]*value="(\d+)"')
 _RE_SCAN_ID  = re.compile(r'\bid="([^"]+)"')
 _RE_SCAN_NUM = re.compile(r'scan=(\d+)')
+ 
+_RE_TIC = re.compile(
+    r'<cvParam[^>]*accession="MS:1000285"[^>]*value="([\d\.eE+\-]+)"'
+)
 
-# Precursor (inside <selectedIon> block)
+_RE_SCAN_POLARITY = re.compile(
+    r'<cvParam\s+cvRef="MS"\s+accession="MS:1000130"[^>]*\bname="(\w+) scan"'
+)
+ 
+# Precursor
+_RE_PRECURSOR_SPECREF = re.compile(r'<precursor\s[^>]*spectrumRef="([^"]*)"')
 _RE_PRECURSOR_MZ = re.compile(
     r'<selectedIon>.*?accession="MS:1000744"[^>]*value="([\d\.eE+\-]+)"',
     re.DOTALL,
@@ -135,21 +174,19 @@ _RE_PRECURSOR_CHARGE = re.compile(
     r'<selectedIon>.*?accession="MS:1000041"[^>]*value="(\d+)"',
     re.DOTALL,
 )
-
-# Binary data array blocks
+_RE_PRECURSOR_INTENSITY = re.compile(
+    # MS:1000042 = peak intensity of selected ion (different from TIC)
+    r'<selectedIon>.*?accession="MS:1000042"[^>]*value="([\d\.eE+\-]+)"',
+    re.DOTALL,
+)
+ 
+# Binary arrays
 _RE_BDA_BLOCK   = re.compile(r'<binaryDataArray[^>]*>(.*?)</binaryDataArray>', re.DOTALL)
 _RE_BINARY_DATA = re.compile(r'<binary>(.*?)</binary>', re.DOTALL)
-
-# Precision: MS:1000523 = 64-bit float, MS:1000521 = 32-bit float
-_RE_64BIT = re.compile(r'accession="MS:1000523"')
-_RE_32BIT = re.compile(r'accession="MS:1000521"')
-
-# Compression: MS:1000574 = zlib, MS:1000576 = no compression
-_RE_ZLIB = re.compile(r'accession="MS:1000574"')
-
-# Array type: MS:1000514 = m/z, MS:1000515 = intensity
-_RE_MZ_ARRAY  = re.compile(r'accession="MS:1000514"')
-_RE_INT_ARRAY = re.compile(r'accession="MS:1000515"')
+_RE_64BIT       = re.compile(r'accession="MS:1000523"')   # 64-bit float
+_RE_ZLIB        = re.compile(r'accession="MS:1000574"')   # zlib compression
+_RE_MZ_ARRAY    = re.compile(r'accession="MS:1000514"')   # m/z array
+_RE_INT_ARRAY   = re.compile(r'accession="MS:1000515"')   # intensity array
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +241,29 @@ class MzmlParser:
         """
         mzml_path = Path(mzml_path)
 
+        instrument_info = _parse_instrument_info(mzml_path)
+
         ms1_con = self._init_ms1_db(ms1_db_path)
         ms2_con = self._init_ms2_db(ms2_db_path)
+
+        # Write metadata + parse command to both DBs
+        parse_dt = datetime.now().astimezone().isoformat()
+        for con in (ms1_con, ms2_con):
+            _insert_metadata(con, mzml_path, instrument_info)
+            _insert_command(
+                con,
+                command_name="parse",
+                dt=parse_dt,
+                arguments={
+                    "source_file":    str(mzml_path),
+                    "decimal_places": self.decimal_places,
+                    "include_ms2":    self.include_ms2,
+                    "msianalyzer_version": SOFTWARE_VERSION,
+                },
+            )
+            con.commit()
+
+        # Parse spectra
 
         n_ms1 = n_ms2 = 0
         all_rts: list[float]        = []
@@ -260,6 +318,7 @@ class MzmlParser:
                 min(precursor_mzs, default=0.0),
                 max(precursor_mzs, default=0.0),
             ),
+            instrument_info=instrument_info,
         )
 
     # ------------------------------------------------------------------
@@ -313,6 +372,8 @@ class MzmlParser:
         if sp["ms_level"] == 2:
             sp["precursor_mz"]    = _parse_precursor_mz(text, decimal_places=self.decimal_places)
             sp["precursor_charge"] = _parse_precursor_charge(text)
+            sp["precursor_intensity"] = _parse_precursor_intensity(text)
+            sp["parent_scan_id"]      = _parse_parent_scan_id(text)
 
         return sp
 
@@ -324,6 +385,20 @@ class MzmlParser:
         con = sqlite3.connect(ms1_db_path)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS commands (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                command_name TEXT    NOT NULL,
+                datetime     TEXT    NOT NULL,
+                arguments    TEXT    NOT NULL
+            )
+        """)
         con.execute("""
             CREATE TABLE IF NOT EXISTS ms1_scans (
                 scan_id         INTEGER PRIMARY KEY,
@@ -350,13 +425,30 @@ class MzmlParser:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
         con.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS commands (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                command_name TEXT    NOT NULL,
+                datetime     TEXT    NOT NULL,
+                arguments    TEXT    NOT NULL
+            )
+        """)
+        con.execute("""
             CREATE TABLE IF NOT EXISTS ms2_scans (
                 scan_id          INTEGER PRIMARY KEY,
+                parent_scan_id       INTEGER,
                 rt               REAL    NOT NULL,
                 precursor_mz     REAL,
                 precursor_charge INTEGER,
+                precursor_intensity   REAL,
                 n_peaks          INTEGER,
                 tic              REAL,
+                group_id             INTEGER,
                 mz_array         BLOB    NOT NULL,
                 intensity_array  BLOB    NOT NULL
             )
@@ -392,15 +484,24 @@ class MzmlParser:
         con.execute(
             """
             INSERT OR REPLACE INTO ms2_scans
-              (scan_id, rt, precursor_mz, precursor_charge,
-               n_peaks, tic, mz_array, intensity_array)
-            VALUES (?,?,?,?,?,?,?, ?)
+              (scan_id, parent_scan_id, rt,
+               precursor_mz, precursor_charge, precursor_intensity,
+               n_peaks, tic, group_id,
+               mz_array, intensity_array)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                sp["scan_id"], sp["rt"],
-                sp.get("precursor_mz"), sp.get("precursor_charge"),
-                sp["n_peaks"], sp["tic"],
-                sp["mz_blob"], sp["intensity_blob"],
+                sp["scan_id"],
+                sp.get("parent_scan_id"),
+                sp["rt"],
+                sp.get("precursor_mz"),
+                sp.get("precursor_charge"),
+                sp.get("precursor_intensity"),
+                sp["n_peaks"],
+                sp["tic"],
+                None,           # group_id — assigned later by ms2_grouper
+                sp["mz_blob"],
+                sp["intensity_blob"],
             ),
         )
 
@@ -408,6 +509,70 @@ class MzmlParser:
 # ---------------------------------------------------------------------------
 # Module-level parsing helpers (pure functions, easy to unit-test)
 # ---------------------------------------------------------------------------
+
+def _parse_instrument_info(path: Path) -> dict:
+    """
+    Fast pre-pass: read the mzML header up to and including
+    </instrumentConfigurationList>, extract instrument metadata.
+ 
+    Stops reading as soon as the instrument block ends — does not load
+    the full file into memory.
+    """
+    info: dict = {
+        "instrument_model":  None,
+        "serial_number":     None,
+        "ionization":        None,
+        "analyzer":          None,
+        "acquisition_start": None,
+        "source_file":       None,
+    }
+ 
+    header_buf: list[str] = []
+    found_end = False
+ 
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            header_buf.append(line)
+            if _RE_INSTRUMENT_CONFIG_END.search(line):
+                found_end = True
+            # startTimeStamp is on <run>, which follows instrumentConfigurationList
+            # so we continue a little further until <spectrumList starts
+            if found_end and "<spectrumList" in line:
+                break
+            # Safety: stop after 500 lines regardless
+            if len(header_buf) > 500:
+                break
+ 
+    header = "".join(header_buf)
+ 
+    m = _RE_INSTRUMENT_MODEL.search(header)
+    if m:
+        info["instrument_model"] = next(
+            (g for g in m.groups() if g is not None), None
+        )
+
+    m = _RE_SERIAL_NUMBER.search(header)
+    if m:
+        info["serial_number"] = m.group(1)
+
+    m = _RE_IONIZATION.search(header)
+    if m:
+        info["ionization"] = next((g for g in m.groups() if g is not None), None)
+
+    m = _RE_ANALYZER.search(header)
+    if m:
+        info["analyzer"] = next((g for g in m.groups() if g is not None), None)
+
+    m = _RE_START_TIMESTAMP.search(header)
+    if m:
+        info["acquisition_start"] = m.group(1)
+
+    m = _RE_SOURCE_FILE_NAME.search(header)
+    if m:
+        info["source_file"] = m.group(1)
+
+    return info
+
 
 def _parse_rt(text: str) -> Optional[float]:
     m = _RE_RT.search(text)
@@ -446,13 +611,39 @@ def _parse_precursor_charge(text: str) -> Optional[int]:
     m = _RE_PRECURSOR_CHARGE.search(text)
     return int(m.group(1)) if m else None
 
+def _parse_precursor_intensity(text: str) -> Optional[float]:
+    """
+    MS:1000042 = peak intensity of the selected ion in the MS1 survey scan.
+    This is NOT the TIC of the MS2 scan — it is the intensity of the
+    precursor peak as measured before fragmentation. Useful as a proxy
+    for precursor abundance and quantification confidence.
+    """
+    m = _RE_PRECURSOR_INTENSITY.search(text)
+    return float(m.group(1)) if m else None
+
+def _parse_parent_scan_id(text: str) -> Optional[int]:
+    """
+    Extract the parent MS1 scan ID from the ``spectrumRef`` attribute
+    of the ``<precursor>`` element.
+ 
+    Example spectrumRef value:
+        "controllerType=0 controllerNumber=1 scan=42"
+    Returns 42.
+    """
+    m = _RE_PRECURSOR_SPECREF.search(text)
+    if not m:
+        return None
+    ref = m.group(1)
+    m2 = _RE_SCAN_NUM.search(ref)
+    return int(m2.group(1)) if m2 else None
+
 def _parse_tic(text: str) -> Optional[float]:
     m = _RE_TIC.search(text)
     return float(m.group(1)) if m else None
 
 def _parse_scan_polarity(text: str) -> Optional[str]:
     m = _RE_SCAN_POLARITY.search(text)
-    return m.group(1) if m else None
+    return m.group(1).upper() if m else None
 
 
 def _parse_binary_arrays(
@@ -499,3 +690,72 @@ def _parse_binary_arrays(
             int_arr = arr
 
     return mz_arr, int_arr
+
+
+def _insert_metadata(
+    con: sqlite3.Connection,
+    mzml_path: Path,
+    instrument_info: dict,
+) -> None:
+    """Write all metadata key/value pairs into the metadata table."""
+    rows = [
+        ("source_file",       str(mzml_path.name)),
+        ("source_path",       str(mzml_path.resolve())),
+        ("instrument_model",  instrument_info.get("instrument_model") or ""),
+        ("serial_number",     instrument_info.get("serial_number")    or ""),
+        ("ionization",        instrument_info.get("ionization")       or ""),
+        ("analyzer",          instrument_info.get("analyzer")         or ""),
+        ("acquisition_start", instrument_info.get("acquisition_start") or ""),
+        ("original_source",   instrument_info.get("source_file")      or ""),
+        ("db_creation_date",  datetime.now().astimezone().isoformat()),
+        ("msianalyzer_version", SOFTWARE_VERSION),
+    ]
+    con.executemany(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", rows
+    )
+ 
+def _insert_command(
+    con: sqlite3.Connection,
+    command_name: str,
+    dt: str,
+    arguments: dict,
+) -> None:
+    """Append one row to the commands table."""
+    con.execute(
+        "INSERT INTO commands (command_name, datetime, arguments) VALUES (?,?,?)",
+        (command_name, dt, json.dumps(arguments)),
+    )
+
+def log_command(
+    db_path: Path | str,
+    command_name: str,
+    arguments: dict,
+) -> None:
+    """
+    Append a command record to an existing DB's ``commands`` table.
+ 
+    Intended for use by any downstream module that modifies a DB
+    (grouper, denoiser, pixel associator, quantifier).
+ 
+    Parameters
+    ----------
+    db_path : Path | str
+        Path to any msianalyzer SQLite database (ms1, ms2, groups…).
+    command_name : str
+        Short identifier, e.g. ``"denoise_ms2"``, ``"assign_pixels"``.
+    arguments : dict
+        Any JSON-serialisable key/value pairs describing the command.
+    """
+    con = sqlite3.connect(Path(db_path))
+    try:
+        con.execute(
+            "INSERT INTO commands (command_name, datetime, arguments) VALUES (?,?,?)",
+            (
+                command_name,
+                datetime.now().astimezone().isoformat(),
+                json.dumps(arguments),
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
