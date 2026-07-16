@@ -28,7 +28,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterator, Optional
 import statistics
-from numpy import argmax
+import numpy as np
 
 from msianalyzer.core.mzml_parser import log_command
 
@@ -51,7 +51,7 @@ class MzCenterMethod(str, Enum):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class Ms2Group:
+class MzGroup:
     """
     A cluster of MS2 scans whose precursor m/z values are within
     ppm_tolerance of their sequential neighbours, and whose total span
@@ -222,7 +222,7 @@ def _cluster_ms2_scans(
     rows: Iterator[tuple[float, float]],
     ppm_tolerance: float,
     mz_center_method: MzCenterMethod,
-) -> Iterator[Ms2Group | None]:
+) -> Iterator[MzGroup | None]:
     """
     Cluster rows into MS2 groups based on their m/z values and yields one group at a time.
 
@@ -245,43 +245,26 @@ def _cluster_ms2_scans(
             is_first = False
             continue
 
-        if len(mzs_group) == 1:
-            center = mzs_group[0]
-            gap_to_last_ok = gap_to_first_ok  = ppm_diff(mz, center) <= ppm_tolerance * 2
-        else:
-            center = _calculate_mz_center(mzs_group, intensities_group, mz_center_method)
-            gap_to_last_ok  = ppm_diff(mz, mzs_group[-1]) <= ppm_tolerance
-            gap_to_first_ok = ppm_diff(mz, mzs_group[0]) <= ppm_tolerance * 2
+        gap_to_last_ok  = ppm_diff(mz, mzs_group[-1]) <= ppm_tolerance * 2
 
         if gap_to_last_ok:
             logging.debug("Gap to last %.4f ok for mz %.4f", mzs_group[-1], mz)
             mzs_group.append(mz)
             intensities_group.append(intensity)
-
-            if not gap_to_first_ok:
-                logging.debug("Gap to first %.4f NOT ok for mz %.4f", mzs_group[0], mz)
-                mzs_to_yield, intensities_to_yield, mzs_group, intensities_group = _split_mzs_intensities(mzs_group, intensities_group)
-                logging.debug("Created two groups: %s %s", mzs_to_yield, mzs_group)
-
-                group = _prepare_group(mzs_to_yield, intensities_to_yield, mz_center_method, ppm_tolerance)
-                yield group
-
         else:
-            min_observed_mz = min(mzs_group)
-            arithmetical_min_mz = center - (center * ppm_tolerance / 1e6)
+            logging.debug("Gap to last %.4f NOT ok for mz %.4f", mzs_group[-1], mz)
             old_mzs = mzs_group
             old_intensities = intensities_group
             mzs_group = [mz]
             intensities_group = [intensity]
 
-            if min_observed_mz < arithmetical_min_mz:
-                mzs_group1, intensities_group1, mzs_group2, intensities_group2 = _split_mzs_intensities(old_mzs, old_intensities)
-
-                yield _prepare_group(mzs_group1, intensities_group1, mz_center_method, ppm_tolerance)
-
-                yield _prepare_group(mzs_group2, intensities_group2, mz_center_method, ppm_tolerance)
-            else:
+            if _is_group_valid(old_mzs, old_intensities, mz_center_method, ppm_tolerance):
+                logging.debug("Valid group")
                 yield _prepare_group(old_mzs, old_intensities, mz_center_method, ppm_tolerance)
+            else:
+                logging.debug("splitting group: %s", old_mzs)
+                groups = _split_group(old_mzs, old_intensities, mz_center_method, ppm_tolerance)
+                yield from groups
 
     if len(mzs_group) == 0:
         return None
@@ -289,34 +272,91 @@ def _cluster_ms2_scans(
     yield _prepare_group(mzs_group, intensities_group, mz_center_method, ppm_tolerance)
 
 
-def _split_mzs_intensities(mzs: list[float], intensities: list[float]) -> tuple[list[float], list[float], list[float], list[float]]:
-    ppm_diffs = [
-        (mzs[i] - mzs[i - 1]) / mzs[i] * 1e6
-        for i in range(1, len(mzs))
-    ]
-    max_ppm_diff = argmax(ppm_diffs)
+def _is_group_valid(mzs: list[float], intensities: list[float],
+                    mz_center_method: MzCenterMethod, ppm_tolerance: float) -> bool:
+    min_observed_mz = min(mzs)
+    max_observed_mz = max(mzs)
+    center = _calculate_mz_center(mzs, intensities, mz_center_method)
+    arithmetical_min_mz = center - (center * ppm_tolerance / 1e6)
+    arithmetical_max_mz = center + (center * ppm_tolerance / 1e6)
 
-    mzs_group1 = mzs[:max_ppm_diff + 1]
-    mzs_group2 = mzs[(max_ppm_diff + 1):]
-    intensities_group1 = intensities[:max_ppm_diff + 1]
-    intensities_group2 = intensities[(max_ppm_diff + 1) :]
-
-    return (
-        mzs_group1,
-        intensities_group1,
-        mzs_group2,
-        intensities_group2,
-    )
+    return (min_observed_mz > arithmetical_min_mz) and (max_observed_mz < arithmetical_max_mz)
 
 
-def _prepare_group(mzs_group: list[float], intensities_group: list[float], mz_center_method: MzCenterMethod, ppm_tolerance: float) -> Ms2Group:
+
+def _split_group(mzs: list[float], intensities: list[float], 
+                 mz_center_method: MzCenterMethod, ppm_tolerance: float) -> list[MzGroup]:
+    n_split = 2
+    mzs = np.array(mzs)
+    intensities = np.array(intensities)
+
+    while True:
+        centroids = np.linspace(mzs[0], mzs[-1], n_split + 2)[1:-1]
+
+        while True:
+            # Assign each mz to its nearest centroid
+            distances = np.abs(mzs[:, None] - centroids[None, :])
+            labels = np.argmin(distances, axis=1)
+
+            # Compute new centroids
+            new_centroids = centroids.copy()
+
+            for i in range(n_split):
+                mzs_cluster = mzs[labels == i]
+                intensities_cluster = intensities[labels == i]
+                if len(mzs_cluster):
+                    new_centroids[i] = _calculate_mz_center(mzs_cluster, intensities_cluster,
+                                                            mz_center_method)
+
+            # Stop if converged
+            if np.allclose(new_centroids, centroids):
+                break
+
+            centroids = new_centroids
+
+        valid = True
+
+        for i in range(n_split):
+            mask = labels == i
+            if sum(mask) == 0:
+                continue
+
+            if not _is_group_valid(mzs[mask].tolist(), intensities[mask].tolist(),
+                                    mz_center_method, ppm_tolerance):
+                valid = False
+                break
+
+        # If all valid, exit the while loop
+        if valid:
+            break
+
+        # Otherwise increase k and retry
+        n_split += 1
+        logging.debug("Increasing number of split to %d", n_split)
+
+    logging.debug("Reached good group splitting: %d", n_split)
+    groups = []
+    for i in range(n_split):
+        mask = labels == i
+        if sum(mask) == 0:
+                continue
+        groups.append(
+            _prepare_group(mzs[mask].tolist(), intensities[mask].tolist(),
+                                    mz_center_method, ppm_tolerance)
+        )
+
+    return groups
+        
+
+
+def _prepare_group(mzs_group: list[float], intensities_group: list[float], mz_center_method: MzCenterMethod, ppm_tolerance: float) -> MzGroup:
     min_observed_mz = min(mzs_group)
     max_observed_mz = max(mzs_group)
     center = _calculate_mz_center(mzs_group, intensities_group, mz_center_method)
     arithmetical_min_mz = center - (center * ppm_tolerance / 1e6)
     arithmetical_max_mz = center + (center * ppm_tolerance / 1e6)
 
-    return Ms2Group(
+    return MzGroup(
                 group_id=None,
                 mz_min=arithmetical_min_mz,
                 mz_max=arithmetical_max_mz,
@@ -326,19 +366,19 @@ def _prepare_group(mzs_group: list[float], intensities_group: list[float], mz_ce
             )
 
 
-def _write_group(group: Ms2Group, con: sqlite3.Connection):
+def _write_group(group: MzGroup, con: sqlite3.Connection):
     """
-    Write a single Ms2Group to the ms2_groups table in the groups database.
+    Write a single MzGroup to the ms2_groups table in the groups database.
 
     Parameters
     ----------
-    group : Ms2Group
+    group : MzGroup
         The group to write to the database.
     con : sqlite3.Connection
         The SQLite connection to the groups database.
     """
     con.execute(
-        "INSERT INTO ms2_groups (mz_center, mz_min, mz_max, observed_min, observed_max) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO ms2_groups (mz_center, mz_min, mz_max, observed_min, observed_max) VALUES (?, ?, ?, ?, ?)",
         (group.mz_center, group.mz_min, group.mz_max, group.observed_min, group.observed_max),
     )
 
@@ -409,7 +449,7 @@ def _initialize_groups_db(
             )
         """)
         con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_groups_mz_center ON ms2_groups(mz_center)"
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_mz_center ON ms2_groups(mz_center)"
         )
 
         con.commit()
@@ -485,7 +525,7 @@ def _calculate_mz_center(
         return statistics.median(mzs)
 
     if mz_center_method == MzCenterMethod.HIGHEST_PEAK:
-        return mzs[argmax(intensities)]
+        return mzs[np.argmax(intensities)]
 
     else:
         raise ValueError(f"Unknown mz_center_method: {mz_center_method}")
