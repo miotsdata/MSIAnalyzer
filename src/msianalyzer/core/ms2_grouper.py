@@ -78,10 +78,11 @@ class MzGroup:
 # Public entry points
 # ---------------------------------------------------------------------------
 
-def group_ms2_by_precursor_ppm(
+def group_ms2_by_precursor(
     ms2_db_path: Path | str,
     groups_db_path: Path | str,
-    ppm_tolerance: float = 10.0,
+    tolerance: float = 10.0,
+    tolerance_unit: str = "ppm",
     polarity: Optional[str] = None,
     mz_center_method: MzCenterMethod = MzCenterMethod.MEAN,
 ):
@@ -106,17 +107,18 @@ def group_ms2_by_precursor_ppm(
     ms2_db_path  = Path(ms2_db_path)
     groups_db_path = Path(groups_db_path)
 
-    if ppm_tolerance <= 0:
-        raise ValueError(f"ppm_tolerance must be positive, got {ppm_tolerance}")
+    if tolerance <= 0:
+        raise ValueError(f"tolerance must be positive, got {tolerance}")
 
     _initialize_groups_db(ms2_db_path = ms2_db_path, groups_db_path = groups_db_path, 
-                          ppm_tolerance = ppm_tolerance, polarity = polarity, 
+                          tolerance = tolerance, tolerance_unit=tolerance_unit, polarity = polarity, 
                           mz_center_method = mz_center_method)
 
     scan_rows: Iterator[tuple[float, float]] = _fetch_scan_rows(ms2_db_path, polarity)
 
     with sqlite3.connect(groups_db_path) as con:
-        for group in _cluster_ms2_scans(scan_rows, ppm_tolerance, mz_center_method):
+        for group in _cluster_ms2_scans(rows = scan_rows, tolerance=tolerance, tolerance_unit=tolerance_unit, 
+                                        mz_center_method=mz_center_method):
             _write_group(group, con)
         con.commit()
 
@@ -220,7 +222,8 @@ def assign_ms2_to_groups(
 
 def _cluster_ms2_scans(
     rows: Iterator[tuple[float, float]],
-    ppm_tolerance: float,
+    tolerance: float,
+    tolerance_unit: str,
     mz_center_method: MzCenterMethod,
 ) -> Iterator[MzGroup | None]:
     """
@@ -229,8 +232,8 @@ def _cluster_ms2_scans(
     Parameters
     ----------
     rows : Iterator of (precursor_mz, precursor_intensity) pairs
-    ppm_tolerance : float
-        The tolerance for grouping scans by m/z in parts per million.
+    tolerance : float
+        The tolerance for grouping scans (either in ppm or mz window).
     mz_center_method : MzCenterMethod
         The method to use for calculating the center m/z of each group.
     """
@@ -244,8 +247,13 @@ def _cluster_ms2_scans(
             intensities_group.append(intensity)
             is_first = False
             continue
-
-        gap_to_last_ok  = ppm_diff(mz, mzs_group[-1]) <= ppm_tolerance * 2
+        
+        if tolerance_unit == "ppm":
+            gap_to_last_ok  = ppm_diff(mz, mzs_group[-1]) <= tolerance * 2
+        elif tolerance_unit == "Da":
+            gap_to_last_ok = (mz - mzs_group[-1]) <= tolerance * 2
+        else:
+            raise ValueError(f"Invalid tolerance unit. Possible settings are 'ppm' or 'Da', found {tolerance_unit}")
 
         if gap_to_last_ok:
             logging.debug("Gap to last %.4f ok for mz %.4f", mzs_group[-1], mz)
@@ -258,34 +266,47 @@ def _cluster_ms2_scans(
             mzs_group = [mz]
             intensities_group = [intensity]
 
-            if _is_group_valid(old_mzs, old_intensities, mz_center_method, ppm_tolerance):
+            if _is_group_valid(mzs=old_mzs, intensities=old_intensities, 
+                               mz_center_method=mz_center_method, 
+                               tolerance=tolerance, tolerance_unit=tolerance_unit):
                 logging.debug("Valid group")
-                yield _prepare_group(old_mzs, old_intensities, mz_center_method, ppm_tolerance)
+                yield _prepare_group(mzs_group=old_mzs, intensities_group=old_intensities, mz_center_method=mz_center_method, 
+                                     tolerance=tolerance, tolerance_unit=tolerance_unit)
             else:
                 logging.debug("splitting group: %s", old_mzs)
-                groups = _split_group(old_mzs, old_intensities, mz_center_method, ppm_tolerance)
+                groups = _split_group(mzs=old_mzs, intensities=old_intensities,mz_center_method=mz_center_method, 
+                                      tolerance=tolerance, tolerance_unit=tolerance_unit)
                 yield from groups
 
     if len(mzs_group) == 0:
         return None
 
-    yield _prepare_group(mzs_group, intensities_group, mz_center_method, ppm_tolerance)
+    yield _prepare_group(mzs_group, intensities_group, mz_center_method, tolerance, tolerance_unit)
 
 
 def _is_group_valid(mzs: list[float], intensities: list[float],
-                    mz_center_method: MzCenterMethod, ppm_tolerance: float) -> bool:
+                    mz_center_method: MzCenterMethod, tolerance: float,
+                    tolerance_unit: str) -> bool:
     min_observed_mz = min(mzs)
     max_observed_mz = max(mzs)
     center = _calculate_mz_center(mzs, intensities, mz_center_method)
-    arithmetical_min_mz = center - (center * ppm_tolerance / 1e6)
-    arithmetical_max_mz = center + (center * ppm_tolerance / 1e6)
+    if tolerance_unit == "ppm":
+        arithmetical_min_mz = center - (center * tolerance / 1e6)
+        arithmetical_max_mz = center + (center * tolerance / 1e6)
+    elif tolerance_unit == "Da":
+        arithmetical_min_mz = center - tolerance
+        arithmetical_max_mz = center + tolerance
+    else:
+        raise ValueError(f"Invalid tolerance unit. Possible settings are 'ppm' or 'Da', found {tolerance_unit}")
 
     return (min_observed_mz > arithmetical_min_mz) and (max_observed_mz < arithmetical_max_mz)
 
 
 
 def _split_group(mzs: list[float], intensities: list[float], 
-                 mz_center_method: MzCenterMethod, ppm_tolerance: float) -> list[MzGroup]:
+                 mz_center_method: MzCenterMethod, 
+                 tolerance: float,
+                 tolerance_unit: str) -> list[MzGroup]:
     n_split = 2
     mzs = np.array(mzs)
     intensities = np.array(intensities)
@@ -321,8 +342,9 @@ def _split_group(mzs: list[float], intensities: list[float],
             if sum(mask) == 0:
                 continue
 
-            if not _is_group_valid(mzs[mask].tolist(), intensities[mask].tolist(),
-                                    mz_center_method, ppm_tolerance):
+            if not _is_group_valid(mzs=mzs[mask].tolist(), intensities=intensities[mask].tolist(),
+                                    mz_center_method=mz_center_method, 
+                                    tolerance=tolerance, tolerance_unit=tolerance_unit):
                 valid = False
                 break
 
@@ -339,22 +361,30 @@ def _split_group(mzs: list[float], intensities: list[float],
     for i in range(n_split):
         mask = labels == i
         if sum(mask) == 0:
-                continue
+            continue
         groups.append(
-            _prepare_group(mzs[mask].tolist(), intensities[mask].tolist(),
-                                    mz_center_method, ppm_tolerance)
+            _prepare_group(mzs_group=mzs[mask].tolist(), intensities_group=intensities[mask].tolist(),
+                           mz_center_method=mz_center_method, tolerance=tolerance,
+                           tolerance_unit=tolerance_unit)
         )
 
     return groups
-        
 
 
-def _prepare_group(mzs_group: list[float], intensities_group: list[float], mz_center_method: MzCenterMethod, ppm_tolerance: float) -> MzGroup:
+def _prepare_group(mzs_group: list[float], intensities_group: list[float], mz_center_method: MzCenterMethod, 
+                   tolerance: float,
+                   tolerance_unit: str) -> MzGroup:
     min_observed_mz = min(mzs_group)
     max_observed_mz = max(mzs_group)
     center = _calculate_mz_center(mzs_group, intensities_group, mz_center_method)
-    arithmetical_min_mz = center - (center * ppm_tolerance / 1e6)
-    arithmetical_max_mz = center + (center * ppm_tolerance / 1e6)
+    if tolerance_unit == "ppm":
+        arithmetical_min_mz = center - (center * tolerance / 1e6)
+        arithmetical_max_mz = center + (center * tolerance / 1e6)
+    elif tolerance_unit == "Da":
+        arithmetical_min_mz = center - tolerance
+        arithmetical_max_mz = center + tolerance
+    else:
+        raise ValueError(f"Invalid tolerance unit. Possible settings are 'ppm' or 'Da', found {tolerance_unit}")
 
     return MzGroup(
                 group_id=None,
@@ -390,7 +420,8 @@ def _write_group(group: MzGroup, con: sqlite3.Connection):
 def _initialize_groups_db(
     ms2_db_path: Path,
     groups_db_path: Path,
-    ppm_tolerance: float,
+    tolerance: float,
+    tolerance_unit: str,
     polarity: Optional[str],
     mz_center_method: MzCenterMethod,
 ) -> None:
@@ -430,7 +461,8 @@ def _initialize_groups_db(
             "INSERT INTO metadata (key, value) VALUES (?, ?)",
             [
                 ("source_ms2_db",      str(ms2_db_path.resolve())),
-                ("ppm_tolerance",      str(ppm_tolerance)),
+                ("tolerance",          str(tolerance)),
+                ("tolerance_unit",    tolerance_unit),
                 ("polarity",           polarity or ""),
                 ("mz_center_method",   mz_center_method),
                 ("creation_date",      datetime.now(timezone.utc).isoformat()),
