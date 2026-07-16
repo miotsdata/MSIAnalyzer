@@ -71,6 +71,8 @@ class Ms2Group:
     mz_min: float
     mz_max: float
     mz_center: float
+    observed_min: float
+    observed_max: float
 
 # ---------------------------------------------------------------------------
 # Public entry points
@@ -143,24 +145,59 @@ def assign_ms2_to_groups(
     ms2_db_path  = Path(ms2_db_path)
     groups_db_path = Path(groups_db_path)
 
-    # Write into ms2_scans
-    ms2_con = sqlite3.connect(ms2_db_path)
-    ms2_con.execute("PRAGMA journal_mode=WAL")
-    ms2_con.execute("PRAGMA synchronous=NORMAL")
+    # Write into ms2_scans    
 
-    groups_con = sqlite3.connect(groups_db_path)
-    groups_con.execute("PRAGMA journal_mode=WAL")
-    groups_con.execute("PRAGMA synchronous=NORMAL")
+    with sqlite3.connect(ms2_db_path) as ms2_con:
+        ms2_con.execute("PRAGMA journal_mode=WAL")
+        ms2_con.execute("PRAGMA synchronous=NORMAL")
+        ms2_con.execute("UPDATE ms2_scans SET group_id = NULL;")
+        ms2_con.execute("DROP TABLE IF EXISTS group_ranges;")
 
-    with ms2_con, groups_con:
+        ms2_con.execute(
+            "ATTACH DATABASE ? AS groups_db",
+            (str(groups_db_path),),
+        )
 
-        for row in groups_con.execute("SELECT * FROM ms2_groups;"):
-            group_id, _, mz_min, mz_max = row
-            ms2_con.execute("""
-                UPDATE ms2_scans
-                SET group_id = ?
-                WHERE precursor_mz >= ? AND precursor_mz <= ? AND group_id IS NULL
-            """, (group_id, mz_min, mz_max))
+        ms2_con.execute("""
+            CREATE TABLE IF NOT EXISTS group_ranges (
+                group_id  INTEGER PRIMARY KEY,
+                mz_center REAL NOT NULL,
+                mz_min    REAL NOT NULL,
+                mz_max    REAL NOT NULL,
+                observed_min REAL   NOT NULL,
+                observed_max REAL   NOT NULL
+            );
+        """)
+
+        ms2_con.execute("""
+            INSERT OR REPLACE INTO group_ranges (
+                group_id,
+                mz_center,
+                mz_min,
+                mz_max,
+                observed_min,
+                observed_max
+            )
+            SELECT
+                group_id,
+                mz_center,
+                mz_min,
+                mz_max,
+                observed_min,
+                observed_max
+            FROM groups_db.ms2_groups;
+        """)
+
+        #ms2_con.execute("DETACH DATABASE groups_db")
+
+        ms2_con.execute("""
+            UPDATE ms2_scans
+            SET group_id = (
+                SELECT group_id
+                FROM group_ranges
+                WHERE precursor_mz BETWEEN observed_min AND observed_max
+            )
+        """)
 
         ms2_con.commit()
 
@@ -185,7 +222,7 @@ def _cluster_ms2_scans(
     rows: Iterator[tuple[float, float]],
     ppm_tolerance: float,
     mz_center_method: MzCenterMethod,
-) -> Iterator[Ms2Group]:
+) -> Iterator[Ms2Group | None]:
     """
     Cluster rows into MS2 groups based on their m/z values and yields one group at a time.
 
@@ -200,73 +237,93 @@ def _cluster_ms2_scans(
     is_first = True
     mzs_group = []
     intensities_group = []
-    mz_sum = 0.0
-    mz_count = 0
 
     for mz, intensity in rows:
         if is_first:
             mzs_group.append(mz)
             intensities_group.append(intensity)
             is_first = False
-            if mz_center_method == MzCenterMethod.MEAN:
-                mz_sum += mz
-                mz_count += 1
             continue
 
-        if mz_center_method == MzCenterMethod.MEDIAN:
-            center = statistics.median(mzs_group)
-        elif mz_center_method == MzCenterMethod.HIGHEST_PEAK:
-            center = mzs_group[argmax(intensities_group)]
-        elif mz_center_method == MzCenterMethod.MEAN:
-            center = mz_sum / mz_count if mz_count > 0 else 0
-            mz_sum += mz
-            mz_count += 1
-            
+        if len(mzs_group) == 1:
+            center = mzs_group[0]
+            gap_to_last_ok = gap_to_first_ok  = ppm_diff(mz, center) <= ppm_tolerance * 2
         else:
-            raise ValueError(f"Unknown mz_center_method: {mz_center_method}")
+            center = _calculate_mz_center(mzs_group, intensities_group, mz_center_method)
+            gap_to_last_ok  = ppm_diff(mz, mzs_group[-1]) <= ppm_tolerance
+            gap_to_first_ok = ppm_diff(mz, mzs_group[0]) <= ppm_tolerance * 2
 
-        gap_ok  = ppm_diff(mz, center) <= ppm_tolerance
-
-        if gap_ok:
+        if gap_to_last_ok:
+            logging.debug("Gap to last %.4f ok for mz %.4f", mzs_group[-1], mz)
             mzs_group.append(mz)
             intensities_group.append(intensity)
+
+            if not gap_to_first_ok:
+                logging.debug("Gap to first %.4f NOT ok for mz %.4f", mzs_group[0], mz)
+                mzs_to_yield, intensities_to_yield, mzs_group, intensities_group = _split_mzs_intensities(mzs_group, intensities_group)
+                logging.debug("Created two groups: %s %s", mzs_to_yield, mzs_group)
+
+                group = _prepare_group(mzs_to_yield, intensities_to_yield, mz_center_method, ppm_tolerance)
+                yield group
+
         else:
+            min_observed_mz = min(mzs_group)
+            arithmetical_min_mz = center - (center * ppm_tolerance / 1e6)
+            old_mzs = mzs_group
+            old_intensities = intensities_group
             mzs_group = [mz]
             intensities_group = [intensity]
 
-            if mz_center_method == MzCenterMethod.MEAN:
-                mz_sum = mz
-                mz_count = 1
+            if min_observed_mz < arithmetical_min_mz:
+                mzs_group1, intensities_group1, mzs_group2, intensities_group2 = _split_mzs_intensities(old_mzs, old_intensities)
 
-            yield Ms2Group(
-                group_id=None,
-                mz_min=center - (center * ppm_tolerance / 1e6),
-                mz_max=center + (center * ppm_tolerance / 1e6),
-                mz_center=center,
-            )
+                yield _prepare_group(mzs_group1, intensities_group1, mz_center_method, ppm_tolerance)
+
+                yield _prepare_group(mzs_group2, intensities_group2, mz_center_method, ppm_tolerance)
+            else:
+                yield _prepare_group(old_mzs, old_intensities, mz_center_method, ppm_tolerance)
 
     if len(mzs_group) == 0:
-        raise ValueError("No scans were found to cluster.")
+        return None
 
-    if len(mzs_group) == 1:
-        center = mzs_group[0]
-    else:
-        if mz_center_method == MzCenterMethod.MEDIAN:
-            center = statistics.median(mzs_group)
-        elif mz_center_method == MzCenterMethod.HIGHEST_PEAK:
-            center = mzs_group[argmax(intensities_group)]
-        elif mz_center_method == MzCenterMethod.MEAN:
-            center = mz_sum / mz_count if mz_count > 0 else 0
-        else:
-            raise ValueError(f"Unknown mz_center_method: {mz_center_method}")
+    yield _prepare_group(mzs_group, intensities_group, mz_center_method, ppm_tolerance)
 
-    yield Ms2Group(
+
+def _split_mzs_intensities(mzs: list[float], intensities: list[float]) -> tuple[list[float], list[float], list[float], list[float]]:
+    ppm_diffs = [
+        (mzs[i] - mzs[i - 1]) / mzs[i] * 1e6
+        for i in range(1, len(mzs))
+    ]
+    max_ppm_diff = argmax(ppm_diffs)
+
+    mzs_group1 = mzs[:max_ppm_diff + 1]
+    mzs_group2 = mzs[(max_ppm_diff + 1):]
+    intensities_group1 = intensities[:max_ppm_diff + 1]
+    intensities_group2 = intensities[(max_ppm_diff + 1) :]
+
+    return (
+        mzs_group1,
+        intensities_group1,
+        mzs_group2,
+        intensities_group2,
+    )
+
+
+def _prepare_group(mzs_group: list[float], intensities_group: list[float], mz_center_method: MzCenterMethod, ppm_tolerance: float) -> Ms2Group:
+    min_observed_mz = min(mzs_group)
+    max_observed_mz = max(mzs_group)
+    center = _calculate_mz_center(mzs_group, intensities_group, mz_center_method)
+    arithmetical_min_mz = center - (center * ppm_tolerance / 1e6)
+    arithmetical_max_mz = center + (center * ppm_tolerance / 1e6)
+
+    return Ms2Group(
                 group_id=None,
-                mz_min=center - (center * ppm_tolerance / 1e6),
-                mz_max=center + (center * ppm_tolerance / 1e6),
+                mz_min=arithmetical_min_mz,
+                mz_max=arithmetical_max_mz,
                 mz_center=center,
+                observed_min=min_observed_mz,
+                observed_max=max_observed_mz
             )
-
 
 
 def _write_group(group: Ms2Group, con: sqlite3.Connection):
@@ -281,8 +338,8 @@ def _write_group(group: Ms2Group, con: sqlite3.Connection):
         The SQLite connection to the groups database.
     """
     con.execute(
-        "INSERT INTO ms2_groups (mz_center, mz_min, mz_max) VALUES (?, ?, ?)",
-        (group.mz_center, group.mz_min, group.mz_max),
+        "INSERT INTO ms2_groups (mz_center, mz_min, mz_max, observed_min, observed_max) VALUES (?, ?, ?, ?, ?)",
+        (group.mz_center, group.mz_min, group.mz_max, group.observed_min, group.observed_max),
     )
 
 
@@ -304,7 +361,6 @@ def _initialize_groups_db(
     ------
     metadata  : key/value store (source db, parameters)
     ms2_groups: one row per group
-    commands  : audit log (one 'group_ms2' entry)
 
     Raises
     ------
@@ -336,7 +392,7 @@ def _initialize_groups_db(
                 ("source_ms2_db",      str(ms2_db_path.resolve())),
                 ("ppm_tolerance",      str(ppm_tolerance)),
                 ("polarity",           polarity or ""),
-                ("mz_center_method",   mz_center_method.value),
+                ("mz_center_method",   mz_center_method),
                 ("creation_date",      datetime.now(timezone.utc).isoformat()),
             ],
         )
@@ -347,22 +403,14 @@ def _initialize_groups_db(
                 group_id   INTEGER PRIMARY KEY,
                 mz_center  REAL    NOT NULL,
                 mz_min     REAL    NOT NULL,
-                mz_max     REAL    NOT NULL
+                mz_max     REAL    NOT NULL,
+                observed_min REAL   NOT NULL,
+                observed_max REAL   NOT NULL
             )
         """)
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_groups_mz_center ON ms2_groups(mz_center)"
         )
-
-        # --- commands ---
-        con.execute("""
-            CREATE TABLE commands (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                command_name TEXT    NOT NULL,
-                datetime     TEXT    NOT NULL,
-                arguments    TEXT    NOT NULL
-            )
-        """)
 
         con.commit()
 
@@ -378,36 +426,39 @@ def _fetch_scan_rows(
     polarity: Optional[str],
 ) -> Iterator[tuple[float, float]]:
     """
-    Return (precursor_mz, intensity) pairs sorted ascending by precursor_mz.
-    Scans with NULL precursor_mz are excluded.
+    Yield (precursor_mz, precursor_intensity) pairs sorted ascending
+    by precursor_mz. Scans with NULL precursor_mz are excluded.
+
+    The SQLite connection stays open for the lifetime of the generator
+    and is closed automatically when the generator is exhausted or
+    garbage collected.
     """
-    with sqlite3.connect(f"file:{ms2_db_path}?mode=ro", uri=True) as con:
-        cursor = None
-        try:
-            if polarity is not None:
-                cursor = con.execute(
-                    """
-                    SELECT precursor_mz, precursor_intensity
-                    FROM ms2_scans
-                    WHERE precursor_mz IS NOT NULL
-                    AND polarity in (?, ?)
-                    ORDER BY precursor_mz ASC
-                    """,
-                    (polarity.upper(), polarity.lower()),
-                )
-            else:
-                cursor = con.execute(
-                    """
-                    SELECT precursor_mz, precursor_intensity
-                    FROM ms2_scans
-                    WHERE precursor_mz IS NOT NULL
-                    ORDER BY precursor_mz ASC
-                    """
-                )
-        finally:
-            if cursor is not None:
-                for row in cursor:
-                    yield row[0], row[1]
+    con = sqlite3.connect(f"file:{ms2_db_path}?mode=ro", uri=True)
+    try:
+        if polarity is not None:
+            cursor = con.execute(
+                """
+                SELECT precursor_mz, precursor_intensity
+                FROM ms2_scans
+                WHERE precursor_mz IS NOT NULL
+                  AND polarity = ?
+                ORDER BY precursor_mz ASC
+                """,
+                (polarity.upper(),),
+            )
+        else:
+            cursor = con.execute(
+                """
+                SELECT precursor_mz, precursor_intensity
+                FROM ms2_scans
+                WHERE precursor_mz IS NOT NULL
+                ORDER BY precursor_mz ASC
+                """
+            )
+        for row in cursor:
+            yield row[0], row[1]
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -419,3 +470,22 @@ def ppm_diff(a: float, b: float) -> float:
     if b == 0:
         return float("inf")
     return abs(a - b) / b * 1e6
+
+
+def _calculate_mz_center(
+        mzs: list[float],
+        intensities: list[float],
+        mz_center_method: MzCenterMethod,
+    ) -> float:
+
+    if mz_center_method == MzCenterMethod.MEAN:
+        return sum(mzs) / len(mzs)
+
+    if mz_center_method == MzCenterMethod.MEDIAN:
+        return statistics.median(mzs)
+
+    if mz_center_method == MzCenterMethod.HIGHEST_PEAK:
+        return mzs[argmax(intensities)]
+
+    else:
+        raise ValueError(f"Unknown mz_center_method: {mz_center_method}")

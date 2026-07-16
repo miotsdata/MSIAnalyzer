@@ -442,6 +442,7 @@ class MzmlParser:
             CREATE TABLE IF NOT EXISTS ms2_scans (
                 scan_id          INTEGER PRIMARY KEY,
                 parent_scan_id       INTEGER,
+                polarity         TEXT,
                 rt               REAL    NOT NULL,
                 precursor_mz     REAL,
                 precursor_charge INTEGER,
@@ -484,15 +485,16 @@ class MzmlParser:
         con.execute(
             """
             INSERT OR REPLACE INTO ms2_scans
-              (scan_id, parent_scan_id, rt,
+              (scan_id, parent_scan_id, polarity, rt,
                precursor_mz, precursor_charge, precursor_intensity,
                n_peaks, tic, group_id,
                mz_array, intensity_array)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 sp["scan_id"],
                 sp.get("parent_scan_id"),
+                sp.get("polarity"),
                 sp["rt"],
                 sp.get("precursor_mz"),
                 sp.get("precursor_charge"),
