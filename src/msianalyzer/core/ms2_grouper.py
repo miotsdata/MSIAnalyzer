@@ -11,7 +11,7 @@ The representative m/z is computed according to mz_center_method.
 Output
 ------
 Results are written to a separate groups DB file containing:
-  - ms2_groups  : one row per group (group_id, mz_center, mz_min, mz_max)
+  - mz_groups  : one row per group (group_id, mz_center, mz_min, mz_max)
   - metadata    : source ms2 db path, ppm_tolerance
 
 The original ms2.db is never modified by grouping.
@@ -83,9 +83,12 @@ def group_ms2_by_filter(
     groups_db_path: Path | str,
     tolerance: float = 10.0,
     tolerance_unit: str = "ppm",
+    max_group_span_Da: float = 2,
+    group_n: int | None = None,
     polarity: Optional[str] = None,
     mz_center_method: MzCenterMethod = MzCenterMethod.MEAN,
-):
+    return_groups: bool = True
+) -> int:
     """
     Cluster MS2 scans by precursor m/z.
 
@@ -103,6 +106,11 @@ def group_ms2_by_filter(
         'POSITIVE', 'NEGATIVE', or None (no filtering).
     mz_center_method : MzCenterMethod
         How to compute the representative m/z for each group.
+    
+        
+    Returns
+    -------
+    Number of groups
     """
     logger.debug("Init group_ms2_by_filter.")
     ms2_db_path  = Path(ms2_db_path)
@@ -117,13 +125,23 @@ def group_ms2_by_filter(
 
     scan_rows: Iterator[tuple[float, float]] = _fetch_scan_rows(ms2_db_path, polarity)
 
+    if return_groups:
+        groups = []
+
     with sqlite3.connect(groups_db_path) as con:
         for group in _cluster_ms2_scans(rows = scan_rows, tolerance=tolerance, tolerance_unit=tolerance_unit, 
-                                        mz_center_method=mz_center_method):
+                                        mz_center_method=mz_center_method, max_group_span_Da=max_group_span_Da,
+                                        group_n=group_n):
             logger.debug("Writing group to file.")
+            if return_groups:
+                groups.append(group)
             _write_group(group, con)
         con.commit()
+        group_ids = con.execute("SELECT group_id from mz_groups;").fetchall()
+
+
     logger.debug("Finished group_ms2_by_filter.")
+    return groups if return_groups else group_ids
 
 
 def assign_ms2_to_groups(
@@ -196,7 +214,7 @@ def assign_ms2_to_groups(
                 mz_max,
                 observed_min,
                 observed_max
-            FROM groups_db.ms2_groups;
+            FROM groups_db.mz_groups;
         """)
 
         #ms2_con.execute("DETACH DATABASE groups_db")
@@ -216,7 +234,7 @@ def assign_ms2_to_groups(
     logger.debug("Adding command to command table.")
     log_command(
         ms2_db_path,
-        command_name="assign_ms2_groups",
+        command_name="assign_mz_groups",
         arguments={
             "groups_db":        groups_db_path.name,
             "groups_db_path":   str(groups_db_path.resolve()),
@@ -235,6 +253,8 @@ def _cluster_ms2_scans(
     tolerance: float,
     tolerance_unit: str,
     mz_center_method: MzCenterMethod,
+    max_group_span_Da: float,
+    group_n: int
 ) -> Iterator[MzGroup | None]:
     """
     Cluster rows into MS2 groups based on their m/z values and yields one group at a time.
@@ -259,35 +279,56 @@ def _cluster_ms2_scans(
             is_first = False
             continue
         
-        if tolerance_unit == "ppm":
-            gap_to_last_ok  = ppm_diff(mz, mzs_group[-1]) <= tolerance * 2
-        elif tolerance_unit == "Da":
-            gap_to_last_ok = (mz - mzs_group[-1]) <= tolerance * 2
-        else:
-            raise ValueError(f"Invalid tolerance unit. Possible settings are 'ppm' or 'Da', found {tolerance_unit}")
-
-        if gap_to_last_ok:
-            logging.debug("Gap to last %.4f ok for mz %.4f", mzs_group[-1], mz)
-            mzs_group.append(mz)
-            intensities_group.append(intensity)
-        else:
-            logging.debug("Gap to last %.4f NOT ok for mz %.4f", mzs_group[-1], mz)
-            old_mzs = mzs_group
-            old_intensities = intensities_group
-            mzs_group = [mz]
-            intensities_group = [intensity]
-
-            if len(old_mzs) == 1 or _is_group_valid(mzs=old_mzs, intensities=old_intensities, 
-                               mz_center_method=mz_center_method,
-                               tolerance=tolerance, tolerance_unit=tolerance_unit):
-                logging.debug("Valid group")
-                yield _prepare_group(mzs_group=old_mzs, intensities_group=old_intensities, mz_center_method=mz_center_method, 
-                                     tolerance=tolerance, tolerance_unit=tolerance_unit)
+        # Use fixed number of elements in group
+        if group_n is not None:
+            if len(mzs_group) <= group_n:
+                logging.debug("Number of mzs in group (%d) less than limit (%d).", len(mzs_group), group_n)
+                mzs_group.append(mz)
+                intensities_group.append(intensity)
             else:
-                logging.debug("splitting group: %s", old_mzs)
-                groups = _split_group(mzs=old_mzs, intensities=old_intensities,mz_center_method=mz_center_method, 
-                                      tolerance=tolerance, tolerance_unit=tolerance_unit)
-                yield from groups
+                logging.debug("Number of mzs in group reached the limit (%d).", group_n)
+                old_mzs = mzs_group
+                old_intensities = intensities_group
+                mzs_group = [mz]
+                intensities_group = [intensity]
+                yield _prepare_group(mzs_group=old_mzs, intensities_group=old_intensities, mz_center_method=mz_center_method, 
+                                        tolerance=tolerance, tolerance_unit=tolerance_unit)
+        # Use specified window to group
+        else:
+            if tolerance_unit == "ppm":
+                gap_to_last_ok  = ppm_diff(mz, mzs_group[-1]) <= tolerance * 2
+            elif tolerance_unit == "Da":
+                gap_to_last_ok = (mz - mzs_group[-1]) <= tolerance * 2
+            else:
+                raise ValueError(f"Invalid tolerance unit. Possible settings are 'ppm' or 'Da', found {tolerance_unit}")
+            
+            group_span_ok = (mz - mzs_group[0]) <= max_group_span_Da
+
+            if gap_to_last_ok and group_span_ok:
+                logging.debug("Gap to last %.4f ok for mz %.4f", mzs_group[-1], mz)
+                mzs_group.append(mz)
+                intensities_group.append(intensity)
+            else:
+                if not gap_to_last_ok:
+                    logging.debug("Gap to last %.4f NOT ok for mz %.4f", mzs_group[-1], mz)
+                elif not group_span_ok:
+                    logging.debug("Gap to first %.4f NOT ok for mz %.4f", mzs_group[-1], mz)
+                old_mzs = mzs_group
+                old_intensities = intensities_group
+                mzs_group = [mz]
+                intensities_group = [intensity]
+
+                if len(old_mzs) == 1 or _is_group_valid(mzs=old_mzs, intensities=old_intensities, 
+                                mz_center_method=mz_center_method,
+                                tolerance=tolerance, tolerance_unit=tolerance_unit):
+                    logging.debug("Valid group")
+                    yield _prepare_group(mzs_group=old_mzs, intensities_group=old_intensities, mz_center_method=mz_center_method, 
+                                        tolerance=tolerance, tolerance_unit=tolerance_unit)
+                else:
+                    logging.debug("splitting group: %s", old_mzs)
+                    groups = _split_group(mzs=old_mzs, intensities=old_intensities,mz_center_method=mz_center_method, 
+                                        tolerance=tolerance, tolerance_unit=tolerance_unit)
+                    yield from groups
 
     if len(mzs_group) == 0:
         return None
@@ -409,7 +450,7 @@ def _prepare_group(mzs_group: list[float], intensities_group: list[float], mz_ce
 
 def _write_group(group: MzGroup, con: sqlite3.Connection):
     """
-    Write a single MzGroup to the ms2_groups table in the groups database.
+    Write a single MzGroup to the mz_groups table in the groups database.
 
     Parameters
     ----------
@@ -419,7 +460,7 @@ def _write_group(group: MzGroup, con: sqlite3.Connection):
         The SQLite connection to the groups database.
     """
     con.execute(
-        "INSERT OR IGNORE INTO ms2_groups (mz_center, mz_min, mz_max, observed_min, observed_max) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO mz_groups (mz_center, mz_min, mz_max, observed_min, observed_max) VALUES (?, ?, ?, ?, ?)",
         (group.mz_center, group.mz_min, group.mz_max, group.observed_min, group.observed_max),
     )
 
@@ -442,7 +483,7 @@ def _initialize_groups_db(
     Schema
     ------
     metadata  : key/value store (source db, parameters)
-    ms2_groups: one row per group
+    mz_groups: one row per group
 
     Raises
     ------
@@ -482,9 +523,9 @@ def _initialize_groups_db(
             ],
         )
 
-        # --- ms2_groups ---
+        # --- mz_groups ---
         con.execute("""
-            CREATE TABLE ms2_groups (
+            CREATE TABLE mz_groups (
                 group_id   INTEGER PRIMARY KEY,
                 mz_center  REAL    NOT NULL,
                 mz_min     REAL    NOT NULL,
@@ -494,7 +535,7 @@ def _initialize_groups_db(
             )
         """)
         con.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_mz_center ON ms2_groups(mz_center)"
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_mz_center ON mz_groups(mz_center)"
         )
 
         con.commit()

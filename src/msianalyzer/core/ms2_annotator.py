@@ -15,9 +15,9 @@ from typing import Optional
 import numpy as np
 
 from msianalyzer.core.mzml_parser import blob_to_array, array_to_blob
-from msianalyzer.core.ms2_grouper import Ms2Group, group_ms2_by_precursor_ppm
+from msianalyzer.core.ms2_grouper import MzCenterMethod, group_ms2_by_filter, assign_ms2_to_groups
 from msianalyzer.core.spectral_matching import reverse_dot_product, MatchResult
-
+from msianalyzer.core.utils.logging_utils import configure_logging
 
 _LIBRARYS = None
 
@@ -32,15 +32,23 @@ def init_worker(config):
 @dataclass
 class AnnotationConfig:
     ms2_db_path: Path
+    groups_db_path: Path
+    annotations_db_path: Path
     library_paths: list[Path]
-    precursor_ppm_tolerance: float = 5.0
+    group_precursor_tolerance: float = 1
+    group_precursor_tolerance_unit: str = "Da"
+    max_group_span_Da: float = 2
+    group_n: int | None = None
+    library_query_tolerance: float = 1
+    library_query_tolerance_unit: str = "Da"
     fragment_ppm_tolerance: float = 5.0
     mz_power: float = 2.0
     int_power: float = 0.5
-    noise_threshold: float = 0.01   # 1 % of base peak
+    noise_threshold: float = 0.01
     min_matched_fraction: float = 0.0
     top_n: int = 1
     polarity: Optional[str] = None
+    mz_center_method: str = "mean"
 
 
 # ---------------------------------------------------------------------------
@@ -82,37 +90,47 @@ class Annotation:
 
 def annotate_ms2(
     config: AnnotationConfig,
-    annotations_db_path: Path | str,
     n_processes: Optional[int] = None,
     progress_callback=None,
 ) -> Path:
-    annotations_db_path = Path(annotations_db_path)
 
-    groups = group_ms2_by_precursor_ppm(
-        config.ms2_db_path, ppm_tolerance=config.precursor_ppm_tolerance
+    group_ids = group_ms2_by_filter(
+        ms2_db_path=config.ms2_db_path, 
+        groups_db_path=config.groups_db_path, 
+        tolerance=config.group_precursor_tolerance, 
+        tolerance_unit=config.group_precursor_tolerance_unit,
+        polarity=config.polarity, 
+        mz_center_method=MzCenterMethod(config.mz_center_method),
+        return_groups=False,
+        max_group_span_Da=config.max_group_span_Da,
+        group_n=config.group_n
     )
 
-    con = _init_annotations_db(annotations_db_path)
+    assign_ms2_to_groups(config.ms2_db_path, config.groups_db_path)
+
+    con = _init_annotations_db(config.annotations_db_path)
     con.close()
 
-    worker_fn = partial(_process_group, config=config, annotations_db_path=annotations_db_path)
-    n_total, n_done = len(groups), 0
+    worker_fn = partial(_process_group, config=config)
+
+    n_total, n_done = len(group_ids), 0 
+
 
     with Pool(processes=n_processes, initializer=init_worker, initargs=(config,)) as pool:
-        for _ in pool.imap_unordered(worker_fn, groups):
+        for _ in pool.imap_unordered(worker_fn, group_ids, chunksize=10):
             n_done += 1
             if progress_callback:
                 progress_callback(n_done, n_total)
 
-    return annotations_db_path
+    return config.annotations_db_path
 
 
 # ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
 
-def _process_group(group: Ms2Group, config: AnnotationConfig, annotations_db_path: Path) -> list[Annotation]:
-    queries = _load_query_spectra(config.ms2_db_path, group.scan_ids)
+def _process_group(group_id, config: AnnotationConfig) -> list[Annotation]:
+    queries = _load_query_spectra(config.ms2_db_path, group_id)
     if not queries:
         return []
 
@@ -123,7 +141,8 @@ def _process_group(group: Ms2Group, config: AnnotationConfig, annotations_db_pat
 
     candidates = _gather_candidates(
             libs, precursor_mz = np.mean([query[-1] for query in queries]),
-            ppm_tolerance = config.precursor_ppm_tolerance,
+            tolerance = config.library_query_tolerance,
+            tolerance_unit = config.library_query_tolerance_unit,
             polarity = config.polarity,
         )
 
@@ -182,7 +201,7 @@ def _process_group(group: Ms2Group, config: AnnotationConfig, annotations_db_pat
     for a in results:
         a.rank_group = scan_to_rank_group.get(a.scan_id, 0)
     
-    _write_annotations(annotations_db_path, results)
+    _write_annotations(config.annotations_db_path, results)
 
     return len(results)
 
@@ -191,14 +210,14 @@ def _process_group(group: Ms2Group, config: AnnotationConfig, annotations_db_pat
 # DB helpers
 # ---------------------------------------------------------------------------
 
-def _load_query_spectra(ms2_db_path, scan_ids):
+def _load_query_spectra(ms2_db_path, group_id):
     con = sqlite3.connect(f"file:{ms2_db_path}?mode=ro", uri=True)
     try:
-        placeholders = ",".join("?" * len(scan_ids))
-        rows = con.execute(
-            f"SELECT scan_id, mz_array, intensity_array, precursor_mz "
-            f"FROM ms2_scans WHERE scan_id IN ({placeholders})",
-            scan_ids,
+        rows = con.execute("""
+            SELECT scan_id, mz_array, intensity_array, isolation_window_target 
+            FROM ms2_scans WHERE group_id = ?;
+            """,
+            group_id,
         ).fetchall()
     finally:
         con.close()
@@ -216,7 +235,8 @@ def _load_library(path):
 def _gather_candidates(
     libs: list,
     precursor_mz: float,
-    ppm_tolerance: float,
+    tolerance: float,
+    tolerance_unit: str,
     polarity: Optional[str],
 ) -> list[dict]:
     """
@@ -228,7 +248,10 @@ def _gather_candidates(
         spectrum_id, compound_id, compound_name, compound_formula,
         inchikey, mz (array-like), intensity (array-like)
     """
-    tol_da = precursor_mz * ppm_tolerance * 1e-6
+    if tolerance_unit == "ppm":
+        tol_da = precursor_mz * tolerance * 1e-6
+    else:
+        tol_da = tolerance
     lo, hi = precursor_mz - tol_da, precursor_mz + tol_da
 
     candidates: list[dict] = []
