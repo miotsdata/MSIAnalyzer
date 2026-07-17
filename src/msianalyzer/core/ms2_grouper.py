@@ -78,7 +78,7 @@ class MzGroup:
 # Public entry points
 # ---------------------------------------------------------------------------
 
-def group_ms2_by_precursor(
+def group_ms2_by_filter(
     ms2_db_path: Path | str,
     groups_db_path: Path | str,
     tolerance: float = 10.0,
@@ -104,12 +104,13 @@ def group_ms2_by_precursor(
     mz_center_method : MzCenterMethod
         How to compute the representative m/z for each group.
     """
+    logger.debug("Init group_ms2_by_filter.")
     ms2_db_path  = Path(ms2_db_path)
     groups_db_path = Path(groups_db_path)
 
-    if tolerance <= 0:
+    if tolerance < 0:
         raise ValueError(f"tolerance must be positive, got {tolerance}")
-
+    
     _initialize_groups_db(ms2_db_path = ms2_db_path, groups_db_path = groups_db_path, 
                           tolerance = tolerance, tolerance_unit=tolerance_unit, polarity = polarity, 
                           mz_center_method = mz_center_method)
@@ -119,8 +120,10 @@ def group_ms2_by_precursor(
     with sqlite3.connect(groups_db_path) as con:
         for group in _cluster_ms2_scans(rows = scan_rows, tolerance=tolerance, tolerance_unit=tolerance_unit, 
                                         mz_center_method=mz_center_method):
+            logger.debug("Writing group to file.")
             _write_group(group, con)
         con.commit()
+    logger.debug("Finished group_ms2_by_filter.")
 
 
 def assign_ms2_to_groups(
@@ -147,6 +150,8 @@ def assign_ms2_to_groups(
     ms2_db_path  = Path(ms2_db_path)
     groups_db_path = Path(groups_db_path)
 
+    logger.debug("Init assign_ms2_to_groups.")
+
     # Write into ms2_scans    
 
     with sqlite3.connect(ms2_db_path) as ms2_con:
@@ -155,11 +160,13 @@ def assign_ms2_to_groups(
         ms2_con.execute("UPDATE ms2_scans SET group_id = NULL;")
         ms2_con.execute("DROP TABLE IF EXISTS group_ranges;")
 
+        logger.debug("Attaching group database.")
         ms2_con.execute(
             "ATTACH DATABASE ? AS groups_db",
             (str(groups_db_path),),
         )
 
+        logger.debug("Creating group_ranges table.")
         ms2_con.execute("""
             CREATE TABLE IF NOT EXISTS group_ranges (
                 group_id  INTEGER PRIMARY KEY,
@@ -170,7 +177,9 @@ def assign_ms2_to_groups(
                 observed_max REAL   NOT NULL
             );
         """)
+        ms2_con.execute("CREATE INDEX IF NOT EXISTS idx_group_ranges_range ON group_ranges(observed_min, observed_max);")
 
+        logger.debug("Inserting groups into group_ranges table.")
         ms2_con.execute("""
             INSERT OR REPLACE INTO group_ranges (
                 group_id,
@@ -191,19 +200,20 @@ def assign_ms2_to_groups(
         """)
 
         #ms2_con.execute("DETACH DATABASE groups_db")
-
+        logger.debug("Updating group_id in ms2 scans.")
         ms2_con.execute("""
             UPDATE ms2_scans
-            SET group_id = (
-                SELECT group_id
-                FROM group_ranges
-                WHERE precursor_mz BETWEEN observed_min AND observed_max
-            )
+            SET group_id = group_ranges.group_id
+            FROM group_ranges
+            WHERE ms2_scans.isolation_window_target
+                BETWEEN group_ranges.observed_min
+                    AND group_ranges.observed_max;
         """)
 
         ms2_con.commit()
 
     # Log the command in ms2.db — include groups DB filename for traceability
+    logger.debug("Adding command to command table.")
     log_command(
         ms2_db_path,
         command_name="assign_ms2_groups",
@@ -237,6 +247,7 @@ def _cluster_ms2_scans(
     mz_center_method : MzCenterMethod
         The method to use for calculating the center m/z of each group.
     """
+    logger.debug("Clustering ms scans.")
     is_first = True
     mzs_group = []
     intensities_group = []
@@ -266,8 +277,8 @@ def _cluster_ms2_scans(
             mzs_group = [mz]
             intensities_group = [intensity]
 
-            if _is_group_valid(mzs=old_mzs, intensities=old_intensities, 
-                               mz_center_method=mz_center_method, 
+            if len(old_mzs) == 1 or _is_group_valid(mzs=old_mzs, intensities=old_intensities, 
+                               mz_center_method=mz_center_method,
                                tolerance=tolerance, tolerance_unit=tolerance_unit):
                 logging.debug("Valid group")
                 yield _prepare_group(mzs_group=old_mzs, intensities_group=old_intensities, mz_center_method=mz_center_method, 
@@ -299,7 +310,7 @@ def _is_group_valid(mzs: list[float], intensities: list[float],
     else:
         raise ValueError(f"Invalid tolerance unit. Possible settings are 'ppm' or 'Da', found {tolerance_unit}")
 
-    return (min_observed_mz > arithmetical_min_mz) and (max_observed_mz < arithmetical_max_mz)
+    return (min_observed_mz >= arithmetical_min_mz) and (max_observed_mz <= arithmetical_max_mz)
 
 
 
@@ -444,6 +455,8 @@ def _initialize_groups_db(
             f"Groups DB already exists: {groups_db_path}. "
             "Delete it first if you want to re-run grouping."
         )
+    
+    logger.debug("Initializing db.")
 
     con = sqlite3.connect(groups_db_path)
     con.execute("PRAGMA journal_mode=WAL")
@@ -488,6 +501,7 @@ def _initialize_groups_db(
 
     finally:
         con.close()
+        logger.debug("Succesfully initialized db.")
 
 # ---------------------------------------------------------------------------
 # Source data fetch
@@ -498,8 +512,8 @@ def _fetch_scan_rows(
     polarity: Optional[str],
 ) -> Iterator[tuple[float, float]]:
     """
-    Yield (precursor_mz, precursor_intensity) pairs sorted ascending
-    by precursor_mz. Scans with NULL precursor_mz are excluded.
+    Yield (isolation_window_target, precursor_intensity) pairs sorted ascending
+    by isolation_window_target. Scans with NULL isolation_window_target are excluded.
 
     The SQLite connection stays open for the lifetime of the generator
     and is closed automatically when the generator is exhausted or
@@ -510,21 +524,21 @@ def _fetch_scan_rows(
         if polarity is not None:
             cursor = con.execute(
                 """
-                SELECT precursor_mz, precursor_intensity
+                SELECT isolation_window_target, precursor_intensity
                 FROM ms2_scans
-                WHERE precursor_mz IS NOT NULL
+                WHERE isolation_window_target IS NOT NULL
                   AND polarity = ?
-                ORDER BY precursor_mz ASC
+                ORDER BY isolation_window_target ASC
                 """,
                 (polarity.upper(),),
             )
         else:
             cursor = con.execute(
                 """
-                SELECT precursor_mz, precursor_intensity
+                SELECT isolation_window_target, precursor_intensity
                 FROM ms2_scans
-                WHERE precursor_mz IS NOT NULL
-                ORDER BY precursor_mz ASC
+                WHERE isolation_window_target IS NOT NULL
+                ORDER BY isolation_window_target ASC
                 """
             )
         for row in cursor:
@@ -551,7 +565,7 @@ def _calculate_mz_center(
     ) -> float:
 
     if mz_center_method == MzCenterMethod.MEAN:
-        return sum(mzs) / len(mzs)
+        return round(sum(mzs) / len(mzs), 4)
 
     if mz_center_method == MzCenterMethod.MEDIAN:
         return statistics.median(mzs)
