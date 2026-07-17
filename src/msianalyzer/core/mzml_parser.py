@@ -172,6 +172,11 @@ _RE_PRECURSOR_INTENSITY = re.compile(
     r'<selectedIon>.*?accession="MS:1000042"[^>]*value="([\d\.eE+\-]+)"',
     re.DOTALL,
 )
+
+_RE_FILTER_STRING = re.compile(
+    r'<cvParam[^>]*accession="MS:1000512"[^>]*value="([^"]*)"'
+)
+
 _RE_ISOLATION_TARGET = re.compile(
     # MS:1000827 = isolation window target m/z — the DDA method target,
     # used for grouping repeated acquisitions of the same precursor.
@@ -389,6 +394,7 @@ class MzmlParser:
             sp["isolation_window_lower"]    = _parse_isolation_lower(text)
             sp["isolation_window_upper"]    = _parse_isolation_upper(text)
             sp["collision_energy"]          = _parse_collision_energy(text)
+            sp["filter_string"]             = _parse_filter_string(text)
 
         return sp
 
@@ -459,6 +465,7 @@ class MzmlParser:
                 parent_scan_id           INTEGER,
                 polarity                 TEXT,
                 rt                       REAL    NOT NULL,
+                filter_string            TEXT    NOT NULL,
                 precursor_mz             REAL,
                 precursor_charge         INTEGER,
                 precursor_intensity      REAL,
@@ -479,6 +486,7 @@ class MzmlParser:
         con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_tic            ON ms2_scans(tic)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_parent         ON ms2_scans(parent_scan_id)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_group          ON ms2_scans(group_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_filter_string      ON ms2_scans(filter_string)")
         con.commit()
         return con
 
@@ -508,19 +516,20 @@ class MzmlParser:
         con.execute(
             """
             INSERT OR REPLACE INTO ms2_scans
-              (scan_id, parent_scan_id, polarity, rt,
+              (scan_id, parent_scan_id, polarity, rt, filter_string,
                precursor_mz, precursor_charge, precursor_intensity,
                isolation_window_target, isolation_window_lower, isolation_window_upper,
                collision_energy,
                n_peaks, tic, group_id,
                mz_array, intensity_array)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 sp["scan_id"],
                 sp.get("parent_scan_id"),
                 sp.get("polarity"),
                 sp["rt"],
+                sp.get("filter_string"),
                 sp.get("precursor_mz"),
                 sp.get("precursor_charge"),
                 sp.get("precursor_intensity"),
@@ -618,7 +627,6 @@ def _parse_rt(text: str) -> Optional[float]:
         val *= 60.0
     return val
 
-
 def _parse_ms_level(text: str) -> int:
     m = _RE_MS_LEVEL.search(text)
     return int(m.group(1)) if m else 1
@@ -631,6 +639,11 @@ def _parse_scan_id(text: str) -> int | str:
     id_str = m.group(1)
     m2 = _RE_SCAN_NUM.search(id_str)
     return int(m2.group(1)) if m2 else id_str
+
+def _parse_filter_string(text: str) -> int:
+    m = _RE_FILTER_STRING.search(text)
+    return m.group(1) if m else 1
+
 
 def _parse_precursor_mz(text: str, decimal_places: int = 4) -> Optional[float]:
     m = _RE_PRECURSOR_MZ.search(text)
