@@ -138,15 +138,25 @@ def _process_group(group_id, config: AnnotationConfig) -> list[Annotation]:
     libs = _LIBRARIES
 
     results: list[Annotation] = []
+    candidates = []
 
-    candidates = _gather_candidates(
-            libs, precursor_mz = np.mean([query[-1] for query in queries]),
-            tolerance = config.library_query_tolerance,
-            tolerance_unit = config.library_query_tolerance_unit,
-            polarity = config.polarity,
-        )
+    if config.group_n is None and config.group_precursor_tolerance == 0:
+        candidates = _gather_candidates(
+                libs, precursor_mz = np.mean([query[-1] for query in queries]),
+                tolerance = config.library_query_tolerance,
+                tolerance_unit = config.library_query_tolerance_unit,
+                polarity = config.polarity,
+            )
 
-    for scan_id, query_mz, query_intensity, _ in queries:
+    for scan_id, query_mz, query_intensity, isolation_window_target in queries:
+
+        if config.group_n is not None or (config.group_n is None and config.group_precursor_tolerance != 0):
+            candidates = _gather_candidates(
+                    libs, precursor_mz = isolation_window_target,
+                    tolerance = config.library_query_tolerance,
+                    tolerance_unit = config.library_query_tolerance_unit,
+                    polarity = config.polarity,
+                )
         
         scored: list[tuple[MatchResult, dict]] = []
         for cand in candidates:
