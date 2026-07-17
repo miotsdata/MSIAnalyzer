@@ -17,13 +17,19 @@ import numpy as np
 from msianalyzer.core.mzml_parser import blob_to_array, array_to_blob
 from msianalyzer.core.ms2_grouper import MzCenterMethod, group_ms2_by_filter, assign_ms2_to_groups
 from msianalyzer.core.spectral_matching import reverse_dot_product, MatchResult
+
+import logging
+
 from msianalyzer.core.utils.logging_utils import configure_logging
 
 _LIBRARYS = None
 
+logger = logging.getLogger(__name__)
+
 def init_worker(config):
     global _LIBRARIES
     _LIBRARIES = [_load_library(p) for p in config.library_paths]
+    configure_logging(level=logging.DEBUG)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -141,6 +147,7 @@ def _process_group(group_id, config: AnnotationConfig) -> list[Annotation]:
     candidates = []
 
     if config.group_n is None and config.group_precursor_tolerance == 0:
+        logger.debug("Gathering candidates for entire group.")
         candidates = _gather_candidates(
                 libs, precursor_mz = np.mean([query[-1] for query in queries]),
                 tolerance = config.library_query_tolerance,
@@ -151,6 +158,7 @@ def _process_group(group_id, config: AnnotationConfig) -> list[Annotation]:
     for scan_id, query_mz, query_intensity, isolation_window_target in queries:
 
         if config.group_n is not None or (config.group_n is None and config.group_precursor_tolerance != 0):
+            logger.debug("Gathering candidates for scan %d, with isolation window target of %d.", scan_id, isolation_window_target)
             candidates = _gather_candidates(
                     libs, precursor_mz = isolation_window_target,
                     tolerance = config.library_query_tolerance,

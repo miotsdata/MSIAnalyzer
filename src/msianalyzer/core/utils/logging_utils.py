@@ -21,5 +21,6 @@ def configure_logging(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s.%(funcName)s: %(message)s",
         handlers=handlers,
+        force=True
     )
 
