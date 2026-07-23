@@ -12,6 +12,7 @@ MzmlParser
 
 from __future__ import annotations
 
+from ast import Bytes
 from datetime import datetime
 import json
 import re
@@ -20,7 +21,7 @@ import zlib
 from base64 import b64decode
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Callable, Iterator, Optional, override
 
 import numpy as np
 
@@ -31,6 +32,7 @@ from msianalyzer.version import __version__ as SOFTWARE_VERSION
 # Public result object
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class MzmlFile:
     """
@@ -40,7 +42,6 @@ class MzmlFile:
     ----------
     source_path : Path
     ms1_db_path : Path
-    ms2_db_path : Path
     n_ms1 : int
     n_ms2 : int
     rt_range : tuple[float, float]
@@ -51,7 +52,6 @@ class MzmlFile:
 
     source_path: Path
     ms1_db_path: Path
-    ms2_db_path: Path
     n_ms1: int = 0
     n_ms2: int = 0
     rt_range: tuple[float, float] = (0.0, 0.0)
@@ -63,16 +63,13 @@ class MzmlFile:
         """Return a new read-only SQLite connection to the MS1 database."""
         return sqlite3.connect(f"file:{self.ms1_db_path}?mode=ro", uri=True)
 
-    def ms2_connection(self) -> sqlite3.Connection:
-        """Return a new read-only SQLite connection to the MS2 database."""
-        return sqlite3.connect(f"file:{self.ms2_db_path}?mode=ro", uri=True)
-
+    @override
     def __repr__(self) -> str:
         return (
             f"MzmlFile(\n"
             f"  source   = '{self.source_path.name}',\n"
             f"  ms1      = {self.n_ms1} scans  →  {self.ms1_db_path.name}\n"
-            f"  ms2      = {self.n_ms2} scans  →  {self.ms2_db_path.name}\n"
+            f"  ms2      = {self.n_ms2} scans\n"
             f"  rt       = [{self.rt_range[0]:.2f}, {self.rt_range[1]:.2f}] s\n"
             f"  ms1 m/z  = [{self.ms1_mz_range[0]:.4f}, {self.ms1_mz_range[1]:.4f}]\n"
             f"  ms2 prec = [{self.ms2_precursor_mz_range[0]:.4f}, {self.ms2_precursor_mz_range[1]:.4f}]\n"
@@ -84,7 +81,10 @@ class MzmlFile:
 # Blob helpers (public — reused by downstream workers)
 # ---------------------------------------------------------------------------
 
-def array_to_blob(arr: np.ndarray, decimal_places: int = 4, compressed: bool = True) -> bytes:
+
+def array_to_blob(
+    arr: np.ndarray, decimal_places: int = 4, compressed: bool = True
+) -> bytes:
     """Compress a numpy array to a zlib-compressed float32 blob."""
     arr = np.round(arr, decimals=decimal_places)
     if compressed:
@@ -110,7 +110,7 @@ def blob_to_array(
 
 # --- Header / instrument ---
 _RE_INSTRUMENT_MODEL = re.compile(
-    r'<cvParam[^>]*accession="MS:1000031"[^>]*value="([^"]*)"'   # instrument model (generic)
+    r'<cvParam[^>]*accession="MS:1000031"[^>]*value="([^"]*)"'  # instrument model (generic)
     r'|<cvParam[^>]*accession="MS:1000483"[^>]*value="([^"]*)"'  # Thermo Fisher model
     r'|<cvParam[^>]*name="([^"]*instrument model[^"]*)"',
     re.IGNORECASE,
@@ -119,24 +119,20 @@ _RE_SERIAL_NUMBER = re.compile(
     r'<cvParam[^>]*accession="MS:1000529"[^>]*value="([^"]*)"'
 )
 _RE_IONIZATION = re.compile(
-    r'<cvParam[^>]*accession="MS:1000073"[^>]*name="([^"]*)"'    # ESI
-    r'|<cvParam[^>]*accession="MS:1000075"[^>]*name="([^"]*)"'   # MALDI
+    r'<cvParam[^>]*accession="MS:1000073"[^>]*name="([^"]*)"'  # ESI
+    r'|<cvParam[^>]*accession="MS:1000075"[^>]*name="([^"]*)"'  # MALDI
     r'|<cvParam[^>]*accession="MS:1000398"[^>]*name="([^"]*)"',  # DESI
 )
 _RE_ANALYZER = re.compile(
-    r'<cvParam[^>]*accession="MS:1000484"[^>]*name="([^"]*)"'    # orbitrap
-    r'|<cvParam[^>]*accession="MS:1000079"[^>]*name="([^"]*)"'   # FT-ICR
-    r'|<cvParam[^>]*accession="MS:1000264"[^>]*name="([^"]*)"'   # ion trap
-    r'|<cvParam[^>]*accession="MS:1000081"[^>]*name="([^"]*)"'   # quadrupole
+    r'<cvParam[^>]*accession="MS:1000484"[^>]*name="([^"]*)"'  # orbitrap
+    r'|<cvParam[^>]*accession="MS:1000079"[^>]*name="([^"]*)"'  # FT-ICR
+    r'|<cvParam[^>]*accession="MS:1000264"[^>]*name="([^"]*)"'  # ion trap
+    r'|<cvParam[^>]*accession="MS:1000081"[^>]*name="([^"]*)"'  # quadrupole
     r'|<cvParam[^>]*accession="MS:1000084"[^>]*name="([^"]*)"',  # TOF
 )
-_RE_START_TIMESTAMP = re.compile(
-    r'startTimeStamp="([^"]+)"'
-)
-_RE_SOURCE_FILE_NAME = re.compile(
-    r'<sourceFile[^>]*name="([^"]*)"'
-)
-_RE_INSTRUMENT_CONFIG_END = re.compile(r'</instrumentConfigurationList>')
+_RE_START_TIMESTAMP = re.compile(r'startTimeStamp="([^"]+)"')
+_RE_SOURCE_FILE_NAME = re.compile(r'<sourceFile[^>]*name="([^"]*)"')
+_RE_INSTRUMENT_CONFIG_END = re.compile(r"</instrumentConfigurationList>")
 
 # --- Per-spectrum ---
 _RE_RT = re.compile(
@@ -146,17 +142,15 @@ _RE_RT = re.compile(
     r'[^>]*unitAccession="UO:(\d+)"'
 )
 _RE_MS_LEVEL = re.compile(r'accession="MS:1000511"[^>]*value="(\d+)"')
-_RE_SCAN_ID  = re.compile(r'\bid="([^"]+)"')
-_RE_SCAN_NUM = re.compile(r'scan=(\d+)')
+_RE_SCAN_ID = re.compile(r'\bid="([^"]+)"')
+_RE_SCAN_NUM = re.compile(r"scan=(\d+)")
 
-_RE_TIC = re.compile(
-    r'<cvParam[^>]*accession="MS:1000285"[^>]*value="([\d\.eE+\-]+)"'
-)
+_RE_TIC = re.compile(r'<cvParam[^>]*accession="MS:1000285"[^>]*value="([\d\.eE+\-]+)"')
 
 _RE_SCAN_POLARITY = re.compile(
     r'<cvParam\s+cvRef="MS"\s+accession="MS:10001(?:29|30)"[^>]*\bname="(\w+) scan"'
 )
- 
+
 # Precursor
 _RE_PRECURSOR_SPECREF = re.compile(r'<precursor\s[^>]*spectrumRef="([^"]*)"')
 _RE_PRECURSOR_MZ = re.compile(
@@ -199,17 +193,18 @@ _RE_COLLISION_ENERGY = re.compile(
 )
 
 # Binary arrays
-_RE_BDA_BLOCK   = re.compile(r'<binaryDataArray[^>]*>(.*?)</binaryDataArray>', re.DOTALL)
-_RE_BINARY_DATA = re.compile(r'<binary>(.*?)</binary>', re.DOTALL)
-_RE_64BIT       = re.compile(r'accession="MS:1000523"')   # 64-bit float
-_RE_ZLIB        = re.compile(r'accession="MS:1000574"')   # zlib compression
-_RE_MZ_ARRAY    = re.compile(r'accession="MS:1000514"')   # m/z array
-_RE_INT_ARRAY   = re.compile(r'accession="MS:1000515"')   # intensity array
+_RE_BDA_BLOCK = re.compile(r"<binaryDataArray[^>]*>(.*?)</binaryDataArray>", re.DOTALL)
+_RE_BINARY_DATA = re.compile(r"<binary>(.*?)</binary>", re.DOTALL)
+_RE_64BIT = re.compile(r'accession="MS:1000523"')  # 64-bit float
+_RE_ZLIB = re.compile(r'accession="MS:1000574"')  # zlib compression
+_RE_MZ_ARRAY = re.compile(r'accession="MS:1000514"')  # m/z array
+_RE_INT_ARRAY = re.compile(r'accession="MS:1000515"')  # intensity array
 
 
 # ---------------------------------------------------------------------------
 # Main parser
 # ---------------------------------------------------------------------------
+
 
 class MzmlParser:
     """
@@ -222,10 +217,6 @@ class MzmlParser:
 
     Parameters
     ----------
-    ms1_db_path : Path | str
-        Destination path for the MS1 SQLite database.
-    ms2_db_path : Path | str
-        Destination path for the MS2 SQLite database.
     include_ms2 : bool
         Store MS2 scans (default True).
     progress_callback : callable | None
@@ -237,18 +228,18 @@ class MzmlParser:
     def __init__(
         self,
         include_ms2: bool = True,
-        progress_callback=None,
+        progress_callback: Callable | None = None,
         decimal_places: int = 4,
     ):
-        self.include_ms2 = include_ms2
-        self.progress_callback = progress_callback
-        self.decimal_places = decimal_places
+        self.include_ms2: bool = include_ms2
+        self.progress_callback: Callable | None = progress_callback
+        self.decimal_places: int = decimal_places
 
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
 
-    def parse(self, mzml_path: Path | str, ms1_db_path: Path | str, ms2_db_path: Path | str) -> MzmlFile:
+    def parse(self, mzml_path: Path | str, ms1_db_path: Path | str) -> MzmlFile:
         """
         Stream-parse *mzml_path* and populate the two SQLite databases, one with ms1 data and one with ms2 data.
 
@@ -257,24 +248,24 @@ class MzmlParser:
         MzmlFile
         """
         mzml_path = Path(mzml_path)
+        ms1_db_path: Path = Path(ms1_db_path)
 
-        instrument_info = _parse_instrument_info(mzml_path)
+        instrument_info: dict[str, Any] = _parse_instrument_info(mzml_path)
 
         ms1_con = self._init_ms1_db(ms1_db_path)
-        ms2_con = self._init_ms2_db(ms2_db_path)
 
         # Write metadata + parse command to both DBs
         parse_dt = datetime.now().astimezone().isoformat()
-        for con in (ms1_con, ms2_con):
+        for con in (ms1_con, ms1_con):
             _insert_metadata(con, mzml_path, instrument_info)
             _insert_command(
                 con,
                 command_name="parse",
                 dt=parse_dt,
                 arguments={
-                    "source_file":    str(mzml_path),
+                    "source_file": str(mzml_path),
                     "decimal_places": self.decimal_places,
-                    "include_ms2":    self.include_ms2,
+                    "include_ms2": self.include_ms2,
                     "msianalyzer_version": SOFTWARE_VERSION,
                 },
             )
@@ -282,9 +273,9 @@ class MzmlParser:
 
         # --- Pass 2: spectrum streaming ---
         n_ms1 = n_ms2 = 0
-        all_rts: list[float]       = []
-        ms1_mz_mins: list[float]   = []
-        ms1_mz_maxs: list[float]   = []
+        all_rts: list[float] = []
+        ms1_mz_mins: list[float] = []
+        ms1_mz_maxs: list[float] = []
         precursor_mzs: list[float] = []
 
         try:
@@ -300,26 +291,25 @@ class MzmlParser:
                         ms1_mz_maxs.append(round(sp["mz_max"], self.decimal_places))
 
                 elif level == 2 and self.include_ms2:
-                    self._insert_ms2(ms2_con, sp)
+                    self._insert_ms2(ms1_con, sp)
                     n_ms2 += 1
                     all_rts.append(sp["rt"])
                     if sp.get("precursor_mz") is not None:
-                        precursor_mzs.append(round(sp["precursor_mz"], self.decimal_places))
+                        precursor_mzs.append(
+                            round(sp["precursor_mz"], self.decimal_places)
+                        )
 
                 if self.progress_callback:
                     self.progress_callback(n_ms1, n_ms2)
 
             ms1_con.commit()
-            ms2_con.commit()
 
         finally:
             ms1_con.close()
-            ms2_con.close()
 
         return MzmlFile(
             source_path=mzml_path,
             ms1_db_path=ms1_db_path,
-            ms2_db_path=ms2_db_path,
             n_ms1=n_ms1,
             n_ms2=n_ms2,
             rt_range=(
@@ -341,7 +331,7 @@ class MzmlParser:
     # Spectrum iterator
     # ------------------------------------------------------------------
 
-    def _iter_spectra(self, path: Path) -> Iterator[dict]:
+    def _iter_spectra(self, path: Path) -> Iterator[dict[str, str | float | int]]:
         """Yield one parsed dict per ``<spectrum>…</spectrum>`` block."""
         inside = False
         buf: list[str] = []
@@ -372,29 +362,39 @@ class MzmlParser:
 
         mz_arr, int_arr = _parse_binary_arrays(text)
 
-        sp: dict = {
-            "scan_id":        _parse_scan_id(text),
-            "rt":             rt,
-            "ms_level":       _parse_ms_level(text),
-            "n_peaks":        len(mz_arr) if mz_arr is not None else None,
-            "mz_min":         float(mz_arr.min()) if mz_arr is not None and len(mz_arr) else None,
-            "mz_max":         float(mz_arr.max()) if mz_arr is not None and len(mz_arr) else None,
-            "mz_blob":        array_to_blob(mz_arr,  self.decimal_places) if mz_arr  is not None else b"",
-            "intensity_blob": array_to_blob(int_arr, self.decimal_places) if int_arr is not None else b"",
-            "tic":            _parse_tic(text),
-            "polarity":       _parse_scan_polarity(text),
+        sp: dict[str, str | float | int | None | bytes] = {
+            "scan_id": _parse_scan_id(text),
+            "rt": rt,
+            "ms_level": _parse_ms_level(text),
+            "n_peaks": len(mz_arr) if mz_arr is not None else None,
+            "mz_min": float(mz_arr.min())
+            if mz_arr is not None and len(mz_arr)
+            else None,
+            "mz_max": float(mz_arr.max())
+            if mz_arr is not None and len(mz_arr)
+            else None,
+            "mz_blob": array_to_blob(mz_arr, self.decimal_places)
+            if mz_arr is not None
+            else b"",
+            "intensity_blob": array_to_blob(int_arr, self.decimal_places)
+            if int_arr is not None
+            else b"",
+            "tic": _parse_tic(text),
+            "polarity": _parse_scan_polarity(text),
         }
 
         if sp["ms_level"] == 2:
-            sp["precursor_mz"]              = _parse_precursor_mz(text, self.decimal_places)
-            sp["precursor_charge"]          = _parse_precursor_charge(text)
-            sp["precursor_intensity"]       = _parse_precursor_intensity(text)
-            sp["parent_scan_id"]            = _parse_parent_scan_id(text)
-            sp["isolation_window_target"]   = _parse_isolation_target(text, self.decimal_places)
-            sp["isolation_window_lower"]    = _parse_isolation_lower(text)
-            sp["isolation_window_upper"]    = _parse_isolation_upper(text)
-            sp["collision_energy"]          = _parse_collision_energy(text)
-            sp["filter_string"]             = _parse_filter_string(text)
+            sp["precursor_mz"] = _parse_precursor_mz(text, self.decimal_places)
+            sp["precursor_charge"] = _parse_precursor_charge(text)
+            sp["precursor_intensity"] = _parse_precursor_intensity(text)
+            sp["parent_scan_id"] = _parse_parent_scan_id(text)
+            sp["isolation_window_target"] = _parse_isolation_target(
+                text, self.decimal_places
+            )
+            sp["isolation_window_lower"] = _parse_isolation_lower(text)
+            sp["isolation_window_upper"] = _parse_isolation_upper(text)
+            sp["collision_energy"] = _parse_collision_energy(text)
+            sp["filter_string"] = _parse_filter_string(text)
 
         return sp
 
@@ -406,6 +406,7 @@ class MzmlParser:
         con = sqlite3.connect(ms1_db_path)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
+        con.execute("PRAGMA foreign_keys = ON")
         con.execute("""
             CREATE TABLE IF NOT EXISTS metadata (
                 key   TEXT PRIMARY KEY,
@@ -438,27 +439,6 @@ class MzmlParser:
         con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_mz_max  ON ms1_scans(mz_max)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_tic     ON ms1_scans(tic)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_pol     ON ms1_scans(polarity)")
-        con.commit()
-        return con
-
-    def _init_ms2_db(self, ms2_db_path: Path | str) -> sqlite3.Connection:
-        con = sqlite3.connect(ms2_db_path)
-        con.execute("PRAGMA journal_mode=WAL")
-        con.execute("PRAGMA synchronous=NORMAL")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS metadata (
-                key   TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS commands (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                command_name TEXT    NOT NULL,
-                datetime     TEXT    NOT NULL,
-                arguments    TEXT    NOT NULL
-            )
-        """)
         con.execute("""
             CREATE TABLE IF NOT EXISTS ms2_scans (
                 scan_id                  INTEGER PRIMARY KEY,
@@ -477,16 +457,33 @@ class MzmlParser:
                 tic                      REAL,
                 group_id                 INTEGER,
                 mz_array                 BLOB    NOT NULL,
-                intensity_array          BLOB    NOT NULL
+                intensity_array          BLOB    NOT NULL,
+                CONSTRAINT fk_ms1_scan
+                FOREIGN KEY (parent_scan_id)
+                REFERENCES ms1_scans(scan_id)
             )
         """)
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_rt             ON ms2_scans(rt)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_precursor_mz   ON ms2_scans(precursor_mz)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_isolation_tgt  ON ms2_scans(isolation_window_target)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_tic            ON ms2_scans(tic)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_parent         ON ms2_scans(parent_scan_id)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_group          ON ms2_scans(group_id)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_filter_string      ON ms2_scans(filter_string)")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ms2_rt             ON ms2_scans(rt)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ms2_precursor_mz   ON ms2_scans(precursor_mz)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ms2_isolation_tgt  ON ms2_scans(isolation_window_target)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ms2_tic            ON ms2_scans(tic)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ms2_parent         ON ms2_scans(parent_scan_id)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ms2_group          ON ms2_scans(group_id)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_filter_string      ON ms2_scans(filter_string)"
+        )
         con.commit()
         return con
 
@@ -504,10 +501,15 @@ class MzmlParser:
             VALUES (?,?,?,?,?,?,?,?,?)
             """,
             (
-                sp["scan_id"], sp["rt"], sp["n_peaks"],
-                sp["mz_min"],  sp["mz_max"],
-                sp["tic"],     sp["polarity"],
-                sp["mz_blob"], sp["intensity_blob"],
+                sp["scan_id"],
+                sp["rt"],
+                sp["n_peaks"],
+                sp["mz_min"],
+                sp["mz_max"],
+                sp["tic"],
+                sp["polarity"],
+                sp["mz_blob"],
+                sp["intensity_blob"],
             ),
         )
 
@@ -539,7 +541,7 @@ class MzmlParser:
                 sp.get("collision_energy"),
                 sp["n_peaks"],
                 sp["tic"],
-                None,           # group_id — assigned later by ms2_grouper
+                None,  # group_id — assigned later by ms2_grouper
                 sp["mz_blob"],
                 sp["intensity_blob"],
             ),
@@ -550,6 +552,7 @@ class MzmlParser:
 # Header pre-pass — instrument metadata
 # ---------------------------------------------------------------------------
 
+
 def _parse_instrument_info(path: Path) -> dict:
     """
     Fast pre-pass: read the mzML header up to and including
@@ -559,12 +562,12 @@ def _parse_instrument_info(path: Path) -> dict:
     the full file into memory.
     """
     info: dict = {
-        "instrument_model":  None,
-        "serial_number":     None,
-        "ionization":        None,
-        "analyzer":          None,
+        "instrument_model": None,
+        "serial_number": None,
+        "ionization": None,
+        "analyzer": None,
         "acquisition_start": None,
-        "source_file":       None,
+        "source_file": None,
     }
 
     header_buf: list[str] = []
@@ -587,9 +590,7 @@ def _parse_instrument_info(path: Path) -> dict:
 
     m = _RE_INSTRUMENT_MODEL.search(header)
     if m:
-        info["instrument_model"] = next(
-            (g for g in m.groups() if g is not None), None
-        )
+        info["instrument_model"] = next((g for g in m.groups() if g is not None), None)
 
     m = _RE_SERIAL_NUMBER.search(header)
     if m:
@@ -613,19 +614,22 @@ def _parse_instrument_info(path: Path) -> dict:
 
     return info
 
+
 # ---------------------------------------------------------------------------
 # Module-level parsing helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_rt(text: str) -> Optional[float]:
     m = _RE_RT.search(text)
     if not m:
         return None
-    val  = float(m.group(1) or m.group(3))
+    val = float(m.group(1) or m.group(3))
     unit = m.group(2) or m.group(4)
-    if unit == "0000031":   # minutes → seconds
+    if unit == "0000031":  # minutes → seconds
         val *= 60.0
     return val
+
 
 def _parse_ms_level(text: str) -> int:
     m = _RE_MS_LEVEL.search(text)
@@ -639,6 +643,7 @@ def _parse_scan_id(text: str) -> int | str:
     id_str = m.group(1)
     m2 = _RE_SCAN_NUM.search(id_str)
     return int(m2.group(1)) if m2 else id_str
+
 
 def _parse_filter_string(text: str) -> int:
     m = _RE_FILTER_STRING.search(text)
@@ -741,8 +746,8 @@ def _parse_binary_arrays(
         if not encoded:
             continue
 
-        dtype       = np.float64 if _RE_64BIT.search(block) else np.float32
-        compression = "zlib"     if _RE_ZLIB.search(block)  else "none"
+        dtype = np.float64 if _RE_64BIT.search(block) else np.float32
+        compression = "zlib" if _RE_ZLIB.search(block) else "none"
 
         try:
             raw = b64decode(encoded)
@@ -764,6 +769,7 @@ def _parse_binary_arrays(
 # Metadata / commands persistence helpers
 # ---------------------------------------------------------------------------
 
+
 def _insert_metadata(
     con: sqlite3.Connection,
     mzml_path: Path,
@@ -771,20 +777,18 @@ def _insert_metadata(
 ) -> None:
     """Write all metadata key/value pairs into the metadata table."""
     rows = [
-        ("source_file",       str(mzml_path.name)),
-        ("source_path",       str(mzml_path.resolve())),
-        ("instrument_model",  instrument_info.get("instrument_model") or ""),
-        ("serial_number",     instrument_info.get("serial_number")    or ""),
-        ("ionization",        instrument_info.get("ionization")       or ""),
-        ("analyzer",          instrument_info.get("analyzer")         or ""),
+        ("source_file", str(mzml_path.name)),
+        ("source_path", str(mzml_path.resolve())),
+        ("instrument_model", instrument_info.get("instrument_model") or ""),
+        ("serial_number", instrument_info.get("serial_number") or ""),
+        ("ionization", instrument_info.get("ionization") or ""),
+        ("analyzer", instrument_info.get("analyzer") or ""),
         ("acquisition_start", instrument_info.get("acquisition_start") or ""),
-        ("original_source",   instrument_info.get("source_file")      or ""),
-        ("db_creation_date",  datetime.now().astimezone().isoformat()),
+        ("original_source", instrument_info.get("source_file") or ""),
+        ("db_creation_date", datetime.now().astimezone().isoformat()),
         ("msianalyzer_version", SOFTWARE_VERSION),
     ]
-    con.executemany(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", rows
-    )
+    con.executemany("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", rows)
 
 
 def _insert_command(
@@ -804,6 +808,7 @@ def _insert_command(
 # Public helper: add a command entry to an existing DB
 # (used by downstream modules: grouper, denoiser, spatial associator)
 # ---------------------------------------------------------------------------
+
 
 def log_command(
     db_path: Path | str,
