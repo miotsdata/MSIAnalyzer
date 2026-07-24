@@ -5,6 +5,7 @@ import pandas as pd
 from scipy.sparse import csr_matrix
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import anndata as ad
+from pathlib import Path
 
 from msianalyzer.core.mzml_parser import blob_to_array
 
@@ -184,8 +185,13 @@ def create_spatial_adata(
     ad_obj = ad.AnnData(X=X_sparse, obs=obs_df, var=var_df)
 
     ad_obj.uns["spatial"] = {}
-    ad_obj.uns["spatial"][db_path] = {"images": {}, "scalefactors": {}, "metadata": {}}
+    ad_obj.uns["spatial"][Path(db_path).stem] = {
+        "images": {},
+        "scalefactors": {},
+        "metadata": {},
+    }
     ad_obj.obsm["spatial"] = np.array(ad_obj.obs.loc[:, ["x", "y"]])
+    ad_obj.obs.file = db_path
 
     # 6. Return AnnData
     return ad_obj
