@@ -14,6 +14,8 @@ license = {text = "MIT"}
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
+[project.scripts]
+msianalyzer = "msianalyzer.cli.main:main"
 
 [tool.pdm]
 distribution = true
