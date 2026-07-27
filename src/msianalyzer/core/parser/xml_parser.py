@@ -1,3 +1,4 @@
+from pathlib import Path
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -7,7 +8,9 @@ import pandas as pd
 # -------------------------------------------------------------------------
 # 1. Parse Raster XML into Spatial Pixel DataFrame
 # -------------------------------------------------------------------------
-def parse_raster_xml(xml_path: str) -> tuple[pd.DataFrame, dict[str, float | int]]:
+def parse_raster_xml(
+    xml_path: str | Path,
+) -> tuple[pd.DataFrame, dict[str, float | int]]:
     """
     Parses AP-MALDI target raster XML file and returns pixel time windows
     along with global metadata (grid dimensions, start time).

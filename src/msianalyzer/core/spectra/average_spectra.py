@@ -1,12 +1,13 @@
 import sqlite3
 import numpy as np
 from scipy.signal import find_peaks
+from pathlib import Path
 
-from msianalyzer.core.mzml_parser import blob_to_array
+from msianalyzer.core.parser import array_to_blob, blob_to_array
 
 
 def get_average_ms1_spectra(
-    db_path: str,
+    db_path: str | Path,
     chunk_size: int = 2000,
     bin_width: float = 0.0001,
     min_mz: float = 70.0,
@@ -70,6 +71,34 @@ def get_average_ms1_spectra(
     bin_centers = min_mz + (np.arange(num_bins) + 0.5) * bin_width
 
     return bin_centers, mean_intensities
+
+
+def save_average_ms1_spectra(
+    mzs_array: np.ndarray,
+    intensities_array: np.ndarray,
+    bin_width: float,
+    ms1_db_path: Path | str,
+) -> None:
+    mzs_blob = array_to_blob(mzs_array)
+    intensities_blob = array_to_blob(intensities_array)
+    with sqlite3.connect(Path(ms1_db_path)) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS average_ms1 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bin_width FLOAT NOT NULL,
+            mz_array BLOB,
+            intensity_array BLOB
+            );
+        """)
+        cursor.execute(
+            """
+            INSERT INTO average_ms1 (bin_width, mz_array, intensity_array)
+            VALUES (?, ?, ?);
+            """,
+            (bin_width, mzs_blob, intensities_blob),
+        )
+        conn.commit()
 
 
 def detect_ms1_centroids(

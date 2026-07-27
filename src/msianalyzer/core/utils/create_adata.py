@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import anndata as ad
 from pathlib import Path
 
-from msianalyzer.core.mzml_parser import blob_to_array
+from msianalyzer.core.parser import blob_to_array
 
 
 def create_spatial_adata(
