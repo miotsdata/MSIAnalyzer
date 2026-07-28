@@ -3,6 +3,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import pandas as pd
+import numpy as np
+
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
+from functools import partial
 
 from msianalyzer.core.config import Config
 from msianalyzer.core.spectra.average_spectra import (
@@ -107,92 +112,115 @@ def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
     run.set_defaults(func=run_command)
 
 
+@dataclass
+class SampleResult:
+    out_db_path: Path
+    peaks_mzs: np.ndarray
+
+
+def _process_one_sample(
+    mzml_path: Path,
+    xml_path: Path,
+    out_dir: Path,
+    ms1_chunk_size: int,
+    ms1_bin_width: float,
+    ms1_min_mz: float,
+    ms1_max_mz: float,
+    snr_threshold: float,
+    min_prominence_factor: float,
+    min_distance_bins: int,
+    peak_height_threshold: float,
+) -> SampleResult:
+    out_db_path = out_dir / f"{mzml_path.stem}.db"
+
+    mzml_parser = MzmlParser()
+    mzml_parser.parse(mzml_path=mzml_path, ms1_db_path=out_db_path)
+
+    df_pixels, _ = parse_raster_xml(xml_path)
+    map_pixels_to_db(db_path=out_db_path, df_pixels=df_pixels)
+
+    average_ms1_mzs, average_ms1_intensities = get_average_ms1_spectra(
+        db_path=out_db_path,
+        chunk_size=ms1_chunk_size,
+        bin_width=ms1_bin_width,
+        min_mz=ms1_min_mz,
+        max_mz=ms1_max_mz,
+    )
+    log_command(
+        db_path=out_db_path,
+        command_name="get_average_ms1_spectra",
+        arguments={
+            "chunk_size": ms1_chunk_size,
+            "bin_width": ms1_bin_width,
+            "min_mz": ms1_min_mz,
+            "max_mz": ms1_max_mz,
+        },
+    )
+
+    save_average_ms1_spectra(
+        average_ms1_mzs,
+        average_ms1_intensities,
+        ms1_bin_width,
+        ms1_db_path=out_db_path,
+    )
+
+    peaks_mzs, peaks_intensities = detect_ms1_centroids(
+        bin_centers=average_ms1_mzs,
+        mean_intensities=average_ms1_intensities,
+        snr_threshold=snr_threshold,
+        min_prominence_factor=min_prominence_factor,
+        min_distance_bins=min_distance_bins,
+    )
+    log_command(
+        db_path=out_db_path,
+        command_name="detect_ms1_centroids",
+        arguments={
+            "snr_threshold": snr_threshold,
+            "min_prominence_factor": min_prominence_factor,
+            "min_distance_bins": min_distance_bins,
+        },
+    )
+
+    mask = peaks_intensities >= peak_height_threshold
+    peaks_mzs = peaks_mzs[mask]
+    peaks_intensities = peaks_intensities[mask]
+
+    peaks_df = pd.DataFrame({"mz": peaks_mzs, "intensity": peaks_intensities})
+    peaks_df.to_csv(out_dir / f"{mzml_path.stem}_peaks_data.csv")
+
+    return SampleResult(out_db_path=out_db_path, peaks_mzs=peaks_mzs)
+
+
 def run_command(args: argparse.Namespace) -> None:
     config: Config = resolve_config(args)
+    out_dir = Path(config.out_dir)
+    mzml_paths = [Path(m) for m in config.mzml_paths]
+    xml_paths = [Path(x) for x in config.xml_paths]
 
-    # Create db file and match pixels
-    mzml_parser = MzmlParser()
+    worker = partial(
+        _process_one_sample,
+        out_dir=out_dir,
+        ms1_chunk_size=config.ms1_chunk_size,
+        ms1_bin_width=config.ms1_bin_width,
+        ms1_min_mz=config.ms1_min_mz,
+        ms1_max_mz=config.ms1_max_mz,
+        snr_threshold=config.snr_threshold,
+        min_prominence_factor=config.min_prominence_factor,
+        min_distance_bins=config.min_distance_bins,
+        peak_height_threshold=config.peak_height_threshold,
+    )
 
-    all_peaks_mzs = []
-    out_db_paths = []
-    for i, mzml_path in enumerate(config.mzml_paths):
-        mzml_path = Path(mzml_path)
-        xml_path = Path(config.xml_paths[i])
-        out_db_path: Path = Path(str(config.out_dir) + "/" + mzml_path.stem + ".db")
-        out_db_paths.append(out_db_path)
+    with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
+        results = list(executor.map(worker, mzml_paths, xml_paths))
 
-        # Parse mzml
-        _ = mzml_parser.parse(mzml_path=mzml_path, ms1_db_path=out_db_path)
-
-        # Insert pixels info
-        df_pixels, _ = parse_raster_xml(xml_path)
-
-        # Match ms1 with pixels
-        map_pixels_to_db(db_path=out_db_path, df_pixels=df_pixels)
-
-        # Get average ms1
-        average_ms1_mzs, average_ms1_intensities = get_average_ms1_spectra(
-            db_path=out_db_path,
-            chunk_size=config.ms1_chunk_size,
-            bin_width=config.ms1_bin_width,
-            min_mz=config.ms1_min_mz,
-            max_mz=config.ms1_max_mz,
-        )
-
-        log_command(
-            db_path=out_db_path,
-            command_name="get_average_ms1_spectra",
-            arguments={
-                "chunk_size": config.ms1_chunk_size,
-                "bin_width": config.ms1_bin_width,
-                "min_mz": config.ms1_min_mz,
-                "max_mz": config.ms1_max_mz,
-            },
-        )
-
-        # Save ms1 in db
-        save_average_ms1_spectra(
-            average_ms1_mzs,
-            average_ms1_intensities,
-            config.ms1_bin_width,
-            ms1_db_path=out_db_path,
-        )
-
-        # Detect centroids
-        peaks_mzs, peaks_intensities = detect_ms1_centroids(
-            bin_centers=average_ms1_mzs,
-            mean_intensities=average_ms1_intensities,
-            snr_threshold=config.snr_threshold,
-            min_prominence_factor=config.min_prominence_factor,
-            min_distance_bins=config.min_distance_bins,
-        )
-
-        log_command(
-            db_path=out_db_path,
-            command_name="detect_ms1_centroids",
-            arguments={
-                "snr_threshold": config.snr_threshold,
-                "min_prominence_factor": config.min_prominence_factor,
-                "min_distance_bins": config.min_distance_bins,
-            },
-        )
-
-        # Filter for threshold
-        mask = peaks_intensities >= config.peak_height_threshold
-        peaks_mzs = peaks_mzs[mask]
-        peaks_intensities = peaks_intensities[mask]
-
-        # Save peaks
-        peaks_df = pd.DataFrame({"mz": peaks_mzs, "intensity": peaks_intensities})
-
-        peaks_df.to_csv(str(config.out_dir) + "/" + mzml_path.stem + "_peaks_data.csv")
-        all_peaks_mzs.append(peaks_mzs)
+    out_db_paths = [r.out_db_path for r in results]
+    all_peaks_mzs = [r.peaks_mzs for r in results]
 
     # Align all mzs
     mzs_df = align_mz_across_samples(
         mz_arrays=all_peaks_mzs,
         sample_names=config.sample_names
-        if config.sample_names != []
+        if config.sample_names is not None
         else [str(m) for m in config.mzml_paths],
         ppm=config.merge_mz_ppm,
     )

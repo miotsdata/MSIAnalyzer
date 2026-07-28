@@ -11,7 +11,7 @@ from msianalyzer.core.parser import blob_to_array
 
 
 def create_spatial_adata(
-    db_path: str,
+    db_path: str | Path,
     target_mz_set: set[float] | list[float] | np.ndarray,
     ppm_val: float = 5.0,
     batch_size: int = 1000,
