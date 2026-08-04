@@ -3,7 +3,10 @@ import pandas as pd
 
 
 def align_mz_across_samples(
-    mz_arrays: list[np.ndarray], sample_names: list[str] = None, ppm: float = 10.0
+    mz_arrays: list[np.ndarray],
+    sample_names: list[str] = None,
+    ppm: float = 10.0,
+    mz_decimals: int = 4,
 ) -> pd.DataFrame:
     """
     Aligns m/z arrays across multiple samples within a target ppm window.
@@ -69,7 +72,7 @@ def align_mz_across_samples(
     for cluster in clusters:
         # Calculate master m/z as average across matched peaks
         cluster_mz = np.mean([p[0] for p in cluster])
-        final_mzs.append(cluster_mz)
+        final_mzs.append(round(cluster_mz, mz_decimals))
 
         # Record original index per sample
         row = {name: np.nan for name in sample_names}

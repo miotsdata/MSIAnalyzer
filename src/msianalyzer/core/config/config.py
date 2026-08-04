@@ -38,6 +38,7 @@ class Config:
         # Find all mzs
         merge_mz_ppm: float = 5.0,
         sample_names: list[str] | None = None,
+        mz_decimals: int = 4,
         # Create h5ad
         integration_ppm: float = 5.0,
         integration_batch_size: int = 1000,
@@ -71,6 +72,7 @@ class Config:
         # Find all mzs
         self.merge_mz_ppm: float = merge_mz_ppm
         self.sample_names: list[str] | None = sample_names
+        self.mz_decimals: int = mz_decimals
 
         # Create h5ad
         self.integration_ppm: float = integration_ppm
@@ -202,7 +204,7 @@ class Config:
                     "filter_mad_nmads",
                 ],
             ),
-            ("find all mzs", ["merge_mz_ppm", "sample_names"]),
+            ("find all mzs", ["merge_mz_ppm", "sample_names", "mz_decimals"]),
             (
                 "create h5ad",
                 [

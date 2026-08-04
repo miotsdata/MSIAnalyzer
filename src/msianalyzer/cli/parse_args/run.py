@@ -102,6 +102,7 @@ def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
     # --- Find all mzs ---
     mz_group = run.add_argument_group("find all mzs")
     mz_group.add_argument("--merge-mz-ppm", type=float, default=None)
+    mz_group.add_argument("--mz-decimals", type=int, default=None)
     mz_group.add_argument(
         "--sample-names",
         nargs="+",
@@ -259,6 +260,7 @@ def run_command(args: argparse.Namespace) -> None:
         if config.sample_names is not None
         else [str(m) for m in config.mzml_paths],
         ppm=config.merge_mz_ppm,
+        mz_decimals=config.mz_decimals,
     )
 
     out_dir = Path(config.out_dir)
