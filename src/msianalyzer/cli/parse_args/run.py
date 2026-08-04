@@ -1,24 +1,30 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-import pandas as pd
-import numpy as np
-
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
+from random import choices
+import numpy as np
+import pandas as pd
+import logging
+
+from concurrent.futures import ProcessPoolExecutor
 
 from msianalyzer.core.config import Config
+from msianalyzer.core.parser import MzmlParser, log_command, parse_raster_xml
+from msianalyzer.core.plotting.plotter import Plotter
 from msianalyzer.core.spectra.average_spectra import (
     detect_ms1_centroids,
+    filter_intensities_mad,
     get_average_ms1_spectra,
     save_average_ms1_spectra,
 )
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 from msianalyzer.core.utils.create_adata import create_spatial_adata
 from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
-from msianalyzer.core.parser import MzmlParser, parse_raster_xml, log_command
+
+logger = logging.getLogger(__name__)
 
 
 def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -77,13 +83,21 @@ def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
 
     # --- Detect centroids ---
     centroid_group = run.add_argument_group("detect centroids")
-    centroid_group.add_argument("--snr-threshold", type=float, default=None)
-    centroid_group.add_argument("--min-prominence-factor", type=float, default=None)
-    centroid_group.add_argument("--min-distance-bins", type=int, default=None)
+    centroid_group.add_argument("--prominence-factor", type=float, default=None)
+    centroid_group.add_argument("--basline-factor", type=float, default=None)
+    centroid_group.add_argument(
+        "--baseline-method", type=str, default=None, choices=["local", "global"]
+    )
+    centroid_group.add_argument("--baseline-percentile", type=float, default=None)
+    centroid_group.add_argument("--local-window", type=int, default=None)
+    centroid_group.add_argument("--smooth-sigma", type=float, default=None)
 
     # --- Peak threshold ---
     peak_group = run.add_argument_group("peak threshold")
     peak_group.add_argument("--peak-height-threshold", type=float, default=None)
+    peak_group.add_argument("--filter-mad", action="store_true", default=None)
+    peak_group.add_argument("--filter-mad-log", action="store_true", default=None)
+    peak_group.add_argument("--filter-mad-nmads", type=float, default=None)
 
     # --- Find all mzs ---
     mz_group = run.add_argument_group("find all mzs")
@@ -105,7 +119,7 @@ def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
         "--integration-scan-handling",
         type=str,
         default=None,
-        choices=["sum", "mean", "max"],  # adjust to your actual allowed values
+        choices=["sum", "mean", "max"],
     )
     h5ad_group.add_argument("--n-workers", type=int, default=None)
 
@@ -121,16 +135,9 @@ class SampleResult:
 def _process_one_sample(
     mzml_path: Path,
     xml_path: Path,
-    out_dir: Path,
-    ms1_chunk_size: int,
-    ms1_bin_width: float,
-    ms1_min_mz: float,
-    ms1_max_mz: float,
-    snr_threshold: float,
-    min_prominence_factor: float,
-    min_distance_bins: int,
-    peak_height_threshold: float,
+    config: Config,
 ) -> SampleResult:
+    out_dir = Path(config.out_dir)
     out_db_path = out_dir / f"{mzml_path.stem}.db"
 
     mzml_parser = MzmlParser()
@@ -138,52 +145,89 @@ def _process_one_sample(
 
     df_pixels, _ = parse_raster_xml(xml_path)
     map_pixels_to_db(db_path=out_db_path, df_pixels=df_pixels)
+    logger.debug("%s: Assigned %d pixels", mzml_path, df_pixels.shape[0])
 
     average_ms1_mzs, average_ms1_intensities = get_average_ms1_spectra(
         db_path=out_db_path,
-        chunk_size=ms1_chunk_size,
-        bin_width=ms1_bin_width,
-        min_mz=ms1_min_mz,
-        max_mz=ms1_max_mz,
+        chunk_size=config.ms1_chunk_size,
+        bin_width=config.ms1_bin_width,
+        min_mz=config.ms1_min_mz,
+        max_mz=config.ms1_max_mz,
     )
     log_command(
         db_path=out_db_path,
         command_name="get_average_ms1_spectra",
         arguments={
-            "chunk_size": ms1_chunk_size,
-            "bin_width": ms1_bin_width,
-            "min_mz": ms1_min_mz,
-            "max_mz": ms1_max_mz,
+            "chunk_size": config.ms1_chunk_size,
+            "bin_width": config.ms1_bin_width,
+            "min_mz": config.ms1_min_mz,
+            "max_mz": config.ms1_max_mz,
         },
     )
+
+    logger.debug("%s: Found %d average ms1 mzs", mzml_path, len(average_ms1_mzs))
 
     save_average_ms1_spectra(
         average_ms1_mzs,
         average_ms1_intensities,
-        ms1_bin_width,
+        config.ms1_bin_width,
         ms1_db_path=out_db_path,
     )
 
     peaks_mzs, peaks_intensities = detect_ms1_centroids(
         bin_centers=average_ms1_mzs,
         mean_intensities=average_ms1_intensities,
-        snr_threshold=snr_threshold,
-        min_prominence_factor=min_prominence_factor,
-        min_distance_bins=min_distance_bins,
+        baseline_factor=config.baseline_factor,
+        prominence_factor=config.prominence_factor,
+        merge_ppm=config.merge_mz_ppm,
+        baseline_method=config.baseline_method,
+        baseline_percentile=config.baseline_percentile,
+        local_window=config.local_window,
+        smooth_sigma=config.smooth_sigma,
     )
     log_command(
         db_path=out_db_path,
         command_name="detect_ms1_centroids",
         arguments={
-            "snr_threshold": snr_threshold,
-            "min_prominence_factor": min_prominence_factor,
-            "min_distance_bins": min_distance_bins,
+            "snr_threshold": getattr(config, "snr_threshold", None),
+            "prominence_factor": config.prominence_factor,
         },
     )
 
-    mask = peaks_intensities >= peak_height_threshold
-    peaks_mzs = peaks_mzs[mask]
-    peaks_intensities = peaks_intensities[mask]
+    logger.debug(
+        "%s: Detected %d centroids for file %s", mzml_path, len(peaks_mzs), mzml_path
+    )
+
+    if config.filter_mad:
+        logger.debug(
+            "%s: Filtering with mad, log %s, nmads %.2f",
+            mzml_path,
+            str(config.filter_mad_log),
+            config.filter_mad_nmads,
+        )
+        peaks_mzs, peaks_intensities = filter_intensities_mad(
+            peaks_mzs,
+            peaks_intensities,
+            log=config.filter_mad_log,
+            n_mads=config.filter_mad_nmads,
+        )
+
+    else:
+        mask = peaks_intensities >= config.peak_height_threshold
+        peaks_mzs = peaks_mzs[mask]
+        peaks_intensities = peaks_intensities[mask]
+
+    logger.debug(
+        "%s, After filtering: %d peaks, min int %d, max int %d",
+        mzml_path,
+        len(peaks_mzs),
+        min(peaks_intensities),
+        max(peaks_intensities),
+    )
+
+    pl = Plotter()
+    f = pl.plot_spectra(peaks_mzs, peaks_intensities)
+    f.write_html(out_dir / f"{mzml_path.stem}_filtered_ms1.html")
 
     peaks_df = pd.DataFrame({"mz": peaks_mzs, "intensity": peaks_intensities})
     peaks_df.to_csv(out_dir / f"{mzml_path.stem}_peaks_data.csv")
@@ -193,22 +237,14 @@ def _process_one_sample(
 
 def run_command(args: argparse.Namespace) -> None:
     config: Config = resolve_config(args)
-    out_dir = Path(config.out_dir)
     mzml_paths = [Path(m) for m in config.mzml_paths]
     xml_paths = [Path(x) for x in config.xml_paths]
 
-    worker = partial(
-        _process_one_sample,
-        out_dir=out_dir,
-        ms1_chunk_size=config.ms1_chunk_size,
-        ms1_bin_width=config.ms1_bin_width,
-        ms1_min_mz=config.ms1_min_mz,
-        ms1_max_mz=config.ms1_max_mz,
-        snr_threshold=config.snr_threshold,
-        min_prominence_factor=config.min_prominence_factor,
-        min_distance_bins=config.min_distance_bins,
-        peak_height_threshold=config.peak_height_threshold,
-    )
+    out_dir = config.out_dir
+    if not out_dir.exists():
+        out_dir.mkdir()
+
+    worker = partial(_process_one_sample, config=config)
 
     with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
         results = list(executor.map(worker, mzml_paths, xml_paths))
@@ -225,7 +261,8 @@ def run_command(args: argparse.Namespace) -> None:
         ppm=config.merge_mz_ppm,
     )
 
-    mzs_df.to_csv(str(config.out_dir) + "/aligned_mzs.csv")
+    out_dir = Path(config.out_dir)
+    mzs_df.to_csv(out_dir / "aligned_mzs.csv")
 
     for db_path in out_db_paths:
         tmp_adata = create_spatial_adata(
@@ -236,7 +273,7 @@ def run_command(args: argparse.Namespace) -> None:
             scan_handling=config.integration_scan_handling,
         )
 
-        tmp_adata.write_h5ad(str(config.out_dir) + "/" + str(db_path.stem) + ".h5ad")
+        tmp_adata.write_h5ad(out_dir / f"{db_path.stem}.h5ad")
 
 
 def resolve_config(args: argparse.Namespace) -> Config:
@@ -250,28 +287,15 @@ def resolve_config(args: argparse.Namespace) -> Config:
     else:
         base = {}
 
+    # Ignore argparse internal metadata (func, config, command, etc.)
+    cli_args = vars(args)
     overrides = {
-        "mzml_paths": args.mzml_paths,
-        "xml_paths": args.xml_paths,
-        "out_dir": args.out_dir,
-        "ms1_chunk_size": args.ms1_chunk_size,
-        "ms1_bin_width": args.ms1_bin_width,
-        "ms1_min_mz": args.ms1_min_mz,
-        "ms1_max_mz": args.ms1_max_mz,
-        "snr_threshold": args.snr_threshold,
-        "min_prominence_factor": args.min_prominence_factor,
-        "min_distance_bins": args.min_distance_bins,
-        "peak_height_threshold": args.peak_height_threshold,
-        "merge_mz_ppm": args.merge_mz_ppm,
-        "sample_names": args.sample_names,
-        "integration_ppm": args.integration_ppm,
-        "integration_batch_size": args.integration_batch_size,
-        "integration_scan_handling": args.integration_scan_handling,
-        "n_workers": args.n_workers,
+        k: v
+        for k, v in cli_args.items()
+        if k not in ("func", "config", "command", "subparser_name") and v is not None
     }
-    for key, value in overrides.items():
-        if value is not None:
-            base[key] = value
+
+    base.update(overrides)
 
     missing = [k for k in ("mzml_paths", "xml_paths", "out_dir") if k not in base]
     if missing:

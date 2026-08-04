@@ -1,8 +1,13 @@
+from ast import Tuple
 import sqlite3
 import numpy as np
 from scipy.signal import find_peaks
 from pathlib import Path
+from typing import Literal
 
+import pandas as pd
+from scipy.ndimage import gaussian_filter1d
+from scipy.spatial import cKDTree
 from msianalyzer.core.parser import array_to_blob, blob_to_array
 
 
@@ -101,53 +106,226 @@ def save_average_ms1_spectra(
         conn.commit()
 
 
+def _infer_decimal_places(bin_centers: np.ndarray) -> int:
+    """
+    Infer the decimal precision of the input m/z values from the bin spacing.
+    """
+    if len(bin_centers) < 2:
+        return 4
+
+    spacing = np.median(np.diff(bin_centers))
+    text = f"{spacing:.10f}".rstrip("0")
+
+    if "." not in text:
+        return 0
+
+    return len(text.split(".")[1])
+
+
+def _estimate_baseline(
+    intensities: np.ndarray,
+    method: Literal["global", "local"] = "global",
+    percentile: float = 10.0,
+    local_window: int = 501,
+    smooth_sigma: float = 10.0,
+) -> np.ndarray:
+    """
+    Estimate the spectral baseline.
+
+    Parameters
+    ----------
+    method
+        "global": single baseline for the whole spectrum.
+        "local": rolling percentile followed by Gaussian smoothing.
+    percentile
+        Percentile of non-zero intensities used as baseline.
+    local_window
+        Rolling window (bins) for local baseline estimation.
+    smooth_sigma
+        Gaussian smoothing sigma (bins) applied to the local baseline.
+    """
+
+    positive = intensities[intensities > 0]
+
+    if len(positive) == 0:
+        if method == "global":
+            return np.array(0.0)
+        return np.zeros_like(intensities)
+
+    global_baseline = np.percentile(positive, percentile)
+
+    if method == "global":
+        return np.array(global_baseline)
+
+    # Ignore empty bins
+    s = pd.Series(intensities).mask(lambda x: x == 0)
+
+    baseline = (
+        s.rolling(
+            window=local_window,
+            center=True,
+            min_periods=max(5, local_window // 10),
+        )
+        .quantile(percentile / 100)
+        .to_numpy()
+    )
+
+    # Fill windows with insufficient data
+    baseline = np.nan_to_num(baseline, nan=global_baseline)
+
+    # Smooth slowly varying background
+    baseline = gaussian_filter1d(baseline, sigma=smooth_sigma)
+
+    return baseline
+
+
+def _merge_peaks_ppm(mz, intensity, ppm: float = 5):
+
+    order = np.argsort(intensity)[::-1]
+
+    mz_ordered = mz[order]
+
+    tree = cKDTree(mz_ordered[:, None])
+
+    removed = np.zeros(len(mz), dtype=bool)
+
+    selected = []
+
+    for idx in range(len(mz_ordered)):
+        if removed[idx]:
+            continue
+
+        selected.append(order[idx])
+
+        mz0 = mz_ordered[idx]
+        tol = mz0 * ppm * 1e-6
+
+        neighbours = tree.query_ball_point([[mz0]], r=tol)[0]
+
+        removed[neighbours] = True
+
+    selected = np.array(selected)
+    selected = selected[np.argsort(mz[selected])]
+
+    return mz[selected], intensity[selected]
+
+
 def detect_ms1_centroids(
     bin_centers: np.ndarray,
     mean_intensities: np.ndarray,
-    snr_threshold: float = 3.0,
-    min_prominence_factor: float = 0.01,
-    min_distance_bins: int = 3,
+    *,
+    baseline_factor: float = 3.0,
+    prominence_factor: float = 1.0,
+    merge_ppm: float = 5,
+    baseline_method: Literal["global", "local"] = "local",
+    baseline_percentile: float = 10.0,
+    local_window: int = 501,
+    smooth_sigma: float = 10.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Detects real peaks and converts binned signals into centroided m/z and intensities.
-    """
-    # Estimate noise baseline (Median Absolute Deviation)
-    noise_level = np.median(np.abs(mean_intensities - np.median(mean_intensities)))
-    min_height = noise_level * snr_threshold
+    Detect centroided peaks from an aggregated profile MS1 spectrum.
 
-    # 1. Find local maxima with SciPy
-    peak_indices, properties = find_peaks(
+    Parameters
+    ----------
+    baseline_factor
+        Peaks must be at least baseline + baseline_factor * baseline.
+    prominence_factor
+        Minimum prominence expressed as a multiple of the baseline.
+    min_distance_bins
+        Minimum separation between peaks (bins).
+    baseline_method
+        "global" or "local".
+    baseline_percentile
+        Percentile used to estimate the baseline.
+    local_window
+        Rolling window size for local baseline estimation.
+    smooth_sigma
+        Gaussian smoothing sigma applied to the local baseline.
+    """
+
+    baseline = _estimate_baseline(
+        intensities=mean_intensities,
+        method=baseline_method,
+        percentile=baseline_percentile,
+        local_window=local_window,
+        smooth_sigma=smooth_sigma,
+    )
+
+    height = baseline * (1.0 + baseline_factor)
+    prominence = baseline * prominence_factor
+
+    peak_indices, _ = find_peaks(
         mean_intensities,
-        height=min_height,
-        prominence=min_height * min_prominence_factor,
-        distance=min_distance_bins,  # Ensures peaks are separated by at least 2 bins
+        height=height,
+        prominence=prominence,
     )
 
     if len(peak_indices) == 0:
-        return np.array([]), np.array([])
+        return np.array([], dtype=float), np.array([], dtype=float)
 
-    # 2. Refine centroid m/z using 3-point parabolic interpolation
-    # (Fixes binning discretization, yielding sub-bin mass accuracy)
-    refined_mzs = []
-    refined_ints = []
+    decimals = _infer_decimal_places(bin_centers)
 
-    for idx in peak_indices:
+    refined_mzs = np.empty(len(peak_indices), dtype=float)
+    refined_intensities = np.empty(len(peak_indices), dtype=float)
+
+    for i, idx in enumerate(peak_indices):
         if 0 < idx < len(mean_intensities) - 1:
             y1, y2, y3 = mean_intensities[idx - 1 : idx + 2]
             x1, x2, x3 = bin_centers[idx - 1 : idx + 2]
 
-            # Parabolic peak refinement
             denom = y1 - 2 * y2 + y3
-            if denom != 0:
+
+            if np.abs(denom) > 1e-12:
                 delta = 0.5 * (y1 - y3) / denom
-                exact_mz = x2 + delta * (x3 - x1) / 2
-                exact_int = y2 - 0.25 * (y1 - y3) * delta
+
+                refined_mzs[i] = x2 + delta * (x3 - x1) / 2
+                refined_intensities[i] = y2 - 0.25 * (y1 - y3) * delta
             else:
-                exact_mz, exact_int = x2, y2
+                refined_mzs[i] = x2
+                refined_intensities[i] = y2
+
         else:
-            exact_mz, exact_int = bin_centers[idx], mean_intensities[idx]
+            refined_mzs[i] = bin_centers[idx]
+            refined_intensities[i] = mean_intensities[idx]
 
-        refined_mzs.append(exact_mz)
-        refined_ints.append(exact_int)
+    mz_centroid, int_centroid = _merge_peaks_ppm(
+        refined_mzs, refined_intensities, ppm=merge_ppm
+    )
 
-    return np.array(refined_mzs), np.array(refined_ints)
+    mz_centroid = np.round(mz_centroid, decimals)
+
+    return mz_centroid, int_centroid
+
+
+def filter_intensities_mad(
+    mz_array, intensity_array, *, log: bool = True, n_mads: float = 2
+) -> tuple[np.ndarray, np.ndarray]:
+
+    if log:
+        threshold = 10 ** (
+            np.median(np.log10(intensity_array))
+            + n_mads
+            * np.median(
+                np.abs(np.log10(intensity_array) - np.median(np.log10(intensity_array)))
+            )
+        )
+    else:
+        threshold = np.median(intensity_array) + n_mads * np.median(
+            np.abs(intensity_array - np.median(intensity_array))
+        )
+
+    mask = intensity_array > threshold
+
+    return mz_array[mask], intensity_array[mask]
+
+
+def load_average_ms1_spectra(ms1_db_path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+
+    with sqlite3.connect(Path(ms1_db_path)) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT mz_array, intensity_array FROM average_ms1")
+
+        mzs_blob, intensities_blob = cursor.fetchone()
+
+        return blob_to_array(mzs_blob), blob_to_array(intensities_blob)

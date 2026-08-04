@@ -24,11 +24,17 @@ class Config:
         ms1_min_mz: float = 70.0,
         ms1_max_mz: float = 900.0,
         # Detect centroids
-        snr_threshold: float = 3.0,
-        min_prominence_factor: float = 0.1,
-        min_distance_bins: int = 5,
+        prominence_factor: float = 0.1,
+        baseline_factor: float = 100,
+        baseline_method: str = "local",
+        baseline_percentile: int = 10,
+        local_window: int = 501,
+        smooth_sigma: int = 10,
         # Peak threshold
         peak_height_threshold: float = 1000.0,
+        filter_mad: bool = True,
+        filter_mad_log: bool = True,
+        filter_mad_nmads: float = 2.5,
         # Find all mzs
         merge_mz_ppm: float = 5.0,
         sample_names: list[str] | None = None,
@@ -49,12 +55,18 @@ class Config:
         self.ms1_max_mz: float = ms1_max_mz
 
         # Detect centroids
-        self.snr_threshold: float = snr_threshold
-        self.min_prominence_factor: float = min_prominence_factor
-        self.min_distance_bins: int = min_distance_bins
+        self.prominence_factor: float = prominence_factor
+        self.baseline_factor: float = baseline_factor
+        self.baseline_method: str = baseline_method
+        self.baseline_percentile: int = baseline_percentile
+        self.local_window: int = local_window
+        self.smooth_sigma: int = smooth_sigma
 
         # Peak threshold
         self.peak_height_threshold: float = peak_height_threshold
+        self.filter_mad: bool = filter_mad
+        self.filter_mad_log: bool = filter_mad_log
+        self.filter_mad_nmads: float = filter_mad_nmads
 
         # Find all mzs
         self.merge_mz_ppm: float = merge_mz_ppm
@@ -173,9 +185,23 @@ class Config:
             ),
             (
                 "detect centroids",
-                ["snr_threshold", "min_prominence_factor", "min_distance_bins"],
+                [
+                    "prominence_factor",
+                    "baseline_method",
+                    "baseline_percentile",
+                    "local_window",
+                    "smooth_sigma",
+                ],
             ),
-            ("peak threshold", ["peak_height_threshold"]),
+            (
+                "peak threshold",
+                [
+                    "peak_height_threshold",
+                    "filter_mad",
+                    "filter_mad_log",
+                    "filter_mad_nmads",
+                ],
+            ),
             ("find all mzs", ["merge_mz_ppm", "sample_names"]),
             (
                 "create h5ad",

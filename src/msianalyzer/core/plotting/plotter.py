@@ -15,7 +15,7 @@ from typing import Optional
 import numpy as np
 import plotly.graph_objects as go
 
-from msianalyzer.core.mzml_parser import blob_to_array
+from msianalyzer.core.parser.mzml_parser import blob_to_array
 from msianalyzer.core.spectral_matching import _align_peaks
 
 
@@ -23,11 +23,11 @@ from msianalyzer.core.spectral_matching import _align_peaks
 # Colour palette
 # ---------------------------------------------------------------------------
 
-_BLUE_MATCHED   = "#1f77b4"
+_BLUE_MATCHED = "#1f77b4"
 _BLUE_UNMATCHED = "#aec7e8"
-_RED_MATCHED    = "#d62728"
-_RED_UNMATCHED  = "#f7b6b6"
-_CONNECTOR      = "#888888"
+_RED_MATCHED = "#d62728"
+_RED_UNMATCHED = "#f7b6b6"
+_CONNECTOR = "#888888"
 
 
 class Plotter:
@@ -42,25 +42,75 @@ class Plotter:
         Used for peak match highlighting in plots.
     """
 
-    def __init__(
-        self,
-        annotations_db_path: Path | str,
-        ms2_db_path: Path | str,
-        fragment_ppm_tolerance: float = 10.0,
-    ) -> None:
-        self.annotations_db_path = Path(annotations_db_path)
-        self.ms2_db_path         = Path(ms2_db_path)
-        self.fragment_ppm_tolerance = fragment_ppm_tolerance
-
     # ------------------------------------------------------------------
     # Public
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def plot_spectra(
+        mz_array: np.ndarray,
+        intensity_array: np.ndarray,
+        color: str = "black",
+        height: int = 500,
+    ) -> go.Figure:
+
+        fig = go.Figure()
+        xs, ys = [], []
+        for m, i in zip(mz_array, intensity_array):
+            xs += [m, m, None]
+            ys += [0, i, None]
+
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=color, width=2),
+                showlegend=True,
+                hoverinfo="skip",
+            )
+        )
+        # Ghost markers for hover tooltips
+        fig.add_trace(
+            go.Scatter(
+                x=mz_array,
+                y=intensity_array,
+                mode="markers",
+                marker=dict(color=color, size=6),
+                customdata=np.abs(intensity_array).reshape(-1, 1),
+                hovertemplate=(
+                    "<b>m/z</b>: %{x:.4f}<br>"
+                    "<b>intensity</b>: %{customdata[0]:.3f}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+        fig.update_layout(
+            height=height,
+            xaxis=dict(title="m/z", showgrid=True, gridcolor="#eeeeee", zeroline=False),
+            yaxis=dict(
+                title="Intensity",
+                showgrid=True,
+                gridcolor="#eeeeee",
+                zeroline=False,
+            ),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            hovermode="x unified",
+            margin=dict(t=100, b=50, l=60, r=20),
+        )
+
+        return fig
+
     def plot_ms2_annotation(
         self,
+        annotations_db_path: Path | str,
+        ms2_db_path: Path | str,
         annotation_id: int,
         use_filtered: bool = True,
         title: Optional[str] = None,
+        fragment_ppm_tolerance: float = 10.0,
         height: int = 500,
     ) -> go.Figure:
         """
@@ -88,54 +138,68 @@ class Plotter:
         -------
         plotly.graph_objects.Figure
         """
-        ann  = self._fetch_annotation(annotation_id)
-        lib  = self._fetch_library_spectrum(ann)
-        scan = self._fetch_ms2_scan(ann["scan_id"])
+        ann = self._fetch_annotation(annotations_db_path, annotation_id)
+        lib = self._fetch_library_spectrum(ann)
+        scan = self._fetch_ms2_scan(ms2_db_path, ann["scan_id"])
 
         if use_filtered:
-            empirical_mz  = ann["filtered_mz"]
-            empirical_int = ann["filtered_intensity"]   # already normalised [0,1]
-            emp_label     = "Empirical filtered"
+            empirical_mz = ann["filtered_mz"]
+            empirical_int = ann["filtered_intensity"]  # already normalised [0,1]
+            emp_label = "Empirical filtered"
         else:
-            empirical_mz  = scan["mz"]
+            empirical_mz = scan["mz"]
             empirical_int = _normalise(scan["intensity"])
-            emp_label     = "Empirical raw"
+            emp_label = "Empirical raw"
 
-        library_mz  = lib["mz"]
+        library_mz = lib["mz"]
         library_int = _normalise(lib["intensity"])
 
         # Match masks — each sized to its own spectrum
         _, emp_matched_mask = _align_peaks(
-            library_mz, library_int,
-            empirical_mz, empirical_int,
+            library_mz,
+            library_int,
+            empirical_mz,
+            empirical_int,
             self.fragment_ppm_tolerance,
         )
         _, lib_matched_mask = _align_peaks(
-            empirical_mz, empirical_int,
-            library_mz, library_int,
+            empirical_mz,
+            empirical_int,
+            library_mz,
+            library_int,
             self.fragment_ppm_tolerance,
         )
 
         fig = go.Figure()
 
         self._add_bars(
-            fig, mz=empirical_mz, intensity=empirical_int,
-            matched_mask=emp_matched_mask, direction=1,
-            color_matched=_BLUE_MATCHED, color_unmatched=_BLUE_UNMATCHED,
+            fig,
+            mz=empirical_mz,
+            intensity=empirical_int,
+            matched_mask=emp_matched_mask,
+            direction=1,
+            color_matched=_BLUE_MATCHED,
+            color_unmatched=_BLUE_UNMATCHED,
             legend_matched=f"{emp_label} (matched)",
             legend_unmatched=f"{emp_label} (unmatched)",
         )
         self._add_bars(
-            fig, mz=library_mz, intensity=library_int,
-            matched_mask=lib_matched_mask, direction=-1,
-            color_matched=_RED_MATCHED, color_unmatched=_RED_UNMATCHED,
+            fig,
+            mz=library_mz,
+            intensity=library_int,
+            matched_mask=lib_matched_mask,
+            direction=-1,
+            color_matched=_RED_MATCHED,
+            color_unmatched=_RED_UNMATCHED,
             legend_matched="Library (matched)",
             legend_unmatched="Library (unmatched)",
         )
         self._add_connectors(
             fig,
-            empirical_mz=empirical_mz, empirical_int=empirical_int,
-            library_mz=library_mz, library_int=library_int,
+            empirical_mz=empirical_mz,
+            empirical_int=empirical_int,
+            library_mz=library_mz,
+            library_int=library_int,
             ppm_tolerance=self.fragment_ppm_tolerance,
         )
 
@@ -158,13 +222,17 @@ class Plotter:
             yaxis=dict(
                 title="Normalised intensity",
                 range=[-1.15, 1.15],
-                showgrid=True, gridcolor="#eeeeee", zeroline=False,
+                showgrid=True,
+                gridcolor="#eeeeee",
+                zeroline=False,
                 tickvals=[-1, -0.5, 0, 0.5, 1],
                 ticktext=["1.0", "0.5", "0", "0.5", "1.0"],
             ),
             plot_bgcolor="white",
             paper_bgcolor="white",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
             hovermode="x unified",
             margin=dict(t=100, b=50, l=60, r=20),
         )
@@ -172,8 +240,12 @@ class Plotter:
         # Metadata box
         filtered_label = "filtered" if use_filtered else "raw"
         fig.add_annotation(
-            xref="paper", yref="paper",
-            x=0.01, y=0.97, xanchor="left", yanchor="top",
+            xref="paper",
+            yref="paper",
+            x=0.01,
+            y=0.97,
+            xanchor="left",
+            yanchor="top",
             text=(
                 f"scan {ann['scan_id']}  ·  "
                 f"precursor m/z {scan['precursor_mz']:.4f}  ·  "
@@ -205,13 +277,13 @@ class Plotter:
         legend_unmatched: str,
     ) -> None:
         for mask, color, name in (
-            (matched_mask,  color_matched,   legend_matched),
+            (matched_mask, color_matched, legend_matched),
             (~matched_mask, color_unmatched, legend_unmatched),
         ):
             if not mask.any():
                 continue
 
-            mz_sel  = mz[mask]
+            mz_sel = mz[mask]
             int_sel = intensity[mask] * direction
 
             xs, ys = [], []
@@ -219,23 +291,36 @@ class Plotter:
                 xs += [m, m, None]
                 ys += [0, i, None]
 
-            fig.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines",
-                name=name, line=dict(color=color, width=2),
-                legendgroup=name, showlegend=True, hoverinfo="skip",
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines",
+                    name=name,
+                    line=dict(color=color, width=2),
+                    legendgroup=name,
+                    showlegend=True,
+                    hoverinfo="skip",
+                )
+            )
             # Ghost markers for hover tooltips
-            fig.add_trace(go.Scatter(
-                x=mz_sel, y=int_sel, mode="markers",
-                marker=dict(color=color, size=6),
-                name=name, legendgroup=name, showlegend=False,
-                customdata=np.abs(int_sel).reshape(-1, 1),
-                hovertemplate=(
-                    "<b>m/z</b>: %{x:.4f}<br>"
-                    "<b>intensity</b>: %{customdata[0]:.3f}"
-                    "<extra></extra>"
-                ),
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=mz_sel,
+                    y=int_sel,
+                    mode="markers",
+                    marker=dict(color=color, size=6),
+                    name=name,
+                    legendgroup=name,
+                    showlegend=False,
+                    customdata=np.abs(int_sel).reshape(-1, 1),
+                    hovertemplate=(
+                        "<b>m/z</b>: %{x:.4f}<br>"
+                        "<b>intensity</b>: %{customdata[0]:.3f}"
+                        "<extra></extra>"
+                    ),
+                )
+            )
 
     @staticmethod
     def _add_connectors(
@@ -249,8 +334,8 @@ class Plotter:
         if len(empirical_mz) == 0:
             return
 
-        order        = np.argsort(empirical_mz)
-        q_mz_sorted  = empirical_mz[order]
+        order = np.argsort(empirical_mz)
+        q_mz_sorted = empirical_mz[order]
         q_int_sorted = empirical_int[order]
 
         xs, ys = [], []
@@ -260,24 +345,30 @@ class Plotter:
             hi = np.searchsorted(q_mz_sorted, lib_m + tol_da, side="right")
             if lo == hi:
                 continue
-            best  = int(np.argmax(q_int_sorted[lo:hi])) + lo
+            best = int(np.argmax(q_int_sorted[lo:hi])) + lo
             emp_i = float(q_int_sorted[best])
             xs += [lib_m, lib_m, None]
             ys += [emp_i, -lib_i, None]
 
         if xs:
-            fig.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines",
-                line=dict(color=_CONNECTOR, width=1, dash="dot"),
-                name="Matched pair", showlegend=True, hoverinfo="skip",
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines",
+                    line=dict(color=_CONNECTOR, width=1, dash="dot"),
+                    name="Matched pair",
+                    showlegend=True,
+                    hoverinfo="skip",
+                )
+            )
 
     # ------------------------------------------------------------------
     # Database access
     # ------------------------------------------------------------------
 
-    def _fetch_annotation(self, annotation_id: int) -> dict:
-        con = sqlite3.connect(f"file:{self.annotations_db_path}?mode=ro", uri=True)
+    def _fetch_annotation(self, annotations_db_path, annotation_id: int) -> dict:
+        con = sqlite3.connect(f"file:{annotations_db_path}?mode=ro", uri=True)
         try:
             row = con.execute(
                 """
@@ -299,23 +390,36 @@ class Plotter:
             raise ValueError(f"No annotation found with id={annotation_id}")
 
         keys = (
-            "scan_id", "library_path", "library_spectrum_id",
-            "compound_id", "compound_name", "compound_formula", "inchikey",
-            "score", "dot_product_score", "lib_coverage", "emp_coverage",
-            "coverage_score", "n_matched_peaks", "n_lib_peaks",
-            "n_emp_peaks_raw", "n_emp_peaks_filtered",
-            "filtered_mz_blob", "filtered_intensity_blob",
-            "rank", "rank_group",
+            "scan_id",
+            "library_path",
+            "library_spectrum_id",
+            "compound_id",
+            "compound_name",
+            "compound_formula",
+            "inchikey",
+            "score",
+            "dot_product_score",
+            "lib_coverage",
+            "emp_coverage",
+            "coverage_score",
+            "n_matched_peaks",
+            "n_lib_peaks",
+            "n_emp_peaks_raw",
+            "n_emp_peaks_filtered",
+            "filtered_mz_blob",
+            "filtered_intensity_blob",
+            "rank",
+            "rank_group",
         )
         d = dict(zip(keys, row))
 
         # Deserialise filtered spectrum blobs
-        d["filtered_mz"]        = blob_to_array(d.pop("filtered_mz_blob"))
-        d["filtered_intensity"]  = blob_to_array(d.pop("filtered_intensity_blob"))
+        d["filtered_mz"] = blob_to_array(d.pop("filtered_mz_blob"))
+        d["filtered_intensity"] = blob_to_array(d.pop("filtered_intensity_blob"))
         return d
 
-    def _fetch_ms2_scan(self, scan_id: int) -> dict:
-        con = sqlite3.connect(f"file:{self.ms2_db_path}?mode=ro", uri=True)
+    def _fetch_ms2_scan(self, ms2_db_path, scan_id: int) -> dict:
+        con = sqlite3.connect(f"file:{ms2_db_path}?mode=ro", uri=True)
         try:
             row = con.execute(
                 "SELECT mz_array, intensity_array, precursor_mz "
@@ -330,14 +434,14 @@ class Plotter:
 
         mz_blob, int_blob, precursor_mz = row
         return {
-            "mz":          blob_to_array(mz_blob, compressed=True),
-            "intensity":   blob_to_array(int_blob, compressed=True),
+            "mz": blob_to_array(mz_blob, compressed=True),
+            "intensity": blob_to_array(int_blob, compressed=True),
             "precursor_mz": precursor_mz,
         }
 
     def _fetch_library_spectrum(self, ann: dict) -> dict:
         """Direct sqlite3 query — no libviz ORM dependency in the plotter."""
-        lib_path    = Path(ann["library_path"])
+        lib_path = Path(ann["library_path"])
         spectrum_id = ann["library_spectrum_id"]
 
         con = sqlite3.connect(f"file:{lib_path}?mode=ro", uri=True)
@@ -353,14 +457,15 @@ class Plotter:
             raise ValueError(f"No spectrum id={spectrum_id} in {lib_path}")
 
         return {
-            "mz":       blob_to_array(row[0], compressed = False),
-            "intensity": blob_to_array(row[1], compressed = False),
+            "mz": blob_to_array(row[0], compressed=False),
+            "intensity": blob_to_array(row[1], compressed=False),
         }
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _normalise(arr: np.ndarray) -> np.ndarray:
     m = float(arr.max()) if len(arr) else 0.0
