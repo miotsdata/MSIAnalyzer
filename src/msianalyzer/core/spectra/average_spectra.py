@@ -1,5 +1,6 @@
 from ast import Tuple
 import sqlite3
+from uuid import UUID
 import numpy as np
 from scipy.signal import find_peaks
 from pathlib import Path
@@ -78,30 +79,39 @@ def get_average_ms1_spectra(
     return bin_centers, mean_intensities
 
 
-def save_average_ms1_spectra(
+def save_aggregated_spectra(
     mzs_array: np.ndarray,
     intensities_array: np.ndarray,
-    bin_width: float,
+    *,
     ms1_db_path: Path | str,
+    project_id: str,
+    command_id: int,
 ) -> None:
     mzs_blob = array_to_blob(mzs_array)
     intensities_blob = array_to_blob(intensities_array)
     with sqlite3.connect(Path(ms1_db_path)) as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS average_ms1 (
+            CREATE TABLE IF NOT EXISTS aggregated_spectra (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            bin_width FLOAT NOT NULL,
+            project_id UUID NOT NULL,
+            command_id INT,
             mz_array BLOB,
-            intensity_array BLOB
+            intensity_array BLOB,
+            CONSTRAINT fk_command_id
+            FOREIGN KEY (command_id)
+            REFERENCES command(id)
             );
         """)
         cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_averagems1_project_id ON aggregated_spectra(project_id)"
+        )
+        cursor.execute(
             """
-            INSERT INTO average_ms1 (bin_width, mz_array, intensity_array)
-            VALUES (?, ?, ?);
+            INSERT OR REPLACE INTO aggregated_spectra (project_id, command_id, mz_array, intensity_array)
+            VALUES (?, ?, ?, ?);
             """,
-            (bin_width, mzs_blob, intensities_blob),
+            (project_id, command_id, mzs_blob, intensities_blob),
         )
         conn.commit()
 
@@ -319,12 +329,20 @@ def filter_intensities_mad(
     return mz_array[mask], intensity_array[mask]
 
 
-def load_average_ms1_spectra(ms1_db_path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+def load_aggregated_spectra(
+    ms1_db_path: str | Path, project_id: str, command_name: str
+) -> tuple[np.ndarray, np.ndarray]:
 
     with sqlite3.connect(Path(ms1_db_path)) as conn:
         cursor = conn.cursor()
 
-        cursor.execute("SELECT mz_array, intensity_array FROM average_ms1")
+        cursor.execute(
+            """
+                       SELECT mz_array, intensity_array FROM aggregated_spectra 
+                       LEFT JOIN commands on aggregated_spectra.command_id = commands.id 
+                       WHERE commands.command_name = ? AND commands.project_id = ?""",
+            (command_name, project_id),
+        )
 
         mzs_blob, intensities_blob = cursor.fetchone()
 

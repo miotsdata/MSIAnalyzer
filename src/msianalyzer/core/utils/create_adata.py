@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from uuid import UUID
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
@@ -13,10 +14,11 @@ from msianalyzer.core.parser import blob_to_array
 def create_spatial_adata(
     db_path: str | Path,
     target_mz_set: set[float] | list[float] | np.ndarray,
-    ppm_val: float = 5.0,
+    project_id: UUID,
+    integration_ppm: float = 5.0,
     batch_size: int = 1000,
     scan_handling: str = "average",  # Options: 'average' or 'first'
-    n_workers: int = None,
+    n_workers: int | None = None,
 ) -> ad.AnnData:
     """
     Quantifies a set of target m/z values across MS1 spectra belonging to spatial pixels.
@@ -27,7 +29,7 @@ def create_spatial_adata(
         Path to SQLite database containing ms1_scans and pixel_ms1_scans tables.
     target_mz_set : set, list, or np.ndarray
         Target m/z values to quantify.
-    ppm_val : float
+    integration_ppm : float
         PPM tolerance for peak matching.
     batch_size : int
         Number of spectra per processing chunk.
@@ -116,7 +118,7 @@ def create_spatial_adata(
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = [
-            executor.submit(process_spectrum_batch, batch, target_mzs, ppm_val)
+            executor.submit(process_spectrum_batch, batch, target_mzs, integration_ppm)
             for batch in batches
         ]
 
@@ -167,7 +169,7 @@ def create_spatial_adata(
     unique_pixels = obs_df["pixel_id"].unique()
     pixel_to_row = {pid: i for i, pid in enumerate(unique_pixels)}
 
-    rows = [pixel_to_row[pid] for pid in df_aggregated["pixel_id"]]
+    rows = [int(pixel_to_row[pid]) for pid in df_aggregated["pixel_id"]]
     cols = df_aggregated["col"].values
     vals = df_aggregated["val"].values
 
@@ -193,12 +195,14 @@ def create_spatial_adata(
     ad_obj.obsm["spatial"] = np.array(ad_obj.obs.loc[:, ["x", "y"]])
     ad_obj.obs.file = db_path
 
+    ad_obj.uns["project_id"] = project_id
+
     # 6. Return AnnData
     return ad_obj
 
 
 def process_spectrum_batch(
-    scans_data: list[tuple], target_mzs: np.ndarray, ppm_val: float = 5.0
+    scans_data: list[tuple], target_mzs: np.ndarray, integration_ppm: float = 5.0
 ) -> tuple[list[dict], list[int | str], list[int], list[float]]:
     """
     Quantifies targeted m/zs in a batch of pixel-mapped MS1 spectra using binary search.
@@ -216,7 +220,7 @@ def process_spectrum_batch(
     coo_vals = []
 
     # Pre-calculate upper and lower bounds for each target m/z (Vectorized)
-    mz_deltas = target_mzs * (ppm_val / 1e6)
+    mz_deltas = target_mzs * (integration_ppm / 1e6)
     lower_bounds = target_mzs - mz_deltas
     upper_bounds = target_mzs + mz_deltas
 

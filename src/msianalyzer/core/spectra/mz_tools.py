@@ -4,8 +4,8 @@ import pandas as pd
 
 def align_mz_across_samples(
     mz_arrays: list[np.ndarray],
-    sample_names: list[str] = None,
-    ppm: float = 10.0,
+    sample_names: list[str] | None = None,
+    align_ppm: float = 10.0,
     mz_decimals: int = 4,
 ) -> pd.DataFrame:
     """
@@ -56,7 +56,7 @@ def align_mz_across_samples(
         # Check if peak is within ppm window AND sample hasn't already contributed to this cluster
         existing_samples = {p[1] for p in current_cluster}
 
-        if delta_ppm <= ppm and sample_idx not in existing_samples:
+        if delta_ppm <= align_ppm and sample_idx not in existing_samples:
             current_cluster.append(peak)
         else:
             clusters.append(current_cluster)
