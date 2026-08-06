@@ -3,6 +3,9 @@ from pathlib import Path
 import uuid
 from typing import Any
 import yaml
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Project:
@@ -22,9 +25,8 @@ class Project:
                 d[key] = value
         return d
 
-    def export(self) -> None:
+    def export(self, path: str | Path) -> None:
         """Export to a .yml/.yaml or .toml file, format inferred from suffix."""
-        path = self.config.io.out_dir / f"{self.name}.yml"
         data = self.to_dict()
 
         with open(path, "w") as f:
@@ -49,3 +51,17 @@ class Project:
         project = cls(name=data["name"])
 
         return project
+
+
+def create_project_folder(path: str | Path, name: str) -> None:
+    logger.debug("Creating project %s folder at %s", name, path)
+    path = Path(path)
+    path.mkdir()
+
+    p = Project(name)
+    p.export(path / f"{name}.yml")
+
+    for subdir in ["output", "data", "configs"]:
+        (path / subdir).mkdir(exist_ok=True)
+
+    logger.debug("Succesfully created project folder %s", path)
