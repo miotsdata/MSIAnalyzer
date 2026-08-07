@@ -12,12 +12,10 @@ MzmlParser
 
 from __future__ import annotations
 
-from ast import Bytes
 from datetime import datetime
 import json
 import re
 import sqlite3
-from uuid import UUID
 import zlib
 from base64 import b64decode
 from dataclasses import dataclass
@@ -152,7 +150,8 @@ _RE_SCAN_NUM = re.compile(r"scan=(\d+)")
 _RE_TIC = re.compile(r'<cvParam[^>]*accession="MS:1000285"[^>]*value="([\d\.eE+\-]+)"')
 
 _RE_SCAN_POLARITY = re.compile(
-    r'<cvParam\s+cvRef="MS"\s+accession="MS:10001(?:29|30)"[^>]*\bname="(\w+) scan"'
+    r'<cvParam[^>]*accession="MS:10001(?:29|30)"[^>]*\bname="(\w+)\s+scan"',
+    re.IGNORECASE,
 )
 
 # Precursor
@@ -243,9 +242,7 @@ class MzmlParser:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def parse(
-        self, mzml_path: Path | str, ms1_db_path: Path | str, project_id
-    ) -> MzmlFile:
+    def parse(self, mzml_path: Path | str, ms1_db_path: Path | str) -> MzmlFile:
         """
         Stream-parse *mzml_path* and populate the two SQLite databases, one with ms1 data and one with ms2 data.
 
@@ -265,7 +262,7 @@ class MzmlParser:
         # Write metadata + parse command to both DBs
         parse_dt = datetime.now().astimezone().isoformat()
         for con in (ms1_con, ms1_con):
-            _insert_metadata(con, mzml_path, instrument_info, project_id)
+            _insert_metadata(con, mzml_path, instrument_info)
             _insert_command(
                 con,
                 command_name="parse",
@@ -276,7 +273,7 @@ class MzmlParser:
                     "include_ms2": self.include_ms2,
                     "msianalyzer_version": SOFTWARE_VERSION,
                 },
-                project_id=project_id,
+                run_id="parse",
             )
             con.commit()
 
@@ -429,15 +426,13 @@ class MzmlParser:
         con.execute("""
             CREATE TABLE IF NOT EXISTS commands (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id UUID NOT NULL,
+                run_id       UUID    NOT NULL,
                 command_name TEXT    NOT NULL,
                 datetime     TEXT    NOT NULL,
                 arguments    TEXT    NOT NULL
             )
         """)
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_command_project_id ON commands(project_id)"
-        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_command_run_id ON commands(run_id)")
         con.execute("""
             CREATE TABLE IF NOT EXISTS ms1_scans (
                 scan_id         INTEGER PRIMARY KEY,
@@ -788,7 +783,7 @@ def _parse_binary_arrays(
 
 
 def _insert_metadata(
-    con: sqlite3.Connection, mzml_path: Path, instrument_info: dict, project_id: UUID
+    con: sqlite3.Connection, mzml_path: Path, instrument_info: dict
 ) -> None:
     """Write all metadata key/value pairs into the metadata table."""
     rows = [
@@ -802,7 +797,6 @@ def _insert_metadata(
         ("original_source", instrument_info.get("source_file") or ""),
         ("db_creation_date", datetime.now().astimezone().isoformat()),
         ("msianalyzer_version", SOFTWARE_VERSION),
-        ("project_id", project_id),
     ]
     con.executemany("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", rows)
 
@@ -812,12 +806,12 @@ def _insert_command(
     command_name: str,
     dt: str,
     arguments: dict,
-    project_id: UUID,
+    run_id: str | None,
 ) -> None:
     """Append one row to the commands table."""
     con.execute(
-        "INSERT INTO commands (command_name, datetime, arguments, project_id) VALUES (?,?,?,?)",
-        (command_name, dt, json.dumps(arguments), project_id),
+        "INSERT INTO commands (command_name, datetime, arguments, run_id) VALUES (?,?,?,?)",
+        (command_name, dt, json.dumps(arguments), run_id),
     )
 
 
@@ -828,7 +822,7 @@ def _insert_command(
 
 
 def log_command(
-    db_path: Path | str, command_name: str, arguments: dict, project_id: str
+    db_path: Path | str, command_name: str, arguments: dict, run_id: str
 ) -> int | None:
     """
     Append a command record to an existing DB's ``commands`` table.
@@ -849,12 +843,12 @@ def log_command(
     try:
         cur = con.cursor()
         cur.execute(
-            "INSERT INTO commands (command_name, datetime, arguments, project_id) VALUES (?,?,?,?)",
+            "INSERT INTO commands (command_name, datetime, arguments, run_id) VALUES (?,?,?,?)",
             (
                 command_name,
                 datetime.now().astimezone().isoformat(),
                 json.dumps(arguments),
-                project_id,
+                run_id,
             ),
         )
         con.commit()
