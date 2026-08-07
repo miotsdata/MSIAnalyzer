@@ -8,7 +8,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _add_create_project_parser(subparsers: argparse._SubParsersAction) -> None:
+def _add_project_parser(subparsers: argparse._SubParsersAction) -> None:
     # 1. Add the main "project" command
     project_parser = subparsers.add_parser("project", help="Handle project operations")
 
