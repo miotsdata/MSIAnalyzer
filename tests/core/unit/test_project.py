@@ -74,7 +74,7 @@ def test_create_project_folder_success(tmp_path: Path):
         assert (target_dir / subdir).is_dir()
 
     # Check project YAML file
-    yml_file = target_dir / f"{proj_name}.yml"
+    yml_file = target_dir / ".msianalyzer.yml"
     assert yml_file.is_file()
 
     # Check project file can be reloaded

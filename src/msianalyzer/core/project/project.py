@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 import yaml
 import logging
+from msianalyzer.core.utils import MSIAnalyzerError
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +60,42 @@ def create_project_folder(path: str | Path, name: str) -> None:
     path.mkdir()
 
     p = Project(name)
-    p.export(path / f"{name}.yml")
+    p.export(path / ".msianalyzer.yml")
 
     for subdir in ["output", "data", "configs"]:
         (path / subdir).mkdir(exist_ok=True)
 
     logger.debug("Succesfully created project folder %s", path)
+
+
+class NotInProjectFolderError(MSIAnalyzerError):
+    """Raised when no valid project directory/file is found."""
+
+
+def get_project_folder(start_path: Path | str | None = None) -> Path:
+    """
+    Walks up from start_path (or current working directory) to locate
+    a project file, similar to how Git finds .git.
+
+    Returns
+    -------
+    Path
+        The path to the located project file.
+
+    Raises
+    ------
+    ProjectNotFoundError
+        If no project file is found in start_path or any parent directories.
+    """
+    current = Path(start_path or Path.cwd()).resolve()
+
+    for directory in [current] + list(current.parents):
+        project_candidate = directory / f".msianalyzer.yml"
+        if project_candidate.is_file():
+            return directory
+
+    # If loop finishes at filesystem root without finding anything:
+    raise NotInProjectFolderError(
+        f"Not an msianalyzer project (or any of the parent directories): "
+        f"could not find a project file starting from '{current}'"
+    )

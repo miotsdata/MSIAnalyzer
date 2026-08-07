@@ -40,7 +40,7 @@ def test_cli_main_create_project_success(
 
     # Assert side effects
     assert target_directory.exists()
-    assert (target_directory / "cli_project.yml").is_file()
+    assert (target_directory / ".msianalyzer.yml").is_file()
 
 
 def test_cli_missing_required_args(

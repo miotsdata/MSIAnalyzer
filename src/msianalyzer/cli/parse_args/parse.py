@@ -1,5 +1,3 @@
-from ast import arg
-
 from msianalyzer.core.parser import MzmlParser
 
 import argparse

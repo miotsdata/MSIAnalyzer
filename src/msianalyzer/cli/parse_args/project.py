@@ -1,4 +1,4 @@
-from msianalyzer.core.project import Project, create_project_folder
+from msianalyzer.core.project import create_project_folder
 
 
 import argparse
