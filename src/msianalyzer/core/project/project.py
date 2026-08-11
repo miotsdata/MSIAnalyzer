@@ -16,14 +16,27 @@ class Project:
         self.name = name
         self.uuid: str = str(uuid.uuid4())
         self.date: datetime.datetime = datetime.datetime.today()
+        self.runs: dict[str, dict] = {}
 
     def to_dict(self) -> dict[str, Any]:
         d = {}
+
         for key, value in vars(self).items():
             if isinstance(value, datetime.datetime):
-                d[key] = str(value)
+                d[key] = value.isoformat()
+
+            elif isinstance(value, dict):
+                d[key] = {
+                    k: v.to_dict() if hasattr(v, "to_dict") else v
+                    for k, v in value.items()
+                }
+
+            elif hasattr(value, "to_dict"):
+                d[key] = value.to_dict()
+
             else:
                 d[key] = value
+
         return d
 
     def export(self, path: str | Path) -> None:

@@ -2,10 +2,9 @@ import pytest
 import yaml
 from pathlib import Path
 from msianalyzer.core.project import Project, create_project_folder
+from msianalyzer.core.run import Run
 
 # --- Tests for Project Class ---
-
-
 def test_project_init():
     """Verify initial attributes are set correctly."""
     p = Project("test_proj")
@@ -13,11 +12,14 @@ def test_project_init():
     assert p.version == 1
     assert p.uuid is not None
     assert p.date is not None
+    assert p.runs == {}
 
 
 def test_project_to_dict():
     """Verify serialization to dictionary converts datetime to string."""
     p = Project("test_proj")
+    r = Run("test_config.yml")
+    p.runs[r.id] = r
     d = p.to_dict()
 
     assert d["name"] == "test_proj"
@@ -57,8 +59,6 @@ def test_project_load_missing_keys(tmp_path: Path):
 
 
 # --- Tests for create_project_folder ---
-
-
 def test_create_project_folder_success(tmp_path: Path):
     """Verify folder structure and project file creation."""
     proj_name = "demo_proj"
