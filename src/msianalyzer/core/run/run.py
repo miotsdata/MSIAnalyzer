@@ -68,8 +68,13 @@ class Run:
         return d
 
 
-    def start(self, config_file: str | Path) -> None:
-        self.config = Config.from_yaml(config_file)
+    def start(self, config_file: str | Path | None = None, config: Config | None = None) -> None:
+        if config is not None:
+            self.config = config
+        elif config_file is not None:
+            self.config = Config.from_yaml(config_file)
+        else:
+            raise ValueError("None of config_file or config provided.")
         project_path = Path(self.config.io.project_folder) / ".msianalyzer.yml"
         self.project = Project.load()
         self.start_date = datetime.datetime.now()
