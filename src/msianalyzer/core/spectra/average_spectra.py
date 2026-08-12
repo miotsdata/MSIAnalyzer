@@ -1,6 +1,4 @@
-from ast import Tuple
 import sqlite3
-from uuid import UUID
 import numpy as np
 from scipy.signal import find_peaks
 from pathlib import Path
@@ -84,7 +82,7 @@ def save_aggregated_spectra(
     intensities_array: np.ndarray,
     *,
     ms1_db_path: Path | str,
-    project_id: str,
+    run_id: str,
     command_id: int,
 ) -> None:
     mzs_blob = array_to_blob(mzs_array)
@@ -94,7 +92,7 @@ def save_aggregated_spectra(
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS aggregated_spectra (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id UUID NOT NULL,
+            run_id TEXT NOT NULL,
             command_id INT,
             mz_array BLOB,
             intensity_array BLOB,
@@ -104,14 +102,14 @@ def save_aggregated_spectra(
             );
         """)
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_averagems1_project_id ON aggregated_spectra(project_id)"
+            "CREATE INDEX IF NOT EXISTS idx_averagems1_run_id ON aggregated_spectra(run_id)"
         )
         cursor.execute(
             """
-            INSERT OR REPLACE INTO aggregated_spectra (project_id, command_id, mz_array, intensity_array)
+            INSERT OR REPLACE INTO aggregated_spectra (run_id, command_id, mz_array, intensity_array)
             VALUES (?, ?, ?, ?);
             """,
-            (project_id, command_id, mzs_blob, intensities_blob),
+            (run_id, command_id, mzs_blob, intensities_blob),
         )
         conn.commit()
 
@@ -330,7 +328,7 @@ def filter_intensities_mad(
 
 
 def load_aggregated_spectra(
-    ms1_db_path: str | Path, project_id: str, command_name: str
+    ms1_db_path: str | Path, run_id: str, command_name: str
 ) -> tuple[np.ndarray, np.ndarray]:
 
     with sqlite3.connect(Path(ms1_db_path)) as conn:
@@ -340,8 +338,8 @@ def load_aggregated_spectra(
             """
                        SELECT mz_array, intensity_array FROM aggregated_spectra 
                        LEFT JOIN commands on aggregated_spectra.command_id = commands.id 
-                       WHERE commands.command_name = ? AND commands.project_id = ?""",
-            (command_name, project_id),
+                       WHERE commands.command_name = ? AND commands.run_id = ?""",
+            (command_name, run_id),
         )
 
         mzs_blob, intensities_blob = cursor.fetchone()
