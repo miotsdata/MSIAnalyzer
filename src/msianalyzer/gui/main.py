@@ -8,14 +8,18 @@ from PySide6.QtCore import QUrl
 from pathlib import Path
 
 from msianalyzer.gui import resources_rc  # noqa: F401  (registers qrc resources on import)
+from .utils import Router
 
 
-def build_engine(app: QGuiApplication) -> QQmlApplicationEngine:
+def build_engine(app: QGuiApplication, router: Router) -> QQmlApplicationEngine:
     """Construct and populate the QML engine. Reusable by tests."""
     engine = QQmlApplicationEngine()
 
     qml_import_path = Path(PySide6.__file__).parent / "Qt" / "qml"
     engine.addImportPath(str(qml_import_path))
+
+    context = engine.rootContext()
+    context.setContextProperty("Router", router)
 
     errors = []
     engine.warnings.connect(lambda warnings: errors.extend(warnings))
@@ -30,7 +34,11 @@ def build_engine(app: QGuiApplication) -> QQmlApplicationEngine:
 
 def main() -> int:
     app = QGuiApplication(sys.argv)
-    engine = build_engine(app)
+
+    # Add bindings
+
+    router = Router()
+    engine = build_engine(app, router)
     return app.exec()
 
 

@@ -2,6 +2,7 @@
 import subprocess
 import pytest
 from msianalyzer.gui.main import build_engine
+from msianalyzer.gui.utils import Router
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -19,7 +20,12 @@ def compile_qml_resources():
 
 
 @pytest.fixture
-def engine(qapp):
-    eng = build_engine(qapp)
+def router():
+    return Router()
+
+
+@pytest.fixture
+def engine(qapp, router):
+    eng = build_engine(qapp, router)
     yield eng
     eng.deleteLater()

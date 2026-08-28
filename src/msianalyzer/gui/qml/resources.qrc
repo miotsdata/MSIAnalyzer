@@ -2,5 +2,7 @@
     <qresource prefix="/">
         <file>Main/Main.qml</file>
         <file>Main/qmldir</file>
+        <file>Views/qmldir</file>
+        <file>Views/StartPage.qml</file>
     </qresource>
 </RCC>
