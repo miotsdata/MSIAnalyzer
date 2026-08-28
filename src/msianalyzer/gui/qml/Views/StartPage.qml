@@ -2,10 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
-//import Core
 
 Page {
     id: startPage
+    objectName: "startPage"
 
     ColumnLayout {
         anchors.centerIn: parent

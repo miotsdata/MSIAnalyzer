@@ -4,5 +4,6 @@
         <file>Main/qmldir</file>
         <file>Views/qmldir</file>
         <file>Views/StartPage.qml</file>
+        <file>Views/ProjectHomePage.qml</file>
     </qresource>
 </RCC>

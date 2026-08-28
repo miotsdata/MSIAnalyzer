@@ -26,14 +26,14 @@ def test_load_project_button_opens_dialog(engine, qtbot):
     qtbot.waitUntil(lambda: dialog.property("visible") is True, timeout=2000)
 
 
-def test_create_project_button_emits_router_signal(engine, router, qtbot):
+def test_create_project_button_emits_router_signal(engine, application, qtbot):
     window = engine.rootObjects()[0]
 
     button = window.findChild(QQuickItem, "createProjectButton")
 
     assert button is not None
 
-    spy = QSignalSpy(router.createProjectRequested)
+    spy = QSignalSpy(application.router.createProjectRequested)
 
     button_center = button.mapToScene(button.boundingRect().center()).toPoint()
 
