@@ -3,6 +3,9 @@ import yaml
 from pathlib import Path
 from msianalyzer.core.project import Project, create_project_folder
 from msianalyzer.core.run import Run
+from hypothesis import given, settings, strategies as st
+import string
+
 
 # --- Tests for Project Class ---
 def test_project_init():
@@ -13,6 +16,38 @@ def test_project_init():
     assert p.uuid is not None
     assert p.date is not None
     assert p.runs == {}
+
+
+VALID_CHARS = string.ascii_letters + string.digits + "_- "
+INVALID_CHARS = "".join(
+    c for c in (chr(i) for i in range(32, 127)) if c not in VALID_CHARS
+)
+
+
+@settings(max_examples=50)
+@given(st.text(alphabet=VALID_CHARS, min_size=1, max_size=50))
+def test_validate_name_accepts_valid_characters(name):
+    p = Project(name)  # should not raise
+
+
+@settings(max_examples=50)
+@given(
+    st.text(alphabet=VALID_CHARS, min_size=0, max_size=20),
+    st.sampled_from(INVALID_CHARS),
+    st.text(alphabet=VALID_CHARS, min_size=0, max_size=20),
+)
+def test_validate_name_rejects_any_invalid_character(prefix, bad_char, suffix):
+    name = prefix + bad_char + suffix
+    with pytest.raises(
+        ValueError,
+        match=r"only letters, numbers, spaces, underscores and - \(minus\) are allowed\.",
+    ):
+        p = Project(name)
+
+
+def test_validate_name_rejects_empty_string():
+    with pytest.raises(ValueError):
+        p = Project("")
 
 
 def test_project_to_dict():
@@ -35,7 +70,7 @@ def test_project_export_and_load(tmp_path: Path):
 
     assert target_file.exists()
 
-    loaded_p = Project.load(target_file)
+    loaded_p = Project.load_from_yaml(target_file)
     assert loaded_p.name == "alpha"
 
 
@@ -44,8 +79,8 @@ def test_project_load_non_dict_yaml(tmp_path: Path):
     file_path = tmp_path / "bad.yml"
     file_path.write_text("just a plain string")
 
-    with pytest.raises(ValueError, match="did not parse to a mapping"):
-        Project.load(file_path)
+    with pytest.raises(ValueError, match="not a valid project yaml file"):
+        Project.load_from_yaml(file_path)
 
 
 def test_project_load_missing_keys(tmp_path: Path):
@@ -55,7 +90,7 @@ def test_project_load_missing_keys(tmp_path: Path):
         yaml.safe_dump({"name": "test_proj"}, f)  # Missing 'uuid' and 'date'
 
     with pytest.raises(ValueError, match="missing"):
-        Project.load(file_path)
+        Project.load_from_yaml(file_path)
 
 
 # --- Tests for create_project_folder ---
@@ -78,7 +113,7 @@ def test_create_project_folder_success(tmp_path: Path):
     assert yml_file.is_file()
 
     # Check project file can be reloaded
-    p = Project.load(yml_file)
+    p = Project.load_from_yaml(yml_file)
     assert p.name == proj_name
 
 

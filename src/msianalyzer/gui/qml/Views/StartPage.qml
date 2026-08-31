@@ -28,7 +28,7 @@ Page {
             Layout.preferredWidth: 220
             Layout.alignment: Qt.AlignHCenter
 
-            onClicked: Router.createProjectRequested()
+            onClicked: Router.createProjectPageRequested()
         }
     }
 

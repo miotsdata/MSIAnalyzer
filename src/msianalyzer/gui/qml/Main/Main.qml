@@ -22,5 +22,9 @@ ApplicationWindow {
         function onShowProjectHomeRequested(project) {
             stackView.push("qrc:/Views/ProjectHomePage.qml", {"project": project})
         }
+
+        function onCreateProjectPageRequested() {
+            stackView.push("qrc:/Views/CreateProjectPage.qml")
+        }
     }
 }

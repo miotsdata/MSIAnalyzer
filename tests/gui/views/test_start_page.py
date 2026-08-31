@@ -33,7 +33,7 @@ def test_create_project_button_emits_router_signal(engine, application, qtbot):
 
     assert button is not None
 
-    spy = QSignalSpy(application.router.createProjectRequested)
+    spy = QSignalSpy(application.router.createProjectPageRequested)
 
     button_center = button.mapToScene(button.boundingRect().center()).toPoint()
 

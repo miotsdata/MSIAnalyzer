@@ -5,18 +5,29 @@ from typing import Any
 import yaml
 import logging
 from msianalyzer.core.utils import MSIAnalyzerError
+import re
 
 logger = logging.getLogger(__name__)
+
+_VALID_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_\- ]+$")
 
 
 class Project:
     version: int = 1
 
     def __init__(self, name: str) -> None:
-        self.name = name
+        self.name = self.validate_name(name)
         self.uuid: str = str(uuid.uuid4())
         self.date: datetime.datetime = datetime.datetime.today()
         self.runs: dict[str, dict] = {}
+
+    @staticmethod
+    def validate_name(name) -> str:
+        if not name or not _VALID_NAME_PATTERN.match(name):
+            raise ValueError(
+                "only letters, numbers, spaces, underscores and - (minus) are allowed."
+            )
+        return name
 
     def to_dict(self) -> dict[str, Any]:
         d = {}
@@ -47,15 +58,18 @@ class Project:
             yaml.safe_dump(data, f, sort_keys=False)
 
     @classmethod
-    def load(cls, path: str | Path) -> "Project":
+    def load_from_yaml(cls, yaml_path: str | Path) -> "Project":
         """Load a project from a YAML file."""
-        path = Path(path)
+        path = Path(yaml_path)
+
+        if path.name == "" or yaml_path is None:
+            raise ValueError("no file provided.")
 
         with open(path, "r") as f:
             data = yaml.safe_load(f)
 
         if not isinstance(data, dict):
-            raise ValueError(f"Project file {path} did not parse to a mapping")
+            raise ValueError(f"Project file {path} is not a valid project yaml file.")
 
         missing = ("name", "uuid", "date") - (data.keys())
 

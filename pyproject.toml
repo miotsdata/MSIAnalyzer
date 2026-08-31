@@ -28,4 +28,5 @@ dev = [
     "pylint>=4.0.6",
     "pytest-mock>=3.15.1",
     "pytest-qt>=4.5.0",
+    "hypothesis>=6.167.1",
 ]

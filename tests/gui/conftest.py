@@ -8,17 +8,29 @@ from msianalyzer.gui.utils.application import Application
 
 import os
 
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+QRC_PATH = PROJECT_ROOT / "src/msianalyzer/gui/qml/resources.qrc"
+RC_PATH = PROJECT_ROOT / "src/msianalyzer/gui/resources_rc.py"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def compile_qml_resources():
     rc_path = "src/msianalyzer/gui/resources_rc.py"
     if os.path.exists(rc_path):
         os.remove(rc_path)
-    subprocess.run(
-        ["pyside6-rcc", "src/msianalyzer/gui/qml/resources.qrc", "-o", rc_path],
-        check=True,
+    result = subprocess.run(
+        [
+            "pyside6-rcc",
+            str(QRC_PATH),
+            "-o",
+            str(RC_PATH),
+        ],
+        capture_output=True,
+        text=True,
     )
-    print("Compiled qml resources.")
 
 
 @pytest.fixture

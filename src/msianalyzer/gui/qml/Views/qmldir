@@ -1,3 +1,4 @@
 module Views
 StartPage 1.0 StartPage.qml
 ProjectHomePage 1.0 ProjectHomePage.qml
+CreateProjectPage 1.0 CreateProjectPage.qml

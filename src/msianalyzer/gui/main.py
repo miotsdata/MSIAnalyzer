@@ -23,6 +23,7 @@ def build_engine(
 
     context = engine.rootContext()
     context.setContextProperty("Router", application.router)
+    context.setContextProperty("CoreBridge", application.core_bridge)
 
     errors = []
     engine.warnings.connect(lambda warnings: errors.extend(warnings))
@@ -39,8 +40,6 @@ def main() -> int:
     app = QGuiApplication(sys.argv)
 
     # Add bindings
-
-    router = Router()
     application = Application()
     engine = build_engine(app, application)
     return app.exec()
