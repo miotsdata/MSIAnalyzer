@@ -6,10 +6,12 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QUrl
 from pathlib import Path
+import logging
 
 from msianalyzer.gui import resources_rc
 from msianalyzer.gui.utils.application import Application  # noqa: F401  (registers qrc resources on import)
-from .utils import Router
+
+from msianalyzer.core.utils import configure_logging
 
 
 def build_engine(
@@ -37,6 +39,7 @@ def build_engine(
 
 
 def main() -> int:
+    configure_logging(level=logging.DEBUG)
     app = QGuiApplication(sys.argv)
 
     # Add bindings

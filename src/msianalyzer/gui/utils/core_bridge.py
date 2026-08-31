@@ -28,7 +28,7 @@ class CoreBridge(QObject):
             return None
 
         try:
-            path = path / name
+            path = f"{path}/{name}"
             create_project_folder(path=path, name=name)
         except (OSError, PermissionError, FileExistsError) as e:
             self.invalidCreateProjectPath.emit(str(e))

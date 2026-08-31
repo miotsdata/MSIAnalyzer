@@ -1,6 +1,20 @@
 from PySide6.QtQuick import QQuickItem
+from PySide6.QtCore import QUrl
+from pathlib import Path
 
 from msianalyzer.gui.models.project import ProjectModel
+
+
+def test_to_local_path(application, tmp_path):
+    qurl = QUrl.fromLocalFile(str(tmp_path))
+    assert qurl.scheme() == "file"
+
+    normalized = application.router.toLocalPath(qurl)
+
+    assert normalized == str(tmp_path)
+    assert Path(normalized).exists()
+    assert qurl.toString() != tmp_path
+    assert "file" in qurl.toString()
 
 
 def test_show_project_home_requested_changes_home_page(

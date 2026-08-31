@@ -59,7 +59,7 @@ Page {
         objectName: "createProjectFolderDialog"
         options: FolderDialog.DontUseNativeDialog
         onAccepted: {
-            createProjectPathInput.text = selectedFolder.toString()
+            createProjectPathInput.text = Router.toLocalPath(selectedFolder)        
         }
     }
 }

@@ -38,7 +38,7 @@ Page {
 
         options: FolderDialog.DontUseNativeDialog
         onAccepted: {
-            Router.projectFolderChosen(selectedFolder.toString())
+            Router.projectFolderChosen(Router.toLocalPath(selectedFolder))
         }
     }
 }
