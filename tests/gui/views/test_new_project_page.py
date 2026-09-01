@@ -1,36 +1,17 @@
-from PySide6.QtQuick import QQuickView
 from PySide6.QtCore import QUrl, Qt
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtTest import QSignalSpy
 import pytest
 
 
-@pytest.fixture
-def project_home_view(application):
-    view = QQuickView()
-    view.engine().rootContext().setContextProperty("Router", application.router)
-    view.engine().rootContext().setContextProperty(
-        "CoreBridge", application.core_bridge
-    )
-
-    view.setSource(QUrl("qrc:/Views/CreateProjectPage.qml"))
-    view.show()
-
-    root = view.rootObject()
-
-    yield view
-
-    view.close()
-
-
-def test_create_btn_disabled_by_default(project_home_view):
-    btn = project_home_view.rootObject().findChild(QQuickItem, "createProjectButton")
+def test_create_btn_disabled_by_default(create_project_view):
+    btn = create_project_view.rootObject().findChild(QQuickItem, "createProjectButton")
     assert btn is not None
     assert btn.property("enabled") is False
 
 
-def test_create_button_enabled_only_when_name_and_path_present(project_home_view):
-    root = project_home_view.rootObject()
+def test_create_button_enabled_only_when_name_and_path_present(create_project_view):
+    root = create_project_view.rootObject()
     name_input = root.findChild(QQuickItem, "createProjectNameInput")
     path_input = root.findChild(QQuickItem, "createProjectPathInput")
     button = root.findChild(QQuickItem, "createProjectButton")
@@ -48,9 +29,9 @@ def test_create_button_enabled_only_when_name_and_path_present(project_home_view
 
 
 def test_create_project_button_emits_router_signal(
-    project_home_view, application, qtbot
+    create_project_view, application, qtbot
 ):
-    root = project_home_view.rootObject()
+    root = create_project_view.rootObject()
 
     button = root.findChild(QQuickItem, "createProjectButton")
     name_input = root.findChild(QQuickItem, "createProjectNameInput")
@@ -62,7 +43,7 @@ def test_create_project_button_emits_router_signal(
     path_input.setProperty("text", "/home/user/projects/my_project")
     button_center = button.mapToScene(button.boundingRect().center()).toPoint()
 
-    qtbot.mouseClick(project_home_view, Qt.LeftButton, pos=button_center)
+    qtbot.mouseClick(create_project_view, Qt.LeftButton, pos=button_center)
 
     qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
 

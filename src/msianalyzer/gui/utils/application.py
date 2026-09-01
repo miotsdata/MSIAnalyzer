@@ -18,6 +18,12 @@ class Application(QObject):
         self.router.projectFolderChosen.connect(self._on_project_folder_chosen)
         self.core_bridge.projectLoaded.connect(self._on_project_loaded)
         self.router.createProjectRequested.connect(self.core_bridge.create_project)
+        self.core_bridge.invalidCreateProjectName.connect(
+            self.router.showErrorRequested
+        )
+        self.core_bridge.invalidCreateProjectPath.connect(
+            self.router.showErrorRequested
+        )
 
     def _on_project_folder_chosen(self, path):
         self.core_bridge.load_project(path)

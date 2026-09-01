@@ -1,5 +1,5 @@
 from PySide6.QtQuick import QQuickItem
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QUrl, QObject, Qt
 from pathlib import Path
 
 from msianalyzer.gui.models.project import ProjectModel
@@ -52,3 +52,38 @@ def test_create_new_project_requested_changes_page(application, engine, qtbot):
 
     current_item = stack_view.property("currentItem")
     assert current_item.objectName() == "createProjectPage"
+
+
+def test_invalidCreateProjectName_shows_message(application, engine, qtbot):
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+    assert stack_view is not None
+
+    message_dialog = window.findChild(QObject, "errorDialog")
+    assert message_dialog is not None
+    assert message_dialog.property("visible") is False
+    assert message_dialog.property("modality") == Qt.ApplicationModal
+
+    error_message = "Invalid name"
+    application.core_bridge.invalidCreateProjectName.emit(error_message)
+
+    qtbot.waitUntil(lambda: message_dialog.property("visible") is True, timeout=2000)
+    assert message_dialog.property("text") == error_message
+    message_dialog.setProperty("visible", False)
+
+
+def test_invalidCreateProjectPath_shows_message(application, engine, qtbot):
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+    assert stack_view is not None
+
+    message_dialog = window.findChild(QObject, "errorDialog")
+    assert message_dialog is not None
+    assert message_dialog.property("visible") is False
+
+    error_message = "Invalid path"
+    application.core_bridge.invalidCreateProjectPath.emit(error_message)
+
+    qtbot.waitUntil(lambda: message_dialog.property("visible") is True, timeout=2000)
+    assert message_dialog.property("text") == error_message
+    message_dialog.setProperty("visible", False)

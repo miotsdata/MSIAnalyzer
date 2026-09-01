@@ -23,3 +23,31 @@ def test_on_project_folder_chosen_triggers_show_project_home_requested(applicati
     assert isinstance(emitted_model, ProjectModel)
     assert emitted_model.name == project.name
     assert emitted_model.uuid == project.uuid
+
+
+def test_core_bridge_invalidCreateProjectName_triggers_router_showErrorRequested(
+    application,
+):
+    error_message = "Name error"
+    received = []
+
+    application.router.showErrorRequested.connect(received.append)
+
+    application.core_bridge.invalidCreateProjectName.emit(error_message)
+
+    assert len(received) == 1
+    assert received[0] == error_message
+
+
+def test_core_bridge_invalidCreateProjectName_triggers_router_showErrorRequested(
+    application,
+):
+    error_message = "Path error"
+    received = []
+
+    application.router.showErrorRequested.connect(received.append)
+
+    application.core_bridge.invalidCreateProjectPath.emit(error_message)
+
+    assert len(received) == 1
+    assert received[0] == error_message

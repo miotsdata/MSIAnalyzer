@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 
 ApplicationWindow {
     id: window
@@ -26,5 +27,17 @@ ApplicationWindow {
         function onCreateProjectPageRequested() {
             stackView.push("qrc:/Views/CreateProjectPage.qml")
         }
+        
+        function onShowErrorRequested(message) {
+            errorDialog.text = message
+            errorDialog.open()
+        }
+    }
+
+    MessageDialog {
+        id: errorDialog
+        objectName: "errorDialog"
+        buttons: MessageDialog.Ok
+        modality: Qt.ApplicationModal
     }
 }

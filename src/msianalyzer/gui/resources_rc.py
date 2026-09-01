@@ -151,48 +151,68 @@ ectHomePage.qml\x0a\
 CreateProjectPag\
 e 1.0 CreateProj\
 ectPage.qml\x0a\
-\x00\x00\x02s\
+\x00\x00\x03\xb1\
 i\
 mport QtQuick\x0aim\
 port QtQuick.Con\
-trols\x0a\x0aApplicati\
-onWindow {\x0a    i\
-d: window\x0a\x0a    v\
-isible: true\x0a   \
- width: 900\x0a    \
-height: 650\x0a    \
-title: \x22MSIAnaly\
-zer\x22\x0a\x0a    StackV\
-iew {\x0a        id\
-: stackView\x0a    \
-    objectName: \
-\x22stackView\x22\x0a    \
-    anchors.fill\
-: parent\x0a\x0a      \
-  initialItem: \x22\
-qrc:/Views/Start\
-Page.qml\x22\x0a    }\x0a\
-\x0a    Connections\
- {\x0a        targe\
-t: Router\x0a      \
+trols\x0aimport QtQ\
+uick.Dialogs\x0a\x0aAp\
+plicationWindow \
+{\x0a    id: window\
+\x0a\x0a    visible: t\
+rue\x0a    width: 9\
+00\x0a    height: 6\
+50\x0a    title: \x22M\
+SIAnalyzer\x22\x0a\x0a   \
+ StackView {\x0a   \
+     id: stackVi\
+ew\x0a        objec\
+tName: \x22stackVie\
+w\x22\x0a        ancho\
+rs.fill: parent\x0a\
+\x0a        initial\
+Item: \x22qrc:/View\
+s/StartPage.qml\x22\
+\x0a    }\x0a\x0a    Conn\
+ections {\x0a      \
+  target: Router\
+\x0a        functio\
+n onShowProjectH\
+omeRequested(pro\
+ject) {\x0a        \
+    stackView.pu\
+sh(\x22qrc:/Views/P\
+rojectHomePage.q\
+ml\x22, {\x22project\x22:\
+ project})\x0a     \
+   }\x0a\x0a        fu\
+nction onCreateP\
+rojectPageReques\
+ted() {\x0a        \
+    stackView.pu\
+sh(\x22qrc:/Views/C\
+reateProjectPage\
+.qml\x22)\x0a        }\
+\x0a        \x0a      \
   function onSho\
-wProjectHomeRequ\
-ested(project) {\
-\x0a            sta\
-ckView.push(\x22qrc\
-:/Views/ProjectH\
-omePage.qml\x22, {\x22\
-project\x22: projec\
-t})\x0a        }\x0a\x0a \
-       function \
-onCreateProjectP\
-ageRequested() {\
-\x0a            sta\
-ckView.push(\x22qrc\
-:/Views/CreatePr\
-ojectPage.qml\x22)\x0a\
-        }\x0a    }\x0a\
-}\x0a\
+wErrorRequested(\
+message) {\x0a     \
+       errorDial\
+og.text = messag\
+e\x0a            er\
+rorDialog.open()\
+\x0a        }\x0a    }\
+\x0a\x0a    MessageDia\
+log {\x0a        id\
+: errorDialog\x0a  \
+      objectName\
+: \x22errorDialog\x22\x0a\
+        buttons:\
+ MessageDialog.O\
+k\x0a        modali\
+ty: Qt.Applicati\
+onModal\x0a    }\x0a}\x0a\
+\
 \x00\x00\x00\x1e\
 m\
 odule Main\x0aMain \
@@ -247,10 +267,10 @@ qt_resource_struct = b"\
 \x00\x00\x01\xa0G\xe1w\x0d\
 \x00\x00\x00>\x00\x04\x00\x00\x00\x01\x00\x00\x04\x17\
 \x00\x00\x01\xa0X7h\xb4\
-\x00\x00\x00\x9a\x00\x00\x00\x00\x00\x01\x00\x00\x0a\xfd\
+\x00\x00\x00\x9a\x00\x00\x00\x00\x00\x01\x00\x00\x0c;\
 \x00\x00\x01\xa0C\x10\x19\xe2\
 \x00\x00\x00\xac\x00\x00\x00\x00\x00\x01\x00\x00\x08\x86\
-\x00\x00\x01\xa0W\x10\xc7#\
+\x00\x00\x01\xa0\x5cB\xd5\xc7\
 "
 
 def qInitResources():

@@ -6,6 +6,9 @@ from msianalyzer.gui.main import build_engine
 from msianalyzer.gui.utils import Router
 from msianalyzer.gui.utils.application import Application
 
+from PySide6.QtQuick import QQuickView
+from PySide6.QtCore import QUrl
+
 import os
 
 from pathlib import Path
@@ -54,3 +57,21 @@ def application():
 def project():
     p = Project(name="test_proj")
     return p
+
+
+@pytest.fixture
+def create_project_view(application):
+    view = QQuickView()
+    view.engine().rootContext().setContextProperty("Router", application.router)
+    view.engine().rootContext().setContextProperty(
+        "CoreBridge", application.core_bridge
+    )
+
+    view.setSource(QUrl("qrc:/Views/CreateProjectPage.qml"))
+    view.show()
+
+    root = view.rootObject()
+
+    yield view
+
+    view.close()

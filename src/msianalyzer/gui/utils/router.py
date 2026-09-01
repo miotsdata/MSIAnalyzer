@@ -6,6 +6,7 @@ class Router(QObject):
     createProjectRequested = Signal(str, str)
     projectFolderChosen = Signal(str)
     showProjectHomeRequested = Signal(QObject)
+    showErrorRequested = Signal(str)
 
     @Slot(QUrl, result=str)
     def toLocalPath(self, url: QUrl) -> str:
