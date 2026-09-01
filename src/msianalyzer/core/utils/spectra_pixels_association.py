@@ -1,20 +1,44 @@
-from pathlib import Path
-import pandas as pd
 import sqlite3
+import pandas as pd
+
+from pathlib import Path
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
     """
-    Creates spatial_pixels and pixel_ms1_scans tables in SQLite, inserts pixels
-    from df_pixels, and executes an indexed SQL range join to map scans to pixels.
+    Associate scans to pixels.
 
-    Parameters:
-    -----------
-    db_path : Path | str
-        Path to SQLite database file.
-    df_pixels : pd.DataFrame
-        DataFrame containing columns: 'x', 'y', 't_start', 't_end'
+    Creates spatial_pixels and pixel_ms1_scans tables in db (if not
+    existing), inserts pixels information from df_pixels, and executes
+    an indexed SQL range join to map scans to pixels.
+
+    Args:
+        db_path   (Path | str)  : Path to SQLite database file containing
+            spectra info.
+        df_pixels (pd.DataFrame): DataFrame containing columns: 'x', 'y',
+            't_start', 't_end'.
+
+    Raises:
+        KeyError: If df_pixels is missing one of the required columns
+            ('x', 'y', 't_start', 't_end').
+        sqlite3.OperationalError: If the database is locked or the
+            ms1_scans table does not exist (required for the foreign
+            key and range join).
+
+    Note:
+        If db_path does not exist, SQLite creates a new empty database
+        file rather than raising an error.
     """
+    logger.debug(
+        "Start to map pixels from db to %s",
+        db_path,
+        extra={"source_file": Path(db_path)},
+    )
+
     # Convert required columns to list of tuples for fast bulk insert
     pixel_tuples = list(
         df_pixels[["x", "y", "t_start", "t_end"]].itertuples(index=False, name=None)
@@ -57,7 +81,7 @@ def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
         # 3. Fast SQL range-based mapping into the junction table
         cursor.execute("""
             INSERT INTO pixel_ms1_scans (pixel_id, scan_id)
-            SELECT 
+            SELECT
                 p.pixel_id,
                 s.scan_id
             FROM spatial_pixels p
@@ -66,4 +90,9 @@ def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
         """)
 
         conn.commit()
-        print(f"Successfully processed {len(pixel_tuples)} pixels.")
+
+    logger.info(
+        "Successfully processed %d pixels.",
+        len(pixel_tuples),
+        extra={"source_file": Path(db_path)},
+    )

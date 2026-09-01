@@ -1,0 +1,10 @@
+site_name: My Docs
+theme:
+  name: readthedocs
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google

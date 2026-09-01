@@ -3,7 +3,7 @@ from .parse_args import build_parser
 from msianalyzer.core.utils.logging_utils import configure_logging
 import logging
 
-configure_logging(level=logging.DEBUG)
+configure_logging(level=logging.INFO)
 
 
 def main() -> None:
