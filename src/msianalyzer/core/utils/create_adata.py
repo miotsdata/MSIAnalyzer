@@ -1,14 +1,39 @@
+import logging
 import os
 import sqlite3
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from logging.handlers import QueueHandler, QueueListener
+from multiprocessing import Manager
+from pathlib import Path
 from uuid import UUID
+
+import anndata as ad
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import anndata as ad
-from pathlib import Path
 
 from msianalyzer.core.parser import blob_to_array
+
+logger = logging.getLogger(__name__)
+
+
+def _worker_init(log_queue) -> None:
+    """Configure logging inside a worker process to forward records to the main process.
+
+    Runs once per worker at pool startup (via ``ProcessPoolExecutor``'s
+    ``initializer``). Each worker process has its own independent logging
+    state, so this attaches a single `QueueHandler` to the worker's root
+    logger, funneling every log record back to the main process instead of
+    trying to write to files/console directly from the worker.
+
+    Args:
+        log_queue: Shared multiprocessing queue that log records are pushed
+            onto. Consumed in the main process by a `QueueListener`.
+    """
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(QueueHandler(log_queue))
+    root.setLevel(logging.DEBUG)
 
 
 def create_spatial_adata(
@@ -17,33 +42,49 @@ def create_spatial_adata(
     project_id: UUID,
     integration_ppm: float = 5.0,
     batch_size: int = 1000,
-    scan_handling: str = "average",  # Options: 'average' or 'first'
+    scan_handling: str = "average",
     n_workers: int | None = None,
 ) -> ad.AnnData:
-    """
-    Quantifies a set of target m/z values across MS1 spectra belonging to spatial pixels.
+    """Quantify a set of target m/z values across MS1 spectra belonging to spatial pixels.
 
-    Parameters:
-    -----------
-    db_path : str
-        Path to SQLite database containing ms1_scans and pixel_ms1_scans tables.
-    target_mz_set : set, list, or np.ndarray
-        Target m/z values to quantify.
-    integration_ppm : float
-        PPM tolerance for peak matching.
-    batch_size : int
-        Number of spectra per processing chunk.
-    scan_handling : str
-        'average': Averages spectral intensities across multiple MS1 scans per pixel.
-        'first': Uses only the first MS1 scan acquired for each pixel.
-    n_workers : int, optional
-        Number of parallel CPU workers. Defaults to os.cpu_count().
+    Reads pixel-mapped MS1 scans from a SQLite database, quantifies each
+    target m/z per pixel in parallel across worker processes, and assembles
+    the result into an `AnnData` object with pixel coordinates in `.obsm["spatial"]`.
+
+    Args:
+        db_path: Path to SQLite database containing `ms1_scans` and
+            `pixel_ms1_scans` tables.
+        target_mz_set: Target m/z values to quantify.
+        project_id: Identifier of the project this data belongs to, stored
+            in `AnnData.uns["project_id"]`.
+        integration_ppm: PPM tolerance for peak matching. Defaults to 5.0.
+        batch_size: Number of spectra per processing chunk. Defaults to 1000.
+        scan_handling: Either `"average"` (average spectral intensities
+            across multiple MS1 scans per pixel) or `"first"` (use only the
+            first MS1 scan acquired for each pixel). Defaults to `"average"`.
+        n_workers: Number of parallel CPU workers. Defaults to
+            `os.cpu_count()` if not provided.
+
+    Returns:
+        An `AnnData` object with pixels as observations, target m/z values
+        as variables, and matched intensities as `.X`.
+
+    Raises:
+        ValueError: If `scan_handling` is not `"average"` or `"first"`, or
+            if no MS1 scans are found matching spatial pixels in
+            `pixel_ms1_scans`.
     """
     if scan_handling not in ("average", "first"):
         raise ValueError("scan_handling must be either 'average' or 'first'")
 
     if n_workers is None:
         n_workers = os.cpu_count() or 1
+
+    logger.debug(
+        "Started creating anndata object with %d workers.",
+        n_workers,
+        extra={"source_file": db_path},
+    )
 
     # Convert target m/zs to sorted numpy array for fast search
     target_mzs = np.sort(np.fromiter(target_mz_set, dtype=np.float64))
@@ -56,16 +97,16 @@ def create_spatial_adata(
     if scan_handling == "first":
         # Select only the first MS1 scan per pixel using MIN(scan_id)
         query = """
-            SELECT 
+            SELECT
                 p.pixel_id,
                 sp.x,
                 sp.y,
-                s.scan_id, 
-                s.rt, 
-                s.tic, 
-                s.polarity, 
-                s.mz_array, 
-                s.intensity_array 
+                s.scan_id,
+                s.rt,
+                s.tic,
+                s.polarity,
+                s.mz_array,
+                s.intensity_array
             FROM ms1_scans s
             INNER JOIN (
                 SELECT pixel_id, MIN(scan_id) as first_scan_id
@@ -79,16 +120,16 @@ def create_spatial_adata(
     else:
         # Fetch all scans belonging to pixels (ordered by pixel_id for grouping)
         query = """
-            SELECT 
+            SELECT
                 p.pixel_id,
                 sp.x,
                 sp.y,
-                s.scan_id, 
-                s.rt, 
-                s.tic, 
-                s.polarity, 
-                s.mz_array, 
-                s.intensity_array 
+                s.scan_id,
+                s.rt,
+                s.tic,
+                s.polarity,
+                s.mz_array,
+                s.intensity_array
             FROM ms1_scans s
             INNER JOIN pixel_ms1_scans p ON s.scan_id = p.scan_id
             INNER JOIN spatial_pixels sp on p.pixel_id = sp.pixel_id
@@ -116,21 +157,44 @@ def create_spatial_adata(
     matrix_cols = []
     matrix_vals = []
 
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
-        futures = [
-            executor.submit(process_spectrum_batch, batch, target_mzs, integration_ppm)
-            for batch in batches
-        ]
+    # Multiprocessing-safe logging: workers push records onto a shared queue;
+    # a QueueListener in this (main) process consumes them and re-emits
+    # through the handlers already attached to the root logger here, so
+    # worker logs land in the same file/console with the same formatting.
+    log_queue = Manager().Queue(-1)
+    root_handlers = logging.getLogger().handlers
+    listener = QueueListener(log_queue, *root_handlers, respect_handler_level=True)
+    listener.start()
 
-        for future in as_completed(futures):
-            # process_spectrum_batch should return:
-            # (batch_obs_list, batch_pixel_ids, batch_cols, batch_vals)
-            batch_obs, pix_ids, coo_cols, coo_vals = future.result()
+    try:
+        with ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=_worker_init,
+            initargs=(log_queue,),
+        ) as executor:
+            futures = [
+                executor.submit(
+                    process_spectrum_batch, batch, target_mzs, integration_ppm
+                )
+                for batch in batches
+            ]
 
-            raw_obs_list.extend(batch_obs)
-            matrix_pixel_ids.extend(pix_ids)
-            matrix_cols.extend(coo_cols)
-            matrix_vals.extend(coo_vals)
+            for future in as_completed(futures):
+                # process_spectrum_batch returns:
+                # (batch_obs_list, batch_pixel_ids, batch_cols, batch_vals)
+                batch_obs, pix_ids, coo_cols, coo_vals = future.result()
+
+                raw_obs_list.extend(batch_obs)
+                matrix_pixel_ids.extend(pix_ids)
+                matrix_cols.extend(coo_cols)
+                matrix_vals.extend(coo_vals)
+    finally:
+        listener.stop()
+
+    logger.debug(
+        "Finished multiprocessing. Assembling object.",
+        extra={"source_file": db_path},
+    )
 
     # 3. Assemble and Aggregate by Pixel
     df_entries = pd.DataFrame(
@@ -197,6 +261,11 @@ def create_spatial_adata(
 
     ad_obj.uns["project_id"] = project_id
 
+    logger.debug(
+        "Anndata object created, exiting from function.",
+        extra={"source_file": db_path},
+    )
+
     # 6. Return AnnData
     return ad_obj
 
@@ -204,25 +273,38 @@ def create_spatial_adata(
 def process_spectrum_batch(
     scans_data: list[tuple], target_mzs: np.ndarray, integration_ppm: float = 5.0
 ) -> tuple[list[dict], list[int | str], list[int], list[float]]:
-    """
-    Quantifies targeted m/zs in a batch of pixel-mapped MS1 spectra using binary search.
+    """Quantify targeted m/z values in a batch of pixel-mapped MS1 spectra.
+
+    Runs inside a worker process (submitted via `ProcessPoolExecutor`). Uses
+    binary search over each scan's sorted m/z array to find, for every
+    target m/z window, the maximum intensity within tolerance.
+
+    Args:
+        scans_data: Rows fetched from the database, each a tuple of
+            `(pixel_id, x, y, scan_id, rt, tic, polarity, mz_bytes, int_bytes)`.
+        target_mzs: Sorted array of target m/z values to quantify.
+        integration_ppm: PPM tolerance for peak matching. Defaults to 5.0.
 
     Returns:
-    --------
-    batch_obs : list of dicts holding scan metadata (including pixel_id)
-    coo_pixel_ids : list of pixel_ids for matched peak intensities
-    coo_cols : list of target m/z feature indices
-    coo_vals : list of maximum intensity values matched
+        A tuple `(batch_obs, coo_pixel_ids, coo_cols, coo_vals)`:
+
+        - batch_obs: List of dicts holding scan metadata (including
+          `pixel_id`) for each scan in the batch.
+        - coo_pixel_ids: Pixel ids for each matched peak intensity.
+        - coo_cols: Target m/z feature indices for each matched peak.
+        - coo_vals: Maximum intensity values matched, one per entry above.
     """
     batch_obs = []
     coo_pixel_ids = []
     coo_cols = []
     coo_vals = []
 
-    # Pre-calculate upper and lower bounds for each target m/z (Vectorized)
+    # Pre-calculate upper and lower bounds for each target m/z (vectorized)
     mz_deltas = target_mzs * (integration_ppm / 1e6)
     lower_bounds = target_mzs - mz_deltas
     upper_bounds = target_mzs + mz_deltas
+
+    logger.debug("Processing batch of %d scans.", len(scans_data))
 
     # Unpack pixel_id as the first element from the SQL SELECT query
     for pixel_id, x, y, scan_id, rt, tic, polarity, mz_bytes, int_bytes in scans_data:

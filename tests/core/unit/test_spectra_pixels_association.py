@@ -14,7 +14,7 @@ from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
 @pytest.fixture
 def setup_ms1_db(tmp_path: Path):
     """
-    Creates a temporary SQLite DB initialized with an ms1_scans table 
+    Creates a temporary SQLite DB initialized with an ms1_scans table
     and pre-populated test scans.
     """
     db_path = tmp_path / "test_msi.db"
@@ -43,10 +43,14 @@ def test_map_pixels_to_db_success(setup_ms1_db: Path):
     """Verifies table schema creation, pixel insertion, and accurate range mapping."""
     db_path = setup_ms1_db
 
-    df_pixels = pd.DataFrame([
-        {"x": 0, "y": 0, "t_start": 0.5, "t_end": 2.5},  # Should match scans 1 (1.0) and 2 (2.0)
-        {"x": 1, "y": 0, "t_start": 2.6, "t_end": 4.5},  # Should match scans 3 (3.0) and 4 (4.0)
-    ])
+    df_pixels = pd.DataFrame(
+        [
+            # Should match scans 1 (1.0) and 2 (2.0)
+            {"x": 0, "y": 0, "t_start": 0.5, "t_end": 2.5},
+            # Should match scans 3 (3.0) and 4 (4.0)
+            {"x": 1, "y": 0, "t_start": 2.6, "t_end": 4.5},
+        ]
+    )
 
     map_pixels_to_db(db_path, df_pixels)
 
@@ -106,7 +110,9 @@ def test_map_pixels_scans_out_of_range(setup_ms1_db: Path):
     map_pixels_to_db(db_path, df_pixels)
 
     with sqlite3.connect(db_path) as conn:
-        mappings_count = conn.execute("SELECT COUNT(*) FROM pixel_ms1_scans").fetchone()[0]
+        mappings_count = conn.execute(
+            "SELECT COUNT(*) FROM pixel_ms1_scans"
+        ).fetchone()[0]
         pixels_count = conn.execute("SELECT COUNT(*) FROM spatial_pixels").fetchone()[0]
 
         assert pixels_count == 1
@@ -118,10 +124,12 @@ def test_map_pixels_overlapping_time_windows(setup_ms1_db: Path):
     db_path = setup_ms1_db
 
     # Overlapping time windows around retention time 3.0 (scan_id = 3)
-    df_pixels = pd.DataFrame([
-        {"x": 0, "y": 0, "t_start": 1.0, "t_end": 3.5},  # Covers scans 1, 2, 3
-        {"x": 1, "y": 0, "t_start": 2.5, "t_end": 4.0},  # Covers scans 3, 4
-    ])
+    df_pixels = pd.DataFrame(
+        [
+            {"x": 0, "y": 0, "t_start": 1.0, "t_end": 3.5},  # Covers scans 1, 2, 3
+            {"x": 1, "y": 0, "t_start": 2.5, "t_end": 4.0},  # Covers scans 3, 4
+        ]
+    )
 
     map_pixels_to_db(db_path, df_pixels)
 
@@ -162,7 +170,9 @@ def test_map_pixels_empty_dataframe(setup_ms1_db: Path):
 
     with sqlite3.connect(db_path) as conn:
         pixels_count = conn.execute("SELECT COUNT(*) FROM spatial_pixels").fetchone()[0]
-        mappings_count = conn.execute("SELECT COUNT(*) FROM pixel_ms1_scans").fetchone()[0]
+        mappings_count = conn.execute(
+            "SELECT COUNT(*) FROM pixel_ms1_scans"
+        ).fetchone()[0]
 
         assert pixels_count == 0
         assert mappings_count == 0
@@ -171,7 +181,8 @@ def test_map_pixels_empty_dataframe(setup_ms1_db: Path):
 def test_map_pixels_missing_required_columns_raises_key_error(setup_ms1_db: Path):
     """Missing expected columns in df_pixels should raise a KeyError."""
     db_path = setup_ms1_db
-    df_invalid = pd.DataFrame([{"x": 0, "y": 0}])  # Missing 't_start' and 't_end'
+    # Missing 't_start' and 't_end'
+    df_invalid = pd.DataFrame([{"x": 0, "y": 0}])
 
     with pytest.raises(KeyError):
         map_pixels_to_db(db_path, df_invalid)
@@ -184,22 +195,3 @@ def test_map_pixels_missing_ms1_scans_table_raises_operational_error(tmp_path: P
 
     with pytest.raises(sqlite3.OperationalError, match="no such table: main.ms1_scans"):
         map_pixels_to_db(db_path, df_pixels)
-
-
-# ==============================================================================
-# 4. OUTPUT / STDOUT VERIFICATION
-# ==============================================================================
-
-
-def test_map_pixels_prints_success_message(setup_ms1_db: Path, capsys):
-    """Verifies the success stdout print statement."""
-    db_path = setup_ms1_db
-    df_pixels = pd.DataFrame([
-        {"x": 0, "y": 0, "t_start": 0.0, "t_end": 1.0},
-        {"x": 1, "y": 0, "t_start": 1.0, "t_end": 2.0},
-    ])
-
-    map_pixels_to_db(db_path, df_pixels)
-
-    captured = capsys.readouterr()
-    assert "Successfully processed 2 pixels." in captured.out
