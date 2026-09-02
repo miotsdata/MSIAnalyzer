@@ -13,6 +13,18 @@ _VALID_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_\- ]+$")
 
 
 class Project:
+    """An msianalyzer project and its processing-run history.
+
+    Serialised to `.msianalyzer.yml` at the project-folder root.
+
+    Attributes:
+        version: Project file schema version.
+        name: Human-readable project name.
+        uuid: Randomly generated unique identifier.
+        date: Creation timestamp.
+        runs: Mapping of run id to serialised run metadata.
+    """
+
     version: int = 1
 
     def __init__(self, name: str) -> None:
@@ -23,6 +35,18 @@ class Project:
 
     @staticmethod
     def validate_name(name) -> str:
+        """Validate a project name.
+
+        Args:
+            name: Candidate project name.
+
+        Returns:
+            The name unchanged if valid.
+
+        Raises:
+            ValueError: If `name` is empty or contains characters other than
+                letters, numbers, spaces, underscores and hyphens.
+        """
         if not name or not _VALID_NAME_PATTERN.match(name):
             raise ValueError(
                 "only letters, numbers, spaces, underscores and - (minus) are allowed."
@@ -30,6 +54,14 @@ class Project:
         return name
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the project to a plain, YAML-friendly dict.
+
+        `datetime` values are converted to ISO strings and nested objects
+        exposing `to_dict` are expanded recursively.
+
+        Returns:
+            A dict representation of the project.
+        """
         d = {}
 
         for key, value in vars(self).items():
@@ -82,6 +114,19 @@ class Project:
 
 
 def create_project_folder(path: str | Path, name: str) -> None:
+    """Create a new project folder on disk.
+
+    Creates `path`, writes a `.msianalyzer.yml` project file into it, and
+    adds the standard `output`, `data` and `configs` subdirectories.
+
+    Args:
+        path: Directory to create for the new project.
+        name: Project name, passed to `Project`.
+
+    Raises:
+        FileExistsError: If `path` already exists.
+        ValueError: If `name` is invalid.
+    """
     logger.debug("Creating project %s folder at %s", name, path)
     path = Path(path)
     path.mkdir()

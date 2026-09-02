@@ -3,15 +3,15 @@ spectral_matching.py
 Reverse dot product spectral matching (MSDial-style), with ppm-tolerant
 peak alignment and coverage-aware scoring.
 
-Scoring pipeline
-----------------
-1. Filter empirical peaks below `noise_threshold` × base-peak intensity
-2. Align filtered empirical peaks onto library peaks (fragment ppm tolerance)
-3. Compute reverse dot product (weighted by intensity^a × mz^b)
-4. Compute lib_coverage  = matched_lib_peaks  / n_lib_peaks
-   Compute emp_coverage  = matched_emp_peaks  / n_emp_filtered_peaks
-   Compute coverage_score = sqrt(lib_coverage × emp_coverage)
-5. final score = dot_product_score × coverage_score  ∈ [0, 1]
+Scoring pipeline:
+    1. Filter empirical peaks below `noise_threshold` × base-peak intensity
+    2. Align filtered empirical peaks onto library peaks (fragment ppm
+       tolerance)
+    3. Compute reverse dot product (weighted by intensity^a × mz^b)
+    4. Compute lib_coverage  = matched_lib_peaks  / n_lib_peaks
+       Compute emp_coverage  = matched_emp_peaks  / n_emp_filtered_peaks
+       Compute coverage_score = sqrt(lib_coverage × emp_coverage)
+    5. final score = dot_product_score × coverage_score  ∈ [0, 1]
 
 All intermediate values are returned in MatchResult for full
 interpretability and downstream storage.
@@ -30,39 +30,31 @@ import numpy as np
 
 @dataclass
 class MatchResult:
-    """
-    Full result of comparing one query spectrum against one library spectrum.
+    """Full result of comparing one query spectrum against one library spectrum.
 
-    Attributes
-    ----------
-    score : float
-        Final combined score = dot_product_score × coverage_score. [0, 1]
-        This is the primary ranking value.
-    dot_product_score : float
-        Pure spectral alignment quality (reverse dot product). [0, 1]
-        Measures how well peak intensities align, ignoring peak counts.
-    lib_coverage : float
-        Fraction of library peaks matched in the filtered query. [0, 1]
-        = matched_lib_peaks / n_lib_peaks
-    emp_coverage : float
-        Fraction of filtered empirical peaks that matched a library peak. [0, 1]
-        = matched_emp_peaks / n_emp_peaks_filtered
-        Low value → many noise/unrelated peaks in the empirical spectrum.
-    coverage_score : float
-        Geometric mean of lib_coverage and emp_coverage. [0, 1]
-        Penalises matches where either side is poorly covered.
-    n_matched_peaks : int
-        Number of library peaks matched by a filtered empirical peak.
-    n_lib_peaks : int
-        Total peaks in the library spectrum.
-    n_emp_peaks_raw : int
-        Empirical peaks before noise filtering.
-    n_emp_peaks_filtered : int
-        Empirical peaks surviving the noise filter.
-    filtered_mz : np.ndarray
-        Empirical m/z values after noise filtering (what was actually scored).
-    filtered_intensity : np.ndarray
-        Empirical intensities after noise filtering, normalised to [0, 1].
+    Attributes:
+        score: Final combined score = dot_product_score × coverage_score,
+            in [0, 1]. This is the primary ranking value.
+        dot_product_score: Pure spectral alignment quality (reverse dot
+            product), in [0, 1]. Measures how well peak intensities align,
+            ignoring peak counts.
+        lib_coverage: Fraction of library peaks matched in the filtered
+            query, in [0, 1]. = matched_lib_peaks / n_lib_peaks.
+        emp_coverage: Fraction of filtered empirical peaks that matched a
+            library peak, in [0, 1]. = matched_emp_peaks /
+            n_emp_peaks_filtered. Low value → many noise/unrelated peaks in
+            the empirical spectrum.
+        coverage_score: Geometric mean of lib_coverage and emp_coverage, in
+            [0, 1]. Penalises matches where either side is poorly covered.
+        n_matched_peaks: Number of library peaks matched by a filtered
+            empirical peak.
+        n_lib_peaks: Total peaks in the library spectrum.
+        n_emp_peaks_raw: Empirical peaks before noise filtering.
+        n_emp_peaks_filtered: Empirical peaks surviving the noise filter.
+        filtered_mz: Empirical m/z values after noise filtering (what was
+            actually scored).
+        filtered_intensity: Empirical intensities after noise filtering,
+            normalised to [0, 1].
     """
 
     score: float
@@ -92,26 +84,23 @@ def reverse_dot_product(
     int_power: float = 0.5,
     noise_threshold: float = 0.01,
 ) -> MatchResult:
-    """
-    Compute the coverage-aware reverse dot product score.
+    """Compute the coverage-aware reverse dot product score.
 
-    Parameters
-    ----------
-    query_mz, query_intensity : np.ndarray
-        Experimental MS2 peaks (the spectrum being annotated).
-    library_mz, library_intensity : np.ndarray
-        Reference library MS2 peaks.
-    ppm_tolerance : float
-        Tolerance for fragment peak alignment.
-    mz_power, int_power : float
-        MSDial-style peak weighting exponents.
-    noise_threshold : float
-        Empirical peaks below (noise_threshold × base_peak_intensity) are
-        removed before scoring. Default 0.01 = 1 % of base peak.
+    Args:
+        query_mz: Experimental MS2 peak m/z values (the spectrum being
+            annotated).
+        query_intensity: Experimental MS2 peak intensities.
+        library_mz: Reference library MS2 peak m/z values.
+        library_intensity: Reference library MS2 peak intensities.
+        ppm_tolerance: Tolerance for fragment peak alignment.
+        mz_power: MSDial-style m/z weighting exponent.
+        int_power: MSDial-style intensity weighting exponent.
+        noise_threshold: Empirical peaks below (noise_threshold ×
+            base_peak_intensity) are removed before scoring. Default 0.01
+            = 1 % of base peak.
 
-    Returns
-    -------
-    MatchResult
+    Returns:
+        A MatchResult.
     """
     n_emp_raw = len(query_mz)
     n_lib     = len(library_mz)
@@ -218,18 +207,16 @@ def _align_peaks(
     library_intensity: np.ndarray,
     ppm_tolerance: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Align query peaks onto library peaks within ppm_tolerance.
+    """Align query peaks onto library peaks within ppm_tolerance.
 
     For each library peak, find the closest query peak within tolerance.
     If multiple query peaks fall within tolerance, the most intense wins.
 
-    Returns
-    -------
-    aligned_query_intensity : np.ndarray
-        Same length as library_mz. 0 where no query peak matched.
-    matched_mask : np.ndarray (bool)
-        True where a query peak was found for that library peak.
+    Returns:
+        aligned_query_intensity: Same length as library_mz. 0 where no
+            query peak matched.
+        matched_mask: Boolean array, True where a query peak was found for
+            that library peak.
     """
     n_lib = len(library_mz)
     aligned_intensity = np.zeros(n_lib, dtype=np.float64)

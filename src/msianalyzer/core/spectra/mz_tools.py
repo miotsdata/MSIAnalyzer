@@ -8,23 +8,21 @@ def align_mz_across_samples(
     align_ppm: float = 10.0,
     mz_decimals: int = 4,
 ) -> pd.DataFrame:
-    """
-    Aligns m/z arrays across multiple samples within a target ppm window.
+    """Align m/z arrays across multiple samples within a target ppm window.
 
-    Parameters:
-    -----------
-    mz_arrays : list of np.ndarray
-        List containing 1D numpy arrays of m/z values for each sample.
-    sample_names : list of str, optional
-        Column names for the samples. Defaults to ['sample_0', 'sample_1', ...]
-    ppm : float
-        Tolerance window in parts-per-million (e.g., 10.0 ppm).
+    Args:
+        mz_arrays: List containing 1D numpy arrays of m/z values for each
+            sample.
+        sample_names: Column names for the samples. Defaults to
+            ``['sample_0', 'sample_1', ...]``.
+        align_ppm: Tolerance window in parts-per-million (e.g., 10.0 ppm).
+        mz_decimals: Number of decimal places to round aligned m/z values
+            to.
 
     Returns:
-    --------
-    pd.DataFrame
-        DataFrame indexed by aligned (averaged) final m/z.
-        Columns contain the original array indices for each sample (NaN if missing).
+        A DataFrame indexed by aligned (averaged) final m/z. Columns
+        contain the original array indices for each sample (NaN if
+        missing).
     """
     n_samples = len(mz_arrays)
     if sample_names is None:

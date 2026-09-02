@@ -35,15 +35,38 @@ from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
 logger = logging.getLogger(__name__)
 
 class RunStatus(Enum):
+    """Lifecycle state of a `Run`."""
+
     RUNNING = 1
     COMPLETED = 0
 
 @dataclass
 class SampleResult:
+    """Per-sample output of `Run._process_one_sample`.
+
+    Attributes:
+        out_db_path: Path to the sample's SQLite database.
+        peaks_mzs: Filtered MS1 peak m/z values for the sample.
+    """
+
     out_db_path: Path
     peaks_mzs: np.ndarray
 
 class Run:
+    """A single end-to-end processing run over a set of samples.
+
+    Loads a `Config`, records the run in the enclosing `Project`, and
+    executes the parsing, pixel-mapping, averaging, centroiding,
+    filtering, alignment and `AnnData` assembly steps.
+
+    Attributes:
+        id: Randomly generated run identifier.
+        start_date: When `start` was called, or None before then.
+        end_date: When the run finished, or None while running.
+        status: Current `RunStatus`.
+        config: The loaded `Config`, or None before `start`.
+        project: The owning `Project`, or None before `start`.
+    """
 
     def __init__(self, config_file: str | Path):
         self.id: str = str(uuid.uuid4())
@@ -54,6 +77,14 @@ class Run:
         self.project: Project | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the run to a plain, YAML-friendly dict.
+
+        `datetime` values are stringified and list items exposing `to_dict`
+        are expanded.
+
+        Returns:
+            A dict representation of the run.
+        """
         d = {}
         for key, value in vars(self).items():
             if isinstance(value, datetime.datetime):
@@ -69,6 +100,21 @@ class Run:
 
 
     def start(self, config_file: str | Path | None = None, config: Config | None = None) -> None:
+        """Load configuration, register the run, and execute the pipeline.
+
+        Resolves the configuration, records the run in the project file,
+        changes into the project folder, runs the core pipeline, then marks
+        the run completed and re-exports the project file.
+
+        Args:
+            config_file: Path to a YAML config file. Used when `config` is
+                not given.
+            config: An already-built `Config`. Takes precedence over
+                `config_file`.
+
+        Raises:
+            ValueError: If neither `config_file` nor `config` is provided.
+        """
         if config is not None:
             self.config = config
         elif config_file is not None:
@@ -94,6 +140,17 @@ class Run:
     def is_command_already_run(
         command_name: str, run_id: str, ms_db_path: str | Path
     ) -> bool:
+        """Check whether a pipeline command has already run for a given run.
+
+        Args:
+            command_name: Name recorded in the database `commands` table.
+            run_id: Identifier of the run to check.
+            ms_db_path: Path to the SQLite database holding the `commands`
+                table.
+
+        Returns:
+            True if a matching `commands` row exists, False otherwise.
+        """
         with sqlite3.connect(Path(ms_db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -289,6 +346,12 @@ class Run:
 
 
     def run_core(self) -> None:
+        """Run the pipeline across all samples and assemble outputs.
+
+        Processes each mzML/XML pair in parallel, aligns peak m/z values
+        across samples, and writes one spatial `AnnData` (.h5ad) file per
+        sample. Steps whose outputs already exist on disk are skipped.
+        """
         config = self.config
         project = self.project
 

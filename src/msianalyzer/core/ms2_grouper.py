@@ -2,20 +2,20 @@
 ms2_grouper.py
 Sequential ppm-based clustering of MS2 spectra by precursor m/z.
 
-Algorithm
----------
-Scans are sorted by precursor_mz ascending. A new group is started
-whenever the ppm gap between the current scan and the group's representative m/z exceeds ppm_tolerance.
-The representative m/z is computed according to mz_center_method.
+Algorithm:
+    Scans are sorted by precursor_mz ascending. A new group is started
+    whenever the ppm gap between the current scan and the group's
+    representative m/z exceeds ppm_tolerance. The representative m/z is
+    computed according to mz_center_method.
 
-Output
-------
-Results are written to a separate groups DB file containing:
-  - mz_groups  : one row per group (group_id, mz_center, mz_min, mz_max)
-  - metadata    : source ms2 db path, ppm_tolerance
+Output:
+    Results are written to a separate groups DB file containing:
 
-The original ms2.db is never modified by grouping.
-To apply a grouping back to ms2_scans.group_id, call assign_ms2_to_groups().
+    - mz_groups: one row per group (group_id, mz_center, mz_min, mz_max)
+    - metadata: source ms2 db path, ppm_tolerance
+
+The original ms2.db is never modified by grouping. To apply a grouping
+back to ms2_scans.group_id, call assign_ms2_to_groups().
 """
 
 from __future__ import annotations
@@ -52,19 +52,22 @@ class MzCenterMethod(str, Enum):
 
 @dataclass
 class MzGroup:
-    """
-    A cluster of MS2 scans whose precursor m/z values are within
-    ppm_tolerance of their sequential neighbours, and whose total span
-    does not exceed max_group_span_ppm.
+    """A cluster of MS2 scans with nearby precursor m/z values.
 
-    Attributes
-    ----------
-    group_id : int | None
-        1-indexed, assigned in precursor m/z ascending order.
-    mz_min, mz_max : float
-        Precursor m/z range calculated based on mz_center and ppm_tolerance.
-    mz_center : float
-        Representative m/z (mean / median / highest_peak).
+    Members have precursor m/z values within ppm_tolerance of their
+    sequential neighbours, and a total span not exceeding
+    max_group_span_ppm.
+
+    Attributes:
+        group_id: 1-indexed, assigned in precursor m/z ascending order;
+            None until assigned.
+        mz_min: Lower bound of the precursor m/z range, from mz_center and
+            ppm_tolerance.
+        mz_max: Upper bound of the precursor m/z range, from mz_center and
+            ppm_tolerance.
+        mz_center: Representative m/z (mean / median / highest_peak).
+        observed_min: Smallest precursor m/z observed in the group.
+        observed_max: Largest precursor m/z observed in the group.
     """
 
     group_id: int | None
@@ -89,28 +92,21 @@ def group_ms2_by_filter(
     mz_center_method: MzCenterMethod = MzCenterMethod.MEAN,
     return_groups: bool = True
 ) -> int:
-    """
-    Cluster MS2 scans by precursor m/z.
+    """Cluster MS2 scans by precursor m/z.
 
-    Parameters
-    ----------
-    ms2_db_path : Path | str
-        Source MS2 SQLite database (read-only — never modified).
-    groups_db_path : Path | str
-        Output path for the groups SQLite database. Created fresh;
-        if it already exists it will be overwritten.
-    ppm_tolerance : float
-        Maximum ppm gap between consecutive sorted precursor m/z values
-        to be placed in the same group.
-    polarity : str | None
-        'POSITIVE', 'NEGATIVE', or None (no filtering).
-    mz_center_method : MzCenterMethod
-        How to compute the representative m/z for each group.
-    
-        
-    Returns
-    -------
-    Number of groups
+    Args:
+        ms2_db_path: Source MS2 SQLite database (read-only — never
+            modified).
+        groups_db_path: Output path for the groups SQLite database. Created
+            fresh; if it already exists it will be overwritten.
+        ppm_tolerance: Maximum ppm gap between consecutive sorted precursor
+            m/z values to be placed in the same group.
+        polarity: 'POSITIVE', 'NEGATIVE', or None (no filtering).
+        mz_center_method: How to compute the representative m/z for each
+            group.
+
+    Returns:
+        Number of groups.
     """
     logger.debug("Init group_ms2_by_filter.")
     ms2_db_path  = Path(ms2_db_path)
@@ -148,22 +144,20 @@ def assign_ms2_to_groups(
     ms2_db_path: Path | str,
     groups_db_path: Path | str,
 ) -> None:
-    """
-    Apply a groups DB to ms2_scans.group_id in the original ms2 database.
+    """Apply a groups DB to ms2_scans.group_id in the original ms2 database.
 
-    Reads the scan_id → group_id mapping from *groups_db_path* and
-    writes it into ms2_scans.group_id in *ms2_db_path*. Logs the
+    Reads the scan_id → group_id mapping from ``groups_db_path`` and
+    writes it into ms2_scans.group_id in ``ms2_db_path``. Logs the
     assignment (including the groups DB filename) in ms2_db's commands
     table.
 
     This is the only operation that modifies the ms2.db.
 
-    Parameters
-    ----------
-    ms2_db_path : Path | str
-        The MS2 database whose ms2_scans.group_id column will be updated.
-    groups_db_path : Path | str
-        The groups database produced by group_ms2_by_precursor_ppm().
+    Args:
+        ms2_db_path: The MS2 database whose ms2_scans.group_id column will
+            be updated.
+        groups_db_path: The groups database produced by
+            group_ms2_by_precursor_ppm().
     """
     ms2_db_path  = Path(ms2_db_path)
     groups_db_path = Path(groups_db_path)
@@ -256,16 +250,14 @@ def _cluster_ms2_scans(
     max_group_span_Da: float,
     group_n: int
 ) -> Iterator[MzGroup | None]:
-    """
-    Cluster rows into MS2 groups based on their m/z values and yields one group at a time.
+    """Cluster rows into MS2 groups by m/z, yielding one group at a time.
 
-    Parameters
-    ----------
-    rows : Iterator of (precursor_mz, precursor_intensity) pairs
-    tolerance : float
-        The tolerance for grouping scans (either in ppm or mz window).
-    mz_center_method : MzCenterMethod
-        The method to use for calculating the center m/z of each group.
+    Args:
+        rows: Iterator of (precursor_mz, precursor_intensity) pairs.
+        tolerance: The tolerance for grouping scans (either in ppm or mz
+            window).
+        mz_center_method: The method to use for calculating the center m/z
+            of each group.
     """
     logger.debug("Clustering ms scans.")
     is_first = True
@@ -449,15 +441,11 @@ def _prepare_group(mzs_group: list[float], intensities_group: list[float], mz_ce
 
 
 def _write_group(group: MzGroup, con: sqlite3.Connection):
-    """
-    Write a single MzGroup to the mz_groups table in the groups database.
+    """Write a single MzGroup to the mz_groups table in the groups database.
 
-    Parameters
-    ----------
-    group : MzGroup
-        The group to write to the database.
-    con : sqlite3.Connection
-        The SQLite connection to the groups database.
+    Args:
+        group: The group to write to the database.
+        con: The SQLite connection to the groups database.
     """
     con.execute(
         "INSERT OR IGNORE INTO mz_groups (mz_center, mz_min, mz_max, observed_min, observed_max) VALUES (?, ?, ?, ?, ?)",
@@ -477,18 +465,15 @@ def _initialize_groups_db(
     polarity: Optional[str],
     mz_center_method: MzCenterMethod,
 ) -> None:
-    """
-    Create the groups SQLite database from scratch.
+    """Create the groups SQLite database from scratch.
 
-    Schema
-    ------
-    metadata  : key/value store (source db, parameters)
-    mz_groups: one row per group
+    Schema:
+        metadata: key/value store (source db, parameters).
+        mz_groups: one row per group.
 
-    Raises
-    ------
-    FileExistsError
-        If the groups DB already exists (to avoid accidental overwrites).
+    Raises:
+        FileExistsError: If the groups DB already exists (to avoid
+            accidental overwrites).
     """
     # Stop if existing groups DB is present (to avoid accidental overwrites)
     if groups_db_path.exists():

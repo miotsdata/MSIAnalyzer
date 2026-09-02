@@ -2,12 +2,9 @@
 mzml_parser.py
 Core mzML parsing module. No GUI dependencies, no pixel/spatial logic.
 
-Classes
--------
-MzmlFile
-    Lightweight result object describing a completed parse.
-MzmlParser
-    Streams an mzML file and writes MS1 / MS2 SQLite databases.
+Classes:
+    MzmlFile: Lightweight result object describing a completed parse.
+    MzmlParser: Streams an mzML file and writes MS1 / MS2 SQLite databases.
 """
 
 from __future__ import annotations
@@ -37,19 +34,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MzmlFile:
-    """
-    Describes the result of a completed mzML parse.
+    """Describes the result of a completed mzML parse.
 
-    Attributes
-    ----------
-    source_path : Path
-    ms1_db_path : Path
-    n_ms1 : int
-    n_ms2 : int
-    rt_range : tuple[float, float]
-    ms1_mz_range : tuple[float, float]
-    ms2_precursor_mz_range : tuple[float, float]
-        Range of MS2 precursor m/z values stored.
+    Attributes:
+        source_path: Source mzML file path.
+        ms1_db_path: Path to the written MS1/MS2 SQLite database.
+        n_ms1: Number of MS1 scans stored.
+        n_ms2: Number of MS2 scans stored.
+        rt_range: Retention-time range, in seconds, across stored scans.
+        ms1_mz_range: m/z range across stored MS1 scans.
+        ms2_precursor_mz_range: Range of MS2 precursor m/z values stored.
+        instrument_info: Instrument metadata extracted from the header.
     """
 
     source_path: Path
@@ -210,22 +205,19 @@ _RE_INT_ARRAY = re.compile(r'accession="MS:1000515"')  # intensity array
 
 
 class MzmlParser:
-    """
-    Streams an mzML file and writes two SQLite databases (MS1, MS2).
+    """Streams an mzML file and writes two SQLite databases (MS1, MS2).
 
     Each database receives:
       - A ``metadata`` table with instrument info and file provenance.
       - A ``commands`` table recording processing steps (JSON arguments).
       - Scan data tables (``ms1_scans`` / ``ms2_scans``).
 
-    Parameters
-    ----------
-    include_ms2 : bool
-        Store MS2 scans (default True).
-    progress_callback : callable | None
-        fn(n_ms1: int, n_ms2: int) — called after each stored spectrum.
-    decimal_places : int
-        Rounding precision for m/z and intensity values in blobs.
+    Args:
+        include_ms2: Store MS2 scans. Defaults to True.
+        progress_callback: ``fn(n_ms1: int, n_ms2: int)`` — called after
+            each stored spectrum. Defaults to None.
+        decimal_places: Rounding precision for m/z and intensity values in
+            blobs. Defaults to 4.
     """
 
     def __init__(
@@ -243,12 +235,14 @@ class MzmlParser:
     # ------------------------------------------------------------------
 
     def parse(self, mzml_path: Path | str, ms1_db_path: Path | str) -> MzmlFile:
-        """
-        Stream-parse *mzml_path* and populate the two SQLite databases, one with ms1 data and one with ms2 data.
+        """Stream-parse ``mzml_path`` and populate the two SQLite databases, one with ms1 data and one with ms2 data.
 
-        Returns
-        -------
-        MzmlFile
+        Args:
+            mzml_path: Path to the mzML file to parse.
+            ms1_db_path: Destination path for the SQLite database.
+
+        Returns:
+            An :class:`MzmlFile` describing the completed parse.
         """
         mzml_path = Path(mzml_path)
         ms1_db_path: Path = Path(ms1_db_path)
@@ -824,20 +818,19 @@ def _insert_command(
 def log_command(
     db_path: Path | str, command_name: str, arguments: dict, run_id: str
 ) -> int | None:
-    """
-    Append a command record to an existing DB's ``commands`` table.
+    """Append a command record to an existing DB's ``commands`` table.
 
     Intended for use by any downstream module that modifies a DB
     (grouper, denoiser, pixel associator, quantifier).
 
-    Parameters
-    ----------
-    db_path : Path | str
-        Path to any msianalyzer SQLite database (ms1, ms2, groups…).
-    command_name : str
-        Short identifier, e.g. ``"denoise_ms2"``, ``"assign_pixels"``.
-    arguments : dict
-        Any JSON-serialisable key/value pairs describing the command.
+    Args:
+        db_path: Path to any msianalyzer SQLite database (ms1, ms2,
+            groups…).
+        command_name: Short identifier, e.g. ``"denoise_ms2"``,
+            ``"assign_pixels"``.
+        arguments: Any JSON-serialisable key/value pairs describing the
+            command.
+        run_id: Identifier of the run the command belongs to.
     """
     con = sqlite3.connect(Path(db_path))
     try:

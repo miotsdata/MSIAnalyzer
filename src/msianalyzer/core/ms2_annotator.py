@@ -27,6 +27,15 @@ _LIBRARYS = None
 logger = logging.getLogger(__name__)
 
 def init_worker(config):
+    """Initialize a worker process for MS2 annotation.
+
+    Runs once per worker at pool startup (via `multiprocessing.Pool`'s
+    `initializer`). Loads every configured library into a module-level
+    global so it is reused across tasks, and configures worker logging.
+
+    Args:
+        config: `AnnotationConfig` whose `library_paths` are loaded.
+    """
     global _LIBRARIES
     _LIBRARIES = [_load_library(p) for p in config.library_paths]
     configure_logging(level=logging.DEBUG)
@@ -37,6 +46,36 @@ def init_worker(config):
 
 @dataclass
 class AnnotationConfig:
+    """Configuration for an MS2 annotation run.
+
+    Attributes:
+        ms2_db_path: SQLite database of empirical MS2 scans to annotate.
+        groups_db_path: SQLite database of precursor m/z groups.
+        annotations_db_path: Output SQLite database for annotation results.
+        library_paths: Reference libviz library databases to search.
+        group_precursor_tolerance: Tolerance for clustering scans into
+            precursor groups.
+        group_precursor_tolerance_unit: Unit of `group_precursor_tolerance`,
+            `"Da"` or `"ppm"`.
+        max_group_span_Da: Maximum total m/z span of a precursor group.
+        group_n: Fixed number of scans per group, or None to group by
+            tolerance.
+        library_query_tolerance: Precursor tolerance for selecting library
+            candidates.
+        library_query_tolerance_unit: Unit of `library_query_tolerance`,
+            `"Da"` or `"ppm"`.
+        fragment_ppm_tolerance: PPM tolerance for fragment peak alignment.
+        mz_power: MSDial-style m/z weighting exponent.
+        int_power: MSDial-style intensity weighting exponent.
+        noise_threshold: Empirical peaks below this fraction of the base
+            peak are removed before scoring.
+        min_matched_fraction: Minimum library coverage for a candidate to
+            be kept.
+        top_n: Number of top-scoring candidates stored per scan.
+        polarity: `"POSITIVE"`, `"NEGATIVE"`, or None for no filtering.
+        mz_center_method: How to compute a group's representative m/z.
+    """
+
     ms2_db_path: Path
     groups_db_path: Path
     annotations_db_path: Path
@@ -99,6 +138,24 @@ def annotate_ms2(
     n_processes: Optional[int] = None,
     progress_callback=None,
 ) -> Path:
+    """Annotate MS2 scans against reference libraries.
+
+    Groups MS2 scans by precursor m/z, assigns the groups back onto the
+    MS2 database, then scores each scan against library candidates in
+    parallel worker processes and writes the results to the annotations
+    database.
+
+    Args:
+        config: Annotation run configuration.
+        n_processes: Number of worker processes. Defaults to the
+            `multiprocessing.Pool` default when None.
+        progress_callback: Optional callable invoked as
+            `progress_callback(n_done, n_total)` after each group.
+
+    Returns:
+        The path to the populated annotations database
+        (`config.annotations_db_path`).
+    """
 
     group_ids = group_ms2_by_filter(
         ms2_db_path=config.ms2_db_path, 

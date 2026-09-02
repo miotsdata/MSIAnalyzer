@@ -10,6 +10,14 @@ class DefaultSourceFileFilter(logging.Filter):
     """
 
     def filter(self, record):
+        """Ensure every record has a `source_file` attribute.
+
+        Args:
+            record: The log record being processed.
+
+        Returns:
+            True, so the record is never dropped.
+        """
         if not hasattr(record, "source_file"):
             record.source_file = "-"
         return True

@@ -85,6 +85,18 @@ def save_aggregated_spectra(
     run_id: str,
     command_id: int,
 ) -> None:
+    """Persist an aggregated m/z / intensity spectrum to the MS1 database.
+
+    Creates the `aggregated_spectra` table if needed and inserts the
+    spectrum as zlib-compressed blobs keyed by run and command.
+
+    Args:
+        mzs_array: m/z values to store.
+        intensities_array: Intensities parallel to `mzs_array`.
+        ms1_db_path: Path to the MS1 SQLite database.
+        run_id: Identifier of the run producing the spectrum.
+        command_id: Row id of the `commands` entry that produced it.
+    """
     mzs_blob = array_to_blob(mzs_array)
     intensities_blob = array_to_blob(intensities_array)
     with sqlite3.connect(Path(ms1_db_path)) as conn:
@@ -308,6 +320,22 @@ def detect_ms1_centroids(
 def filter_intensities_mad(
     mz_array, intensity_array, *, log: bool = True, n_mads: float = 2
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Filter peaks by a median-absolute-deviation intensity threshold.
+
+    Keeps peaks whose intensity exceeds `median + n_mads * MAD`, with the
+    statistic computed either directly or in log10 space.
+
+    Args:
+        mz_array: Peak m/z values.
+        intensity_array: Peak intensities, parallel to `mz_array`.
+        log: Compute the median and MAD in log10 intensity space. Defaults
+            to True.
+        n_mads: Number of MADs above the median for the cutoff. Defaults
+            to 2.
+
+    Returns:
+        The `(mz_array, intensity_array)` subset above the threshold.
+    """
 
     if log:
         threshold = 10 ** (
@@ -330,6 +358,16 @@ def filter_intensities_mad(
 def load_aggregated_spectra(
     ms1_db_path: str | Path, run_id: str, command_name: str
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Load an aggregated spectrum previously saved for a run and command.
+
+    Args:
+        ms1_db_path: Path to the MS1 SQLite database.
+        run_id: Identifier of the run that produced the spectrum.
+        command_name: Name of the `commands` entry that produced it.
+
+    Returns:
+        The stored `(mz_array, intensity_array)` pair.
+    """
 
     with sqlite3.connect(Path(ms1_db_path)) as conn:
         cursor = conn.cursor()

@@ -11,9 +11,16 @@ import pandas as pd
 def parse_raster_xml(
     xml_path: str | Path,
 ) -> tuple[pd.DataFrame, dict[str, float | int]]:
-    """
-    Parses AP-MALDI target raster XML file and returns pixel time windows
-    along with global metadata (grid dimensions, start time).
+    """Parse an AP-MALDI target raster XML file into pixel time windows.
+
+    Args:
+        xml_path: Path to the raster XML file.
+
+    Returns:
+        A ``(df_pixels, metadata)`` tuple. ``df_pixels`` has columns
+        ``x``, ``y``, ``t_start``, ``t_end``, ``abs_start_sec`` and
+        ``abs_end_sec``; ``metadata`` holds ``grid_width``,
+        ``grid_height`` and ``raster_start_sec``.
     """
     tree = ET.parse(xml_path)
     root = tree.getroot()

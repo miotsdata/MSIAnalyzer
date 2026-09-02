@@ -53,6 +53,20 @@ class Plotter:
         color: str = "black",
         height: int = 500,
     ) -> go.Figure:
+        """Plot a single spectrum as a centroid (stick) figure.
+
+        Draws one vertical line per peak with invisible markers carrying
+        hover tooltips for m/z and intensity.
+
+        Args:
+            mz_array: Peak m/z values.
+            intensity_array: Peak intensities, parallel to `mz_array`.
+            color: Line and marker colour. Defaults to `"black"`.
+            height: Figure height in pixels. Defaults to 500.
+
+        Returns:
+            A Plotly `Figure` containing the spectrum.
+        """
 
         fig = go.Figure()
         xs, ys = [], []
