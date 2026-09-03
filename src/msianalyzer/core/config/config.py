@@ -152,6 +152,39 @@ class AlignMzSamples:
 
 
 @dataclass
+class GroupMs2Config:
+    """Parameters for associating MS2 scans with aligned features.
+
+    Stage A of annotation (`core.annotation.group_ms2`): every MS2 scan is
+    snapped to a feature from `align_mz_across_samples`; nothing is
+    filtered out, only flagged.
+
+    Attributes:
+        assoc_ppm: PPM tolerance for accepting a precursor-to-feature
+            match. Should be >= `align.align_ppm` — it must cover the
+            feature's own width plus the extra slack of a single
+            survey-scan precursor. A warning is emitted at run time when it
+            is tighter than `align.align_ppm`.
+        include_unmatched: Keep MS2 scans that matched no feature (stored
+            with a NULL feature id) instead of dropping them.
+        default_isolation_half_width: Isolation half-width, in Da, assumed
+            when a scan carries no isolation-window offsets.
+        precursor_only_tic_frac: A scan is flagged `precursor_only` when at
+            least this fraction of its fragment TIC lies within
+            `precursor_only_mz_tol_da` of the precursor (i.e. fragmentation
+            did not really occur).
+        precursor_only_mz_tol_da: Half-width, in Da, of the "on the
+            precursor" band used for the `precursor_only` test.
+    """
+
+    assoc_ppm: float = 10.0
+    include_unmatched: bool = True
+    default_isolation_half_width: float = 0.5
+    precursor_only_tic_frac: float = 0.8
+    precursor_only_mz_tol_da: float = 2.0
+
+
+@dataclass
 class H5adConfig:
     """Parameters for assembling the spatial `AnnData` (.h5ad) object.
 
@@ -190,6 +223,7 @@ GROUPS: dict[str, type] = {
     "centroid": CentroidConfig,
     "peak": PeakConfig,
     "align": AlignMzSamples,
+    "group_ms2": GroupMs2Config,
     "h5ad": H5adConfig,
     "analysis": AnalysisConfig,
 }
@@ -201,6 +235,7 @@ GROUP_TITLES: dict[str, str] = {
     "centroid": "detect centroids",
     "peak": "peak threshold",
     "align": "align all mzs",
+    "group_ms2": "group MS2",
     "h5ad": "create h5ad",
     "analysis": "analysis database",
 }
@@ -210,9 +245,9 @@ class Config:
     """Full configuration for a processing run, grouped by pipeline stage.
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
-    `align`, `h5ad`, `analysis`) and provides (de)serialization to and from
-    YAML and TOML. Only `io` is required; the remaining groups fall back to
-    their dataclass defaults.
+    `align`, `group_ms2`, `h5ad`, `analysis`) and provides (de)serialization
+    to and from YAML and TOML. Only `io` is required; the remaining groups
+    fall back to their dataclass defaults.
 
     Attributes:
         version: Config schema version; checked on load.
@@ -221,11 +256,12 @@ class Config:
         centroid: Centroid detection parameters.
         peak: Peak filtering parameters.
         align: Cross-sample m/z alignment parameters.
+        group_ms2: MS2-to-feature association parameters.
         h5ad: Spatial `AnnData` assembly parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 3
+    version: int = 4
 
     def __init__(
         self,
@@ -234,6 +270,7 @@ class Config:
         centroid: CentroidConfig | None = None,
         peak: PeakConfig | None = None,
         align: AlignMzSamples | None = None,
+        group_ms2: GroupMs2Config | None = None,
         h5ad: H5adConfig | None = None,
         analysis: AnalysisConfig | None = None,
     ) -> None:
@@ -242,6 +279,7 @@ class Config:
         self.centroid: CentroidConfig = centroid or CentroidConfig()
         self.peak: PeakConfig = peak or PeakConfig()
         self.align: AlignMzSamples = align or AlignMzSamples()
+        self.group_ms2: GroupMs2Config = group_ms2 or GroupMs2Config()
         self.h5ad: H5adConfig = h5ad or H5adConfig()
         self.analysis: AnalysisConfig = analysis or AnalysisConfig()
 

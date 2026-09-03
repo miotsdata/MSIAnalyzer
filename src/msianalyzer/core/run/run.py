@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from msianalyzer.core import analysis_db
+from msianalyzer.core.annotation.group_ms2 import run_grouper
 from msianalyzer.core.config import Config
 from msianalyzer.core.parser import MzmlParser, log_command, parse_raster_xml
 from msianalyzer.core.plotting.plotter import Plotter
@@ -468,6 +469,39 @@ class Run:
         else:
             logger.debug("Already run align mz across samples")
             mzs_df = pd.read_csv(aligned_df_path, index_col=0)
+
+        # --- ASSOCIATE MS2 SCANS WITH FEATURES (analysis DB) ---
+        if not analysis_db.is_command_already_run(
+            "group_ms2", analysis_id, adb_path
+        ):
+            command_id = analysis_db.log_command(
+                adb_path,
+                command_name="group_ms2",
+                arguments={
+                    **vars(config.group_ms2),
+                    "align_ppm": config.align.align_ppm,
+                },
+                run_id=analysis_id,
+            )
+            grouping = run_grouper(
+                adb_path,
+                assoc_ppm=config.group_ms2.assoc_ppm,
+                align_ppm=config.align.align_ppm,
+                include_unmatched=config.group_ms2.include_unmatched,
+                command_id=command_id,
+                default_isolation_half_width=(
+                    config.group_ms2.default_isolation_half_width
+                ),
+                precursor_only_tic_frac=config.group_ms2.precursor_only_tic_frac,
+                precursor_only_mz_tol_da=config.group_ms2.precursor_only_mz_tol_da,
+            )
+            logger.info(
+                "Associated %d MS2 scans across %d features with MS2 coverage",
+                len(grouping.associations),
+                len(grouping.feature_summary),
+            )
+        else:
+            logger.debug("Already run group_ms2")
 
         # --- SPATIAL AnnData PER SAMPLE ---
         for db_path in out_db_paths:

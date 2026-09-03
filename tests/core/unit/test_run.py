@@ -58,6 +58,15 @@ class MockAlignConfig:
 
 
 @dataclass
+class MockGroupMs2Config:
+    assoc_ppm: float = 10.0
+    include_unmatched: bool = True
+    default_isolation_half_width: float = 0.5
+    precursor_only_tic_frac: float = 0.8
+    precursor_only_mz_tol_da: float = 2.0
+
+
+@dataclass
 class MockH5ADConfig:
     n_workers: int = 1
 
@@ -79,6 +88,7 @@ class DummyConfig:
         self.centroid = MockCentroidConfig()
         self.peak = MockPeakConfig()
         self.align = MockAlignConfig()
+        self.group_ms2 = MockGroupMs2Config()
         self.h5ad = MockH5ADConfig()
         self.analysis = MockAnalysisConfig()
 
@@ -358,6 +368,12 @@ def test_run_core_executes_successfully(mocker, tmp_path):
     mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    mock_run_grouper = mocker.patch(
+        "msianalyzer.core.run.run.run_grouper",
+        return_value=mocker.MagicMock(associations=[], feature_summary=[]),
+    )
 
     mock_align = mocker.patch(
         "msianalyzer.core.run.run.align_mz_across_samples",
@@ -382,6 +398,11 @@ def test_run_core_executes_successfully(mocker, tmp_path):
 
     mock_align.assert_called_once()
     assert (out_dir / "aligned_mzs.csv").exists()
+
+    mock_run_grouper.assert_called_once()
+    grouper_kwargs = mock_run_grouper.call_args.kwargs
+    assert grouper_kwargs["assoc_ppm"] == config.group_ms2.assoc_ppm
+    assert grouper_kwargs["align_ppm"] == config.align.align_ppm
 
     assert mock_create_adata.call_count == 2
     assert mock_adata.write_h5ad.call_count == 2
@@ -411,8 +432,10 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = True
 
     mock_align = mocker.patch("msianalyzer.core.run.run.align_mz_across_samples")
+    mock_run_grouper = mocker.patch("msianalyzer.core.run.run.run_grouper")
     mock_create_adata = mocker.patch("msianalyzer.core.run.run.create_spatial_adata")
 
     mock_executor = mocker.MagicMock()
@@ -424,6 +447,7 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     run.run_core()
 
     mock_align.assert_not_called()
+    mock_run_grouper.assert_not_called()
     mock_create_adata.assert_not_called()
 
 
