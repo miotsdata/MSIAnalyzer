@@ -169,6 +169,19 @@ class H5adConfig:
     n_workers: int | None = None
 
 
+@dataclass
+class AnalysisConfig:
+    """Parameters for the per-analysis database.
+
+    Attributes:
+        db_name: File name for the analysis database, written inside
+            `io.out_dir`. When None, a name is derived from the run id as
+            `analysis_<run_id>.db`.
+    """
+
+    db_name: str | None = None
+
+
 # Maps group name (used as the nested key in dicts/files) -> dataclass type,
 # and doubles as the canonical group order for __str__ and CLI wiring.
 GROUPS: dict[str, type] = {
@@ -178,6 +191,7 @@ GROUPS: dict[str, type] = {
     "peak": PeakConfig,
     "align": AlignMzSamples,
     "h5ad": H5adConfig,
+    "analysis": AnalysisConfig,
 }
 
 # Human-readable titles for __str__, in the same order as GROUPS.
@@ -188,6 +202,7 @@ GROUP_TITLES: dict[str, str] = {
     "peak": "peak threshold",
     "align": "align all mzs",
     "h5ad": "create h5ad",
+    "analysis": "analysis database",
 }
 
 
@@ -195,9 +210,9 @@ class Config:
     """Full configuration for a processing run, grouped by pipeline stage.
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
-    `align`, `h5ad`) and provides (de)serialization to and from YAML and
-    TOML. Only `io` is required; the remaining groups fall back to their
-    dataclass defaults.
+    `align`, `h5ad`, `analysis`) and provides (de)serialization to and from
+    YAML and TOML. Only `io` is required; the remaining groups fall back to
+    their dataclass defaults.
 
     Attributes:
         version: Config schema version; checked on load.
@@ -207,9 +222,10 @@ class Config:
         peak: Peak filtering parameters.
         align: Cross-sample m/z alignment parameters.
         h5ad: Spatial `AnnData` assembly parameters.
+        analysis: Per-analysis database parameters.
     """
 
-    version: int = 2
+    version: int = 3
 
     def __init__(
         self,
@@ -219,6 +235,7 @@ class Config:
         peak: PeakConfig | None = None,
         align: AlignMzSamples | None = None,
         h5ad: H5adConfig | None = None,
+        analysis: AnalysisConfig | None = None,
     ) -> None:
         self.io: IOConfig = io
         self.ms1: MS1Config = ms1 or MS1Config()
@@ -226,6 +243,7 @@ class Config:
         self.peak: PeakConfig = peak or PeakConfig()
         self.align: AlignMzSamples = align or AlignMzSamples()
         self.h5ad: H5adConfig = h5ad or H5adConfig()
+        self.analysis: AnalysisConfig = analysis or AnalysisConfig()
 
     # ------------------------------------------------------------------ #
     # (de)serialization helpers

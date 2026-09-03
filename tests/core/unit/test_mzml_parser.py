@@ -11,6 +11,8 @@ from msianalyzer.core.parser.mzml_parser import (
     MzmlParser,
     array_to_blob,
     blob_to_array,
+    create_raw_schema,
+    init_raw_db,
     log_command,
     _parse_binary_arrays,
     _parse_collision_energy,
@@ -356,10 +358,24 @@ def test_mzml_parser_end_to_end(
         meta = dict(conn.execute("SELECT key, value FROM metadata").fetchall())
         assert meta["instrument_model"] == "Orbitrap Exploris 480"
 
-        # 2. Commands Table
-        cmd = conn.execute("SELECT command_name, run_id FROM commands").fetchone()
-        assert cmd[0] == "parse"
-        assert cmd[1] == "parse"
+        # 2. Commands Table — parse writes exactly one row (regression: the
+        #    old code looped over the same connection twice).
+        cmds = conn.execute("SELECT command_name, run_id FROM commands").fetchall()
+        assert cmds == [("parse", "parse")]
+
+        # metadata is written once per key
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM metadata WHERE key = 'instrument_model'"
+            ).fetchone()[0]
+            == 1
+        )
+
+        # ms2_scans carries only ground-truth columns — no analysis-level group_id
+        ms2_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(ms2_scans)").fetchall()
+        }
+        assert "group_id" not in ms2_cols
 
         # 3. MS1 Scans Table
         ms1_row = conn.execute(
@@ -425,6 +441,32 @@ def test_log_command_helper(tmp_path: Path, sample_run_id: str):
 
     assert row[0] == "denoise_ms2"
     assert '"threshold": 100' in row[1]
+
+
+def test_init_raw_db_creates_expected_tables(tmp_path: Path):
+    """init_raw_db applies the full raw schema and is idempotent."""
+    db_path = tmp_path / "raw.db"
+
+    conn = init_raw_db(db_path)
+    try:
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        assert {"metadata", "commands", "ms1_scans", "ms2_scans"} <= tables
+        # geometry tables are added later by map_pixels_to_db, not here
+        assert "spatial_pixels" not in tables
+    finally:
+        conn.close()
+
+    # Re-applying the schema on a fresh connection must not raise.
+    conn2 = sqlite3.connect(db_path)
+    try:
+        create_raw_schema(conn2)
+    finally:
+        conn2.close()
 
 
 def test_mzml_file_repr(tmp_path: Path):

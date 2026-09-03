@@ -235,11 +235,17 @@ class MzmlParser:
     # ------------------------------------------------------------------
 
     def parse(self, mzml_path: Path | str, ms1_db_path: Path | str) -> MzmlFile:
-        """Stream-parse ``mzml_path`` and populate the two SQLite databases, one with ms1 data and one with ms2 data.
+        """Stream-parse ``mzml_path`` and populate the raw SQLite database.
+
+        The database holds only ground-truth facts about the acquisition:
+        MS1/MS2 scans plus instrument metadata and a parse ``commands``
+        entry. Parameter-dependent derived data (averaged spectra,
+        centroids, groupings, annotations) is never written here — it
+        belongs to a per-analysis database.
 
         Args:
             mzml_path: Path to the mzML file to parse.
-            ms1_db_path: Destination path for the SQLite database.
+            ms1_db_path: Destination path for the raw SQLite database.
 
         Returns:
             An :class:`MzmlFile` describing the completed parse.
@@ -253,23 +259,22 @@ class MzmlParser:
 
         ms1_con = self._init_ms1_db(ms1_db_path)
 
-        # Write metadata + parse command to both DBs
+        # Write instrument metadata + the parse command entry.
         parse_dt = datetime.now().astimezone().isoformat()
-        for con in (ms1_con, ms1_con):
-            _insert_metadata(con, mzml_path, instrument_info)
-            _insert_command(
-                con,
-                command_name="parse",
-                dt=parse_dt,
-                arguments={
-                    "source_file": str(mzml_path),
-                    "decimal_places": self.decimal_places,
-                    "include_ms2": self.include_ms2,
-                    "msianalyzer_version": SOFTWARE_VERSION,
-                },
-                run_id="parse",
-            )
-            con.commit()
+        _insert_metadata(ms1_con, mzml_path, instrument_info)
+        _insert_command(
+            ms1_con,
+            command_name="parse",
+            dt=parse_dt,
+            arguments={
+                "source_file": str(mzml_path),
+                "decimal_places": self.decimal_places,
+                "include_ms2": self.include_ms2,
+                "msianalyzer_version": SOFTWARE_VERSION,
+            },
+            run_id="parse",
+        )
+        ms1_con.commit()
 
         logger.debug("%s: Written metadata", mzml_path)
 
@@ -407,91 +412,12 @@ class MzmlParser:
     # ------------------------------------------------------------------
 
     def _init_ms1_db(self, ms1_db_path: Path | str) -> sqlite3.Connection:
-        con = sqlite3.connect(ms1_db_path)
-        con.execute("PRAGMA journal_mode=WAL")
-        con.execute("PRAGMA synchronous=NORMAL")
-        con.execute("PRAGMA foreign_keys = ON")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS metadata (
-                key   TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS commands (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id       UUID    NOT NULL,
-                command_name TEXT    NOT NULL,
-                datetime     TEXT    NOT NULL,
-                arguments    TEXT    NOT NULL
-            )
-        """)
-        con.execute("CREATE INDEX IF NOT EXISTS idx_command_run_id ON commands(run_id)")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS ms1_scans (
-                scan_id         INTEGER PRIMARY KEY,
-                rt              REAL    NOT NULL,
-                n_peaks         INTEGER,
-                mz_min          REAL,
-                mz_max          REAL,
-                tic             REAL,
-                polarity        TEXT,
-                mz_array        BLOB    NOT NULL,
-                intensity_array BLOB    NOT NULL
-            )
-        """)
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_rt      ON ms1_scans(rt)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_mz_min  ON ms1_scans(mz_min)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_mz_max  ON ms1_scans(mz_max)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_tic     ON ms1_scans(tic)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_pol     ON ms1_scans(polarity)")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS ms2_scans (
-                scan_id                  INTEGER PRIMARY KEY,
-                parent_scan_id           INTEGER,
-                polarity                 TEXT,
-                rt                       REAL    NOT NULL,
-                filter_string            TEXT    NOT NULL,
-                precursor_mz             REAL,
-                precursor_charge         INTEGER,
-                precursor_intensity      REAL,
-                isolation_window_target  REAL,
-                isolation_window_lower   REAL,
-                isolation_window_upper   REAL,
-                collision_energy         REAL,
-                n_peaks                  INTEGER,
-                tic                      REAL,
-                group_id                 INTEGER,
-                mz_array                 BLOB    NOT NULL,
-                intensity_array          BLOB    NOT NULL,
-                CONSTRAINT fk_ms1_scan
-                FOREIGN KEY (parent_scan_id)
-                REFERENCES ms1_scans(scan_id)
-            )
-        """)
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ms2_rt             ON ms2_scans(rt)"
-        )
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ms2_precursor_mz   ON ms2_scans(precursor_mz)"
-        )
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ms2_isolation_tgt  ON ms2_scans(isolation_window_target)"
-        )
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ms2_tic            ON ms2_scans(tic)"
-        )
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ms2_parent         ON ms2_scans(parent_scan_id)"
-        )
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ms2_group          ON ms2_scans(group_id)"
-        )
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_filter_string      ON ms2_scans(filter_string)"
-        )
-        con.commit()
-        return con
+        """Open ``ms1_db_path`` and ensure the raw schema exists.
+
+        Thin wrapper around :func:`init_raw_db`, kept as a method for
+        backwards compatibility with existing callers and tests.
+        """
+        return init_raw_db(ms1_db_path)
 
     # ------------------------------------------------------------------
     # SQLite — inserts
@@ -528,9 +454,9 @@ class MzmlParser:
                precursor_mz, precursor_charge, precursor_intensity,
                isolation_window_target, isolation_window_lower, isolation_window_upper,
                collision_energy,
-               n_peaks, tic, group_id,
+               n_peaks, tic,
                mz_array, intensity_array)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 sp["scan_id"],
@@ -547,11 +473,116 @@ class MzmlParser:
                 sp.get("collision_energy"),
                 sp["n_peaks"],
                 sp["tic"],
-                None,  # group_id — assigned later by ms2_grouper
                 sp["mz_blob"],
                 sp["intensity_blob"],
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# Raw-database schema (single source of truth — reused by tests)
+# ---------------------------------------------------------------------------
+
+
+def create_raw_schema(con: sqlite3.Connection) -> None:
+    """Create every table and index of the raw database on ``con``.
+
+    The raw database describes only ground-truth facts about the
+    acquisition: MS1/MS2 scans, instrument ``metadata`` and a ``commands``
+    log of the parse (and, later, pixel mapping). It carries no
+    parameter-dependent derived data.
+
+    Idempotent — every statement uses ``IF NOT EXISTS``.
+    """
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS metadata (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS commands (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id       UUID    NOT NULL,
+            command_name TEXT    NOT NULL,
+            datetime     TEXT    NOT NULL,
+            arguments    TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_command_run_id ON commands(run_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ms1_scans (
+            scan_id         INTEGER PRIMARY KEY,
+            rt              REAL    NOT NULL,
+            n_peaks         INTEGER,
+            mz_min          REAL,
+            mz_max          REAL,
+            tic             REAL,
+            polarity        TEXT,
+            mz_array        BLOB    NOT NULL,
+            intensity_array BLOB    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_rt      ON ms1_scans(rt)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_mz_min  ON ms1_scans(mz_min)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_mz_max  ON ms1_scans(mz_max)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_tic     ON ms1_scans(tic)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ms1_pol     ON ms1_scans(polarity)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ms2_scans (
+            scan_id                  INTEGER PRIMARY KEY,
+            parent_scan_id           INTEGER,
+            polarity                 TEXT,
+            rt                       REAL    NOT NULL,
+            filter_string            TEXT    NOT NULL,
+            precursor_mz             REAL,
+            precursor_charge         INTEGER,
+            precursor_intensity      REAL,
+            isolation_window_target  REAL,
+            isolation_window_lower   REAL,
+            isolation_window_upper   REAL,
+            collision_energy         REAL,
+            n_peaks                  INTEGER,
+            tic                      REAL,
+            mz_array                 BLOB    NOT NULL,
+            intensity_array          BLOB    NOT NULL,
+            CONSTRAINT fk_ms1_scan
+            FOREIGN KEY (parent_scan_id)
+            REFERENCES ms1_scans(scan_id)
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_rt             ON ms2_scans(rt)")
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ms2_precursor_mz   ON ms2_scans(precursor_mz)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ms2_isolation_tgt  ON ms2_scans(isolation_window_target)"
+    )
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ms2_tic            ON ms2_scans(tic)")
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ms2_parent         ON ms2_scans(parent_scan_id)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_filter_string      ON ms2_scans(filter_string)"
+    )
+
+
+def init_raw_db(db_path: Path | str) -> sqlite3.Connection:
+    """Open (creating if needed) the raw database and apply its schema.
+
+    Args:
+        db_path: Destination path for the raw SQLite database.
+
+    Returns:
+        An open connection with WAL journalling and foreign keys enabled.
+    """
+    con = sqlite3.connect(db_path)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
+    con.execute("PRAGMA foreign_keys = ON")
+    create_raw_schema(con)
+    con.commit()
+    return con
 
 
 # ---------------------------------------------------------------------------

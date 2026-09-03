@@ -107,8 +107,12 @@ def test_get_average_ms1_spectra_multi_chunk(mocker):
     assert mean_intensities[0] == pytest.approx(15.0)
 
 
-def test_save_aggregated_spectra_with_run_id(mocker):
-    """Tests save_aggregated_spectra DB execution with updated run_id."""
+def _norm(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def test_save_aggregated_spectra_targets_analysis_db(mocker):
+    """save_aggregated_spectra inserts run_id, sample_id and command_id."""
     mock_conn = mocker.MagicMock()
     mock_conn.__enter__.return_value = mock_conn
     mock_cursor = mocker.MagicMock()
@@ -123,23 +127,30 @@ def test_save_aggregated_spectra_with_run_id(mocker):
     save_aggregated_spectra(
         mzs_array=np.array([100.0, 200.0]),
         intensities_array=np.array([10.0, 20.0]),
-        ms1_db_path="test_db.db",
+        analysis_db_path="analysis.db",
         run_id="run_abc123",
+        sample_id=7,
         command_id=99,
     )
 
-    mock_cursor.execute.assert_any_call(
-        """
-            INSERT OR REPLACE INTO aggregated_spectra (run_id, command_id, mz_array, intensity_array)
-            VALUES (?, ?, ?, ?);
-            """,
-        ("run_abc123", 99, b"mz_blob", b"int_blob"),
+    insert_calls = [
+        c
+        for c in mock_cursor.execute.call_args_list
+        if "INSERT" in _norm(c.args[0])
+    ]
+    assert len(insert_calls) == 1
+    sql, params = insert_calls[0].args
+    assert _norm(sql) == _norm(
+        "INSERT INTO aggregated_spectra "
+        "(run_id, sample_id, command_id, mz_array, intensity_array) "
+        "VALUES (?, ?, ?, ?, ?);"
     )
+    assert params == ("run_abc123", 7, 99, b"mz_blob", b"int_blob")
     mock_conn.commit.assert_called_once()
 
 
-def test_load_aggregated_spectra_with_run_id(mocker):
-    """Tests load_aggregated_spectra DB query with context manager properly mocked."""
+def test_load_aggregated_spectra_filters_by_sample(mocker):
+    """load_aggregated_spectra joins commands and filters on sample_id."""
     mock_conn = mocker.MagicMock()
     mock_conn.__enter__.return_value = mock_conn
     mock_cursor = mocker.MagicMock()
@@ -156,21 +167,20 @@ def test_load_aggregated_spectra_with_run_id(mocker):
     )
 
     mzs, intensities = load_aggregated_spectra(
-        ms1_db_path="test_db.db",
+        analysis_db_path="analysis.db",
         run_id="run_abc123",
         command_name="detect_ms1_centroids",
+        sample_id=7,
     )
 
     np.testing.assert_array_equal(mzs, expected_mzs)
     np.testing.assert_array_equal(intensities, expected_ints)
 
-    mock_cursor.execute.assert_called_once_with(
-        """
-                       SELECT mz_array, intensity_array FROM aggregated_spectra 
-                       LEFT JOIN commands on aggregated_spectra.command_id = commands.id 
-                       WHERE commands.command_name = ? AND commands.run_id = ?""",
-        ("detect_ms1_centroids", "run_abc123"),
-    )
+    sql, params = mock_cursor.execute.call_args.args
+    norm_sql = _norm(sql)
+    assert "JOIN commands" in norm_sql
+    assert "c.command_name = ? AND c.run_id = ? AND a.sample_id = ?" in norm_sql
+    assert params == ("detect_ms1_centroids", "run_abc123", 7)
 
 
 # ==============================================================================

@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:dae89850fa6697644c8de041902c797504074ac91600901dace4de2278997703"
+content_hash = "sha256:6c7b11d8b017e176f5e67e4cf8ddfc7baeb5138434f948143cd70fac92dda0bb"
 
 [[metadata.targets]]
 requires_python = "==3.13"
@@ -1320,7 +1320,7 @@ files = [
 
 [[package]]
 name = "libviz"
-version = "0.1.2"
+version = "0.1.3"
 requires_python = "==3.13"
 summary = "App to visualize MS library spectra"
 groups = ["default"]
@@ -1334,8 +1334,8 @@ dependencies = [
     "tqdm>=4.67.3",
 ]
 files = [
-    {file = "libviz-0.1.2-py3-none-any.whl", hash = "sha256:489d291d4bfa2170e55b3c72151a55fc7575ea60621ac645de3366b67838fd0e"},
-    {file = "libviz-0.1.2.tar.gz", hash = "sha256:7f03f24119d80acb6af3d6001abb689cd6db98ec9fe7d311120b050560dc7be3"},
+    {file = "libviz-0.1.3-py3-none-any.whl", hash = "sha256:e15e718212df23adcd8e9505f418ef08373464590120008bb5f3653a946c7359"},
+    {file = "libviz-0.1.3.tar.gz", hash = "sha256:cecbc44140aa3670e9c3b6167b1df98ecb7d2ce94fdfa6d0b0fc73d6d64c7a21"},
 ]
 
 [[package]]

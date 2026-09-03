@@ -81,47 +81,51 @@ def save_aggregated_spectra(
     mzs_array: np.ndarray,
     intensities_array: np.ndarray,
     *,
-    ms1_db_path: Path | str,
+    analysis_db_path: Path | str,
     run_id: str,
+    sample_id: int,
     command_id: int,
 ) -> None:
-    """Persist an aggregated m/z / intensity spectrum to the MS1 database.
+    """Persist an aggregated m/z / intensity spectrum to the analysis database.
 
-    Creates the `aggregated_spectra` table if needed and inserts the
-    spectrum as zlib-compressed blobs keyed by run and command.
+    Inserts the spectrum as zlib-compressed blobs attributed to one
+    sample and one `commands` entry. The `aggregated_spectra` table is
+    normally created by `analysis_db.init_analysis_db`; a
+    `CREATE TABLE IF NOT EXISTS` guard is kept here so the function is
+    usable in isolation.
 
     Args:
         mzs_array: m/z values to store.
         intensities_array: Intensities parallel to `mzs_array`.
-        ms1_db_path: Path to the MS1 SQLite database.
+        analysis_db_path: Path to the per-analysis SQLite database.
         run_id: Identifier of the run producing the spectrum.
+        sample_id: Row id in the analysis `samples` table this spectrum
+            belongs to.
         command_id: Row id of the `commands` entry that produced it.
     """
     mzs_blob = array_to_blob(mzs_array)
     intensities_blob = array_to_blob(intensities_array)
-    with sqlite3.connect(Path(ms1_db_path)) as conn:
+    with sqlite3.connect(Path(analysis_db_path)) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS aggregated_spectra (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id TEXT NOT NULL,
-            command_id INT,
+            sample_id INTEGER,
+            command_id INTEGER,
             mz_array BLOB,
-            intensity_array BLOB,
-            CONSTRAINT fk_command_id
-            FOREIGN KEY (command_id)
-            REFERENCES command(id)
+            intensity_array BLOB
             );
         """)
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_averagems1_run_id ON aggregated_spectra(run_id)"
+            "CREATE INDEX IF NOT EXISTS idx_agg_run_id ON aggregated_spectra(run_id)"
         )
         cursor.execute(
             """
-            INSERT OR REPLACE INTO aggregated_spectra (run_id, command_id, mz_array, intensity_array)
-            VALUES (?, ?, ?, ?);
+            INSERT INTO aggregated_spectra (run_id, sample_id, command_id, mz_array, intensity_array)
+            VALUES (?, ?, ?, ?, ?);
             """,
-            (run_id, command_id, mzs_blob, intensities_blob),
+            (run_id, sample_id, command_id, mzs_blob, intensities_blob),
         )
         conn.commit()
 
@@ -356,28 +360,37 @@ def filter_intensities_mad(
 
 
 def load_aggregated_spectra(
-    ms1_db_path: str | Path, run_id: str, command_name: str
+    analysis_db_path: str | Path,
+    run_id: str,
+    command_name: str,
+    sample_id: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Load an aggregated spectrum previously saved for a run and command.
+    """Load an aggregated spectrum previously saved for a sample and step.
 
     Args:
-        ms1_db_path: Path to the MS1 SQLite database.
+        analysis_db_path: Path to the per-analysis SQLite database.
         run_id: Identifier of the run that produced the spectrum.
         command_name: Name of the `commands` entry that produced it.
+        sample_id: Row id in the analysis `samples` table.
 
     Returns:
-        The stored `(mz_array, intensity_array)` pair.
+        The stored `(mz_array, intensity_array)` pair; the most recent one
+        if the step ran more than once.
     """
 
-    with sqlite3.connect(Path(ms1_db_path)) as conn:
+    with sqlite3.connect(Path(analysis_db_path)) as conn:
         cursor = conn.cursor()
 
         cursor.execute(
             """
-                       SELECT mz_array, intensity_array FROM aggregated_spectra 
-                       LEFT JOIN commands on aggregated_spectra.command_id = commands.id 
-                       WHERE commands.command_name = ? AND commands.run_id = ?""",
-            (command_name, run_id),
+            SELECT a.mz_array, a.intensity_array
+            FROM aggregated_spectra AS a
+            JOIN commands AS c ON a.command_id = c.id
+            WHERE c.command_name = ? AND c.run_id = ? AND a.sample_id = ?
+            ORDER BY a.id DESC
+            LIMIT 1
+            """,
+            (command_name, run_id, sample_id),
         )
 
         mzs_blob, intensities_blob = cursor.fetchone()

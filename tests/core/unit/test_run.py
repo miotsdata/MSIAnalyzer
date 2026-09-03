@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -62,6 +62,11 @@ class MockH5ADConfig:
     n_workers: int = 1
 
 
+@dataclass
+class MockAnalysisConfig:
+    db_name: str | None = None
+
+
 class DummyConfig:
     def __init__(self, tmp_path):
         self.io = MockIOConfig(
@@ -75,6 +80,7 @@ class DummyConfig:
         self.peak = MockPeakConfig()
         self.align = MockAlignConfig()
         self.h5ad = MockH5ADConfig()
+        self.analysis = MockAnalysisConfig()
 
     @classmethod
     def from_yaml(cls, path):
@@ -119,6 +125,12 @@ def test_run_init():
     assert run.project is None
 
 
+def test_run_init_without_config_file():
+    """`cli` constructs `Run()` with no arguments."""
+    run = Run()
+    assert isinstance(run.id, str)
+
+
 def test_run_to_dict_conversions():
     run = Run("test_config.yml")
     run.start_date = datetime(2026, 1, 1, 12, 0, 0)
@@ -136,19 +148,15 @@ def test_run_to_dict_conversions():
 
 
 # ==============================================================================
-# TESTS FOR is_command_already_run
+# TESTS FOR is_command_already_run (raw database, project-scoped)
 # ==============================================================================
 
 
 def test_is_command_already_run_returns_true(tmp_path):
     db_path = tmp_path / "test.db"
     with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "CREATE TABLE commands (id TEXT, command_name TEXT, run_id TEXT)"
-        )
-        conn.execute(
-            "INSERT INTO commands VALUES ('cmd1', 'parse_spectra', 'proj_123')"
-        )
+        conn.execute("CREATE TABLE commands (id TEXT, command_name TEXT, run_id TEXT)")
+        conn.execute("INSERT INTO commands VALUES ('cmd1', 'parse_spectra', 'proj_123')")
         conn.commit()
 
     assert Run.is_command_already_run("parse_spectra", "proj_123", db_path) is True
@@ -157,9 +165,7 @@ def test_is_command_already_run_returns_true(tmp_path):
 def test_is_command_already_run_returns_false(tmp_path):
     db_path = tmp_path / "test.db"
     with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "CREATE TABLE commands (id TEXT, command_name TEXT, run_id TEXT)"
-        )
+        conn.execute("CREATE TABLE commands (id TEXT, command_name TEXT, run_id TEXT)")
         conn.commit()
 
     assert Run.is_command_already_run("parse_spectra", "proj_123", db_path) is False
@@ -168,6 +174,40 @@ def test_is_command_already_run_returns_false(tmp_path):
 # ==============================================================================
 # TESTS FOR _process_one_sample (USING mocker)
 # ==============================================================================
+
+
+def _patch_common(mocker):
+    """Patch every collaborator of `_process_one_sample` and return the mocks."""
+    m = {}
+    m["MzmlParser"] = mocker.patch("msianalyzer.core.run.run.MzmlParser")
+    m["log_command"] = mocker.patch("msianalyzer.core.run.run.log_command")
+    m["parse_raster_xml"] = mocker.patch(
+        "msianalyzer.core.run.run.parse_raster_xml",
+        return_value=(pd.DataFrame({"x": [1, 2]}), None),
+    )
+    m["map_pixels_to_db"] = mocker.patch("msianalyzer.core.run.run.map_pixels_to_db")
+    m["get_average_ms1_spectra"] = mocker.patch(
+        "msianalyzer.core.run.run.get_average_ms1_spectra",
+        return_value=(np.array([100.0, 200.0]), np.array([10.0, 20.0])),
+    )
+    m["save_aggregated_spectra"] = mocker.patch(
+        "msianalyzer.core.run.run.save_aggregated_spectra"
+    )
+    m["load_aggregated_spectra"] = mocker.patch(
+        "msianalyzer.core.run.run.load_aggregated_spectra"
+    )
+    m["detect_ms1_centroids"] = mocker.patch(
+        "msianalyzer.core.run.run.detect_ms1_centroids",
+        return_value=(np.array([100.0, 200.0]), np.array([10.0, 20.0])),
+    )
+    m["filter_intensities_mad"] = mocker.patch(
+        "msianalyzer.core.run.run.filter_intensities_mad",
+        return_value=(np.array([100.0]), np.array([20.0])),
+    )
+    m["Plotter"] = mocker.patch("msianalyzer.core.run.run.Plotter")
+    m["analysis_db"] = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    m["analysis_db"].log_command.return_value = 1
+    return m
 
 
 def test_process_one_sample_fresh_run_with_mad_filter(mocker, tmp_path):
@@ -179,54 +219,40 @@ def test_process_one_sample_fresh_run_with_mad_filter(mocker, tmp_path):
     xml_path.write_text(DUMMY_XML_CONTENT, encoding="utf-8")
 
     config = DummyConfig(tmp_path)
-    run_id = "proj_test"
-
-    # Set up patches via mocker at the exact import location in run.py
-    mock_mzml_parser_cls = mocker.patch("msianalyzer.core.run.run.MzmlParser")
-    mock_log_cmd = mocker.patch("msianalyzer.core.run.run.log_command")
-    mock_parse_xml = mocker.patch(
-        "msianalyzer.core.run.run.parse_raster_xml",
-        return_value=(pd.DataFrame({"x": [1, 2]}), None),
-    )
-    mock_map_pixels = mocker.patch("msianalyzer.core.run.run.map_pixels_to_db")
-    mock_get_avg = mocker.patch(
-        "msianalyzer.core.run.run.get_average_ms1_spectra",
-        return_value=(np.array([100.0, 200.0]), np.array([10.0, 20.0])),
-    )
-    mocker.patch("msianalyzer.core.run.run.save_aggregated_spectra")
-    mocker.patch("msianalyzer.core.run.run.load_aggregated_spectra")
-    mock_detect_centroids = mocker.patch(
-        "msianalyzer.core.run.run.detect_ms1_centroids",
-        return_value=(np.array([100.0, 200.0]), np.array([10.0, 20.0])),
-    )
-    mock_filter_mad = mocker.patch(
-        "msianalyzer.core.run.run.filter_intensities_mad",
-        return_value=(np.array([100.0]), np.array([20.0])),
-    )
-
-    mock_fig = mocker.MagicMock()
-    mock_plotter = mocker.patch("msianalyzer.core.run.run.Plotter")
-    mock_plotter.return_value.plot_spectra.return_value = mock_fig
-
+    m = _patch_common(mocker)
+    m["analysis_db"].is_command_already_run.return_value = False
     mocker.patch.object(Run, "is_command_already_run", return_value=False)
 
-    res = Run._process_one_sample(mzml_path, xml_path, config, run_id)
+    mock_fig = mocker.MagicMock()
+    m["Plotter"].return_value.plot_spectra.return_value = mock_fig
+
+    res = Run._process_one_sample(
+        mzml_path,
+        xml_path,
+        sample_id=1,
+        config=config,
+        run_id="proj_test",
+        analysis_id="ana_test",
+        analysis_db_path=out_dir / "analysis.db",
+    )
 
     assert isinstance(res, SampleResult)
     assert res.out_db_path == out_dir / "sample.db"
     np.testing.assert_array_equal(res.peaks_mzs, np.array([100.0]))
 
-    # Verify parser and processing functions were called
-    mock_mzml_parser_cls.return_value.parse.assert_called_once()
-    mock_map_pixels.assert_called_once()
-    mock_get_avg.assert_called_once()
-    mock_detect_centroids.assert_called_once()
-    mock_filter_mad.assert_called_once()
+    m["MzmlParser"].return_value.parse.assert_called_once()
+    m["map_pixels_to_db"].assert_called_once()
+    m["get_average_ms1_spectra"].assert_called_once()
+    m["detect_ms1_centroids"].assert_called_once()
+    m["filter_intensities_mad"].assert_called_once()
 
-    # Verify plot export was called on the mock figure
+    # three aggregated spectra written (avg, centroids, filtered), all to the analysis DB
+    assert m["save_aggregated_spectra"].call_count == 3
+    for call in m["save_aggregated_spectra"].call_args_list:
+        assert call.kwargs["analysis_db_path"] == out_dir / "analysis.db"
+        assert call.kwargs["sample_id"] == 1
+
     mock_fig.write_html.assert_called_once_with(out_dir / "sample_filtered_ms1.html")
-
-    # Verify real CSV file creation (pandas wasn't mocked, so to_csv actually wrote to disk)
     assert (out_dir / "sample_peaks_data.csv").exists()
 
 
@@ -241,26 +267,33 @@ def test_process_one_sample_cached_run(mocker, tmp_path):
     xml_path.write_text(DUMMY_XML_CONTENT, encoding="utf-8")
     db_path.touch()
 
-    # Create dummy files to pass existence checks
     (out_dir / "sample_filtered_ms1.html").touch()
     (out_dir / "sample_peaks_data.csv").touch()
 
     config = DummyConfig(tmp_path)
-    run_id = "proj_test"
-
-    mock_load_agg = mocker.patch(
-        "msianalyzer.core.run.run.load_aggregated_spectra",
-        side_effect=[(np.array([100.0]), np.array([50.0]))],
-    )
-    mocker.patch("msianalyzer.core.run.run.Plotter")
+    m = _patch_common(mocker)
+    m["analysis_db"].is_command_already_run.return_value = True
+    m["load_aggregated_spectra"].side_effect = [(np.array([100.0]), np.array([50.0]))]
     mocker.patch.object(Run, "is_command_already_run", return_value=True)
 
-    res = Run._process_one_sample(mzml_path, xml_path, config, run_id)
+    res = Run._process_one_sample(
+        mzml_path,
+        xml_path,
+        sample_id=2,
+        config=config,
+        run_id="proj_test",
+        analysis_id="ana_test",
+        analysis_db_path=out_dir / "analysis.db",
+    )
 
     assert res.out_db_path == db_path
     np.testing.assert_array_equal(res.peaks_mzs, np.array([100.0]))
-    mock_load_agg.assert_called_once_with(
-        db_path, run_id=run_id, command_name="filter_spectra"
+    m["save_aggregated_spectra"].assert_not_called()
+    m["load_aggregated_spectra"].assert_called_once_with(
+        out_dir / "analysis.db",
+        run_id="ana_test",
+        command_name="filter_spectra",
+        sample_id=2,
     )
 
 
@@ -276,34 +309,25 @@ def test_process_one_sample_peak_threshold_filtering(mocker, tmp_path):
     config.peak.filter_mad = False
     config.peak.peak_height_threshold = 15.0
 
-    run_id = "proj_test"
-
-    mock_mad = mocker.patch("msianalyzer.core.run.run.filter_intensities_mad")
-    mocker.patch("msianalyzer.core.run.run.save_aggregated_spectra")
-    mocker.patch("msianalyzer.core.run.run.log_command")
+    m = _patch_common(mocker)
+    m["analysis_db"].is_command_already_run.return_value = False
+    m["detect_ms1_centroids"].return_value = (
+        np.array([100.0, 200.0, 300.0]),
+        np.array([10.0, 20.0, 5.0]),  # 10 and 5 are < threshold 15.0
+    )
     mocker.patch.object(Run, "is_command_already_run", return_value=False)
-    mocker.patch("msianalyzer.core.run.run.MzmlParser")
-    mocker.patch(
-        "msianalyzer.core.run.run.parse_raster_xml",
-        return_value=(pd.DataFrame(), None),
-    )
-    mocker.patch("msianalyzer.core.run.run.map_pixels_to_db")
-    mocker.patch(
-        "msianalyzer.core.run.run.get_average_ms1_spectra",
-        return_value=(np.array([10.0, 20.0]), np.array([100.0, 200.0])),
-    )
-    mocker.patch(
-        "msianalyzer.core.run.run.detect_ms1_centroids",
-        return_value=(
-            np.array([100.0, 200.0, 300.0]),
-            np.array([10.0, 20.0, 5.0]),  # 10 and 5 are < threshold 15.0
-        ),
-    )
-    mocker.patch("msianalyzer.core.run.run.Plotter")
 
-    res = Run._process_one_sample(mzml_path, xml_path, config, run_id)
+    res = Run._process_one_sample(
+        mzml_path,
+        xml_path,
+        sample_id=1,
+        config=config,
+        run_id="proj_test",
+        analysis_id="ana_test",
+        analysis_db_path=out_dir / "analysis.db",
+    )
 
-    mock_mad.assert_not_called()
+    m["filter_intensities_mad"].assert_not_called()
     np.testing.assert_array_equal(res.peaks_mzs, np.array([200.0]))
 
 
@@ -331,6 +355,10 @@ def test_run_core_executes_successfully(mocker, tmp_path):
         out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0, 300.0])
     )
 
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+
     mock_align = mocker.patch(
         "msianalyzer.core.run.run.align_mz_across_samples",
         return_value=pd.DataFrame(index=[100.0, 200.0, 300.0]),
@@ -340,15 +368,17 @@ def test_run_core_executes_successfully(mocker, tmp_path):
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mock_adata
     )
 
-    # Mock ProcessPoolExecutor to avoid pickling MagicMocks across processes
     mock_executor = mocker.MagicMock()
     mock_executor.__enter__.return_value.map.return_value = [res1, res2]
     mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor",
-        return_value=mock_executor,
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
     )
 
     run.run_core()
+
+    mock_adb.init_analysis_db.assert_called_once()
+    assert mock_adb.register_sample.call_count == 2
+    mock_adb.save_features.assert_called_once()
 
     mock_align.assert_called_once()
     assert (out_dir / "aligned_mzs.csv").exists()
@@ -363,7 +393,6 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     out_dir = Path(config.io.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Pre-create output files
     aligned_csv = out_dir / "aligned_mzs.csv"
     pd.DataFrame(index=[100.0, 200.0]).to_csv(aligned_csv)
 
@@ -379,15 +408,17 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0]))
     res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0]))
 
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+
     mock_align = mocker.patch("msianalyzer.core.run.run.align_mz_across_samples")
     mock_create_adata = mocker.patch("msianalyzer.core.run.run.create_spatial_adata")
 
-    # Mock ProcessPoolExecutor to run synchronously without pickling
     mock_executor = mocker.MagicMock()
     mock_executor.__enter__.return_value.map.return_value = [res1, res2]
     mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor",
-        return_value=mock_executor,
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
     )
 
     run.run_core()

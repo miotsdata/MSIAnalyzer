@@ -25,16 +25,19 @@ def parse_raster_xml(
     tree = ET.parse(xml_path)
     root = tree.getroot()
 
-    # Extract start time (ISO format)
+    # Extract start time (ISO 8601, trailing "Z" for UTC).
     start_time_str = root.attrib.get("startTime")
-    # Parse UTC timestamp
+    if not start_time_str:
+        raise ValueError(f"{xml_path}: raster XML has no 'startTime' attribute")
     dt = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
     start_timestamp_sec = dt.timestamp()
 
     image_node = root.find("{http://www.apmaldi.com/target_raster-1.0.0}image")
     if image_node is None:
-        # Fallback if namespace is missing/different
+        # Fallback if the namespace is missing or different.
         image_node = root.find("image")
+    if image_node is None:
+        raise ValueError(f"{xml_path}: raster XML has no <image> element")
 
     grid_width = int(image_node.attrib["width"])
     grid_height = int(image_node.attrib["height"])

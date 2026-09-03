@@ -90,6 +90,19 @@ class Project:
             yaml.safe_dump(data, f, sort_keys=False)
 
     @classmethod
+    def load(cls, start_path: str | Path | None = None) -> "Project":
+        """Locate the enclosing project and load its ``.msianalyzer.yml``.
+
+        Walks up from ``start_path`` (or the current working directory) to
+        find the project folder, then delegates to :meth:`load_from_yaml`.
+
+        Raises:
+            NotInProjectFolderError: If no project file is found.
+        """
+        folder = get_project_folder(start_path)
+        return cls.load_from_yaml(folder / ".msianalyzer.yml")
+
+    @classmethod
     def load_from_yaml(cls, yaml_path: str | Path) -> "Project":
         """Load a project from a YAML file."""
         path = Path(yaml_path)

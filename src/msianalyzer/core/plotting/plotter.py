@@ -31,15 +31,11 @@ _CONNECTOR = "#888888"
 
 
 class Plotter:
-    """
-    Builds Plotly figures from msianalyzer database outputs.
+    """Builds interactive Plotly figures from msianalyzer outputs.
 
-    Parameters
-    ----------
-    annotations_db_path : Path | str
-    ms2_db_path : Path | str
-    fragment_ppm_tolerance : float
-        Used for peak match highlighting in plots.
+    The class is stateless: every method takes the data (or the database
+    path) it needs as an argument. Figures render both as standalone HTML
+    and embedded in QML via ``WebEngineView``.
     """
 
     # ------------------------------------------------------------------
