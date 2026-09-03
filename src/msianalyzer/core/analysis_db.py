@@ -10,11 +10,14 @@ per-sample databases produced by the parser are never modified.
 
 Tables
 ------
-metadata            key/value store (analysis-level provenance)
-commands            one row per parameter-dependent step (JSON arguments)
-samples             one row per raw database feeding the analysis
-aggregated_spectra  averaged MS1 / centroids / filtered peaks, per sample
-features            aligned cross-sample master m/z list
+metadata             key/value store (analysis-level provenance)
+commands             one row per parameter-dependent step (JSON arguments)
+samples              one row per raw database feeding the analysis
+aggregated_spectra   averaged MS1 / centroids / filtered peaks, per sample
+features             aligned cross-sample master m/z list
+ms2_associations     one row per MS2 scan snapped to a feature (grouper)
+ms2_window_features  features inside each scan's isolation window
+feature_ms2_summary  per-feature MS2 coverage roll-up
 """
 
 from __future__ import annotations
@@ -128,6 +131,68 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_features_mz ON features(mz)")
+
+    # --- MS2 -> feature association (Stage A of annotation) ---------------
+    # Written by core.annotation.group_ms2. One row per MS2 scan; a re-run
+    # replaces these rows without touching features / samples.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ms2_associations (
+            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+            sample_id                   INTEGER,
+            scan_id                     INTEGER NOT NULL,
+            feature_id                  INTEGER,
+            match_key                   TEXT    NOT NULL,
+            precursor_mz                REAL,
+            isolation_window_target     REAL,
+            isolation_window_lower      REAL,
+            isolation_window_upper      REAL,
+            ppm_offset                  REAL,
+            n_features_in_window        INTEGER NOT NULL,
+            nearest_other_feature_ppm   REAL,
+            precursor_target_delta_ppm  REAL,
+            rt                          REAL,
+            collision_energy            REAL,
+            n_peaks                     INTEGER,
+            polarity                    TEXT,
+            precursor_only              INTEGER NOT NULL DEFAULT 0,
+            command_id                  INTEGER,
+            UNIQUE (sample_id, scan_id),
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_assoc_feature ON ms2_associations(feature_id)"
+    )
+    # One row per (association, feature inside its isolation window). Always
+    # populated: a clean single match is one row with is_primary = 1.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ms2_window_features (
+            association_id  INTEGER NOT NULL,
+            feature_id      INTEGER NOT NULL,
+            feature_mz      REAL    NOT NULL,
+            ppm_diff        REAL,
+            within_tol      INTEGER NOT NULL,
+            is_primary      INTEGER NOT NULL,
+            PRIMARY KEY (association_id, feature_id),
+            FOREIGN KEY (association_id) REFERENCES ms2_associations(id) ON DELETE CASCADE,
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id)
+        )
+    """)
+    # Per-feature MS2 coverage roll-up (materialised at grouper time).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS feature_ms2_summary (
+            feature_id        INTEGER PRIMARY KEY,
+            feature_mz        REAL    NOT NULL,
+            n_ms2             INTEGER NOT NULL,
+            n_samples         INTEGER NOT NULL,
+            n_precursor_only  INTEGER NOT NULL,
+            n_single_peak     INTEGER NOT NULL,
+            n_chimeric        INTEGER NOT NULL,
+            median_n_peaks    REAL    NOT NULL,
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id)
+        )
+    """)
 
 
 def init_analysis_db(db_path: Path | str) -> sqlite3.Connection:

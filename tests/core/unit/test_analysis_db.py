@@ -55,6 +55,9 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             "samples",
             "aggregated_spectra",
             "features",
+            "ms2_associations",
+            "ms2_window_features",
+            "feature_ms2_summary",
         } <= tables
         # commands table has the analysis-only sample_id column
         cmd_cols = {

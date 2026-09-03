@@ -25,10 +25,10 @@ class DefaultSourceFileFilter(logging.Filter):
 
 def configure_logging(
     *,
-    level=logging.INFO,
+    level: int = logging.INFO,
     log_file: Path | None = None,
     debug_log_dir: Path | None = None,
-):
+) -> None:
     """
     Configure logging.
 

@@ -18,7 +18,7 @@ Three distinct tolerances are involved and must not be conflated:
   Da, read from the mzML. Used only to enumerate the features that could
   have co-fragmented into a scan (the chimera count), never as the matcher.
 
-Outputs (see :func:`create_grouper_schema`):
+Outputs (schema in :func:`msianalyzer.core.analysis_db.create_analysis_schema`):
 
 * ``ms2_associations`` — one row per MS2 scan (the primary pick + flags).
 * ``ms2_window_features`` — one row per (scan, feature inside its isolation
@@ -39,6 +39,8 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
+from ..analysis_db import create_analysis_schema
+
 __all__ = [
     "WindowFeature",
     "ScanAssociation",
@@ -49,7 +51,6 @@ __all__ = [
     "associate_scan",
     "group_ms2",
     "summarize_features",
-    "create_grouper_schema",
     "persist_grouping",
     "run_grouper",
 ]
@@ -202,8 +203,8 @@ def associate_scan(
         assoc_ppm: Acceptance tolerance for the precursor<->feature match.
         default_isolation_half_width: Used as ``lower``/``upper`` when the
             scan does not carry isolation offsets.
-        precursor_only_tic_frac / precursor_only_mz_tol_da: passed to
-            :func:`detect_precursor_only`.
+        precursor_only_tic_frac: Passed to :func:`detect_precursor_only`.
+        precursor_only_mz_tol_da: Passed to :func:`detect_precursor_only`.
         sample_id: Overrides ``scan["sample_id"]`` when given.
 
     Returns:
@@ -420,65 +421,6 @@ _ASSOC_COLS = (
 )
 
 
-def create_grouper_schema(con: sqlite3.Connection) -> None:
-    """Create the grouper's three tables on ``con``. Idempotent."""
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS ms2_associations (
-            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
-            sample_id                   INTEGER,
-            scan_id                     INTEGER NOT NULL,
-            feature_id                  INTEGER,
-            match_key                   TEXT    NOT NULL,
-            precursor_mz                REAL,
-            isolation_window_target     REAL,
-            isolation_window_lower      REAL,
-            isolation_window_upper      REAL,
-            ppm_offset                  REAL,
-            n_features_in_window        INTEGER NOT NULL,
-            nearest_other_feature_ppm   REAL,
-            precursor_target_delta_ppm  REAL,
-            rt                          REAL,
-            collision_energy            REAL,
-            n_peaks                     INTEGER,
-            polarity                    TEXT,
-            precursor_only              INTEGER NOT NULL DEFAULT 0,
-            command_id                  INTEGER,
-            UNIQUE (sample_id, scan_id),
-            FOREIGN KEY (feature_id) REFERENCES features(feature_id),
-            FOREIGN KEY (command_id) REFERENCES commands(id)
-        )
-    """)
-    con.execute(
-        "CREATE INDEX IF NOT EXISTS idx_assoc_feature ON ms2_associations(feature_id)"
-    )
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS ms2_window_features (
-            association_id  INTEGER NOT NULL,
-            feature_id      INTEGER NOT NULL,
-            feature_mz      REAL    NOT NULL,
-            ppm_diff        REAL,
-            within_tol      INTEGER NOT NULL,
-            is_primary      INTEGER NOT NULL,
-            PRIMARY KEY (association_id, feature_id),
-            FOREIGN KEY (association_id) REFERENCES ms2_associations(id) ON DELETE CASCADE,
-            FOREIGN KEY (feature_id) REFERENCES features(feature_id)
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS feature_ms2_summary (
-            feature_id        INTEGER PRIMARY KEY,
-            feature_mz        REAL    NOT NULL,
-            n_ms2             INTEGER NOT NULL,
-            n_samples         INTEGER NOT NULL,
-            n_precursor_only  INTEGER NOT NULL,
-            n_single_peak     INTEGER NOT NULL,
-            n_chimeric        INTEGER NOT NULL,
-            median_n_peaks    REAL    NOT NULL,
-            FOREIGN KEY (feature_id) REFERENCES features(feature_id)
-        )
-    """)
-
-
 def persist_grouping(
     db_path: Path | str,
     result: GroupingResult,
@@ -498,7 +440,7 @@ def persist_grouping(
     """
     with sqlite3.connect(Path(db_path)) as con:
         con.execute("PRAGMA foreign_keys = ON")
-        create_grouper_schema(con)
+        create_analysis_schema(con)  # idempotent; grouper tables live here
         if replace_existing:
             con.execute("DELETE FROM ms2_window_features")
             con.execute("DELETE FROM ms2_associations")

@@ -322,7 +322,11 @@ def detect_ms1_centroids(
 
 
 def filter_intensities_mad(
-    mz_array, intensity_array, *, log: bool = True, n_mads: float = 2
+    mz_array: np.ndarray,
+    intensity_array: np.ndarray,
+    *,
+    log: bool = True,
+    n_mads: float = 2,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Filter peaks by a median-absolute-deviation intensity threshold.
 

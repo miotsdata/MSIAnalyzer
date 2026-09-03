@@ -1,6 +1,23 @@
-site_name: My Docs
+site_name: MSIAnalyzer
+site_description: Mass-spectrometry imaging pipeline — parsing, averaging, alignment, MS2 annotation.
+
 theme:
-  name: readthedocs
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - content.code.copy
+    - toc.follow
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
 plugins:
   - search
   - mkdocstrings:
@@ -8,3 +25,49 @@ plugins:
         python:
           options:
             docstring_style: google
+            show_source: true
+            show_root_heading: true
+            members_order: source
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - User guide:
+      - user-guide/index.md
+      - Concepts: user-guide/concepts.md
+      - The workflow: user-guide/workflow.md
+      - Projects & configuration: user-guide/projects-and-config.md
+      - Outputs: user-guide/outputs.md
+      - MS2 annotation: user-guide/ms2-annotation.md
+  - Developer:
+      - developer/developer.md
+      - Architecture:
+          - developer/architecture/index.md
+          - Core modules: developer/architecture/core-modules.md
+          - Database schemas: developer/architecture/databases.md
+          - Provenance & caching: developer/architecture/provenance.md
+      - Decision records:
+          - developer/adr/index.md
+          - 1 — Raw vs analysis DB split: developer/adr/0001-raw-vs-analysis-db-split.md
+          - 2 — MS2→feature association design: developer/adr/0002-ms2-feature-association-design.md
+          - 3 — No min-peaks filter, flag instead: developer/adr/0003-no-min-peaks-filter-flag-instead.md
+          - 4 — Two-table association storage: developer/adr/0004-two-table-association-storage.md
+          - 5 — Three ppm tolerances: developer/adr/0005-three-ppm-tolerances.md
+          - 6 — Schema single source of truth: developer/adr/0006-schema-single-source-of-truth.md
+      - Testing: developer/testing.md
+      - Logging: developer/logging.md
+      - API reference:
+          - developer/api_reference/index.md
+          - parser: developer/api_reference/parser.md
+          - spectra: developer/api_reference/spectra.md
+          - analysis_db: developer/api_reference/analysis_db.md
+          - annotation: developer/api_reference/annotation.md
+          - run: developer/api_reference/run.md
+          - logging utils: developer/api_reference/utils/logging_utils.md

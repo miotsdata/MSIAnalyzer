@@ -13,7 +13,6 @@ import pytest
 
 from msianalyzer.core.annotation.group_ms2 import (
     associate_scan,
-    create_grouper_schema,
     detect_precursor_only,
     group_ms2,
     persist_grouping,
@@ -289,19 +288,6 @@ def test_persist_grouping_round_trip(ms2_grouper_mock_data, tmp_path):
         )
     finally:
         con.close()
-
-
-def test_create_grouper_schema_is_idempotent(tmp_path):
-    db = tmp_path / "x.db"
-    con = sqlite3.connect(db)
-    create_grouper_schema(con)
-    create_grouper_schema(con)  # must not raise
-    tables = {
-        r[0]
-        for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-    }
-    assert {"ms2_associations", "ms2_window_features", "feature_ms2_summary"} <= tables
-    con.close()
 
 
 # ---------------------------------------------------------------------------
