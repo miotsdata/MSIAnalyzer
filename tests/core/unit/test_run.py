@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +30,16 @@ class MockIOConfig:
     out_dir: str
     mzml_paths: list
     xml_paths: list
+    db_paths: list = field(default_factory=list)
+
+    def raw_db_paths(self) -> list[Path]:
+        default_dir = Path(self.project_folder) / "parsed"
+        return [
+            self.db_paths[i]
+            if i < len(self.db_paths)
+            else default_dir / f"{Path(m).stem}.db"
+            for i, m in enumerate(self.mzml_paths)
+        ]
 
 
 @dataclass
@@ -239,7 +249,8 @@ def test_process_one_sample_fresh_run_with_mad_filter(mocker, tmp_path):
     res = Run._process_one_sample(
         mzml_path,
         xml_path,
-        sample_id=1,
+        1,
+        tmp_path / "parsed" / "sample.db",
         config=config,
         run_id="proj_test",
         analysis_id="ana_test",
@@ -247,7 +258,7 @@ def test_process_one_sample_fresh_run_with_mad_filter(mocker, tmp_path):
     )
 
     assert isinstance(res, SampleResult)
-    assert res.out_db_path == out_dir / "sample.db"
+    assert res.out_db_path == tmp_path / "parsed" / "sample.db"
     np.testing.assert_array_equal(res.peaks_mzs, np.array([100.0]))
 
     m["MzmlParser"].return_value.parse.assert_called_once()
@@ -271,10 +282,11 @@ def test_process_one_sample_cached_run(mocker, tmp_path):
     out_dir.mkdir()
     mzml_path = tmp_path / "sample.mzML"
     xml_path = tmp_path / "sample.xml"
-    db_path = out_dir / "sample.db"
+    db_path = tmp_path / "parsed" / "sample.db"
 
     mzml_path.touch()
     xml_path.write_text(DUMMY_XML_CONTENT, encoding="utf-8")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     db_path.touch()
 
     (out_dir / "sample_filtered_ms1.html").touch()
@@ -289,7 +301,8 @@ def test_process_one_sample_cached_run(mocker, tmp_path):
     res = Run._process_one_sample(
         mzml_path,
         xml_path,
-        sample_id=2,
+        2,
+        db_path,
         config=config,
         run_id="proj_test",
         analysis_id="ana_test",
@@ -330,7 +343,8 @@ def test_process_one_sample_peak_threshold_filtering(mocker, tmp_path):
     res = Run._process_one_sample(
         mzml_path,
         xml_path,
-        sample_id=1,
+        1,
+        tmp_path / "parsed" / "sample.db",
         config=config,
         run_id="proj_test",
         analysis_id="ana_test",

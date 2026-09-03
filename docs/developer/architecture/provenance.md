@@ -8,7 +8,10 @@
 | `analysis_id` | this **run's** `Run.id` (a fresh UUID) | one run | analysis-DB identity (`analysis_<analysis_id>.db`), analysis-DB `commands` rows, and `aggregated_spectra.run_id` |
 
 The parse and pixel-mapping outputs live in the raw DB and are keyed by
-`run_id`, so a second analysis in the same project reuses them. Everything
+`run_id`, so a second analysis in the same project reuses them — provided both
+analyses resolve the same raw-DB path, which is why raw databases live at the
+project level (`<project_folder>/parsed/`) and not in a per-analysis `out_dir`
+([ADR 1](../adr/0001-raw-vs-analysis-db-split.md)). Everything
 parameter-dependent is keyed by `analysis_id` and lives in a database whose file
 name already contains `analysis_id`.
 

@@ -62,10 +62,12 @@ class Run:
     executes the parsing, pixel-mapping, averaging, centroiding,
     filtering, alignment and `AnnData` assembly steps.
 
-    Raw per-sample databases (`<sample>.db`) hold only ground-truth scan
-    data and pixel geometry and are reused across runs. Every
-    parameter-dependent artefact of this run is written to a dedicated
-    analysis database, `analysis_<run.id>.db`, in the output folder.
+    Raw per-sample databases hold only ground-truth scan data and pixel
+    geometry. They live once per project (by default under
+    `<project_folder>/parsed/`, see `IOConfig.raw_db_paths`) and are reused
+    by every analysis. Every parameter-dependent artefact of this run is
+    written to a dedicated analysis database, `analysis_<run.id>.db`, in the
+    output folder.
 
     Attributes:
         id: Randomly generated run identifier; also the analysis identity.
@@ -176,6 +178,7 @@ class Run:
         mzml_path: Path,
         xml_path: Path,
         sample_id: int,
+        raw_db_path: Path,
         *,
         config: Config,
         run_id: str,
@@ -189,6 +192,8 @@ class Run:
             mzml_path: Source mzML file.
             xml_path: Raster XML providing pixel timing.
             sample_id: Row id of this sample in the analysis `samples` table.
+            raw_db_path: Destination of this sample's parsed raw database
+                (project-scoped, shared across analyses).
             config: The run configuration.
             run_id: Project-scoped id used for raw-DB command bookkeeping.
             analysis_id: This run's id, used for analysis-DB bookkeeping.
@@ -196,7 +201,8 @@ class Run:
         """
         logger.debug("%s: Starting processing.", mzml_path)
         out_dir = Path(config.io.out_dir)
-        out_db_path = out_dir / f"{mzml_path.stem}.db"
+        out_db_path = Path(raw_db_path)
+        out_db_path.parent.mkdir(parents=True, exist_ok=True)
 
         # --- PARSE (raw DB) ---
         if not out_db_path.exists() or not Run.is_command_already_run(
@@ -413,13 +419,19 @@ class Run:
             },
         )
 
+        # Raw databases live once per project (shared by every analysis), not
+        # inside this run's out_dir.
+        raw_db_paths = config.io.raw_db_paths()
+        for p in raw_db_paths:
+            p.parent.mkdir(parents=True, exist_ok=True)
+
         sample_ids = [
             analysis_db.register_sample(
                 adb_path,
                 name=Path(m).stem,
-                raw_db_path=out_dir / f"{Path(m).stem}.db",
+                raw_db_path=raw_db_paths[i],
             )
-            for m in config.io.mzml_paths
+            for i, m in enumerate(config.io.mzml_paths)
         ]
 
         worker = partial(
@@ -437,6 +449,7 @@ class Run:
                     config.io.mzml_paths,
                     config.io.xml_paths,
                     sample_ids,
+                    raw_db_paths,
                 )
             )
 

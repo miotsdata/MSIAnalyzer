@@ -1,17 +1,19 @@
 # Outputs
 
-Everything lands in `io.out_dir`.
+Raw databases are written once per project, under
+`<project_folder>/parsed/` by default (or wherever `io.db_paths` points).
+Everything else lands in the analysis' `io.out_dir`.
 
 ## Files
 
-| file | one per | what it is |
-|---|---|---|
-| `<sample>.db` | sample | raw database — every scan + the pixel grid. Immutable. |
-| `analysis_<run-id>.db` | run | every parameter-dependent result of the run |
-| `aligned_mzs.csv` | run | the feature list: consensus m/z + contributing peak index per sample |
-| `<sample>.h5ad` | sample | `AnnData` — pixels × features quantification matrix with spatial coordinates |
-| `<sample>_filtered_ms1.html` | sample | interactive figure of the filtered MS1 peak list |
-| `<sample>_peaks_data.csv` | sample | the filtered MS1 peak list as `mz,intensity` |
+| file | location | one per | what it is |
+|---|---|---|---|
+| `<sample>.db` | `<project>/parsed/` | sample | raw database — every scan + the pixel grid. Immutable, shared by every analysis. |
+| `analysis_<run-id>.db` | `out_dir` | run | every parameter-dependent result of the run |
+| `aligned_mzs.csv` | `out_dir` | run | the feature list: consensus m/z + contributing peak index per sample |
+| `<sample>.h5ad` | `out_dir` | sample | `AnnData` — pixels × features quantification matrix with spatial coordinates |
+| `<sample>_filtered_ms1.html` | `out_dir` | sample | interactive figure of the filtered MS1 peak list |
+| `<sample>_peaks_data.csv` | `out_dir` | sample | the filtered MS1 peak list as `mz,intensity` |
 
 ## Reading the analysis database
 
@@ -53,7 +55,8 @@ adata.obs        # pixel x / y coordinates
 
 ## Re-running
 
-- Re-running an analysis **never rewrites** `<sample>.db`.
+- Re-running an analysis **never rewrites** `<sample>.db`; a new analysis over
+  the same samples reuses the parsed databases and skips straight to averaging.
 - Re-running the grouper replaces `ms2_associations`, `ms2_window_features` and
   `feature_ms2_summary`; `features` and `samples` are untouched.
 - A stage whose output file or `commands` row already exists is skipped; delete

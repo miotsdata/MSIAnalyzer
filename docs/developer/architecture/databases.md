@@ -6,10 +6,12 @@ Schema is created by exactly one function per database
 
 ---
 
-## Raw database — `<sample>.db`
+## Raw database — `<project_folder>/parsed/<sample>.db`
 
 Created by `parser.mzml_parser.create_raw_schema`. Written by `parse` and
-`map_pixels_to_db` only; **never modified by an analysis**.
+`map_pixels_to_db` only; **never modified by an analysis**. One per sample per
+project (path from `IOConfig.raw_db_paths()`; `io.db_paths` overrides), shared
+by every analysis in that project.
 
 ### `metadata`
 

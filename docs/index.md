@@ -12,20 +12,19 @@ raw instrument output (mzML + a raster timing file) into:
 
 ## Where to look
 
-<div class="grid cards" markdown>
 
-- **[User guide](user-guide/index.md)**
+
+-  **[User guide](user-guide/index.md)**
 
     What the pipeline does, the concepts behind it, how to configure a run and
     read its outputs. Start here if you *use* MSIAnalyzer.
 
-- **[Developer docs](developer/developer.md)**
+-  **[Developer docs](developer/developer.md)**
 
     Module map, database schemas, the reasoning behind the design
     ([decision records](developer/adr/index.md)), testing approach and the API
-    reference. Start here if you *change* MSIAnalyzer.
+    reference. Start here if you want to *contribute* to MSIAnalyzer.
 
-</div>
 
 ## The pipeline at a glance
 
@@ -45,4 +44,7 @@ mzML + raster XML
 
 Two databases, one rule: the **raw DB holds objective facts about the
 acquisition**; the **analysis DB holds everything that depends on a parameter
-choice**. See [ADR 1](developer/adr/0001-raw-vs-analysis-db-split.md).
+choice**. Raw databases are parsed once and live at the **project** level
+(`<project_folder>/parsed/` by default), shared by every analysis; each
+analysis' `out_dir` holds only its own results. See
+[ADR 1](developer/adr/0001-raw-vs-analysis-db-split.md).

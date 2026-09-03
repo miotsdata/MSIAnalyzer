@@ -3,17 +3,16 @@
 ## The two-database model
 
 ```
-                 ┌──────────────────────────┐
-   mzML  ──────► │  <sample>.db  (RAW)      │   written once, never modified
-   XML   ──────► │  metadata, commands      │
-                 │  ms1_scans, ms2_scans    │
-                 │  spatial_pixels          │
-                 │  pixel_ms1_scans         │
-                 └───────────┬──────────────┘
-                             │  read-only
-                             ▼
                  ┌──────────────────────────────────────────┐
-                 │  analysis_<run-id>.db  (ANALYSIS)        │  one per run
+   mzML  ──────► │  <project>/parsed/<sample>.db  (RAW)     │  written once, never modified
+   XML   ──────► │  metadata, commands                      │  shared by every analysis
+                 │  ms1_scans, ms2_scans                    │  in the project
+                 │  spatial_pixels, pixel_ms1_scans         │
+                 └───────────────┬──────────────────────────┘
+                                 │  read-only
+                                 ▼
+                 ┌──────────────────────────────────────────┐
+                 │  <out_dir>/analysis_<run-id>.db          │  one per run
                  │  metadata, commands, samples             │
                  │  aggregated_spectra                      │  avg / centroids / filtered
                  │  features                                │  cross-sample master m/z
@@ -27,7 +26,10 @@ The split is the central architectural decision
 ([ADR 1](../adr/0001-raw-vs-analysis-db-split.md)): a raw database is a
 cacheable, shareable, parallel-safe artefact produced by parsing; everything that
 depends on a parameter choice belongs to *an analysis*, of which there can be
-many over the same parsed files.
+many over the same parsed files. Raw databases therefore live at the **project**
+level (`IOConfig.raw_db_paths()` → `<project_folder>/parsed/<stem>.db` by
+default, overridable per sample via `io.db_paths`), never inside an analysis
+`out_dir`.
 
 ## Data flow
 
@@ -63,11 +65,12 @@ msianalyzer/core/
 
 `Run` (`core/run/run.py`) is the only component that knows the full sequence:
 
-1. `run_core` creates `analysis_<id>.db`, writes analysis-level `metadata`, and
-   registers one `samples` row per input.
-2. A `ProcessPoolExecutor` runs `_process_one_sample` per sample: parse + map
-   pixels (raw DB) then average / centroid / filter (analysis DB), returning the
-   filtered peak m/z.
+1. `run_core` creates `analysis_<id>.db`, writes analysis-level `metadata`,
+   resolves the per-sample raw-DB paths (`config.io.raw_db_paths()`) and
+   registers one `samples` row per input pointing at them.
+2. A `ProcessPoolExecutor` runs `_process_one_sample` per sample — given its
+   `raw_db_path` — : parse + map pixels (raw DB) then average / centroid /
+   filter (analysis DB), returning the filtered peak m/z.
 3. Back on the main process: align across samples → `features`; run the grouper;
    build one `.h5ad` per sample.
 

@@ -13,15 +13,19 @@ directory**.
 
 ## Stage 1 — Parse (→ raw DB)
 
-`MzmlParser().parse()` streams the mzML and writes `<sample>.db`:
+`MzmlParser().parse()` streams the mzML and writes the sample's **raw database**:
 
 - `metadata` — instrument info,
 - `commands` — a `parse` provenance row,
 - `ms1_scans`, `ms2_scans` — every scan, with m/z and intensity arrays stored as
   compressed `float32` blobs.
 
-This database is **immutable** afterwards. Re-running an analysis never touches
-it.
+The raw database lives **once per project** — by default
+`<project_folder>/parsed/<sample>.db`, or an explicit path per sample via
+`io.db_paths`. It is **immutable** afterwards, parse takes no configurable
+parameters, and every analysis in the project reuses it. A second analysis over
+the same file finds the `parse` `commands` row already present and skips
+straight to averaging.
 
 ## Stage 2 — Map pixels (→ raw DB)
 
@@ -76,11 +80,13 @@ spectra (`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes
 ## What you end up with
 
 ```
-out_dir/
-  <sample>.db                 raw DB (per sample, immutable)
-  <sample>.h5ad               spatial matrix (per sample)
-  <sample>_filtered_ms1.html  spectrum figure
-  <sample>_peaks_data.csv     filtered peak list
-  aligned_mzs.csv             the feature list
-  analysis_<run-id>.db        everything parameter-dependent
+<project_folder>/
+  parsed/
+    <sample>.db               raw DB (per sample, immutable, shared by all analyses)
+  <out_dir>/                   one per analysis
+    <sample>.h5ad             spatial matrix (per sample)
+    <sample>_filtered_ms1.html  spectrum figure
+    <sample>_peaks_data.csv   filtered peak list
+    aligned_mzs.csv           the feature list
+    analysis_<run-id>.db      everything parameter-dependent
 ```

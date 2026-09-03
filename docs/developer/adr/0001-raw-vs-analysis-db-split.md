@@ -45,8 +45,22 @@ parameter.
   analysis with no side effects.
 - Several analyses (different bin widths, tolerances, filters) share one set of
   parsed raw databases.
+- **Raw databases live at the project level**, not in an analysis `out_dir`:
+  `IOConfig.raw_db_paths()` resolves each to `<project_folder>/parsed/<stem>.db`
+  by default, overridable per sample via `io.db_paths`. Putting them in `out_dir`
+  (the original layout) duplicated every raw DB per analysis and defeated the
+  `parse` / `map_pixels_to_db` command cache, which is keyed by the project
+  `run_id` and only fires when the second analysis looks at the *same path*.
+- **Invariant: parsing takes no configurable parameters.** `MzmlParser()` reads
+  nothing from `Config`, so the raw database is a pure function of the mzML file
+  and is genuinely shareable. If parsing ever gains parameters, either it stays
+  parameter-free for the raw layer or the raw-DB path must encode them.
 - Cross-database reads use `ATTACH DATABASE` (`analysis_db.attach_raw`); the raw
   DB is opened read-only by convention.
 - `save_aggregated_spectra` / `load_aggregated_spectra` take an
   `analysis_db_path` and a `sample_id`; the raw DB lost its `group_id` column on
   `ms2_scans` (grouping is an analysis concern).
+- Concurrent first-time parses of the same file by two analyses race; today the
+  `path.exists()` + `commands` check makes a double parse merely wasteful, not
+  corrupting (WAL + `INSERT OR REPLACE`). A per-file lock is the tightening if it
+  becomes a problem.

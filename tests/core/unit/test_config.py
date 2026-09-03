@@ -66,6 +66,25 @@ def test_io_config_resolve_paths(tmp_path: Path):
     assert io.db_paths[0] == (proj_dir / "db/ms1.db").resolve()
 
 
+def test_io_config_raw_db_paths_default_and_override(tmp_path: Path):
+    """raw_db_paths falls back to <project>/parsed/<stem>.db per sample, and
+    honours explicit db_paths entries."""
+    io = IOConfig(
+        project_folder=tmp_path / "proj",
+        mzml_paths=["a.mzML", "b.mzML"],
+        xml_paths=[],
+        db_paths=[tmp_path / "shared" / "a_raw.db"],  # only the first is explicit
+        out_dir="out",
+    )
+
+    raw = io.raw_db_paths()
+
+    assert raw[0] == tmp_path / "shared" / "a_raw.db"
+    assert raw[1] == tmp_path / "proj" / "parsed" / "b.db"
+    # the default location is NOT inside out_dir
+    assert io.out_dir not in raw[1].parents
+
+
 def test_default_dataclass_initializations():
     """Verify default values for all sub-config dataclasses."""
     assert MS1Config().chunk_size == 2000

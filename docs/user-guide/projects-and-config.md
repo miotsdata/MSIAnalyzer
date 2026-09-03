@@ -37,8 +37,8 @@ Relative paths are resolved against `project_folder`.
 | `project_folder` | project root (contains `.msianalyzer.yml`) |
 | `mzml_paths` | input mzML files |
 | `xml_paths` | raster XML files, paired with `mzml_paths` |
-| `db_paths` | SQLite database paths (optional inputs) |
-| `out_dir` | where outputs are written |
+| `db_paths` | parsed raw-database path per sample, paired with `mzml_paths`. Leave empty to use `<project_folder>/parsed/<stem>.db` (the recommended default — raw DBs are shared across analyses, so they belong at the project level, not in an analysis `out_dir`). |
+| `out_dir` | where **this analysis'** outputs are written |
 
 ### `ms1` — averaged MS1 spectrum
 

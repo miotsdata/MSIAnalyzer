@@ -11,6 +11,11 @@ import tomli_w
 
 from msianalyzer.core.project.project import NotInProjectFolderError, get_project_folder
 
+#: Directory (under the project folder) where parsed raw databases live by
+#: default. Raw databases are immutable and shared across every analysis in the
+#: project, so they belong here rather than inside an analysis output folder.
+PARSED_DIRNAME = "parsed"
+
 
 @dataclass
 class IOConfig:
@@ -25,8 +30,11 @@ class IOConfig:
         mzml_paths: Input mzML files to process.
         xml_paths: Raster XML files providing pixel timing, paired with
             `mzml_paths`.
-        db_paths: SQLite database paths.
-        out_dir: Directory where outputs are written.
+        db_paths: Parsed raw-database path for each input, paired with
+            `mzml_paths`. Entries left unset (or an empty list) fall back to
+            `project_folder / "parsed" / "<mzml stem>.db"` — see
+            `raw_db_paths`.
+        out_dir: Directory where this analysis' outputs are written.
     """
 
     project_folder: Path
@@ -68,6 +76,26 @@ class IOConfig:
         self.db_paths = [
             p if p.is_absolute() else (base_dir / p).resolve() for p in self.db_paths
         ]
+
+    def raw_db_paths(self) -> list[Path]:
+        """Effective parsed raw-database path for each mzML input.
+
+        For index ``i`` the path is ``db_paths[i]`` when provided, otherwise
+        ``project_folder / PARSED_DIRNAME / "<mzml stem>.db"``. Raw databases
+        are immutable and shared across analyses, so the default keeps them
+        out of any single analysis' ``out_dir``.
+
+        Returns:
+            One path per entry in ``mzml_paths``.
+        """
+        default_dir = Path(self.project_folder) / PARSED_DIRNAME
+        paths: list[Path] = []
+        for i, mzml in enumerate(self.mzml_paths):
+            if i < len(self.db_paths) and self.db_paths[i] is not None:
+                paths.append(Path(self.db_paths[i]))
+            else:
+                paths.append(default_dir / f"{Path(mzml).stem}.db")
+        return paths
 
 
 @dataclass
