@@ -18,6 +18,7 @@ from msianalyzer.core.annotation.annotate import (
     Candidate,
     annotate_feature,
     assign_rank_feature,
+    normalize_library_paths,
     normalize_polarity,
     persist_annotations,
     rank_scan_rows,
@@ -99,6 +100,22 @@ def _row(scan_id, score, *, feature_id=1, sample_id=1):
 )
 def test_normalize_polarity(value, expected):
     assert normalize_polarity(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, []),
+        ("", []),
+        ([], []),
+        ("a.db", ["a.db"]),
+        (["a.db", "b.db"], ["a.db", "b.db"]),
+        (["a.db", "a.db", "", "b.db"], ["a.db", "b.db"]),  # de-dup + drop blanks
+        (("a.db", "b.db"), ["a.db", "b.db"]),  # tuple accepted
+    ],
+)
+def test_normalize_library_paths(value, expected):
+    assert normalize_library_paths(value) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +283,7 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
     r.lib_filtered_mz = np.array([100.1230, 150.5680, 200.9999])
     r.lib_filtered_intensity = np.array([1.0, 0.5, 0.2])
 
-    persist_annotations(db, [r], library_id=1)
+    persist_annotations(db, [r], 1)
 
     with sqlite3.connect(db) as con:
         row = con.execute(
@@ -280,7 +297,7 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
     assert blob_to_array(row[5]).size == 3
 
     # a second call replaces rather than appends
-    persist_annotations(db, [r], library_id=1)
+    persist_annotations(db, [r], 1)
     with sqlite3.connect(db) as con:
         n = con.execute("SELECT COUNT(*) FROM ms2_annotations").fetchone()[0]
     assert n == 1
@@ -294,7 +311,7 @@ def test_persist_annotations_can_drop_filtered_spectra(tmp_path):
     r.emp_filtered_intensity = np.array([1.0, 1.0])
     r.lib_filtered_intensity = np.array([1.0, 1.0])
 
-    persist_annotations(db, [r], library_id=1, store_filtered_spectra=False)
+    persist_annotations(db, [r], 1, store_filtered_spectra=False)
 
     with sqlite3.connect(db) as con:
         row = con.execute(
@@ -338,8 +355,8 @@ def test_run_annotation_end_to_end_ranks_true_compound(
     cfg = AnnotateConfig(library_path=str(lib), candidate_ppm=25.0, n_workers=1)
     result = run_annotation(adb, cfg)
 
-    assert result.library is not None
-    assert result.library.n_spectra >= 1
+    assert result.libraries and len(result.libraries) == 1
+    assert result.libraries[0].n_spectra >= 1
     assert result.n_scans_annotated >= 1
 
     single_scan_id = mock.planted["single"].scan_id
@@ -388,9 +405,88 @@ def test_run_annotation_no_library_is_a_noop(
     result = run_annotation(adb, AnnotateConfig(library_path=None))
 
     assert result.rows == []
-    assert result.library is None
+    assert result.libraries == []
     with sqlite3.connect(adb) as con:
         assert con.execute("SELECT COUNT(*) FROM ms2_annotations").fetchone()[0] == 0
         assert (
             con.execute("SELECT COUNT(*) FROM annotation_libraries").fetchone()[0] == 0
         )
+
+
+def test_run_annotation_empty_list_is_a_noop(
+    ms2_grouper_mock_data, make_ms2_db, tmp_path
+):
+    mock = ms2_grouper_mock_data(n=1000)
+    adb = _seeded_analysis_db(tmp_path, mock, make_ms2_db)
+
+    result = run_annotation(adb, AnnotateConfig(library_path=[]))
+
+    assert result.rows == []
+    assert result.libraries == []
+
+
+def test_run_annotation_multiple_libraries_pooled_and_registered(
+    ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
+):
+    mock = ms2_grouper_mock_data(n=1000)
+    adb = _seeded_analysis_db(tmp_path, mock, make_ms2_db)
+    lib_a = make_library_db(mock, name="lib_a.db", case="single")
+    lib_b = make_library_db(mock, name="lib_b.db", case="chimeric")
+
+    cfg = AnnotateConfig(
+        library_path=[str(lib_a), str(lib_b)], candidate_ppm=25.0, n_workers=1
+    )
+    result = run_annotation(adb, cfg)
+
+    assert len(result.libraries) == 2
+    lib_ids = {li.library_id for li in result.libraries}
+
+    single_scan_id = mock.planted["single"].scan_id
+    chim_scan_id = mock.planted["chimeric"].scan_id
+    with sqlite3.connect(adb) as con:
+        assert (
+            con.execute("SELECT COUNT(*) FROM annotation_libraries").fetchone()[0] == 2
+        )
+        # every annotation row points at one of the two registered libraries
+        row_lib_ids = {
+            r[0]
+            for r in con.execute(
+                "SELECT DISTINCT library_id FROM ms2_annotations"
+            ).fetchall()
+        }
+        assert row_lib_ids <= lib_ids
+        # the "single" feature is only in lib_a; its rank-1 hit is the true cpd
+        single_top = con.execute(
+            "SELECT compound_name FROM ms2_annotations "
+            "WHERE scan_id = ? AND rank = 1",
+            (single_scan_id,),
+        ).fetchone()
+        # the chimeric feature is only in lib_b; it is still annotated + flagged
+        chim_rows = con.execute(
+            "SELECT DISTINCT is_chimeric FROM ms2_annotations WHERE scan_id = ?",
+            (chim_scan_id,),
+        ).fetchall()
+    assert single_top is not None and single_top[0] == "TrueCompound"
+    assert chim_rows and all(r[0] == 1 for r in chim_rows)
+
+
+def test_run_annotation_re_run_replaces_all_configured_libraries(
+    ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
+):
+    mock = ms2_grouper_mock_data(n=1000)
+    adb = _seeded_analysis_db(tmp_path, mock, make_ms2_db)
+    lib = make_library_db(mock, case="single")
+    cfg = AnnotateConfig(library_path=[str(lib)], candidate_ppm=25.0, n_workers=1)
+
+    run_annotation(adb, cfg)
+    with sqlite3.connect(adb) as con:
+        first = con.execute("SELECT COUNT(*) FROM ms2_annotations").fetchone()[0]
+
+    run_annotation(adb, cfg)
+    with sqlite3.connect(adb) as con:
+        second = con.execute("SELECT COUNT(*) FROM ms2_annotations").fetchone()[0]
+        n_libs = con.execute("SELECT COUNT(*) FROM annotation_libraries").fetchone()[0]
+
+    assert first > 0
+    assert second == first  # replaced, not appended
+    assert n_libs == 1  # library row upserted, not duplicated

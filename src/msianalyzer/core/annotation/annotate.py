@@ -7,11 +7,16 @@ near the feature m/z (``candidate_ppm``), and scores every scan of that
 feature against every candidate with a coverage-aware reverse dot product
 (:mod:`msianalyzer.core.annotation.spectral_match`).
 
+``config.library_path`` may name a single library or a list of them; the
+candidates from every configured library are pooled per scan, so ``rank``
+orders the best hit across all of them and each stored row carries its own
+``library_id``.
+
 Design (see ADR 0007):
 
 * **Batch unit = one feature.** Candidates are gathered *once* per feature
-  and reused for all its scans; features are chunked across worker
-  processes.
+  (from every library) and reused for all its scans; features are chunked
+  across worker processes.
 * **Store every candidate** that shares at least ``min_matched_peaks``
   fragments with the (noise-filtered) empirical spectrum, each with a
   ``rank`` within its scan. ``rank_feature`` then orders the scans of a
@@ -23,7 +28,7 @@ Design (see ADR 0007):
   library peak lists that were actually scored — are persisted on every row
   (``store_filtered_spectra``) so downstream can draw mirror plots without
   re-running the matcher.
-* An empty ``library_path`` disables the whole stage.
+* An empty ``library_path`` (``None`` or ``[]``) disables the whole stage.
 
 Outputs (schema in
 :func:`msianalyzer.core.analysis_db.create_analysis_schema`):
@@ -63,6 +68,7 @@ __all__ = [
     "AnnotationRow",
     "AnnotationResult",
     "normalize_polarity",
+    "normalize_library_paths",
     "score_scan_against_candidates",
     "rank_scan_rows",
     "assign_rank_feature",
@@ -150,7 +156,7 @@ class AnnotationResult:
     """Return value of :func:`run_annotation`."""
 
     rows: list[AnnotationRow]
-    library: LibraryInfo | None
+    libraries: list[LibraryInfo]
     n_scans_annotated: int
     n_features_annotated: int
 
@@ -356,6 +362,29 @@ def load_library(path: Path | str):
     return Library.load_from_db(Path(path))
 
 
+def normalize_library_paths(library_path) -> list[str]:
+    """Coerce ``config.library_path`` to a de-duplicated list of path strings.
+
+    ``None`` / ``""`` / an empty list -> ``[]`` (annotation disabled). A bare
+    string -> a one-element list. A list/tuple is kept, order preserved,
+    blanks dropped, duplicates removed.
+    """
+    if not library_path:
+        return []
+    if isinstance(library_path, (str, Path)):
+        library_path = [library_path]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in library_path:
+        if not p:
+            continue
+        s = str(p)
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
 def _gather_candidates(
     library, library_id: int, mz: float, ppm: float, polarity: str | None
 ) -> list[Candidate]:
@@ -383,13 +412,17 @@ def _gather_candidates(
 # worker
 # ---------------------------------------------------------------------------
 
-_WORKER_LIBRARY = None
+_WORKER_LIBRARIES: list[tuple[int, object]] = []
 
 
-def _init_worker(library_path: str) -> None:
-    """ProcessPool initializer — load the library once per worker."""
-    global _WORKER_LIBRARY
-    _WORKER_LIBRARY = load_library(library_path)
+def _init_worker(lib_specs: Sequence[tuple[int, str]]) -> None:
+    """ProcessPool initializer — load every library once per worker.
+
+    ``lib_specs`` is ``[(library_id, path), ...]``; the loaded handles are
+    kept in module state as ``[(library_id, Library), ...]``.
+    """
+    global _WORKER_LIBRARIES
+    _WORKER_LIBRARIES = [(int(lid), load_library(path)) for lid, path in lib_specs]
 
 
 def _read_fragments(
@@ -416,7 +449,6 @@ def _annotate_feature_batch(
     *,
     analysis_db_path: str,
     sample_raw_db: dict,
-    library_id: int,
     candidate_ppm: float,
     fragment_ppm: float,
     noise_threshold: float,
@@ -425,8 +457,12 @@ def _annotate_feature_batch(
     min_matched_peaks: int,
     annotate_chimeric: bool,
 ) -> list[AnnotationRow]:
-    """Annotate one chunk of features (a worker task)."""
-    library = _WORKER_LIBRARY
+    """Annotate one chunk of features (a worker task).
+
+    Candidates from every configured library are pooled per scan, so
+    ``rank`` orders the best hit across all of them.
+    """
+    libraries = _WORKER_LIBRARIES
     rows: list[AnnotationRow] = []
     raw_cons: dict = {}
     adb = sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True)
@@ -463,9 +499,17 @@ def _annotate_feature_batch(
                 )
 
             for polarity, scans in scans_by_pol.items():
-                candidates = _gather_candidates(
-                    library, library_id, float(feature_mz), candidate_ppm, polarity
-                )
+                candidates: list[Candidate] = []
+                for lib_id, library in libraries:
+                    candidates.extend(
+                        _gather_candidates(
+                            library,
+                            lib_id,
+                            float(feature_mz),
+                            candidate_ppm,
+                            polarity,
+                        )
+                    )
                 if not candidates:
                     continue
                 rows.extend(
@@ -537,7 +581,7 @@ def _blob_or_none(arr, store: bool):
 def persist_annotations(
     db_path: Path | str,
     rows: Sequence[AnnotationRow],
-    library_id: int,
+    library_ids: int | Sequence[int],
     *,
     command_id: int | None = None,
     replace_existing: bool = True,
@@ -548,19 +592,28 @@ def persist_annotations(
     Args:
         db_path: Path to the analysis database.
         rows: Rows to store (``rank`` / ``rank_feature`` already stamped).
-        library_id: ``annotation_libraries.id`` the rows belong to.
+            Each row carries its own ``library_id``.
+        library_ids: The ``annotation_libraries.id``(s) this call owns —
+            their existing ``ms2_annotations`` rows are cleared first when
+            ``replace_existing``.
         command_id: Optional ``commands.id`` stamped on every row.
-        replace_existing: Delete this library's existing ``ms2_annotations``
-            rows first.
+        replace_existing: Delete those libraries' existing
+            ``ms2_annotations`` rows first.
         store_filtered_spectra: When False the four ``*_filtered_*`` blob
             columns are written NULL.
     """
+    if isinstance(library_ids, int):
+        library_ids = [library_ids]
+    library_ids = [int(x) for x in library_ids]
+
     with sqlite3.connect(Path(db_path)) as con:
         con.execute("PRAGMA foreign_keys = ON")
         create_analysis_schema(con)
-        if replace_existing:
+        if replace_existing and library_ids:
+            id_placeholders = ", ".join("?" * len(library_ids))
             con.execute(
-                "DELETE FROM ms2_annotations WHERE library_id = ?", (library_id,)
+                f"DELETE FROM ms2_annotations WHERE library_id IN ({id_placeholders})",
+                library_ids,
             )
         if rows:
             placeholders = ", ".join("?" * len(_ANN_COLS))
@@ -572,7 +625,7 @@ def persist_annotations(
                         r.sample_id,
                         r.scan_id,
                         r.feature_id,
-                        library_id,
+                        r.library_id,
                         r.library_spectrum_id,
                         r.compound_id,
                         r.compound_name,
@@ -666,25 +719,36 @@ def run_annotation(
 
     Returns:
         An :class:`AnnotationResult`. When ``config.library_path`` is empty
-        the result is empty and nothing is written.
+        the result is empty and nothing is written. ``config.library_path``
+        may be a single path or a list of paths; candidates from every
+        library are pooled per scan before ranking.
     """
     analysis_db_path = Path(analysis_db_path)
-    library_path = getattr(config, "library_path", None)
-    if not library_path:
+    library_paths = normalize_library_paths(getattr(config, "library_path", None))
+    if not library_paths:
         logger.info("No annotation library configured; skipping MS2 annotation")
         return AnnotationResult(
-            rows=[], library=None, n_scans_annotated=0, n_features_annotated=0
+            rows=[], libraries=[], n_scans_annotated=0, n_features_annotated=0
         )
 
-    library = load_library(library_path)
-    library_id = _register_library(analysis_db_path, library, command_id=command_id)
-    lib_info = LibraryInfo(
-        library_id=library_id,
-        path=str(library.path),
-        name=getattr(library, "name", None),
-        n_spectra=int(getattr(library, "n_spectra", 0) or 0),
-        n_compounds=int(getattr(library, "n_compounds", 0) or 0),
-    )
+    lib_specs: list[tuple[int, str]] = []
+    lib_infos: list[LibraryInfo] = []
+    for path in library_paths:
+        library = load_library(path)
+        library_id = _register_library(
+            analysis_db_path, library, command_id=command_id
+        )
+        lib_specs.append((library_id, path))
+        lib_infos.append(
+            LibraryInfo(
+                library_id=library_id,
+                path=str(library.path),
+                name=getattr(library, "name", None),
+                n_spectra=int(getattr(library, "n_spectra", 0) or 0),
+                n_compounds=int(getattr(library, "n_compounds", 0) or 0),
+            )
+        )
+    library_ids = [lid for lid, _ in lib_specs]
 
     with sqlite3.connect(analysis_db_path) as con:
         feats = con.execute(
@@ -700,13 +764,13 @@ def run_annotation(
         persist_annotations(
             analysis_db_path,
             [],
-            library_id,
+            library_ids,
             command_id=command_id,
             store_filtered_spectra=config.store_filtered_spectra,
         )
         logger.info("No MS2-associated features to annotate")
         return AnnotationResult(
-            rows=[], library=lib_info, n_scans_annotated=0, n_features_annotated=0
+            rows=[], libraries=lib_infos, n_scans_annotated=0, n_features_annotated=0
         )
 
     sample_raw_db = {int(sid): str(rp) for sid, rp in samples}
@@ -719,7 +783,6 @@ def run_annotation(
         _annotate_feature_batch,
         analysis_db_path=str(analysis_db_path),
         sample_raw_db=sample_raw_db,
-        library_id=library_id,
         candidate_ppm=config.candidate_ppm,
         fragment_ppm=config.fragment_ppm,
         noise_threshold=config.noise_threshold,
@@ -732,14 +795,14 @@ def run_annotation(
     rows: list[AnnotationRow] = []
     n_workers = config.n_workers
     if n_workers is not None and n_workers <= 1:
-        _init_worker(str(library_path))
+        _init_worker(lib_specs)
         for b in batches:
             rows.extend(worker(b))
     else:
         with ProcessPoolExecutor(
             max_workers=n_workers,
             initializer=_init_worker,
-            initargs=(str(library_path),),
+            initargs=(lib_specs,),
         ) as executor:
             for part in executor.map(worker, batches):
                 rows.extend(part)
@@ -748,7 +811,7 @@ def run_annotation(
     persist_annotations(
         analysis_db_path,
         rows,
-        library_id,
+        library_ids,
         command_id=command_id,
         store_filtered_spectra=config.store_filtered_spectra,
     )
@@ -756,14 +819,17 @@ def run_annotation(
     scans_done = {(r.sample_id, r.scan_id) for r in rows}
     feats_done = {r.feature_id for r in rows}
     logger.info(
-        "Annotated %d MS2 scan(s) over %d feature(s): %d candidate row(s)",
+        "Annotated %d MS2 scan(s) over %d feature(s) against %d librar%s: "
+        "%d candidate row(s)",
         len(scans_done),
         len(feats_done),
+        len(lib_infos),
+        "y" if len(lib_infos) == 1 else "ies",
         len(rows),
     )
     return AnnotationResult(
         rows=rows,
-        library=lib_info,
+        libraries=lib_infos,
         n_scans_annotated=len(scans_done),
         n_features_annotated=len(feats_done),
     )

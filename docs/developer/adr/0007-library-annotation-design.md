@@ -51,6 +51,12 @@ Design choices:
    a single-row read. `store_filtered_spectra = false` writes them NULL.
 6. **Empty `library_path` disables the stage** — `run_annotation` returns an
    empty result and writes nothing; `run.py` does not even log a command.
+7. **`library_path` may be a list.** `normalize_library_paths` coerces
+   `None` / str / list to a de-duplicated list; each library gets its own
+   `annotation_libraries` row, workers load them all once, and per scan the
+   candidates from every library are pooled before ranking (so `rank` is the
+   best hit across all libraries). Each `ms2_annotations` row carries its own
+   `library_id`; a re-run clears rows for every configured `library_id`.
 
 Two tables, folded into `analysis_db.create_analysis_schema`
 ([ADR 6](0006-schema-single-source-of-truth.md)): `annotation_libraries` (one

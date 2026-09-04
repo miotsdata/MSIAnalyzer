@@ -40,6 +40,7 @@ matching). Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
         - AnnotationRow
         - AnnotationResult
         - normalize_polarity
+        - normalize_library_paths
         - score_scan_against_candidates
         - rank_scan_rows
         - assign_rank_feature

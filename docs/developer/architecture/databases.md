@@ -205,7 +205,9 @@ One row per spectral library used to annotate.
 ### `ms2_annotations`  (annotator)
 
 One row per (MS2 scan, library candidate) comparison that shared at least
-`min_matched_peaks` fragments. Written only when `annotate.library_path` is set.
+`min_matched_peaks` fragments. Written only when `annotate.library_path` is set;
+with several libraries configured the rows are interleaved and distinguished by
+`library_id`, and `rank` is the best hit across all of them.
 
 | column | type | notes |
 |---|---|---|

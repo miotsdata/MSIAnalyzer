@@ -222,11 +222,12 @@ class AnnotateConfig:
     coverage-aware reverse dot product, and every candidate sharing at
     least `min_matched_peaks` fragments is stored with its rank.
 
-    Leaving `library_path` empty (`None`) disables the whole step.
+    Leaving `library_path` empty (`None` or `[]`) disables the whole step.
 
     Attributes:
-        library_path: Path to a libviz library database. When None/empty no
-            annotation is performed.
+        library_path: Path to a libviz library database, or a list of them.
+            Candidates from every library are pooled per scan before
+            ranking. When None/empty no annotation is performed.
         noise_threshold: Fraction in `[0, 1]`. After both spectra are
             max-normalised to 1, peaks below this fraction of the base peak
             are dropped (empirical and library alike).
@@ -252,7 +253,7 @@ class AnnotateConfig:
             None.
     """
 
-    library_path: str | None = None
+    library_path: str | list[str] | None = None
     noise_threshold: float = 0.01
     candidate_ppm: float = 10.0
     fragment_ppm: float = 10.0

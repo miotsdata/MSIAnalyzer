@@ -24,7 +24,7 @@ io:
 ms1:      {bin_width: 0.0001, min_mz: 70.0, max_mz: 900.0}
 align:    {align_ppm: 5.0, mz_decimals: 4}
 group_ms2: {assoc_ppm: 10.0, include_unmatched: true}
-annotate: {library_path: null}   # set a path to enable Stage B
+annotate: {library_path: null}   # a path (or [list, of, paths]) enables Stage B
 ```
 
 Relative paths are resolved against `project_folder`.
@@ -95,7 +95,7 @@ Leave `library_path` empty (`null`) and the whole stage is skipped.
 
 | key | default | meaning |
 |---|---|---|
-| `library_path` | `null` | path to a libviz library database. Empty ⇒ no annotation. |
+| `library_path` | `null` | path to a libviz library database, or a list of them (candidates are pooled per scan). Empty (`null` / `[]`) ⇒ no annotation. |
 | `noise_threshold` | `0.01` | after both spectra are normalised to 1, drop peaks below this fraction (empirical **and** library) |
 | `candidate_ppm` | `10.0` | a library spectrum is a candidate when its precursor m/z is within this of the feature m/z |
 | `fragment_ppm` | `10.0` | ppm tolerance for aligning individual fragment peaks while scoring |

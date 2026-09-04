@@ -95,16 +95,20 @@ every result row `is_chimeric = 1` (see below).
 # Stage B — library annotation
 
 Once every scan is snapped to a feature, `core.annotation.annotate` compares the
-fragment spectra to one or more reference libraries.
+fragment spectra to one or more reference libraries. `annotate.library_path` is
+either a single path or a **list** of paths; candidates from every library are
+pooled per scan before ranking, and each stored row records which `library_id`
+it came from.
 
 ## What the annotator does
 
 The unit of work is **one feature**:
 
-1. **Gather candidates once per feature.** Pull every library spectrum whose
-   precursor m/z is within `annotate.candidate_ppm` of the feature m/z. The same
-   candidate set is reused for all of that feature's scans (features are
-   processed in parallel, `annotate.batch_size` per worker).
+1. **Gather candidates once per feature.** Pull every library spectrum (from
+   every configured library) whose precursor m/z is within
+   `annotate.candidate_ppm` of the feature m/z. The same candidate set is reused
+   for all of that feature's scans (features are processed in parallel,
+   `annotate.batch_size` per worker).
 2. **Score each scan against each candidate.** Both spectra are max-normalised to
    1; peaks below `annotate.noise_threshold` are dropped from *both*; fragments
    are aligned within `annotate.fragment_ppm`; a weighted reverse dot product
@@ -115,13 +119,15 @@ The unit of work is **one feature**:
 4. **Rank scans within a feature** (`rank_feature`) by their best hit, so you can
    pick the single most convincing MS2 per feature.
 
-Leaving `annotate.library_path` empty disables the whole stage.
+Leaving `annotate.library_path` empty (`null` or `[]`) disables the whole stage.
 
 ## Tables
 
 ### `annotation_libraries` — one row per library used
 
-`path`, `name`, `n_spectra`, `n_compounds`, `command_id`.
+`path` (unique), `name`, `n_spectra`, `n_compounds`, `command_id`. With several
+libraries configured there is one row each, and every `ms2_annotations` row
+points back via `library_id`.
 
 ### `ms2_annotations` — one row per (scan, library candidate)
 

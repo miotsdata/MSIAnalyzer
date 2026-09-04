@@ -95,14 +95,17 @@ Stage B of annotation: score each associated MS2 scan against spectral libraries
 Detail in [MS2 annotation](../../user-guide/ms2-annotation.md) and
 [ADR 7](../adr/0007-library-annotation-design.md).
 
-- Pure: `normalize_polarity`, `score_scan_against_candidates`, `rank_scan_rows`,
-  `assign_rank_feature`, `annotate_feature`.
-- Data classes: `Candidate`, `LibraryInfo`, `AnnotationRow`, `AnnotationResult`.
-- IO: `load_library(path)`, `persist_annotations(db_path, rows, library_id, …)`,
+- Pure: `normalize_polarity`, `normalize_library_paths`,
+  `score_scan_against_candidates`, `rank_scan_rows`, `assign_rank_feature`,
+  `annotate_feature`.
+- Data classes: `Candidate`, `LibraryInfo`, `AnnotationRow`, `AnnotationResult`
+  (`AnnotationResult.libraries` is a list).
+- IO: `load_library(path)`, `persist_annotations(db_path, rows, library_ids, …)`,
   `run_annotation(analysis_db_path, config, *, command_id) -> AnnotationResult` —
-  the orchestration entry point used by `run.py`. The batch unit is one feature;
-  a worker loads the library once (`ProcessPoolExecutor` initializer) and
-  gathers candidates once per feature.
+  the orchestration entry point used by `run.py`. `config.library_path` is one
+  path or a list; each library gets an `annotation_libraries` row, a worker
+  loads them all once (`ProcessPoolExecutor` initializer) and per feature pools
+  the candidates from every library before ranking.
 
 ## `utils/create_adata.py`
 
