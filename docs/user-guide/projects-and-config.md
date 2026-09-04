@@ -10,7 +10,7 @@ find that marker.
 ## The config file
 
 A run is driven by one config file (`.yaml`/`.yml` or `.toml`). It has a
-`version` key (currently **4**) and one section per pipeline stage. Only `io` is
+`version` key (currently **5**) and one section per pipeline stage. Only `io` is
 required; every other section falls back to its defaults.
 
 ```yaml
@@ -121,6 +121,20 @@ Leave `library_path` empty (`null`) and the whole stage is skipped.
 | key | default | meaning |
 |---|---|---|
 | `db_name` | `null` | file name of the analysis DB inside `out_dir`; when null it is `analysis_<run-id>.db` |
+
+## Running
+
+```
+msianalyzer run -c run.yaml [-o OUT_DIR] [-l run.log] [-v debug]
+```
+
+- `-o` overrides `io.out_dir`.
+- `-l PATH` writes this run's log to `PATH` (no user log file by default).
+- `-v {debug,info,warning,error,critical}` (default `info`) sets the level of the
+  console **and** the `-l` file.
+
+Every run also writes a full-DEBUG log to `<project_folder>/logs/debug_<run-id>.log`
+regardless of `-v`.
 
 ## Programmatic use
 

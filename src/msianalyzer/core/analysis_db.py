@@ -33,6 +33,9 @@ import pandas as pd
 
 import logging
 
+from msianalyzer.core.utils.db import safe_execute, safe_executemany
+from msianalyzer.core.utils.logging_utils import log_call
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_TEMPLATE = "analysis_{run_id}.db"
@@ -66,6 +69,7 @@ def analysis_db_path(
 # ---------------------------------------------------------------------------
 
 
+@log_call
 def create_analysis_schema(con: sqlite3.Connection) -> None:
     """Create every table and index of the analysis database on ``con``.
 
@@ -267,6 +271,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     )
 
 
+@log_call(source="db_path")
 def init_analysis_db(db_path: Path | str) -> sqlite3.Connection:
     """Open (creating if needed) the analysis database and apply its schema.
 
@@ -287,6 +292,7 @@ def init_analysis_db(db_path: Path | str) -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 
 
+@log_call(source="db_path")
 def register_sample(
     db_path: Path | str,
     name: str,
@@ -306,9 +312,12 @@ def register_sample(
         row = cur.fetchone()
         if row is not None:
             return int(row[0])
-        cur = con.execute(
+        cur = safe_execute(
+            con,
             "INSERT INTO samples (name, raw_db_path, polarity) VALUES (?, ?, ?)",
             (name, raw_db_path, polarity),
+            table="samples",
+            logger=logger,
         )
         con.commit()
         return int(cur.lastrowid)
@@ -319,6 +328,7 @@ def register_sample(
 # ---------------------------------------------------------------------------
 
 
+@log_call(source="db_path")
 def log_command(
     db_path: Path | str,
     command_name: str,
@@ -340,7 +350,8 @@ def log_command(
         The new ``commands.id``.
     """
     with sqlite3.connect(Path(db_path)) as con:
-        cur = con.execute(
+        cur = safe_execute(
+            con,
             "INSERT INTO commands (command_name, datetime, arguments, run_id, sample_id) "
             "VALUES (?, ?, ?, ?, ?)",
             (
@@ -350,6 +361,8 @@ def log_command(
                 run_id,
                 sample_id,
             ),
+            table="commands",
+            logger=logger,
         )
         con.commit()
         return int(cur.lastrowid)
@@ -386,12 +399,16 @@ def is_command_already_run(
         return cur.fetchone() is not None
 
 
+@log_call(source="db_path")
 def write_metadata(db_path: Path | str, rows: dict[str, str]) -> None:
     """Upsert key/value pairs into the analysis ``metadata`` table."""
     with sqlite3.connect(Path(db_path)) as con:
-        con.executemany(
+        safe_executemany(
+            con,
             "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
             [(k, str(v)) for k, v in rows.items()],
+            table="metadata",
+            logger=logger,
         )
         con.commit()
 
@@ -401,6 +418,7 @@ def write_metadata(db_path: Path | str, rows: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 
 
+@log_call(source="raw_db_path")
 def attach_raw(
     con: sqlite3.Connection, raw_db_path: Path | str, alias: str = "raw"
 ) -> None:
@@ -419,6 +437,7 @@ def attach_raw(
 # ---------------------------------------------------------------------------
 
 
+@log_call(source="db_path")
 def save_features(
     db_path: Path | str, aligned_df: pd.DataFrame, command_id: int | None = None
 ) -> None:
@@ -438,13 +457,17 @@ def save_features(
 
     with sqlite3.connect(Path(db_path)) as con:
         con.execute("DELETE FROM features")
-        con.executemany(
+        safe_executemany(
+            con,
             "INSERT INTO features (mz, members_json, command_id) VALUES (?, ?, ?)",
             records,
+            table="features",
+            logger=logger,
         )
         con.commit()
 
 
+@log_call(source="db_path")
 def load_features(db_path: Path | str) -> pd.DataFrame:
     """Reconstruct the aligned DataFrame previously stored by :func:`save_features`.
 

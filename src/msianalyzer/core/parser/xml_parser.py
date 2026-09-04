@@ -1,13 +1,19 @@
+import logging
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
 import pandas as pd
 
+from msianalyzer.core.utils.logging_utils import log_call
+
+logger = logging.getLogger(__name__)
+
 
 # -------------------------------------------------------------------------
 # 1. Parse Raster XML into Spatial Pixel DataFrame
 # -------------------------------------------------------------------------
+@log_call(source="xml_path")
 def parse_raster_xml(
     xml_path: str | Path,
 ) -> tuple[pd.DataFrame, dict[str, float | int]]:

@@ -5,9 +5,13 @@ from pathlib import Path
 
 import logging
 
+from msianalyzer.core.utils.db import safe_execute, safe_executemany
+from msianalyzer.core.utils.logging_utils import log_call
+
 logger = logging.getLogger(__name__)
 
 
+@log_call(source="db_path")
 def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
     """
     Associate scans to pixels.
@@ -70,16 +74,21 @@ def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
         """)
 
         # 2. Bulk insert pixels from df_pixels
-        cursor.executemany(
+        safe_executemany(
+            conn,
             """
             INSERT INTO spatial_pixels (x, y, t_start, t_end)
             VALUES (?, ?, ?, ?);
         """,
             pixel_tuples,
+            table="spatial_pixels",
+            logger=logger,
         )
 
         # 3. Fast SQL range-based mapping into the junction table
-        cursor.execute("""
+        safe_execute(
+            conn,
+            """
             INSERT INTO pixel_ms1_scans (pixel_id, scan_id)
             SELECT
                 p.pixel_id,
@@ -87,7 +96,10 @@ def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
             FROM spatial_pixels p
             JOIN ms1_scans s
               ON s.rt >= p.t_start AND s.rt <= p.t_end;
-        """)
+        """,
+            table="pixel_ms1_scans",
+            logger=logger,
+        )
 
         conn.commit()
 

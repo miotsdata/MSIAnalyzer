@@ -114,6 +114,27 @@ Detail in [MS2 annotation](../../user-guide/ms2-annotation.md) and
   across each pixel's MS1 spectra. Reads only the raw DB; returns an `AnnData`
   (persisted by the caller as a sidecar `.h5ad`).
 
+## `utils/logging_utils.py`
+
+- `configure_logging(*, level, log_file, debug_log_dir, run_id)` — console + an
+  optional user file (both at `level`) + an always-DEBUG file
+  `debug_<run_id>.log`. `level` accepts a name or a number (`resolve_log_level`).
+- `@log_call(*, level=DEBUG, source=None)` — decorator emitting `start` / `end
+  (N ms)` records (and `fail` + traceback on exception) on the wrapped
+  function's own module logger. `source="db_path"` copies that argument onto
+  `record.source_file`.
+- `worker_logging()` — context manager: runs a `QueueListener` over the parent's
+  root handlers and yields `(log_queue, initializer)` for a
+  `ProcessPoolExecutor`, so worker logs reach the parent's handlers.
+- See [Logging](../logging.md).
+
+## `utils/db.py`
+
+- `safe_execute` / `safe_executemany(con, sql, params/rows, *, table, logger)` —
+  run the write; on a `sqlite3.Error` log ERROR with the offending values (for a
+  batch, the first bad row, isolated via a `SAVEPOINT`) and re-raise unchanged.
+  Used by every DB write site.
+
 ## `config/config.py`
 
 - `Config` + one dataclass per stage; `GROUPS` / `GROUP_TITLES` drive

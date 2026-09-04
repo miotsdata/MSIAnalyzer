@@ -48,6 +48,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from functools import partial
+from logging.handlers import QueueHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
@@ -55,6 +56,8 @@ import numpy as np
 
 from ..analysis_db import create_analysis_schema
 from ..parser.mzml_parser import array_to_blob, blob_to_array
+from ..utils.db import safe_execute, safe_executemany
+from ..utils.logging_utils import log_call, worker_logging
 from .spectral_match import MatchResult, reverse_dot_product
 
 if TYPE_CHECKING:  # avoid a runtime import cycle / hard libviz dependency
@@ -290,6 +293,7 @@ def _row_from_match(
     )
 
 
+@log_call
 def annotate_feature(
     feature_id: int,
     feature_mz: float,
@@ -351,6 +355,7 @@ def annotate_feature(
 # ---------------------------------------------------------------------------
 
 
+@log_call(source="path")
 def load_library(path: Path | str):
     """Open a libviz library database read-only.
 
@@ -362,6 +367,7 @@ def load_library(path: Path | str):
     return Library.load_from_db(Path(path))
 
 
+@log_call
 def normalize_library_paths(library_path) -> list[str]:
     """Coerce ``config.library_path`` to a de-duplicated list of path strings.
 
@@ -415,13 +421,20 @@ def _gather_candidates(
 _WORKER_LIBRARIES: list[tuple[int, object]] = []
 
 
-def _init_worker(lib_specs: Sequence[tuple[int, str]]) -> None:
-    """ProcessPool initializer — load every library once per worker.
+def _init_worker(lib_specs: Sequence[tuple[int, str]], log_queue=None) -> None:
+    """ProcessPool initializer — forward logs, then load every library.
 
     ``lib_specs`` is ``[(library_id, path), ...]``; the loaded handles are
-    kept in module state as ``[(library_id, Library), ...]``.
+    kept in module state as ``[(library_id, Library), ...]``. When
+    ``log_queue`` is given the worker's root logger is pointed at it so
+    records reach the main process.
     """
     global _WORKER_LIBRARIES
+    if log_queue is not None:
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.addHandler(QueueHandler(log_queue))
+        root.setLevel(logging.DEBUG)
     _WORKER_LIBRARIES = [(int(lid), load_library(path)) for lid, path in lib_specs]
 
 
@@ -444,6 +457,7 @@ def _read_fragments(
     return blob_to_array(row[0]), blob_to_array(row[1])
 
 
+@log_call
 def _annotate_feature_batch(
     batch: Sequence[tuple[int, float]],
     *,
@@ -578,6 +592,7 @@ def _blob_or_none(arr, store: bool):
     return array_to_blob(arr, _BLOB_DECIMALS, True)
 
 
+@log_call(source="db_path")
 def persist_annotations(
     db_path: Path | str,
     rows: Sequence[AnnotationRow],
@@ -617,7 +632,8 @@ def persist_annotations(
             )
         if rows:
             placeholders = ", ".join("?" * len(_ANN_COLS))
-            con.executemany(
+            safe_executemany(
+                con,
                 f"INSERT INTO ms2_annotations ({', '.join(_ANN_COLS)}) "
                 f"VALUES ({placeholders})",
                 [
@@ -657,10 +673,13 @@ def persist_annotations(
                     )
                     for r in rows
                 ],
+                table="ms2_annotations",
+                logger=logger,
             )
         con.commit()
 
 
+@log_call(source="db_path")
 def _register_library(
     db_path: Path | str, library, *, command_id: int | None = None
 ) -> int:
@@ -676,18 +695,24 @@ def _register_library(
             "SELECT id FROM annotation_libraries WHERE path = ?", (path,)
         ).fetchone()
         if row is not None:
-            con.execute(
+            safe_execute(
+                con,
                 "UPDATE annotation_libraries "
                 "SET name = ?, n_spectra = ?, n_compounds = ?, command_id = ? "
                 "WHERE id = ?",
                 (name, n_spectra, n_compounds, command_id, row[0]),
+                table="annotation_libraries",
+                logger=logger,
             )
             con.commit()
             return int(row[0])
-        cur = con.execute(
+        cur = safe_execute(
+            con,
             "INSERT INTO annotation_libraries "
             "(path, name, n_spectra, n_compounds, command_id) VALUES (?, ?, ?, ?, ?)",
             (path, name, n_spectra, n_compounds, command_id),
+            table="annotation_libraries",
+            logger=logger,
         )
         con.commit()
         return int(cur.lastrowid)
@@ -698,6 +723,7 @@ def _register_library(
 # ---------------------------------------------------------------------------
 
 
+@log_call(source="analysis_db_path")
 def run_annotation(
     analysis_db_path: Path | str,
     config: "AnnotateConfig",
@@ -778,6 +804,13 @@ def run_annotation(
     batches = [
         feats[i : i + batch_size] for i in range(0, len(feats), batch_size)
     ]
+    logger.info(
+        "annotation: %d MS2-bearing features in %d batch(es) against %d librar%s",
+        len(feats),
+        len(batches),
+        len(lib_infos),
+        "y" if len(lib_infos) == 1 else "ies",
+    )
 
     worker = partial(
         _annotate_feature_batch,
@@ -799,13 +832,16 @@ def run_annotation(
         for b in batches:
             rows.extend(worker(b))
     else:
-        with ProcessPoolExecutor(
-            max_workers=n_workers,
-            initializer=_init_worker,
-            initargs=(lib_specs,),
-        ) as executor:
-            for part in executor.map(worker, batches):
-                rows.extend(part)
+        # `_init_worker` handles both library loading and log forwarding;
+        # `worker_logging` just runs the listener over the parent handlers.
+        with worker_logging() as (log_queue, _):
+            with ProcessPoolExecutor(
+                max_workers=n_workers,
+                initializer=_init_worker,
+                initargs=(lib_specs, log_queue),
+            ) as executor:
+                for part in executor.map(worker, batches):
+                    rows.extend(part)
 
     assign_rank_feature(rows)
     persist_annotations(

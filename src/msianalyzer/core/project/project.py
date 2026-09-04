@@ -5,6 +5,7 @@ from typing import Any
 import yaml
 import logging
 from msianalyzer.core.utils import MSIAnalyzerError
+from msianalyzer.core.utils.logging_utils import log_call
 import re
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class Project:
 
         return d
 
+    @log_call(source="path")
     def export(self, path: str | Path) -> None:
         """Export to a .yml/.yaml or .toml file, format inferred from suffix."""
         data = self.to_dict()
@@ -90,6 +92,7 @@ class Project:
             yaml.safe_dump(data, f, sort_keys=False)
 
     @classmethod
+    @log_call
     def load(cls, start_path: str | Path | None = None) -> "Project":
         """Locate the enclosing project and load its ``.msianalyzer.yml``.
 
@@ -103,6 +106,7 @@ class Project:
         return cls.load_from_yaml(folder / ".msianalyzer.yml")
 
     @classmethod
+    @log_call(source="yaml_path")
     def load_from_yaml(cls, yaml_path: str | Path) -> "Project":
         """Load a project from a YAML file."""
         path = Path(yaml_path)
@@ -126,6 +130,7 @@ class Project:
         return project
 
 
+@log_call(source="path")
 def create_project_folder(path: str | Path, name: str) -> None:
     """Create a new project folder on disk.
 

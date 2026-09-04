@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import numpy as np
 from scipy.signal import find_peaks
@@ -8,8 +9,13 @@ import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial import cKDTree
 from msianalyzer.core.parser import array_to_blob, blob_to_array
+from msianalyzer.core.utils.db import safe_execute
+from msianalyzer.core.utils.logging_utils import log_call
+
+logger = logging.getLogger(__name__)
 
 
+@log_call(source="db_path")
 def get_average_ms1_spectra(
     db_path: str | Path,
     chunk_size: int = 2000,
@@ -77,6 +83,7 @@ def get_average_ms1_spectra(
     return bin_centers, mean_intensities
 
 
+@log_call(source="analysis_db_path")
 def save_aggregated_spectra(
     mzs_array: np.ndarray,
     intensities_array: np.ndarray,
@@ -120,12 +127,15 @@ def save_aggregated_spectra(
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_agg_run_id ON aggregated_spectra(run_id)"
         )
-        cursor.execute(
+        safe_execute(
+            conn,
             """
             INSERT INTO aggregated_spectra (run_id, sample_id, command_id, mz_array, intensity_array)
             VALUES (?, ?, ?, ?, ?);
             """,
             (run_id, sample_id, command_id, mzs_blob, intensities_blob),
+            table="aggregated_spectra",
+            logger=logger,
         )
         conn.commit()
 
@@ -234,6 +244,7 @@ def _merge_peaks_ppm(mz, intensity, ppm: float = 5):
     return mz[selected], intensity[selected]
 
 
+@log_call
 def detect_ms1_centroids(
     bin_centers: np.ndarray,
     mean_intensities: np.ndarray,
@@ -321,6 +332,7 @@ def detect_ms1_centroids(
     return mz_centroid, int_centroid
 
 
+@log_call
 def filter_intensities_mad(
     mz_array: np.ndarray,
     intensity_array: np.ndarray,
@@ -363,6 +375,7 @@ def filter_intensities_mad(
     return mz_array[mask], intensity_array[mask]
 
 
+@log_call(source="analysis_db_path")
 def load_aggregated_spectra(
     analysis_db_path: str | Path,
     run_id: str,

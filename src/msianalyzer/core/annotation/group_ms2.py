@@ -30,6 +30,7 @@ Outputs (schema in :func:`msianalyzer.core.analysis_db.create_analysis_schema`):
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import warnings
 from collections import defaultdict
@@ -40,6 +41,10 @@ from typing import Iterable, Sequence
 import numpy as np
 
 from ..analysis_db import create_analysis_schema
+from ..utils.db import safe_execute, safe_executemany
+from ..utils.logging_utils import log_call
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "WindowFeature",
@@ -307,6 +312,7 @@ def associate_scan(
     )
 
 
+@log_call
 def summarize_features(
     associations: Iterable[ScanAssociation],
 ) -> list[FeatureMs2Summary]:
@@ -334,6 +340,7 @@ def summarize_features(
     return out
 
 
+@log_call
 def group_ms2(
     scans: Iterable[dict],
     features: np.ndarray,
@@ -421,6 +428,7 @@ _ASSOC_COLS = (
 )
 
 
+@log_call(source="db_path")
 def persist_grouping(
     db_path: Path | str,
     result: GroupingResult,
@@ -452,7 +460,8 @@ def persist_grouping(
             f"VALUES ({placeholders})"
         )
         for a in result.associations:
-            cur = con.execute(
+            cur = safe_execute(
+                con,
                 insert_assoc,
                 (
                     a.sample_id,
@@ -474,10 +483,13 @@ def persist_grouping(
                     int(a.precursor_only),
                     command_id,
                 ),
+                table="ms2_associations",
+                logger=logger,
             )
             assoc_id = cur.lastrowid
             if a.window_features:
-                con.executemany(
+                safe_executemany(
+                    con,
                     "INSERT INTO ms2_window_features "
                     "(association_id, feature_id, feature_mz, ppm_diff, "
                     " within_tol, is_primary) VALUES (?, ?, ?, ?, ?, ?)",
@@ -492,9 +504,12 @@ def persist_grouping(
                         )
                         for w in a.window_features
                     ],
+                    table="ms2_window_features",
+                    logger=logger,
                 )
 
-        con.executemany(
+        safe_executemany(
+            con,
             "INSERT INTO feature_ms2_summary "
             "(feature_id, feature_mz, n_ms2, n_samples, n_precursor_only, "
             " n_single_peak, n_chimeric, median_n_peaks) "
@@ -512,6 +527,8 @@ def persist_grouping(
                 )
                 for s in result.feature_summary
             ],
+            table="feature_ms2_summary",
+            logger=logger,
         )
         con.commit()
 
@@ -521,6 +538,7 @@ def persist_grouping(
 # ---------------------------------------------------------------------------
 
 
+@log_call(source="analysis_db_path")
 def run_grouper(
     analysis_db_path: Path | str,
     *,
@@ -538,6 +556,7 @@ def run_grouper(
     from ..parser.mzml_parser import blob_to_array
 
     analysis_db_path = Path(analysis_db_path)
+    logger.info("grouper: reading features + samples from %s", analysis_db_path)
     with sqlite3.connect(analysis_db_path) as con:
         feats = con.execute(
             "SELECT feature_id, mz FROM features ORDER BY mz"
@@ -559,6 +578,12 @@ def run_grouper(
                 "collision_energy, n_peaks, polarity, mz_array, intensity_array "
                 "FROM ms2_scans"
             ).fetchall()
+        logger.info(
+            "grouper: sample %s — %d MS2 scans",
+            sample_id,
+            len(rows),
+            extra={"source_file": str(raw_db_path)},
+        )
         for r in rows:
             scans.append(
                 {
@@ -577,6 +602,11 @@ def run_grouper(
                 }
             )
 
+    logger.info(
+        "grouper: associating %d MS2 scans against %d features",
+        len(scans),
+        len(features),
+    )
     result = group_ms2(
         scans,
         features,
@@ -587,4 +617,9 @@ def run_grouper(
         **group_kwargs,
     )
     persist_grouping(analysis_db_path, result, command_id=command_id)
+    logger.info(
+        "grouper: persisted %d associations, %d feature summaries",
+        len(result.associations),
+        len(result.feature_summary),
+    )
     return result

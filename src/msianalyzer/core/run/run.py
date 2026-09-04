@@ -31,6 +31,7 @@ from msianalyzer.core.spectra.average_spectra import (
 )
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 from msianalyzer.core.utils.create_adata import create_spatial_adata
+from msianalyzer.core.utils.logging_utils import log_call, worker_logging
 from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,7 @@ class Run:
                 d[key] = value
         return d
 
+    @log_call
     def start(
         self,
         config_file: str | Path | None = None,
@@ -152,12 +154,18 @@ class Run:
 
         os.chdir(self.config.io.project_folder)
 
+        logger.info("run %s: pipeline started", self.id)
         self.run_core()
 
         self.end_date = datetime.datetime.now()
         self.status = RunStatus.COMPLETED
         self.project.runs[self.id] = self.to_dict()
         self.project.export(project_path)
+        logger.info(
+            "run %s: pipeline complete in %s",
+            self.id,
+            self.end_date - self.start_date,
+        )
 
     @staticmethod
     def is_command_already_run(
@@ -183,6 +191,7 @@ class Run:
             return cursor.fetchone() is not None
 
     @staticmethod
+    @log_call(source="mzml_path")
     def _process_one_sample(
         mzml_path: Path,
         xml_path: Path,
@@ -237,7 +246,10 @@ class Run:
                 command_name="map_pixels_to_db",
                 arguments={},
             )
-            logger.debug("%s: Assigned %d pixels", mzml_path, df_pixels.shape[0])
+            logger.info(
+                "%s: mapped %d pixels", mzml_path, df_pixels.shape[0],
+                extra={"source_file": mzml_path},
+            )
         else:
             logger.debug("%s: Already run map_pixels_to_db", mzml_path)
 
@@ -263,7 +275,10 @@ class Run:
                 sample_id=sample_id,
                 command_id=command_id,
             )
-            logger.debug("%s: Found %d average ms1 mzs", mzml_path, len(average_ms1_mzs))
+            logger.info(
+                "%s: averaged MS1 -> %d bins", mzml_path, len(average_ms1_mzs),
+                extra={"source_file": mzml_path},
+            )
         else:
             logger.debug("%s: Already run get_average_ms1_spectra", mzml_path)
 
@@ -300,8 +315,9 @@ class Run:
                 sample_id=sample_id,
                 command_id=command_id,
             )
-            logger.debug(
-                "%s: Detected %d centroids", mzml_path, len(peaks_mzs)
+            logger.info(
+                "%s: detected %d centroids", mzml_path, len(peaks_mzs),
+                extra={"source_file": mzml_path},
             )
         else:
             logger.debug("%s: Already run detect_ms1_centroids", mzml_path)
@@ -351,8 +367,9 @@ class Run:
                 sample_id=sample_id,
                 command_id=command_id,
             )
-            logger.debug(
-                "%s: After filtering: %d peaks", mzml_path, len(filtered_peaks_mzs)
+            logger.info(
+                "%s: filtered -> %d peaks", mzml_path, len(filtered_peaks_mzs),
+                extra={"source_file": mzml_path},
             )
         else:
             logger.debug("%s: Already run filter_spectra", mzml_path)
@@ -396,6 +413,7 @@ class Run:
 
         return SampleResult(out_db_path=out_db_path, peaks_mzs=filtered_peaks_mzs)
 
+    @log_call
     def run_core(self) -> None:
         """Run the pipeline across all samples and assemble outputs.
 
@@ -451,16 +469,27 @@ class Run:
             analysis_db_path=adb_path,
         )
 
-        with ProcessPoolExecutor(max_workers=config.h5ad.n_workers) as executor:
-            results = list(
-                executor.map(
-                    worker,
-                    config.io.mzml_paths,
-                    config.io.xml_paths,
-                    sample_ids,
-                    raw_db_paths,
+        logger.info(
+            "run %s: processing %d sample(s) with %s worker(s)",
+            analysis_id,
+            len(config.io.mzml_paths),
+            config.h5ad.n_workers or "os.cpu_count()",
+        )
+        with worker_logging() as (log_queue, initializer):
+            with ProcessPoolExecutor(
+                max_workers=config.h5ad.n_workers,
+                initializer=initializer,
+                initargs=(log_queue,),
+            ) as executor:
+                results = list(
+                    executor.map(
+                        worker,
+                        config.io.mzml_paths,
+                        config.io.xml_paths,
+                        sample_ids,
+                        raw_db_paths,
+                    )
                 )
-            )
 
         out_db_paths = [r.out_db_path for r in results]
         all_peaks_mzs = [r.peaks_mzs for r in results]
@@ -488,6 +517,12 @@ class Run:
                 run_id=analysis_id,
             )
             analysis_db.save_features(adb_path, mzs_df, command_id=command_id)
+            logger.info(
+                "run %s: aligned %d features across %d samples",
+                analysis_id,
+                len(mzs_df.index),
+                len(mzs_df.columns),
+            )
         else:
             logger.debug("Already run align mz across samples")
             mzs_df = pd.read_csv(aligned_df_path, index_col=0)
@@ -563,5 +598,13 @@ class Run:
                     **vars(config.h5ad),
                 )
                 tmp_adata.write_h5ad(out_adata_path)
+                logger.info(
+                    "%s: wrote %s (%d pixels x %d features)",
+                    db_path,
+                    out_adata_path.name,
+                    tmp_adata.n_obs,
+                    tmp_adata.n_vars,
+                    extra={"source_file": db_path},
+                )
             else:
                 logger.debug("%s: Already created adata object", db_path)

@@ -14,6 +14,7 @@ Everything else lands in the analysis' `io.out_dir`.
 | `<sample>.h5ad` | `out_dir` | sample | `AnnData` — pixels × features quantification matrix with spatial coordinates |
 | `<sample>_filtered_ms1.html` | `out_dir` | sample | interactive figure of the filtered MS1 peak list |
 | `<sample>_peaks_data.csv` | `out_dir` | sample | the filtered MS1 peak list as `mz,intensity` |
+| `debug_<run-id>.log` | `<project>/logs/` | run | full-DEBUG trace of the run (always written); plus `run -l PATH` for a user log at the `-v` level |
 
 ## Reading the analysis database
 

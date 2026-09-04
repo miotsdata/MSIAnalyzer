@@ -27,7 +27,26 @@ def test_add_run_parser_defaults():
     assert args.subcommand == "run"
     assert args.config is None
     assert args.out_dir is None
+    assert args.log_file is None
+    assert args.verbosity == "info"
     assert args.func == run_command
+
+
+def test_add_run_parser_log_flags(tmp_path):
+    """`-l` takes a path and `-v` a level name (lower-cased, validated)."""
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="subcommand")
+    _add_run_parser(subparsers)
+
+    args = parser.parse_args(
+        ["run", "-l", str(tmp_path / "run.log"), "-v", "DEBUG"]
+    )
+    assert args.log_file == tmp_path / "run.log"
+    assert args.verbosity == "debug"
+
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["run", "-v", "loud"])
+    assert exc.value.code == 2
 
 
 def test_add_run_parser_custom_args(tmp_path):
@@ -83,49 +102,64 @@ def test_build_parser_registers_run_command(tmp_path):
 # ==============================================================================
 
 
+def _run_args(**over):
+    base = dict(config=None, out_dir=None, log_file=None, verbosity="info")
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
 def test_run_command_without_out_dir_override(mocker, tmp_path):
     """Verifies run_command when out_dir is None (uses config default)."""
-    # 1. Mock Config.load
     mock_config = mocker.MagicMock()
     mock_config.io.out_dir = tmp_path / "default_out"
+    mock_config.io.project_folder = tmp_path / "proj"
     mock_config_load = mocker.patch(f"{MODULE_PATH}.Config.load", return_value=mock_config)
 
-    # 2. Mock Run class
     mock_run_instance = mocker.MagicMock()
+    mock_run_instance.id = "run-xyz"
     mock_run_cls = mocker.patch(f"{MODULE_PATH}.Run", return_value=mock_run_instance)
+    mock_cfg_log = mocker.patch(f"{MODULE_PATH}.configure_logging")
 
-    # 3. Execute with args.out_dir = None
-    args = argparse.Namespace(config=tmp_path / "my_config.yaml", out_dir=None)
-    run_command(args)
+    run_command(_run_args(config=tmp_path / "my_config.yaml"))
 
-    # 4. Assertions
     mock_config_load.assert_called_once_with(tmp_path / "my_config.yaml")
     assert mock_config.io.out_dir == tmp_path / "default_out"  # Unchanged
     mock_run_cls.assert_called_once()
     mock_run_instance.start.assert_called_once_with(config=mock_config)
+    mock_cfg_log.assert_called_once_with(
+        level="info",
+        log_file=None,
+        debug_log_dir=(tmp_path / "proj" / "logs"),
+        run_id="run-xyz",
+    )
 
 
 def test_run_command_with_out_dir_override(mocker, tmp_path):
     """Verifies run_command overrides config.io.out_dir when --out-dir is passed."""
-    # 1. Mock Config.load
     mock_config = mocker.MagicMock()
     mock_config.io.out_dir = tmp_path / "default_out"
+    mock_config.io.project_folder = tmp_path / "proj"
     mock_config_load = mocker.patch(f"{MODULE_PATH}.Config.load", return_value=mock_config)
 
-    # 2. Mock Run class
     mock_run_instance = mocker.MagicMock()
+    mock_run_instance.id = "run-xyz"
     mock_run_cls = mocker.patch(f"{MODULE_PATH}.Run", return_value=mock_run_instance)
+    mock_cfg_log = mocker.patch(f"{MODULE_PATH}.configure_logging")
 
-    # 3. Execute with args.out_dir provided
     override_dir = tmp_path / "custom_override_out"
-    args = argparse.Namespace(config=None, out_dir=override_dir)
-    run_command(args)
+    log_path = tmp_path / "run.log"
+    run_command(_run_args(out_dir=override_dir, log_file=log_path, verbosity="debug"))
 
-    # 4. Assertions
     mock_config_load.assert_called_once_with(None)
     assert mock_config.io.out_dir == override_dir  # Successfully overridden
     mock_run_cls.assert_called_once()
     mock_run_instance.start.assert_called_once_with(config=mock_config)
+    mock_cfg_log.assert_called_once_with(
+        level="debug",
+        log_file=log_path,
+        debug_log_dir=(tmp_path / "proj" / "logs"),
+        run_id="run-xyz",
+    )
 
 
 # ==============================================================================
@@ -137,18 +171,28 @@ def test_full_cli_run_command_execution(mocker, tmp_path, monkeypatch):
     """Simulates 'msianalyzer run -c ... -o ...' through main()."""
     mock_config = mocker.MagicMock()
     mock_config.io.out_dir = tmp_path / "config_out"
+    mock_config.io.project_folder = tmp_path / "proj"
     mock_config_load = mocker.patch(
         f"{MODULE_PATH}.Config.load", return_value=mock_config
     )
     mock_run_instance = mocker.MagicMock()
+    mock_run_instance.id = "run-xyz"
     mock_run_cls = mocker.patch(f"{MODULE_PATH}.Run", return_value=mock_run_instance)
+    mock_cfg_log = mocker.patch(f"{MODULE_PATH}.configure_logging")
 
     config_path = tmp_path / "pipeline.yaml"
     override_dir = tmp_path / "cli_out"
+    log_path = tmp_path / "run.log"
     monkeypatch.setattr(
         sys,
         "argv",
-        ["msianalyzer", "run", "-c", str(config_path), "-o", str(override_dir)],
+        [
+            "msianalyzer", "run",
+            "-c", str(config_path),
+            "-o", str(override_dir),
+            "-l", str(log_path),
+            "-v", "warning",
+        ],
     )
 
     main()
@@ -157,3 +201,9 @@ def test_full_cli_run_command_execution(mocker, tmp_path, monkeypatch):
     assert mock_config.io.out_dir == override_dir
     mock_run_cls.assert_called_once()
     mock_run_instance.start.assert_called_once_with(config=mock_config)
+    mock_cfg_log.assert_called_once_with(
+        level="warning",
+        log_file=log_path,
+        debug_log_dir=(tmp_path / "proj" / "logs"),
+        run_id="run-xyz",
+    )

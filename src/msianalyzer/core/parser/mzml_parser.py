@@ -25,6 +25,9 @@ from msianalyzer.version import __version__ as SOFTWARE_VERSION
 
 import logging
 
+from msianalyzer.core.utils.db import safe_execute, safe_executemany
+from msianalyzer.core.utils.logging_utils import log_call
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -234,6 +237,7 @@ class MzmlParser:
     # Public entry point
     # ------------------------------------------------------------------
 
+    @log_call(source="mzml_path")
     def parse(self, mzml_path: Path | str, ms1_db_path: Path | str) -> MzmlFile:
         """Stream-parse ``mzml_path`` and populate the raw SQLite database.
 
@@ -425,7 +429,8 @@ class MzmlParser:
 
     @staticmethod
     def _insert_ms1(con: sqlite3.Connection, sp: dict) -> None:
-        con.execute(
+        safe_execute(
+            con,
             """
             INSERT OR REPLACE INTO ms1_scans
               (scan_id, rt, n_peaks, mz_min, mz_max, tic, polarity,
@@ -443,11 +448,14 @@ class MzmlParser:
                 sp["mz_blob"],
                 sp["intensity_blob"],
             ),
+            table="ms1_scans",
+            logger=logger,
         )
 
     @staticmethod
     def _insert_ms2(con: sqlite3.Connection, sp: dict) -> None:
-        con.execute(
+        safe_execute(
+            con,
             """
             INSERT OR REPLACE INTO ms2_scans
               (scan_id, parent_scan_id, polarity, rt, filter_string,
@@ -476,6 +484,8 @@ class MzmlParser:
                 sp["mz_blob"],
                 sp["intensity_blob"],
             ),
+            table="ms2_scans",
+            logger=logger,
         )
 
 
@@ -823,7 +833,13 @@ def _insert_metadata(
         ("db_creation_date", datetime.now().astimezone().isoformat()),
         ("msianalyzer_version", SOFTWARE_VERSION),
     ]
-    con.executemany("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", rows)
+    safe_executemany(
+        con,
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+        rows,
+        table="metadata",
+        logger=logger,
+    )
 
 
 def _insert_command(
@@ -834,9 +850,12 @@ def _insert_command(
     run_id: str | None,
 ) -> None:
     """Append one row to the commands table."""
-    con.execute(
+    safe_execute(
+        con,
         "INSERT INTO commands (command_name, datetime, arguments, run_id) VALUES (?,?,?,?)",
         (command_name, dt, json.dumps(arguments), run_id),
+        table="commands",
+        logger=logger,
     )
 
 
@@ -846,6 +865,7 @@ def _insert_command(
 # ---------------------------------------------------------------------------
 
 
+@log_call(source="db_path")
 def log_command(
     db_path: Path | str, command_name: str, arguments: dict, run_id: str
 ) -> int | None:
@@ -865,8 +885,8 @@ def log_command(
     """
     con = sqlite3.connect(Path(db_path))
     try:
-        cur = con.cursor()
-        cur.execute(
+        cur = safe_execute(
+            con,
             "INSERT INTO commands (command_name, datetime, arguments, run_id) VALUES (?,?,?,?)",
             (
                 command_name,
@@ -874,6 +894,8 @@ def log_command(
                 json.dumps(arguments),
                 run_id,
             ),
+            table="commands",
+            logger=logger,
         )
         con.commit()
         command_id = cur.lastrowid

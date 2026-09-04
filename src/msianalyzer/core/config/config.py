@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 from dataclasses import dataclass, fields
@@ -10,6 +11,9 @@ import tomllib
 import tomli_w
 
 from msianalyzer.core.project.project import NotInProjectFolderError, get_project_folder
+from msianalyzer.core.utils.logging_utils import log_call
+
+logger = logging.getLogger(__name__)
 
 #: Directory (under the project folder) where parsed raw databases live by
 #: default. Raw databases are immutable and shared across every analysis in the
@@ -393,6 +397,7 @@ class Config:
         return d
 
     @classmethod
+    @log_call
     def from_dict(
         cls,
         data: dict[str, Any],
@@ -438,6 +443,7 @@ class Config:
     # ------------------------------------------------------------------ #
 
     @classmethod
+    @log_call(source="path")
     def load(cls, path: str | Path) -> "Config":
         """Load a config file and resolve relative paths."""
 
@@ -493,6 +499,7 @@ class Config:
     # exporting
     # ------------------------------------------------------------------ #
 
+    @log_call(source="path")
     def export(self, path: str | Path) -> None:
         """Export to a .yml/.yaml or .toml file, format inferred from suffix."""
         path = Path(path)
@@ -548,6 +555,7 @@ class Config:
         return "\n".join(lines)
 
 
+@log_call(source="file")
 def create_config_file(
     file: Path,
     project_folder: Path | None = None,

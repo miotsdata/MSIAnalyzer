@@ -133,9 +133,10 @@ def test_save_aggregated_spectra_targets_analysis_db(mocker):
         command_id=99,
     )
 
+    # the INSERT now runs through utils.db.safe_execute -> conn.execute
     insert_calls = [
         c
-        for c in mock_cursor.execute.call_args_list
+        for c in mock_conn.execute.call_args_list
         if "INSERT" in _norm(c.args[0])
     ]
     assert len(insert_calls) == 1

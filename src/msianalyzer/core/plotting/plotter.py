@@ -8,6 +8,7 @@ and embedded in QML via WebEngineView.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,9 @@ import plotly.graph_objects as go
 
 from msianalyzer.core.parser.mzml_parser import blob_to_array
 from msianalyzer.core.annotation.spectral_match import _align_peaks
+from msianalyzer.core.utils.logging_utils import log_call
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -43,6 +47,7 @@ class Plotter:
     # ------------------------------------------------------------------
 
     @staticmethod
+    @log_call
     def plot_spectra(
         mz_array: np.ndarray,
         intensity_array: np.ndarray,
@@ -113,6 +118,7 @@ class Plotter:
 
         return fig
 
+    @log_call
     def plot_ms2_annotation(
         self,
         annotations_db_path: Path | str,

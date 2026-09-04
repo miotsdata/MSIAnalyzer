@@ -1,7 +1,14 @@
+import logging
+
 import numpy as np
 import pandas as pd
 
+from msianalyzer.core.utils.logging_utils import log_call
 
+logger = logging.getLogger(__name__)
+
+
+@log_call
 def align_mz_across_samples(
     mz_arrays: list[np.ndarray],
     sample_names: list[str] | None = None,

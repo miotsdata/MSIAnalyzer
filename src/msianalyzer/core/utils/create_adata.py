@@ -2,8 +2,6 @@ import logging
 import os
 import sqlite3
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from logging.handlers import QueueHandler, QueueListener
-from multiprocessing import Manager
 from pathlib import Path
 from uuid import UUID
 
@@ -13,29 +11,12 @@ import pandas as pd
 from scipy.sparse import csr_matrix
 
 from msianalyzer.core.parser import blob_to_array
+from msianalyzer.core.utils.logging_utils import log_call, worker_logging
 
 logger = logging.getLogger(__name__)
 
 
-def _worker_init(log_queue) -> None:
-    """Configure logging inside a worker process to forward records to the main process.
-
-    Runs once per worker at pool startup (via ``ProcessPoolExecutor``'s
-    ``initializer``). Each worker process has its own independent logging
-    state, so this attaches a single `QueueHandler` to the worker's root
-    logger, funneling every log record back to the main process instead of
-    trying to write to files/console directly from the worker.
-
-    Args:
-        log_queue: Shared multiprocessing queue that log records are pushed
-            onto. Consumed in the main process by a `QueueListener`.
-    """
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.addHandler(QueueHandler(log_queue))
-    root.setLevel(logging.DEBUG)
-
-
+@log_call(source="db_path")
 def create_spatial_adata(
     db_path: str | Path,
     target_mz_set: set[float] | list[float] | np.ndarray,
@@ -161,15 +142,10 @@ def create_spatial_adata(
     # a QueueListener in this (main) process consumes them and re-emits
     # through the handlers already attached to the root logger here, so
     # worker logs land in the same file/console with the same formatting.
-    log_queue = Manager().Queue(-1)
-    root_handlers = logging.getLogger().handlers
-    listener = QueueListener(log_queue, *root_handlers, respect_handler_level=True)
-    listener.start()
-
-    try:
+    with worker_logging() as (log_queue, initializer):
         with ProcessPoolExecutor(
             max_workers=n_workers,
-            initializer=_worker_init,
+            initializer=initializer,
             initargs=(log_queue,),
         ) as executor:
             futures = [
@@ -188,8 +164,6 @@ def create_spatial_adata(
                 matrix_pixel_ids.extend(pix_ids)
                 matrix_cols.extend(coo_cols)
                 matrix_vals.extend(coo_vals)
-    finally:
-        listener.stop()
 
     logger.debug(
         "Finished multiprocessing. Assembling object.",
@@ -270,6 +244,7 @@ def create_spatial_adata(
     return ad_obj
 
 
+@log_call
 def process_spectrum_batch(
     scans_data: list[tuple], target_mzs: np.ndarray, integration_ppm: float = 5.0
 ) -> tuple[list[dict], list[int | str], list[int], list[float]]:
