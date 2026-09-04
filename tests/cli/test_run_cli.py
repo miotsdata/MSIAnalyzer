@@ -1,6 +1,9 @@
 import argparse
+import sys
 from pathlib import Path
 import pytest
+
+from msianalyzer.cli import build_parser, main
 
 # Adjust the import path to match where _add_run_parser and run_command are defined
 from msianalyzer.cli.parse_args.run import _add_run_parser, run_command
@@ -46,6 +49,33 @@ def test_add_run_parser_custom_args(tmp_path):
     assert args.out_dir == out_dir_path
     assert isinstance(args.config, Path)
     assert isinstance(args.out_dir, Path)
+
+
+def test_add_run_parser_short_flags(tmp_path):
+    """`-c` and `-o` are accepted as short aliases for --config / --out-dir."""
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="subcommand")
+    _add_run_parser(subparsers)
+
+    args = parser.parse_args([
+        "run",
+        "-c", str(tmp_path / "c.toml"),
+        "-o", str(tmp_path / "out"),
+    ])
+
+    assert args.config == tmp_path / "c.toml"
+    assert args.out_dir == tmp_path / "out"
+    assert args.func == run_command
+
+
+def test_build_parser_registers_run_command(tmp_path):
+    """The top-level parser exposes `run` and routes it to run_command."""
+    args = build_parser().parse_args(["run", "-c", str(tmp_path / "c.yaml")])
+
+    assert args.command == "run"
+    assert args.config == tmp_path / "c.yaml"
+    assert args.out_dir is None
+    assert args.func == run_command
 
 
 # ==============================================================================
@@ -94,5 +124,36 @@ def test_run_command_with_out_dir_override(mocker, tmp_path):
     # 4. Assertions
     mock_config_load.assert_called_once_with(None)
     assert mock_config.io.out_dir == override_dir  # Successfully overridden
+    mock_run_cls.assert_called_once()
+    mock_run_instance.start.assert_called_once_with(config=mock_config)
+
+
+# ==============================================================================
+# 3. Integration: full CLI via main()
+# ==============================================================================
+
+
+def test_full_cli_run_command_execution(mocker, tmp_path, monkeypatch):
+    """Simulates 'msianalyzer run -c ... -o ...' through main()."""
+    mock_config = mocker.MagicMock()
+    mock_config.io.out_dir = tmp_path / "config_out"
+    mock_config_load = mocker.patch(
+        f"{MODULE_PATH}.Config.load", return_value=mock_config
+    )
+    mock_run_instance = mocker.MagicMock()
+    mock_run_cls = mocker.patch(f"{MODULE_PATH}.Run", return_value=mock_run_instance)
+
+    config_path = tmp_path / "pipeline.yaml"
+    override_dir = tmp_path / "cli_out"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["msianalyzer", "run", "-c", str(config_path), "-o", str(override_dir)],
+    )
+
+    main()
+
+    mock_config_load.assert_called_once_with(config_path)
+    assert mock_config.io.out_dir == override_dir
     mock_run_cls.assert_called_once()
     mock_run_instance.start.assert_called_once_with(config=mock_config)

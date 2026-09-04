@@ -33,10 +33,11 @@ def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
     )
 
     run.add_argument(
+        "-o",
         "--out-dir",
         type=Path,
         default=None,
-        help="Output directory.",
+        help="Output directory; overrides io.out_dir from the config file.",
     )
 
     run.set_defaults(func=run_command)
