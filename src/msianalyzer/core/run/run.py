@@ -90,21 +90,29 @@ class Run:
     def to_dict(self) -> dict[str, Any]:
         """Serialise the run to a plain, YAML-friendly dict.
 
-        `datetime` values are stringified and list items exposing `to_dict`
-        are expanded.
+        `datetime` values are stringified, enums become their name, and
+        nested objects exposing `to_dict` (e.g. the `Config`) are expanded.
+        The back-reference to the owning `project` is omitted — the run is
+        stored *inside* the project file.
 
         Returns:
             A dict representation of the run.
         """
-        d = {}
+        d: dict[str, Any] = {}
         for key, value in vars(self).items():
+            if key == "project":
+                continue
             if isinstance(value, datetime.datetime):
                 d[key] = str(value)
+            elif isinstance(value, Enum):
+                d[key] = value.name
             elif isinstance(value, list):
                 d[key] = [
                     item.to_dict() if hasattr(item, "to_dict") else item
                     for item in value
                 ]
+            elif hasattr(value, "to_dict"):
+                d[key] = value.to_dict()
             else:
                 d[key] = value
         return d

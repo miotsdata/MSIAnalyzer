@@ -171,6 +171,8 @@ def test_run_to_dict_conversions():
     run = Run("test_config.yml")
     run.start_date = datetime(2026, 1, 1, 12, 0, 0)
     run.end_date = datetime(2026, 1, 1, 12, 30, 0)
+    run.config = DummyObjectWithToDict()
+    run.project = object()  # back-reference must be dropped
 
     run.custom_list = [DummyObjectWithToDict(), "simple_string", 42]
 
@@ -179,8 +181,15 @@ def test_run_to_dict_conversions():
     assert d["id"] == run.id
     assert d["start_date"] == "2026-01-01 12:00:00"
     assert d["end_date"] == "2026-01-01 12:30:00"
-    assert d["status"] == RunStatus.RUNNING
+    # enum -> name, and the whole thing is YAML-safe
+    assert d["status"] == "RUNNING"
+    assert d["config"] == {"key": "value"}
+    assert "project" not in d
     assert d["custom_list"] == [{"key": "value"}, "simple_string", 42]
+
+    import yaml
+
+    yaml.safe_dump(d)  # must not raise
 
 
 # ==============================================================================
