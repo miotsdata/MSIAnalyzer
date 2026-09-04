@@ -485,6 +485,7 @@ def persist_grouping(
                 ),
                 table="ms2_associations",
                 logger=logger,
+                source=db_path,
             )
             assoc_id = cur.lastrowid
             if a.window_features:
@@ -506,6 +507,7 @@ def persist_grouping(
                     ],
                     table="ms2_window_features",
                     logger=logger,
+                    source=db_path,
                 )
 
         safe_executemany(
@@ -529,6 +531,7 @@ def persist_grouping(
             ],
             table="feature_ms2_summary",
             logger=logger,
+            source=db_path,
         )
         con.commit()
 

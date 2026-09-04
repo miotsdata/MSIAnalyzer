@@ -675,6 +675,7 @@ def persist_annotations(
                 ],
                 table="ms2_annotations",
                 logger=logger,
+                source=db_path,
             )
         con.commit()
 
@@ -703,6 +704,7 @@ def _register_library(
                 (name, n_spectra, n_compounds, command_id, row[0]),
                 table="annotation_libraries",
                 logger=logger,
+                source=db_path,
             )
             con.commit()
             return int(row[0])
@@ -713,6 +715,7 @@ def _register_library(
             (path, name, n_spectra, n_compounds, command_id),
             table="annotation_libraries",
             logger=logger,
+            source=db_path,
         )
         con.commit()
         return int(cur.lastrowid)

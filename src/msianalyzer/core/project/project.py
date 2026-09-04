@@ -127,6 +127,17 @@ class Project:
 
         project = cls(name=data["name"])
 
+        # Restore identity from the file. `__init__` mints a fresh uuid/date;
+        # keeping those would give every load a new project id, which breaks
+        # the raw-DB command cache (run_id == project.uuid) and makes
+        # re-runs re-parse / re-map pixels.
+        project.uuid = str(data["uuid"])
+        date = data["date"]
+        project.date = (
+            datetime.datetime.fromisoformat(date) if isinstance(date, str) else date
+        )
+        project.runs = dict(data.get("runs") or {})
+
         return project
 
 

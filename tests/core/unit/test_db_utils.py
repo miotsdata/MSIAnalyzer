@@ -36,12 +36,26 @@ def test_safe_execute_logs_params_and_reraises(con, caplog):
         with pytest.raises(sqlite3.IntegrityError):
             safe_execute(
                 con, "INSERT INTO t (id, v) VALUES (?, ?)", (1, "b"),
-                table="t", logger=LOGGER,
+                table="t", logger=LOGGER, source="/tmp/x.db",
             )
     assert len(caplog.records) == 1
-    msg = caplog.records[0].message
-    assert "DB write failed on t" in msg
-    assert "(1, 'b')" in msg
+    rec = caplog.records[0]
+    assert "DB write failed on t" in rec.message
+    assert "(1, 'b')" in rec.message
+    assert rec.source_file == "/tmp/x.db"
+
+
+def test_safe_execute_reports_no_bound_params_clearly(con, caplog):
+    con.execute("CREATE TABLE u (id INTEGER PRIMARY KEY)")
+    con.execute("INSERT INTO u (id) VALUES (1)")
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(sqlite3.IntegrityError):
+            safe_execute(
+                con,
+                "INSERT INTO u (id) SELECT id FROM u",  # collides, no params
+                table="u", logger=LOGGER,
+            )
+    assert "no bound parameters" in caplog.records[0].message.lower()
 
 
 def test_safe_executemany_ok_inserts_all_and_is_quiet(con, caplog):

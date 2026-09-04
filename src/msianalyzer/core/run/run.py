@@ -451,6 +451,11 @@ class Run:
         raw_db_paths = config.io.raw_db_paths()
         for p in raw_db_paths:
             p.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "run %s: raw databases -> %s",
+            analysis_id,
+            ", ".join(str(p) for p in raw_db_paths),
+        )
 
         sample_ids = [
             analysis_db.register_sample(
@@ -475,21 +480,29 @@ class Run:
             len(config.io.mzml_paths),
             config.h5ad.n_workers or "os.cpu_count()",
         )
-        with worker_logging() as (log_queue, initializer):
-            with ProcessPoolExecutor(
-                max_workers=config.h5ad.n_workers,
-                initializer=initializer,
-                initargs=(log_queue,),
-            ) as executor:
-                results = list(
-                    executor.map(
-                        worker,
-                        config.io.mzml_paths,
-                        config.io.xml_paths,
-                        sample_ids,
-                        raw_db_paths,
+        try:
+            with worker_logging() as (log_queue, initializer):
+                with ProcessPoolExecutor(
+                    max_workers=config.h5ad.n_workers,
+                    initializer=initializer,
+                    initargs=(log_queue,),
+                ) as executor:
+                    results = list(
+                        executor.map(
+                            worker,
+                            config.io.mzml_paths,
+                            config.io.xml_paths,
+                            sample_ids,
+                            raw_db_paths,
+                        )
                     )
-                )
+        except Exception:
+            logger.error(
+                "run %s: a sample failed to process — aborting the run "
+                "(later stages will not run)",
+                analysis_id,
+            )
+            raise
 
         out_db_paths = [r.out_db_path for r in results]
         all_peaks_mzs = [r.peaks_mzs for r in results]

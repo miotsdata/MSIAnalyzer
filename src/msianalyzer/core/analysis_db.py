@@ -318,6 +318,7 @@ def register_sample(
             (name, raw_db_path, polarity),
             table="samples",
             logger=logger,
+            source=db_path,
         )
         con.commit()
         return int(cur.lastrowid)
@@ -363,6 +364,7 @@ def log_command(
             ),
             table="commands",
             logger=logger,
+            source=db_path,
         )
         con.commit()
         return int(cur.lastrowid)
@@ -409,6 +411,7 @@ def write_metadata(db_path: Path | str, rows: dict[str, str]) -> None:
             [(k, str(v)) for k, v in rows.items()],
             table="metadata",
             logger=logger,
+            source=db_path,
         )
         con.commit()
 
@@ -463,6 +466,7 @@ def save_features(
             records,
             table="features",
             logger=logger,
+            source=db_path,
         )
         con.commit()
 

@@ -63,15 +63,24 @@ def test_project_to_dict():
 
 
 def test_project_export_and_load(tmp_path: Path):
-    """Test exporting to YAML and loading it back."""
+    """Round-trip: name, uuid, date and runs all survive export + load.
+
+    The uuid in particular must be preserved — it is used as the raw-DB
+    command cache key (run_id), so a fresh id on every load would defeat
+    parse / pixel-mapping caching.
+    """
     target_file = tmp_path / "my_project.yml"
     p = Project("alpha")
+    p.runs = {"run-1": {"id": "run-1", "status": "COMPLETED"}}
     p.export(target_file)
 
     assert target_file.exists()
 
     loaded_p = Project.load_from_yaml(target_file)
     assert loaded_p.name == "alpha"
+    assert loaded_p.uuid == p.uuid
+    assert loaded_p.date == p.date
+    assert loaded_p.runs == p.runs
 
 
 def test_project_load_non_dict_yaml(tmp_path: Path):

@@ -136,6 +136,7 @@ def save_aggregated_spectra(
             (run_id, sample_id, command_id, mzs_blob, intensities_blob),
             table="aggregated_spectra",
             logger=logger,
+            source=analysis_db_path,
         )
         conn.commit()
 

@@ -896,6 +896,7 @@ def log_command(
             ),
             table="commands",
             logger=logger,
+            source=db_path,
         )
         con.commit()
         command_id = cur.lastrowid

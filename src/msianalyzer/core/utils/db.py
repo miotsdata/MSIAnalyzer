@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from pathlib import Path
 from typing import Iterable, Sequence
 
 __all__ = ["safe_execute", "safe_executemany"]
@@ -24,6 +25,17 @@ def _clip(text: str, limit: int = _MAX_PARAMS_REPR) -> str:
     return text if len(text) <= limit else text[:limit] + " …(truncated)"
 
 
+def _params_repr(params: Sequence) -> str:
+    params = tuple(params)
+    if not params:
+        return "(none — statement takes no bound parameters, e.g. INSERT … SELECT)"
+    return _clip(repr(params))
+
+
+def _extra(source: str | Path | None) -> dict | None:
+    return {"source_file": str(source)} if source else None
+
+
 def safe_execute(
     con: sqlite3.Connection,
     sql: str,
@@ -31,8 +43,14 @@ def safe_execute(
     *,
     table: str,
     logger: logging.Logger,
+    source: str | Path | None = None,
 ) -> sqlite3.Cursor:
-    """``con.execute(sql, params)`` — logs params + re-raises on ``sqlite3.Error``."""
+    """``con.execute(sql, params)`` — logs params + re-raises on ``sqlite3.Error``.
+
+    Args:
+        source: Optional path (usually the DB file) put on the error
+            record's ``source_file`` so the log's source column shows it.
+    """
     try:
         return con.execute(sql, params)
     except sqlite3.Error as exc:
@@ -41,7 +59,8 @@ def safe_execute(
             table,
             exc,
             _summarize_sql(sql),
-            _clip(repr(tuple(params))),
+            _params_repr(params),
+            extra=_extra(source),
         )
         raise
 
@@ -53,6 +72,7 @@ def safe_executemany(
     *,
     table: str,
     logger: logging.Logger,
+    source: str | Path | None = None,
 ) -> None:
     """``con.executemany(sql, rows)`` — on failure, pinpoint and log the bad row.
 
@@ -60,6 +80,10 @@ def safe_executemany(
     rows behind; it is then replayed one row at a time to name the first
     offending row (and its index) in the log before the original exception
     is re-raised.
+
+    Args:
+        source: Optional path (usually the DB file) put on the error
+            record's ``source_file``.
     """
     rows = list(rows)
     con.execute("SAVEPOINT _safe_em")
@@ -91,6 +115,7 @@ def safe_executemany(
                 offending_index,
                 len(rows),
                 _clip(repr(tuple(offending_row))),
+                extra=_extra(source),
             )
         else:
             logger.error(
@@ -100,5 +125,6 @@ def safe_executemany(
                 exc,
                 _summarize_sql(sql),
                 len(rows),
+                extra=_extra(source),
             )
         raise

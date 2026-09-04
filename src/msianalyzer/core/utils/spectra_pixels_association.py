@@ -73,6 +73,12 @@ def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
             CREATE INDEX IF NOT EXISTS idx_ms1_scans_rt ON ms1_scans(rt);
         """)
 
+        # 1b. These two tables are fully derived from df_pixels + ms1_scans.rt,
+        # so a re-run rebuilds them from scratch — clear first, otherwise the
+        # junction insert below hits the (pixel_id, scan_id) UNIQUE constraint.
+        cursor.execute("DELETE FROM pixel_ms1_scans")
+        cursor.execute("DELETE FROM spatial_pixels")
+
         # 2. Bulk insert pixels from df_pixels
         safe_executemany(
             conn,
@@ -83,6 +89,7 @@ def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
             pixel_tuples,
             table="spatial_pixels",
             logger=logger,
+            source=db_path,
         )
 
         # 3. Fast SQL range-based mapping into the junction table
@@ -99,6 +106,7 @@ def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
         """,
             table="pixel_ms1_scans",
             logger=logger,
+            source=db_path,
         )
 
         conn.commit()
