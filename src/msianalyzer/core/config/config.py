@@ -213,6 +213,59 @@ class GroupMs2Config:
 
 
 @dataclass
+class AnnotateConfig:
+    """Parameters for annotating MS2 scans against spectral libraries.
+
+    Stage B of annotation (`core.annotation.annotate`): every MS2 scan that
+    the grouper snapped to a feature is compared against library spectra
+    whose precursor m/z is near that feature's m/z, scored with a
+    coverage-aware reverse dot product, and every candidate sharing at
+    least `min_matched_peaks` fragments is stored with its rank.
+
+    Leaving `library_path` empty (`None`) disables the whole step.
+
+    Attributes:
+        library_path: Path to a libviz library database. When None/empty no
+            annotation is performed.
+        noise_threshold: Fraction in `[0, 1]`. After both spectra are
+            max-normalised to 1, peaks below this fraction of the base peak
+            are dropped (empirical and library alike).
+        candidate_ppm: PPM tolerance for pulling library candidates — a
+            library spectrum is a candidate when its precursor m/z is within
+            this of the master feature m/z.
+        fragment_ppm: PPM tolerance for aligning individual fragment peaks
+            during scoring.
+        mz_power: MSDial-style m/z weighting exponent in the dot product.
+        int_power: MSDial-style intensity weighting exponent.
+        min_matched_peaks: A candidate is stored only when it shares at
+            least this many fragment peaks with the filtered empirical
+            spectrum.
+        annotate_chimeric: Score scans whose isolation window held more than
+            one feature (against their primary feature). They are always
+            flagged `is_chimeric`; set False to skip them entirely.
+        store_filtered_spectra: Persist the noise-filtered, max-normalised
+            m/z + intensity of both the empirical scan and the matched
+            library spectrum on every annotation row, for later mirror
+            plots. Set False to keep the table small.
+        batch_size: Number of features handed to each worker process.
+        n_workers: Parallel worker count; defaults to `os.cpu_count()` when
+            None.
+    """
+
+    library_path: str | None = None
+    noise_threshold: float = 0.01
+    candidate_ppm: float = 10.0
+    fragment_ppm: float = 10.0
+    mz_power: float = 2.0
+    int_power: float = 0.5
+    min_matched_peaks: int = 1
+    annotate_chimeric: bool = True
+    store_filtered_spectra: bool = True
+    batch_size: int = 200
+    n_workers: int | None = None
+
+
+@dataclass
 class H5adConfig:
     """Parameters for assembling the spatial `AnnData` (.h5ad) object.
 
@@ -252,6 +305,7 @@ GROUPS: dict[str, type] = {
     "peak": PeakConfig,
     "align": AlignMzSamples,
     "group_ms2": GroupMs2Config,
+    "annotate": AnnotateConfig,
     "h5ad": H5adConfig,
     "analysis": AnalysisConfig,
 }
@@ -264,6 +318,7 @@ GROUP_TITLES: dict[str, str] = {
     "peak": "peak threshold",
     "align": "align all mzs",
     "group_ms2": "group MS2",
+    "annotate": "annotate MS2",
     "h5ad": "create h5ad",
     "analysis": "analysis database",
 }
@@ -273,9 +328,9 @@ class Config:
     """Full configuration for a processing run, grouped by pipeline stage.
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
-    `align`, `group_ms2`, `h5ad`, `analysis`) and provides (de)serialization
-    to and from YAML and TOML. Only `io` is required; the remaining groups
-    fall back to their dataclass defaults.
+    `align`, `group_ms2`, `annotate`, `h5ad`, `analysis`) and provides
+    (de)serialization to and from YAML and TOML. Only `io` is required; the
+    remaining groups fall back to their dataclass defaults.
 
     Attributes:
         version: Config schema version; checked on load.
@@ -285,11 +340,12 @@ class Config:
         peak: Peak filtering parameters.
         align: Cross-sample m/z alignment parameters.
         group_ms2: MS2-to-feature association parameters.
+        annotate: MS2 spectral-library annotation parameters.
         h5ad: Spatial `AnnData` assembly parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 4
+    version: int = 5
 
     def __init__(
         self,
@@ -299,6 +355,7 @@ class Config:
         peak: PeakConfig | None = None,
         align: AlignMzSamples | None = None,
         group_ms2: GroupMs2Config | None = None,
+        annotate: AnnotateConfig | None = None,
         h5ad: H5adConfig | None = None,
         analysis: AnalysisConfig | None = None,
     ) -> None:
@@ -308,6 +365,7 @@ class Config:
         self.peak: PeakConfig = peak or PeakConfig()
         self.align: AlignMzSamples = align or AlignMzSamples()
         self.group_ms2: GroupMs2Config = group_ms2 or GroupMs2Config()
+        self.annotate: AnnotateConfig = annotate or AnnotateConfig()
         self.h5ad: H5adConfig = h5ad or H5adConfig()
         self.analysis: AnalysisConfig = analysis or AnalysisConfig()
 

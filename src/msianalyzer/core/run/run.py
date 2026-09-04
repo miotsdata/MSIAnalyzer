@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from msianalyzer.core import analysis_db
+from msianalyzer.core.annotation.annotate import run_annotation
 from msianalyzer.core.annotation.group_ms2 import run_grouper
 from msianalyzer.core.config import Config
 from msianalyzer.core.parser import MzmlParser, log_command, parse_raster_xml
@@ -515,6 +516,33 @@ class Run:
             )
         else:
             logger.debug("Already run group_ms2")
+
+        # --- ANNOTATE MS2 AGAINST SPECTRAL LIBRARY (analysis DB) ---
+        if config.annotate.library_path:
+            if not analysis_db.is_command_already_run(
+                "annotate_ms2", analysis_id, adb_path
+            ):
+                command_id = analysis_db.log_command(
+                    adb_path,
+                    command_name="annotate_ms2",
+                    arguments={**vars(config.annotate)},
+                    run_id=analysis_id,
+                )
+                annotation = run_annotation(
+                    adb_path, config.annotate, command_id=command_id
+                )
+                logger.info(
+                    "Annotated %d MS2 scans over %d features (%d candidate rows)",
+                    annotation.n_scans_annotated,
+                    annotation.n_features_annotated,
+                    len(annotation.rows),
+                )
+            else:
+                logger.debug("Already run annotate_ms2")
+        else:
+            logger.info(
+                "No annotation library configured; skipping MS2 annotation"
+            )
 
         # --- SPATIAL AnnData PER SAMPLE ---
         for db_path in out_db_paths:

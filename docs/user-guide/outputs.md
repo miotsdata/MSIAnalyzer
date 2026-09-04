@@ -39,6 +39,12 @@ Key tables (full schema in the
 - **`feature_ms2_summary`** — one row per feature: how many MS2 scans hit it,
   across how many samples, and how many were `precursor_only` / single-peak /
   chimeric.
+- **`annotation_libraries`** — one row per spectral library used to annotate
+  (`path`, `name`, spectrum / compound counts).
+- **`ms2_annotations`** — one row per (MS2 scan, library candidate) comparison:
+  the compound, all sub-scores, `rank` within the scan, `rank_feature` across the
+  feature, and (unless disabled) the filtered empirical + library spectra for
+  mirror plots. Only written when `annotate.library_path` is set.
 - **`aggregated_spectra`** — averaged / centroided / filtered MS1 spectra,
   attributed per sample and per `commands` row.
 - **`commands`** — the provenance log: one row per step with its JSON arguments.
@@ -59,5 +65,6 @@ adata.obs        # pixel x / y coordinates
   the same samples reuses the parsed databases and skips straight to averaging.
 - Re-running the grouper replaces `ms2_associations`, `ms2_window_features` and
   `feature_ms2_summary`; `features` and `samples` are untouched.
+- Re-running annotation replaces that library's `ms2_annotations` rows.
 - A stage whose output file or `commands` row already exists is skipped; delete
   the output to force recomputation.

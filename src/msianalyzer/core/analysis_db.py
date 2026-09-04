@@ -18,6 +18,8 @@ features             aligned cross-sample master m/z list
 ms2_associations     one row per MS2 scan snapped to a feature (grouper)
 ms2_window_features  features inside each scan's isolation window
 feature_ms2_summary  per-feature MS2 coverage roll-up
+annotation_libraries one row per spectral library used to annotate
+ms2_annotations      one row per (MS2 scan, library candidate) comparison
 """
 
 from __future__ import annotations
@@ -193,6 +195,76 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             FOREIGN KEY (feature_id) REFERENCES features(feature_id)
         )
     """)
+
+    # --- MS2 -> library annotation (Stage B of annotation) ---------------
+    # Written by core.annotation.annotate. One row per spectral library
+    # actually used; a re-run replaces the ms2_annotations rows.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS annotation_libraries (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            path         TEXT    NOT NULL UNIQUE,
+            name         TEXT,
+            n_spectra    INTEGER,
+            n_compounds  INTEGER,
+            command_id   INTEGER,
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    # One row per (MS2 scan, library candidate) comparison that shared at
+    # least min_matched_peaks fragments. `rank` orders candidates within a
+    # scan (1 = best); `rank_feature` orders scans within a feature by their
+    # best hit. The four *_filtered_* blobs are the noise-filtered,
+    # max-normalised spectra actually scored (for mirror plots); NULL when
+    # store_filtered_spectra was off.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ms2_annotations (
+            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            sample_id              INTEGER,
+            scan_id                INTEGER NOT NULL,
+            feature_id             INTEGER,
+            library_id             INTEGER NOT NULL,
+            library_spectrum_id    INTEGER NOT NULL,
+            compound_id            INTEGER,
+            compound_name          TEXT,
+            compound_formula       TEXT,
+            inchikey               TEXT,
+            score                  REAL    NOT NULL,
+            dot_product_score      REAL    NOT NULL,
+            lib_coverage           REAL    NOT NULL,
+            emp_coverage           REAL    NOT NULL,
+            coverage_score         REAL    NOT NULL,
+            n_matched_peaks        INTEGER NOT NULL,
+            n_lib_peaks            INTEGER NOT NULL,
+            n_emp_peaks_raw        INTEGER NOT NULL,
+            n_emp_peaks_filtered   INTEGER NOT NULL,
+            rank                   INTEGER NOT NULL,
+            rank_feature           INTEGER,
+            is_chimeric            INTEGER NOT NULL DEFAULT 0,
+            n_features_in_window   INTEGER,
+            precursor_only         INTEGER NOT NULL DEFAULT 0,
+            emp_filtered_mz        BLOB,
+            emp_filtered_intensity BLOB,
+            lib_filtered_mz        BLOB,
+            lib_filtered_intensity BLOB,
+            command_id             INTEGER,
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id),
+            FOREIGN KEY (library_id) REFERENCES annotation_libraries(id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ann_scan "
+        "ON ms2_annotations(sample_id, scan_id)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ann_feature ON ms2_annotations(feature_id)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ann_score ON ms2_annotations(score)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ann_inchikey ON ms2_annotations(inchikey)"
+    )
 
 
 def init_analysis_db(db_path: Path | str) -> sqlite3.Connection:

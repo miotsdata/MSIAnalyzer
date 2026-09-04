@@ -1,9 +1,9 @@
 # MS2 annotation
 
-Annotation has two stages. **Stage A — association** (built) ties every MS2 scan
-to a feature. **Stage B — library annotation** (planned) scores the fragment
-spectra against reference libraries. This page covers Stage A: what the grouper
-does and how to read its output.
+Annotation has two stages. **Stage A — association** ties every MS2 scan to a
+feature. **Stage B — library annotation** scores the fragment spectra against
+reference libraries. This page covers both: what each step does and how to read
+its output.
 
 ## What the grouper does
 
@@ -83,9 +83,74 @@ feature is still stored, with `feature_id` NULL — useful for spotting features
 that peak-picking or alignment missed. Set it to `false` to keep only MS2 tied to
 an imageable feature.
 
-## Chimeric scans — current policy
+## Chimeric scans — policy
 
 A chimeric scan (`n_features_in_window > 1`) is associated **only to its nearest
 feature**; the alternatives are still recorded in `ms2_window_features` with
-their ppm differences. Duplicating a chimeric scan into every co-isolated feature
-(conservative annotation transfer) is left for Stage B to decide.
+their ppm differences. Stage B scores it against that primary feature and marks
+every result row `is_chimeric = 1` (see below).
+
+---
+
+# Stage B — library annotation
+
+Once every scan is snapped to a feature, `core.annotation.annotate` compares the
+fragment spectra to one or more reference libraries.
+
+## What the annotator does
+
+The unit of work is **one feature**:
+
+1. **Gather candidates once per feature.** Pull every library spectrum whose
+   precursor m/z is within `annotate.candidate_ppm` of the feature m/z. The same
+   candidate set is reused for all of that feature's scans (features are
+   processed in parallel, `annotate.batch_size` per worker).
+2. **Score each scan against each candidate.** Both spectra are max-normalised to
+   1; peaks below `annotate.noise_threshold` are dropped from *both*; fragments
+   are aligned within `annotate.fragment_ppm`; a weighted reverse dot product
+   (`annotate.mz_power` / `annotate.int_power`) plus a coverage term gives
+   `score = dot_product_score × coverage_score` in `[0, 1]`.
+3. **Keep every candidate** that shared at least `annotate.min_matched_peaks`
+   fragment peaks, each stored with a `rank` within its scan.
+4. **Rank scans within a feature** (`rank_feature`) by their best hit, so you can
+   pick the single most convincing MS2 per feature.
+
+Leaving `annotate.library_path` empty disables the whole stage.
+
+## Tables
+
+### `annotation_libraries` — one row per library used
+
+`path`, `name`, `n_spectra`, `n_compounds`, `command_id`.
+
+### `ms2_annotations` — one row per (scan, library candidate)
+
+| column | meaning |
+|---|---|
+| `sample_id`, `scan_id`, `feature_id` | which scan, and the feature it was scored against |
+| `library_id`, `library_spectrum_id` | the matched library entry |
+| `compound_name`, `compound_formula`, `inchikey` | the candidate compound |
+| `score` | `dot_product_score × coverage_score`, the ranking value |
+| `dot_product_score` | weighted reverse dot product alone |
+| `lib_coverage`, `emp_coverage`, `coverage_score` | fraction of each side matched, and their geometric mean |
+| `n_matched_peaks`, `n_lib_peaks`, `n_emp_peaks_raw`, `n_emp_peaks_filtered` | peak counts |
+| `rank` | 1 = best candidate for this scan |
+| `rank_feature` | 1 = this scan is the best-scoring MS2 on its feature |
+| `is_chimeric`, `n_features_in_window` | carried through from the grouper |
+| `precursor_only` | carried through — fragmentation looked to have failed |
+| `emp_filtered_mz` / `emp_filtered_intensity` | the noise-filtered, normalised **empirical** spectrum that was scored |
+| `lib_filtered_mz` / `lib_filtered_intensity` | the same for the **library** spectrum |
+
+The four `*_filtered_*` columns are zlib-compressed float32 blobs (decode with
+`msianalyzer.core.parser.mzml_parser.blob_to_array`). They exist so a mirror plot
+can be drawn straight from a result row without re-running the matcher. Set
+`annotate.store_filtered_spectra = false` to write them NULL and keep the table
+small.
+
+## Chimeric and precursor-only scans
+
+Chimeric scans are scored against their primary feature and flagged
+`is_chimeric = 1`; the coverage term already penalises mixed spectra, so
+downstream can down-weight or exclude them. Set `annotate.annotate_chimeric =
+false` to skip them entirely. `precursor_only` scans are annotated too (the flag
+rides along) — usually you will filter them out when reviewing hits.

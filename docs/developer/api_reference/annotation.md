@@ -1,8 +1,11 @@
 # annotation
 
-Stage A of MS2 annotation — the grouper. Narrative:
-[MS2 annotation](../../user-guide/ms2-annotation.md),
-[ADR 2](../adr/0002-ms2-feature-association-design.md).
+MS2 annotation — Stage A (the grouper) and Stage B (spectral-library
+matching). Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
+[ADR 2](../adr/0002-ms2-feature-association-design.md),
+[ADR 7](../adr/0007-library-annotation-design.md).
+
+## Stage A — `group_ms2`
 
 ::: msianalyzer.core.annotation.group_ms2
     options:
@@ -18,3 +21,29 @@ Stage A of MS2 annotation — the grouper. Narrative:
         - ppm_between
         - persist_grouping
         - run_grouper
+
+## Stage B — `spectral_match`
+
+::: msianalyzer.core.annotation.spectral_match
+    options:
+      members:
+        - MatchResult
+        - reverse_dot_product
+
+## Stage B — `annotate`
+
+::: msianalyzer.core.annotation.annotate
+    options:
+      members:
+        - Candidate
+        - LibraryInfo
+        - AnnotationRow
+        - AnnotationResult
+        - normalize_polarity
+        - score_scan_against_candidates
+        - rank_scan_rows
+        - assign_rank_feature
+        - annotate_feature
+        - load_library
+        - persist_annotations
+        - run_annotation

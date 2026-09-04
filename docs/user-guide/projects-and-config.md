@@ -24,6 +24,7 @@ io:
 ms1:      {bin_width: 0.0001, min_mz: 70.0, max_mz: 900.0}
 align:    {align_ppm: 5.0, mz_decimals: 4}
 group_ms2: {assoc_ppm: 10.0, include_unmatched: true}
+annotate: {library_path: null}   # set a path to enable Stage B
 ```
 
 Relative paths are resolved against `project_folder`.
@@ -87,6 +88,24 @@ Relative paths are resolved against `project_folder`.
 | `default_isolation_half_width` | `0.5` | isolation half-width (Da) assumed when a scan carries no isolation offsets |
 | `precursor_only_tic_frac` | `0.8` | a scan is flagged `precursor_only` when at least this fraction of its fragment TIC is within `precursor_only_mz_tol_da` of the precursor |
 | `precursor_only_mz_tol_da` | `2.0` | half-width (Da) of the "on the precursor" band for the `precursor_only` test |
+
+### `annotate` — MS2 spectral-library annotation
+
+Leave `library_path` empty (`null`) and the whole stage is skipped.
+
+| key | default | meaning |
+|---|---|---|
+| `library_path` | `null` | path to a libviz library database. Empty ⇒ no annotation. |
+| `noise_threshold` | `0.01` | after both spectra are normalised to 1, drop peaks below this fraction (empirical **and** library) |
+| `candidate_ppm` | `10.0` | a library spectrum is a candidate when its precursor m/z is within this of the feature m/z |
+| `fragment_ppm` | `10.0` | ppm tolerance for aligning individual fragment peaks while scoring |
+| `mz_power` | `2.0` | MSDial-style m/z weighting exponent in the dot product |
+| `int_power` | `0.5` | MSDial-style intensity weighting exponent |
+| `min_matched_peaks` | `1` | store a candidate only when it shares at least this many fragments |
+| `annotate_chimeric` | `true` | score chimeric scans (against their primary feature); they are always flagged. `false` skips them |
+| `store_filtered_spectra` | `true` | persist the filtered empirical + library spectra on every row (for mirror plots). `false` writes them NULL |
+| `batch_size` | `200` | features handed to each worker process |
+| `n_workers` | `null` | parallel workers; defaults to `os.cpu_count()` |
 
 ### `h5ad` — spatial AnnData assembly
 

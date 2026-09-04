@@ -190,6 +190,47 @@ One row per feature with MS2 coverage; rebuilt on every grouper run.
 | `n_chimeric` | INTEGER |
 | `median_n_peaks` | REAL |
 
+### `annotation_libraries`  (annotator)
+
+One row per spectral library used to annotate.
+
+| column | type | notes |
+|---|---|---|
+| `id` | INTEGER | PK |
+| `path` | TEXT | not null, unique |
+| `name` | TEXT | from the library metadata |
+| `n_spectra` / `n_compounds` | INTEGER | counts at annotation time |
+| `command_id` | INTEGER | FK → `commands` |
+
+### `ms2_annotations`  (annotator)
+
+One row per (MS2 scan, library candidate) comparison that shared at least
+`min_matched_peaks` fragments. Written only when `annotate.library_path` is set.
+
+| column | type | notes |
+|---|---|---|
+| `id` | INTEGER | PK |
+| `sample_id`, `scan_id` | INTEGER | the empirical scan |
+| `feature_id` | INTEGER | FK → `features` — the feature it was scored against |
+| `library_id` | INTEGER | FK → `annotation_libraries`, not null |
+| `library_spectrum_id` | INTEGER | not null |
+| `compound_id` / `compound_name` / `compound_formula` / `inchikey` | — | the candidate |
+| `score` | REAL | `dot_product_score × coverage_score`, not null |
+| `dot_product_score` | REAL | weighted reverse dot product, not null |
+| `lib_coverage` / `emp_coverage` / `coverage_score` | REAL | not null |
+| `n_matched_peaks` / `n_lib_peaks` / `n_emp_peaks_raw` / `n_emp_peaks_filtered` | INTEGER | not null |
+| `rank` | INTEGER | not null — 1 = best candidate for this scan |
+| `rank_feature` | INTEGER | 1 = best-scoring scan on this feature |
+| `is_chimeric` | INTEGER | 0/1, from the grouper |
+| `n_features_in_window` | INTEGER | from the grouper |
+| `precursor_only` | INTEGER | 0/1, from the grouper |
+| `emp_filtered_mz` / `emp_filtered_intensity` | BLOB | filtered, normalised empirical spectrum (zlib float32); NULL if `store_filtered_spectra` off |
+| `lib_filtered_mz` / `lib_filtered_intensity` | BLOB | same for the library spectrum |
+| `command_id` | INTEGER | FK → `commands` |
+
+Indexes: `idx_ann_scan (sample_id, scan_id)`, `idx_ann_feature (feature_id)`,
+`idx_ann_score (score)`, `idx_ann_inchikey (inchikey)`.
+
 ---
 
 ## Re-run semantics
@@ -198,4 +239,5 @@ One row per feature with MS2 coverage; rebuilt on every grouper run.
 |---|---|
 | re-run any stage | never rewrites a raw DB |
 | re-run the grouper | `DELETE` + repopulate `ms2_associations`, `ms2_window_features`, `feature_ms2_summary`; `features` / `samples` untouched |
+| re-run the annotator | `DELETE FROM ms2_annotations WHERE library_id = ?` then repopulate; `annotation_libraries` row is upserted |
 | re-run alignment | `DELETE FROM features` then repopulate |

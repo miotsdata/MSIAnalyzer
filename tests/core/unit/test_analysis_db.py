@@ -58,6 +58,8 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             "ms2_associations",
             "ms2_window_features",
             "feature_ms2_summary",
+            "annotation_libraries",
+            "ms2_annotations",
         } <= tables
         # commands table has the analysis-only sample_id column
         cmd_cols = {

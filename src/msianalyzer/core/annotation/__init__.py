@@ -2,7 +2,9 @@
 
 Stage A — :mod:`msianalyzer.core.annotation.group_ms2`: associate every MS2
 scan with a master feature from ``align_mz_across_samples`` (the "grouper").
-Stage B — annotation against spectral libraries — will live alongside it.
+Stage B — :mod:`msianalyzer.core.annotation.annotate`: score each associated
+scan against reference spectral libraries with a coverage-aware reverse dot
+product (:mod:`msianalyzer.core.annotation.spectral_match`).
 
 Both stages write only to the per-analysis database; the raw per-sample
 databases produced by the parser are never modified.

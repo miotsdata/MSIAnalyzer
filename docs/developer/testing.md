@@ -51,6 +51,9 @@ interesting ones. Planted cases are deterministic regardless of `seed`.
 
 Companion helpers: `materialize_ms2_db(path, mock)` / the `make_ms2_db` fixture
 write a mock batch into a real raw-schema SQLite DB, for testing `run_grouper`
+end-to-end. `build_mock_library(path, mock, case=...)` / the `make_library_db`
+fixture build a tiny real libviz library whose "true" compound is a planted
+scan's own fragment list (plus random decoys), for testing `run_annotation`
 end-to-end.
 
 ## Conventions

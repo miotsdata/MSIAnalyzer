@@ -61,6 +61,7 @@ nav:
           - 4 — Two-table association storage: developer/adr/0004-two-table-association-storage.md
           - 5 — Three ppm tolerances: developer/adr/0005-three-ppm-tolerances.md
           - 6 — Schema single source of truth: developer/adr/0006-schema-single-source-of-truth.md
+          - 7 — Library annotation design: developer/adr/0007-library-annotation-design.md
       - Testing: developer/testing.md
       - Logging: developer/logging.md
       - API reference:

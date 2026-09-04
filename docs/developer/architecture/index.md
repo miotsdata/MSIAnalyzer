@@ -42,6 +42,7 @@ default, overridable per sample via `io.db_paths`), never inside an analysis
 | filter | `filter_intensities_mad` / threshold | previous aggregated spectrum | analysis: `aggregated_spectra` |
 | align | `align_mz_across_samples` | per-sample filtered peaks | analysis: `features`; `aligned_mzs.csv` |
 | group MS2 | `run_grouper` | analysis `features`, `samples`; raw `ms2_scans` | analysis: `ms2_associations`, `ms2_window_features`, `feature_ms2_summary` |
+| annotate MS2 | `run_annotation` | analysis `features`, `ms2_associations`; raw `ms2_scans`; library DB | analysis: `annotation_libraries`, `ms2_annotations` |
 | AnnData | `create_spatial_adata` | raw `ms1_scans`, `pixel_ms1_scans`, `spatial_pixels`; feature m/z | `<sample>.h5ad` |
 
 ## Package layout
@@ -50,11 +51,12 @@ default, overridable per sample via `io.db_paths`), never inside an analysis
 msianalyzer/core/
   parser/        mzml_parser.py   xml_parser.py
   spectra/       average_spectra.py   mz_tools.py
-  annotation/    group_ms2.py           (Stage A; Stage B to come)
+  annotation/    group_ms2.py       (Stage A — association)
+                 spectral_match.py  reverse dot product + coverage
+                 annotate.py        (Stage B — library annotation)
   utils/         spectra_pixels_association.py   create_adata.py
                  logging_utils.py   errors.py
   analysis_db.py       analysis-DB schema + provenance helpers
-  spectral_matching.py reverse dot product (used by Stage B)
   config/        config.py
   project/       project.py
   plotting/      plotter.py
@@ -72,7 +74,8 @@ msianalyzer/core/
    `raw_db_path` — : parse + map pixels (raw DB) then average / centroid /
    filter (analysis DB), returning the filtered peak m/z.
 3. Back on the main process: align across samples → `features`; run the grouper;
-   build one `.h5ad` per sample.
+   run the annotator when `config.annotate.library_path` is set; build one
+   `.h5ad` per sample.
 
 Two identifiers flow through:
 

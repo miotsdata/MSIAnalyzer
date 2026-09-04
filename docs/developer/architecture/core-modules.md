@@ -60,8 +60,8 @@ Schema and provenance helpers for `analysis_<id>.db`. See the
 
 - `analysis_db_path(out_dir, run_id, override)` ,
   `init_analysis_db(path) -> Connection` , `create_analysis_schema(con)` — the
-  single source of truth for the analysis schema, **including the grouper
-  tables** ([ADR 6](../adr/0006-schema-single-source-of-truth.md)).
+  single source of truth for the analysis schema, **including the grouper and
+  annotator tables** ([ADR 6](../adr/0006-schema-single-source-of-truth.md)).
 - `register_sample`, `log_command`, `is_command_already_run`, `write_metadata`.
 - `attach_raw(con, raw_db_path, alias)` — `ATTACH DATABASE` for cross-DB reads.
 - `save_features` / `load_features` — round-trip the aligned frame to `features`.
@@ -81,11 +81,28 @@ Stage A of annotation: snap each MS2 scan to a feature. Detail in
   `run_grouper(analysis_db_path, *, assoc_ppm, align_ppm, include_unmatched, …)`
   — the orchestration entry point used by `run.py`.
 
-## `spectral_matching.py`
+## `annotation/spectral_match.py`
 
 - `reverse_dot_product(...) -> MatchResult` — MSDial-style coverage-aware reverse
-  dot product with ppm-tolerant peak alignment. Unused by the current pipeline;
-  the basis for Stage B (library annotation).
+  dot product with ppm-tolerant peak alignment. `MatchResult` carries the
+  noise-filtered, normalised spectra of **both** sides (`filtered_mz` /
+  `lib_filtered_mz` …) so the annotator can persist them for mirror plots. Also
+  used by `plotting/plotter.py` (`_align_peaks`).
+
+## `annotation/annotate.py`
+
+Stage B of annotation: score each associated MS2 scan against spectral libraries.
+Detail in [MS2 annotation](../../user-guide/ms2-annotation.md) and
+[ADR 7](../adr/0007-library-annotation-design.md).
+
+- Pure: `normalize_polarity`, `score_scan_against_candidates`, `rank_scan_rows`,
+  `assign_rank_feature`, `annotate_feature`.
+- Data classes: `Candidate`, `LibraryInfo`, `AnnotationRow`, `AnnotationResult`.
+- IO: `load_library(path)`, `persist_annotations(db_path, rows, library_id, …)`,
+  `run_annotation(analysis_db_path, config, *, command_id) -> AnnotationResult` —
+  the orchestration entry point used by `run.py`. The batch unit is one feature;
+  a worker loads the library once (`ProcessPoolExecutor` initializer) and
+  gathers candidates once per feature.
 
 ## `utils/create_adata.py`
 
@@ -97,7 +114,7 @@ Stage A of annotation: snap each MS2 scan to a feature. Detail in
 ## `config/config.py`
 
 - `Config` + one dataclass per stage; `GROUPS` / `GROUP_TITLES` drive
-  (de)serialisation, `__str__` and CLI wiring. `version = 4`.
+  (de)serialisation, `__str__` and CLI wiring. `version = 5`.
 - `create_config_file(...)` — write a defaulted config with the given paths.
 
 ## `project/project.py`

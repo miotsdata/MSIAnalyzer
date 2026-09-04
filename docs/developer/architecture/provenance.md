@@ -61,3 +61,11 @@ dependent rows).
 `group_ms2` `commands` check in `run_core`, a re-run is a no-op unless the row is
 removed; a forced re-run cleanly replaces the association without disturbing
 `features` or `samples`.
+
+## Annotator idempotence
+
+`run_annotation` upserts the `annotation_libraries` row (keyed on `path`) and
+`persist_annotations` `DELETE`s that library's `ms2_annotations` rows before
+inserting. The `annotate_ms2` `commands` check in `run_core` skips the step
+entirely once it has run; the whole step is also skipped whenever
+`config.annotate.library_path` is empty.

@@ -19,6 +19,7 @@ test and compare against ``mock.planted[<name>]``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ __all__ = [
     "Ms2GrouperMockData",
     "build_ms2_grouper_mock_data",
     "materialize_ms2_db",
+    "build_mock_library",
 ]
 
 
@@ -540,6 +542,80 @@ def materialize_ms2_db(db_path, mock: Ms2GrouperMockData, *, compressed: bool = 
 
 
 # ---------------------------------------------------------------------------
+# optional: a tiny libviz spectral library that "knows" one planted case
+# ---------------------------------------------------------------------------
+
+
+def build_mock_library(
+    db_path,
+    mock: Ms2GrouperMockData,
+    *,
+    case: str = "single",
+    n_decoys: int = 3,
+    jitter_ppm: float = 1.5,
+    seed: int = 0,
+):
+    """Write a small libviz library that contains the ``case`` scan's spectrum.
+
+    The "true" compound's fragment list is the planted scan's own
+    ``mz_array`` / ``intensity_array`` shifted by ``jitter_ppm`` and its
+    ``precursor_mz`` is the feature the grouper will snap that scan to
+    (``planted[case].expected_feature_mz``). ``n_decoys`` random spectra are
+    added at nearby precursor m/z so candidate gathering has something to
+    rank the true hit against.
+
+    Returns:
+        ``db_path`` (as passed in).
+    """
+    from libviz.core.library import Library
+
+    rng = np.random.default_rng(seed)
+    planted = mock.planted[case]
+    scan = mock.scan_by_id(planted.scan_id)
+    true_mz = np.asarray(scan["mz_array"], dtype=float) * (1.0 + jitter_ppm / 1e6)
+    true_int = np.asarray(scan["intensity_array"], dtype=float)
+    precursor = float(planted.expected_feature_mz)
+
+    lib = Library.create(Path(db_path), name=f"mock-{case}")
+    adduct_id = next(a["id"] for a in lib.get_adducts() if a["charge"] > 0)
+
+    lib.add_spectra(
+        compound_name="TrueCompound",
+        compound_formula="C10H15N5O10P2",
+        inchikey="AAAAAAAAAAAAAA-BBBBBBBBBB-N",
+        spectra_info={
+            "precursor_mz": precursor,
+            "polarity": "POSITIVE",
+            "collision_energy": float(scan["collision_energy"]),
+            "mz": true_mz,
+            "intensity": true_int,
+        },
+        adduct_id=adduct_id,
+    )
+
+    for k in range(n_decoys):
+        off_ppm = float(rng.uniform(-4.0, 4.0))
+        n_pk = int(rng.integers(8, 40))
+        d_mz = np.sort(rng.uniform(50.0, max(precursor - 1.0, 60.0), size=n_pk))
+        d_int = rng.uniform(1e2, 1e6, size=n_pk)
+        lib.add_spectra(
+            compound_name=f"Decoy{k}",
+            compound_formula="C6H12O6",
+            inchikey=f"DECOY{k:08d}AAAAA-CCCCCCCCCC-N",
+            spectra_info={
+                "precursor_mz": precursor * (1.0 + off_ppm / 1e6),
+                "polarity": "POSITIVE",
+                "collision_energy": float(scan["collision_energy"]),
+                "mz": d_mz,
+                "intensity": d_int,
+            },
+            adduct_id=adduct_id,
+        )
+
+    return db_path
+
+
+# ---------------------------------------------------------------------------
 # fixtures
 # ---------------------------------------------------------------------------
 
@@ -571,5 +647,20 @@ def make_ms2_db(tmp_path):
 
     def _make(mock: Ms2GrouperMockData, name: str = "mock_ms2.db"):
         return materialize_ms2_db(tmp_path / name, mock)
+
+    return _make
+
+
+@pytest.fixture
+def make_library_db(tmp_path):
+    """Factory fixture -> writes a mock libviz library under ``tmp_path``.
+
+    def test_x(ms2_grouper_mock_data, make_library_db):
+        mock = ms2_grouper_mock_data()
+        lib = make_library_db(mock, case="single")   # -> Path to <tmp>/mock_lib.db
+    """
+
+    def _make(mock: Ms2GrouperMockData, name: str = "mock_lib.db", **kwargs):
+        return build_mock_library(tmp_path / name, mock, **kwargs)
 
     return _make
