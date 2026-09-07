@@ -103,6 +103,21 @@ class MockAnnotateConfig:
 
 
 @dataclass
+class MockConsensusConfig:
+    enabled: bool = True
+    target_peaks: int = 10
+    neutral_purity: float = 0.5
+    min_purity: float | None = None
+
+
+@dataclass
+class MockReportConfig:
+    enabled: bool = True
+    overlap_top_n: int = 30
+    purity_cutoff: float = 0.8
+
+
+@dataclass
 class MockH5ADConfig:
     n_workers: int = 1
 
@@ -127,6 +142,8 @@ class DummyConfig:
         self.group_ms2 = MockGroupMs2Config()
         self.purity = MockPurityConfig()
         self.annotate = MockAnnotateConfig()
+        self.consensus = MockConsensusConfig()
+        self.report = MockReportConfig()
         self.h5ad = MockH5ADConfig()
         self.analysis = MockAnalysisConfig()
 
@@ -439,6 +456,13 @@ def test_run_core_executes_successfully(mocker, tmp_path):
             rows=[], n_scans_annotated=0, n_features_annotated=0
         ),
     )
+    mock_run_consensus = mocker.patch(
+        "msianalyzer.core.run.run.run_consensus",
+        return_value=mocker.MagicMock(n_features=0, n_features_scored=0),
+    )
+    mock_build_report = mocker.patch(
+        "msianalyzer.core.run.run.build_summary_report"
+    )
 
     mock_align = mocker.patch(
         "msianalyzer.core.run.run.align_mz_across_samples",
@@ -476,6 +500,11 @@ def test_run_core_executes_successfully(mocker, tmp_path):
     ann_args = mock_run_annotation.call_args
     assert ann_args.args[1] is config.annotate
 
+    mock_run_consensus.assert_called_once()
+    assert mock_run_consensus.call_args.args[1] is config.consensus
+    mock_build_report.assert_called_once()
+    assert mock_build_report.call_args.kwargs["out_dir"] == out_dir
+
     assert mock_create_adata.call_count == 2
     assert mock_adata.write_h5ad.call_count == 2
 
@@ -491,6 +520,7 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
 
     (out_dir / "sample1.h5ad").touch()
     (out_dir / "sample2.h5ad").touch()
+    (out_dir / "summary_report.html").touch()
 
     project_mock = mocker.MagicMock()
     project_mock.uuid = "proj_uuid_123"
@@ -511,6 +541,10 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     mock_run_grouper = mocker.patch("msianalyzer.core.run.run.run_grouper")
     mock_run_purity = mocker.patch("msianalyzer.core.run.run.run_precursor_purity")
     mock_run_annotation = mocker.patch("msianalyzer.core.run.run.run_annotation")
+    mock_run_consensus = mocker.patch("msianalyzer.core.run.run.run_consensus")
+    mock_build_report = mocker.patch(
+        "msianalyzer.core.run.run.build_summary_report"
+    )
     mock_create_adata = mocker.patch("msianalyzer.core.run.run.create_spatial_adata")
 
     mock_executor = mocker.MagicMock()
@@ -525,6 +559,8 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     mock_run_grouper.assert_not_called()
     mock_run_purity.assert_not_called()
     mock_run_annotation.assert_not_called()
+    mock_run_consensus.assert_not_called()
+    mock_build_report.assert_not_called()
     mock_create_adata.assert_not_called()
 
 

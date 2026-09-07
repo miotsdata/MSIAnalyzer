@@ -17,3 +17,4 @@ useful).
 | [6](0006-schema-single-source-of-truth.md) | One schema builder per database | Accepted |
 | [7](0007-library-annotation-design.md) | Library annotation design (Stage B) | Accepted |
 | [8](0008-precursor-ion-purity.md) | Precursor ion purity (Stage A′) | Accepted |
+| [9](0009-consume-purity-and-consensus.md) | Consume purity: annotation filter + per-feature consensus | Accepted |

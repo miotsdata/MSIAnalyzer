@@ -59,6 +59,7 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             "ms2_window_features",
             "feature_ms2_summary",
             "precursor_purity",
+            "feature_ms2_consensus",
             "annotation_libraries",
             "ms2_annotations",
         } <= tables
@@ -84,6 +85,29 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             "purity",
             "purity_parent",
         } <= purity_cols
+        # ms2_annotations carries the purity carry-through columns
+        ann_cols = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(ms2_annotations)"
+            ).fetchall()
+        }
+        assert {"purity", "runner_up_rel_int"} <= ann_cols
+        # feature_ms2_consensus shape
+        cons_cols = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(feature_ms2_consensus)"
+            ).fetchall()
+        }
+        assert {
+            "feature_id",
+            "best_scan_id",
+            "consensus_score",
+            "n_ms2",
+            "n_ms2_considered",
+            "best_compound_name",
+        } <= cons_cols
     finally:
         conn.close()
 

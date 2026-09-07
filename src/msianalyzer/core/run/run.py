@@ -17,8 +17,10 @@ import pandas as pd
 
 from msianalyzer.core import analysis_db
 from msianalyzer.core.annotation.annotate import run_annotation
+from msianalyzer.core.annotation.consensus import run_consensus
 from msianalyzer.core.annotation.group_ms2 import run_grouper
 from msianalyzer.core.annotation.precursor_purity import run_precursor_purity
+from msianalyzer.core.report.summary import build_summary_report
 from msianalyzer.core.config import Config
 from msianalyzer.core.parser import MzmlParser, log_command, parse_raster_xml
 from msianalyzer.core.plotting.plotter import Plotter
@@ -629,6 +631,32 @@ class Run:
                 "No annotation library configured; skipping MS2 annotation"
             )
 
+        # --- PER-FEATURE MS2 CONSENSUS (analysis DB) ---
+        consensus_cfg = getattr(config, "consensus", None)
+        if consensus_cfg is not None and getattr(consensus_cfg, "enabled", True):
+            if not analysis_db.is_command_already_run(
+                "ms2_consensus", analysis_id, adb_path
+            ):
+                command_id = analysis_db.log_command(
+                    adb_path,
+                    command_name="ms2_consensus",
+                    arguments={**vars(consensus_cfg)},
+                    run_id=analysis_id,
+                )
+                consensus = run_consensus(
+                    adb_path, consensus_cfg, command_id=command_id
+                )
+                logger.info(
+                    "MS2 consensus: picked a scan for %d feature(s) "
+                    "(%d backed by a library hit)",
+                    consensus.n_features,
+                    consensus.n_features_scored,
+                )
+            else:
+                logger.debug("Already run ms2_consensus")
+        else:
+            logger.info("MS2 consensus disabled; skipping")
+
         # --- SPATIAL AnnData PER SAMPLE ---
         for db_path in out_db_paths:
             out_adata_path = out_dir / f"{db_path.stem}.h5ad"
@@ -650,3 +678,28 @@ class Run:
                 )
             else:
                 logger.debug("%s: Already created adata object", db_path)
+
+        # --- SUMMARY REPORT ---
+        report_cfg = getattr(config, "report", None)
+        if report_cfg is not None and getattr(report_cfg, "enabled", True):
+            report_path = out_dir / "summary_report.html"
+            if not report_path.exists():
+                try:
+                    build_summary_report(
+                        adb_path,
+                        raw_db_paths={
+                            sid: p for sid, p in zip(sample_ids, raw_db_paths)
+                        },
+                        out_dir=out_dir,
+                        config=report_cfg,
+                    )
+                except Exception:
+                    logger.exception(
+                        "run %s: summary report failed (pipeline outputs are "
+                        "unaffected)",
+                        analysis_id,
+                    )
+            else:
+                logger.debug("Already built summary report")
+        else:
+            logger.info("Summary report disabled; skipping")

@@ -26,6 +26,8 @@ align:    {align_ppm: 5.0, mz_decimals: 4}
 group_ms2: {assoc_ppm: 10.0, include_unmatched: true}
 purity:   {enabled: true, ppm_precursor_match: 20.0}
 annotate: {library_path: null}   # a path (or [list, of, paths]) enables Stage B
+consensus: {enabled: true, target_peaks: 10}
+report:   {enabled: true, purity_cutoff: 0.8}
 ```
 
 Relative paths are resolved against `project_folder`.
@@ -119,10 +121,31 @@ Leave `library_path` empty (`null`) and the whole stage is skipped.
 | `mz_power` | `2.0` | MSDial-style m/z weighting exponent in the dot product |
 | `int_power` | `0.5` | MSDial-style intensity weighting exponent |
 | `min_matched_peaks` | `1` | store a candidate only when it shares at least this many fragments |
+| `min_purity` | `null` | skip scans whose precursor purity (Stage A′) is known and below this; `null` scores every scan. Rows still carry `purity` / `runner_up_rel_int`. |
 | `annotate_chimeric` | `true` | score chimeric scans (against their primary feature); they are always flagged. `false` skips them |
 | `store_filtered_spectra` | `true` | persist the filtered empirical + library spectra on every row (for mirror plots). `false` writes them NULL |
 | `batch_size` | `200` | features handed to each worker process |
 | `n_workers` | `null` | parallel workers; defaults to `os.cpu_count()` |
+
+### `consensus` — per-feature MS2 pick
+
+`consensus_score = best library score × purity term × peak term`; the
+highest-scoring scan per feature wins. Runs library-free and purity-free.
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `true` | run the stage; `false` skips it |
+| `target_peaks` | `10` | fragment count at which the peak-richness term saturates to 1 |
+| `neutral_purity` | `0.5` | purity assumed for a scan the purity stage could not score |
+| `min_purity` | `null` | drop scans with a known purity below this from the pick (they still count in `n_ms2`) |
+
+### `report` — end-of-run summary
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `true` | write `summary_report.html` + `summary.json` after every other stage |
+| `overlap_top_n` | `30` | max sample-combination bars in the feature-overlap UpSet plot |
+| `purity_cutoff` | `0.8` | reference line + "low purity" threshold in the report |
 
 ### `h5ad` — spatial AnnData assembly
 

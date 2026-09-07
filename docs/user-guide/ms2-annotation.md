@@ -210,6 +210,7 @@ points back via `library_id`.
 | `rank` | 1 = best candidate for this scan |
 | `rank_feature` | 1 = this scan is the best-scoring MS2 on its feature |
 | `is_chimeric`, `n_features_in_window` | carried through from the grouper |
+| `purity`, `runner_up_rel_int` | carried through from the purity stage (NULL when the scan was not purity-scored) |
 | `precursor_only` | carried through — fragmentation looked to have failed |
 | `emp_filtered_mz` / `emp_filtered_intensity` | the noise-filtered, normalised **empirical** spectrum that was scored |
 | `lib_filtered_mz` / `lib_filtered_intensity` | the same for the **library** spectrum |
@@ -220,10 +221,54 @@ can be drawn straight from a result row without re-running the matcher. Set
 `annotate.store_filtered_spectra = false` to write them NULL and keep the table
 small.
 
-## Chimeric and precursor-only scans
+## Chimeric, low-purity and precursor-only scans
 
 Chimeric scans are scored against their primary feature and flagged
 `is_chimeric = 1`; the coverage term already penalises mixed spectra, so
 downstream can down-weight or exclude them. Set `annotate.annotate_chimeric =
 false` to skip them entirely. `precursor_only` scans are annotated too (the flag
 rides along) — usually you will filter them out when reviewing hits.
+
+Set `annotate.min_purity` (e.g. `0.5`) to **not** score scans whose precursor
+purity (Stage A′) is known and below that. Scans the purity stage could not
+score (`precursor_found = 0`, or the stage disabled) are always kept — the
+filter never guesses. Every stored row carries the scan's `purity` and
+`runner_up_rel_int` regardless, so you can also filter at query time.
+
+---
+
+# Stage A″ — MS2 consensus
+
+`core.annotation.consensus` answers *"which single MS2 scan represents this
+feature?"*. For each MS2-bearing feature it folds three per-scan signals into
+
+```
+consensus_score = best_score × purity_term × peak_term
+```
+
+* `best_score` — the scan's `ms2_annotations.score` at `rank = 1`, or `1.0` when
+  no library ran;
+* `purity_term` — `clamp(purity)`, or `consensus.neutral_purity` (default `0.5`)
+  when the scan was not purity-scored;
+* `peak_term` — `min(1, n_peaks / consensus.target_peaks)` on the scan's
+  fragment-peak count.
+
+The highest-scoring scan wins. `consensus.min_purity` (its own knob) drops
+scans with a *known* low purity from the pick but not from the `n_ms2` count.
+The stage works library-free (score term collapses to purity × peaks) and
+purity-free (`neutral_purity` stands in); set `consensus.enabled = false` to
+skip it.
+
+## `feature_ms2_consensus` — one row per MS2-bearing feature
+
+| column | meaning |
+|---|---|
+| `feature_id`, `feature_mz` | the feature |
+| `best_sample_id`, `best_scan_id` | the chosen MS2 scan |
+| `n_ms2` | scans associated to the feature |
+| `n_ms2_considered` | scans that passed `min_purity` |
+| `n_ms2_scored` | of those, how many had a library hit |
+| `consensus_score` | the winning scan's score |
+| `purity`, `n_peaks` | the winning scan's purity and fragment count |
+| `best_annotation_score` | its `rank = 1` library score, or NULL |
+| `best_compound_name`, `best_inchikey` | that hit's identity, when present |

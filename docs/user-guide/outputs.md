@@ -14,7 +14,12 @@ Everything else lands in the analysis' `io.out_dir`.
 | `<sample>.h5ad` | `out_dir` | sample | `AnnData` — pixels × features quantification matrix with spatial coordinates |
 | `<sample>_filtered_ms1.html` | `out_dir` | sample | interactive figure of the filtered MS1 peak list |
 | `<sample>_peaks_data.csv` | `out_dir` | sample | the filtered MS1 peak list as `mz,intensity` |
+| `summary_report.html` | `out_dir` | run | per-sample counts, feature-overlap UpSet plot, MS2 association / `n_features_in_window` / purity distributions |
+| `summary.json` | `out_dir` | run | the same numbers, machine-readable |
 | `debug_<run-id>.log` | `<project>/logs/` | run | full-DEBUG trace of the run (always written); plus `run -l PATH` for a user log at the `-v` level |
+
+Regenerate the report from a finished database any time with `msianalyzer report
+path/to/analysis_<run-id>.db` — no reprocessing.
 
 ## Reading the analysis database
 
@@ -44,6 +49,10 @@ Key tables (full schema in the
   and `runner_up_rel_int` measured against the scan's parent MS1 (and the next
   MS1 on the same raster line). A chimericity signal independent of the feature
   list — prefer `purity < 0.8` over `n_features_in_window > 1`.
+- **`feature_ms2_consensus`** — one row per MS2-bearing feature: the single
+  chosen scan (`best_sample_id` / `best_scan_id`), its `consensus_score`,
+  `purity`, `n_peaks` and — when a library ran — `best_compound_name` /
+  `best_inchikey`.
 - **`annotation_libraries`** — one row per spectral library used to annotate
   (`path`, `name`, spectrum / compound counts).
 - **`ms2_annotations`** — one row per (MS2 scan, library candidate) comparison:
@@ -72,5 +81,6 @@ adata.obs        # pixel x / y coordinates
   `feature_ms2_summary`; `features` and `samples` are untouched.
 - Re-running the purity stage replaces every `precursor_purity` row.
 - Re-running annotation replaces that library's `ms2_annotations` rows.
+- Re-running the consensus stage replaces every `feature_ms2_consensus` row.
 - A stage whose output file or `commands` row already exists is skipped; delete
   the output to force recomputation.

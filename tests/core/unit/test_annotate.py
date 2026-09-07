@@ -254,6 +254,50 @@ def test_annotate_feature_skips_chimeric_when_disabled():
     )
 
 
+def _purity_scan(scan_id, purity, *, runner_up=None):
+    return {
+        "scan_id": scan_id,
+        "sample_id": 1,
+        "n_features_in_window": 1,
+        "is_chimeric": False,
+        "precursor_only": False,
+        "purity": purity,
+        "runner_up_rel_int": runner_up,
+        "emp_mz": np.array([100.0, 200.0]),
+        "emp_int": np.array([1.0, 1.0]),
+    }
+
+
+def _annotate_one(scans, *, min_purity=None):
+    return annotate_feature(
+        1,
+        150.0,
+        scans,
+        [_cand(1, [100.0, 200.0], [1.0, 1.0])],
+        fragment_ppm=10.0,
+        noise_threshold=0.0,
+        mz_power=2.0,
+        int_power=0.5,
+        min_matched_peaks=1,
+        min_purity=min_purity,
+    )
+
+
+def test_annotate_feature_carries_purity_onto_rows():
+    rows = _annotate_one([_purity_scan(1, 0.83, runner_up=0.2)])
+    assert rows[0].purity == pytest.approx(0.83)
+    assert rows[0].runner_up_rel_int == pytest.approx(0.2)
+
+
+def test_annotate_feature_min_purity_skips_low_and_keeps_unscored():
+    rows = _annotate_one(
+        [_purity_scan(1, 0.4), _purity_scan(2, 0.9), _purity_scan(3, None)],
+        min_purity=0.5,
+    )
+    kept = {r.scan_id for r in rows}
+    assert kept == {2, 3}  # 0.4 dropped; None (unscored) kept
+
+
 # ---------------------------------------------------------------------------
 # persist_annotations
 # ---------------------------------------------------------------------------
@@ -343,6 +387,46 @@ def _seeded_analysis_db(tmp_path, mock, make_ms2_db):
     save_features(adb, mock.features_df)
     run_grouper(adb, assoc_ppm=mock.assoc_ppm, align_ppm=mock.align_ppm)
     return adb
+
+
+def _seed_purity(adb, scan_id, purity, *, sample_id=1):
+    with sqlite3.connect(adb) as con:
+        con.execute("PRAGMA foreign_keys = ON")
+        con.execute(
+            "INSERT INTO precursor_purity (sample_id, ms2_scan_id, bracket_kind, "
+            "precursor_found, n_peaks_in_window, purity) "
+            "VALUES (?,?,'parent_only',1,3,?)",
+            (sample_id, scan_id, purity),
+        )
+        con.commit()
+
+
+def test_run_annotation_carries_purity_and_min_purity_filters(
+    ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
+):
+    mock = ms2_grouper_mock_data(n=1000)
+    adb = _seeded_analysis_db(tmp_path, mock, make_ms2_db)
+    lib = make_library_db(mock, case="single")
+    single_scan = mock.planted["single"].scan_id
+    _seed_purity(adb, single_scan, 0.2)
+
+    cfg = AnnotateConfig(library_path=str(lib), candidate_ppm=25.0, n_workers=1)
+    run_annotation(adb, cfg)
+    with sqlite3.connect(adb) as con:
+        purity = con.execute(
+            "SELECT purity FROM ms2_annotations WHERE scan_id = ?", (single_scan,)
+        ).fetchone()
+    assert purity is not None and purity[0] == pytest.approx(0.2)
+
+    cfg_filtered = AnnotateConfig(
+        library_path=str(lib), candidate_ppm=25.0, n_workers=1, min_purity=0.5
+    )
+    run_annotation(adb, cfg_filtered)
+    with sqlite3.connect(adb) as con:
+        n = con.execute(
+            "SELECT COUNT(*) FROM ms2_annotations WHERE scan_id = ?", (single_scan,)
+        ).fetchone()[0]
+    assert n == 0  # dropped by min_purity
 
 
 def test_run_annotation_end_to_end_ranks_true_compound(

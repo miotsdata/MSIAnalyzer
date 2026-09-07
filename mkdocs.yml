@@ -63,6 +63,7 @@ nav:
           - 6 — Schema single source of truth: developer/adr/0006-schema-single-source-of-truth.md
           - 7 — Library annotation design: developer/adr/0007-library-annotation-design.md
           - 8 — Precursor ion purity: developer/adr/0008-precursor-ion-purity.md
+          - 9 — Consume purity + consensus: developer/adr/0009-consume-purity-and-consensus.md
       - Testing: developer/testing.md
       - Logging: developer/logging.md
       - API reference:
@@ -71,5 +72,6 @@ nav:
           - spectra: developer/api_reference/spectra.md
           - analysis_db: developer/api_reference/analysis_db.md
           - annotation: developer/api_reference/annotation.md
+          - report: developer/api_reference/report.md
           - run: developer/api_reference/run.md
           - logging utils: developer/api_reference/utils/logging_utils.md

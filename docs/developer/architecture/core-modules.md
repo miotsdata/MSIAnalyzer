@@ -100,6 +100,36 @@ the feature list. Detail in
   `run_precursor_purity(analysis_db_path, config, *, command_id) -> PurityResult`
   — the orchestration entry point used by `run.py`.
 
+## `annotation/consensus.py`
+
+Stage A″ of annotation: pick one representative MS2 scan per feature by folding
+the best library score, precursor `purity` and fragment-peak count into one
+`consensus_score`. Detail in
+[MS2 annotation](../../user-guide/ms2-annotation.md) and
+[ADR 9](../adr/0009-consume-purity-and-consensus.md).
+
+- Pure: `peak_term`, `purity_term`, `consensus_score`, `pick_feature`,
+  `build_consensus`.
+- Data classes: `ScanStat`, `ConsensusRow`, `ConsensusResult`.
+- IO: `persist_consensus(db_path, result, command_id)` (replace-and-insert),
+  `run_consensus(analysis_db_path, config, *, command_id) -> ConsensusResult` —
+  reads `ms2_associations` + `precursor_purity` + `ms2_annotations` (rank 1),
+  used by `run.py`. Works with annotation and/or purity absent.
+
+## `report/summary.py`
+
+End-of-run reporting: reads a finished analysis database (and each sample's raw
+database, read-only) and writes `summary_report.html` + `summary.json`. Detail
+in [Outputs](../../user-guide/outputs.md).
+
+- Pure stats: `per_sample_counts`, `feature_membership`, `overlap_combos`,
+  `ms2_summary`, `purity_vs_nfw`, `collect_stats` → `SummaryStats`.
+- Figures (Plotly, no new dependency): `figure_per_sample`,
+  `figure_overlap_upset` (hand-rolled UpSet), `figure_ms2_association`,
+  `figure_nfw`, `figure_purity`, `figure_purity_vs_nfw`.
+- Entry point: `build_summary_report(analysis_db_path, raw_db_paths, out_dir,
+  *, config)` — called by `run.py` and by the `msianalyzer report` CLI.
+
 ## `annotation/spectral_match.py`
 
 - `reverse_dot_product(...) -> MatchResult` — MSDial-style coverage-aware reverse

@@ -219,6 +219,28 @@ feature list. See [ADR 8](../adr/0008-precursor-ion-purity.md).
 `UNIQUE (sample_id, ms2_scan_id)`. Indexes: `idx_purity_scan (sample_id,
 ms2_scan_id)`, `idx_purity_value (purity)`.
 
+### `feature_ms2_consensus`  (consensus stage)
+
+One row per MS2-bearing feature; rebuilt on every run of the consensus stage.
+`consensus_score = best library score x purity term x peak term`; see
+[ADR 9](../adr/0009-consume-purity-and-consensus.md).
+
+| column | type | notes |
+|---|---|---|
+| `feature_id` | INTEGER | PK, FK → `features` |
+| `feature_mz` | REAL | not null |
+| `best_sample_id` / `best_scan_id` | INTEGER | the chosen MS2 scan |
+| `n_ms2` | INTEGER | scans associated to the feature |
+| `n_ms2_considered` | INTEGER | scans that passed `consensus.min_purity` |
+| `n_ms2_scored` | INTEGER | of those, how many had a library hit |
+| `consensus_score` | REAL | not null — the winning scan's score |
+| `purity` / `n_peaks` | — | the winning scan's purity and fragment count |
+| `best_annotation_score` | REAL | its `ms2_annotations.score` at `rank = 1`, or NULL |
+| `best_compound_name` / `best_inchikey` | TEXT | that hit's identity, when present |
+| `command_id` | INTEGER | FK → `commands` |
+
+Index: `idx_consensus_score (consensus_score)`.
+
 ### `annotation_libraries`  (annotator)
 
 One row per spectral library used to annotate.
@@ -254,6 +276,7 @@ with several libraries configured the rows are interleaved and distinguished by
 | `rank_feature` | INTEGER | 1 = best-scoring scan on this feature |
 | `is_chimeric` | INTEGER | 0/1, from the grouper |
 | `n_features_in_window` | INTEGER | from the grouper |
+| `purity` / `runner_up_rel_int` | REAL | left-joined from `precursor_purity`; NULL when the scan was not purity-scored |
 | `precursor_only` | INTEGER | 0/1, from the grouper |
 | `emp_filtered_mz` / `emp_filtered_intensity` | BLOB | filtered, normalised empirical spectrum (zlib float32); NULL if `store_filtered_spectra` off |
 | `lib_filtered_mz` / `lib_filtered_intensity` | BLOB | same for the library spectrum |
@@ -272,4 +295,5 @@ Indexes: `idx_ann_scan (sample_id, scan_id)`, `idx_ann_feature (feature_id)`,
 | re-run the grouper | `DELETE` + repopulate `ms2_associations`, `ms2_window_features`, `feature_ms2_summary`; `features` / `samples` untouched |
 | re-run the purity stage | `DELETE FROM precursor_purity` then repopulate; nothing else touched |
 | re-run the annotator | `DELETE FROM ms2_annotations WHERE library_id = ?` then repopulate; `annotation_libraries` row is upserted |
+| re-run the consensus stage | `DELETE FROM feature_ms2_consensus` then repopulate; nothing else touched |
 | re-run alignment | `DELETE FROM features` then repopulate |

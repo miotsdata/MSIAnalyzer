@@ -287,6 +287,10 @@ class AnnotateConfig:
         min_matched_peaks: A candidate is stored only when it shares at
             least this many fragment peaks with the filtered empirical
             spectrum.
+        min_purity: When set, skip scans whose precursor-ion purity (from
+            the `purity` stage) is known and below this value. `None`
+            annotates every scan regardless of purity. Every stored row
+            still carries the scan's `purity` and `runner_up_rel_int`.
         annotate_chimeric: Score scans whose isolation window held more than
             one feature (against their primary feature). They are always
             flagged `is_chimeric`; set False to skip them entirely.
@@ -306,10 +310,59 @@ class AnnotateConfig:
     mz_power: float = 2.0
     int_power: float = 0.5
     min_matched_peaks: int = 1
+    min_purity: float | None = None
     annotate_chimeric: bool = True
     store_filtered_spectra: bool = True
     batch_size: int = 200
     n_workers: int | None = None
+
+
+@dataclass
+class ConsensusConfig:
+    """Parameters for the per-feature MS2 consensus stage.
+
+    Stage A'' of annotation (`core.annotation.consensus`): for each feature
+    that carries MS2, pick the single most trustworthy scan by folding the
+    best library score (when annotation ran), the precursor-ion `purity`
+    and the fragment-peak count into one `consensus_score`. Output:
+    `feature_ms2_consensus`, one row per feature.
+
+    Attributes:
+        enabled: Run the stage. When False it is skipped entirely.
+        target_peaks: Fragment-peak count at which the peak-richness term
+            saturates to 1; scans with fewer peaks are scaled down linearly.
+        neutral_purity: Purity value assumed for a scan the purity stage
+            could not score (`precursor_found = 0`, or the stage disabled).
+        min_purity: When set, scans with a known purity below this are
+            excluded from the pick (they still count in `n_ms2`).
+    """
+
+    enabled: bool = True
+    target_peaks: int = 10
+    neutral_purity: float = 0.5
+    min_purity: float | None = None
+
+
+@dataclass
+class ReportConfig:
+    """Parameters for the end-of-run summary report.
+
+    `core.report.summary`: after every other stage, write
+    `summary_report.html` + `summary.json` to `io.out_dir` — per-sample
+    scan / peak counts, a feature-overlap UpSet plot, and the MS2
+    association / `n_features_in_window` / purity distributions.
+
+    Attributes:
+        enabled: Build the report. When False it is skipped.
+        overlap_top_n: Maximum number of sample-combination bars drawn in
+            the feature-overlap UpSet plot (largest first).
+        purity_cutoff: Reference line drawn on the purity histogram and used
+            for the "low purity" count in the report summary.
+    """
+
+    enabled: bool = True
+    overlap_top_n: int = 30
+    purity_cutoff: float = 0.8
 
 
 @dataclass
@@ -354,6 +407,8 @@ GROUPS: dict[str, type] = {
     "group_ms2": GroupMs2Config,
     "purity": PurityConfig,
     "annotate": AnnotateConfig,
+    "consensus": ConsensusConfig,
+    "report": ReportConfig,
     "h5ad": H5adConfig,
     "analysis": AnalysisConfig,
 }
@@ -368,6 +423,8 @@ GROUP_TITLES: dict[str, str] = {
     "group_ms2": "group MS2",
     "purity": "precursor purity",
     "annotate": "annotate MS2",
+    "consensus": "MS2 consensus",
+    "report": "summary report",
     "h5ad": "create h5ad",
     "analysis": "analysis database",
 }
@@ -377,9 +434,10 @@ class Config:
     """Full configuration for a processing run, grouped by pipeline stage.
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
-    `align`, `group_ms2`, `purity`, `annotate`, `h5ad`, `analysis`) and
-    provides (de)serialization to and from YAML and TOML. Only `io` is
-    required; the remaining groups fall back to their dataclass defaults.
+    `align`, `group_ms2`, `purity`, `annotate`, `consensus`, `report`,
+    `h5ad`, `analysis`) and provides (de)serialization to and from YAML and
+    TOML. Only `io` is required; the remaining groups fall back to their
+    dataclass defaults.
 
     Attributes:
         version: Config schema version; checked on load.
@@ -391,11 +449,13 @@ class Config:
         group_ms2: MS2-to-feature association parameters.
         purity: Precursor-ion-purity parameters.
         annotate: MS2 spectral-library annotation parameters.
+        consensus: Per-feature MS2 consensus parameters.
+        report: End-of-run summary report parameters.
         h5ad: Spatial `AnnData` assembly parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 6
+    version: int = 7
 
     def __init__(
         self,
@@ -407,6 +467,8 @@ class Config:
         group_ms2: GroupMs2Config | None = None,
         purity: PurityConfig | None = None,
         annotate: AnnotateConfig | None = None,
+        consensus: ConsensusConfig | None = None,
+        report: ReportConfig | None = None,
         h5ad: H5adConfig | None = None,
         analysis: AnalysisConfig | None = None,
     ) -> None:
@@ -418,6 +480,8 @@ class Config:
         self.group_ms2: GroupMs2Config = group_ms2 or GroupMs2Config()
         self.purity: PurityConfig = purity or PurityConfig()
         self.annotate: AnnotateConfig = annotate or AnnotateConfig()
+        self.consensus: ConsensusConfig = consensus or ConsensusConfig()
+        self.report: ReportConfig = report or ReportConfig()
         self.h5ad: H5adConfig = h5ad or H5adConfig()
         self.analysis: AnalysisConfig = analysis or AnalysisConfig()
 

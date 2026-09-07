@@ -86,14 +86,30 @@ Controlled by `purity.*`; set `purity.enabled: false` to skip. Full detail in
 feature that carries MS2 it pulls library candidates near the feature m/z
 (`annotate.candidate_ppm`), scores each scan against each candidate with a
 coverage-aware reverse dot product, and writes `annotation_libraries` +
-`ms2_annotations` (one row per scored candidate, ranked). Controlled by the
-`annotate.*` settings. Full detail in [MS2 annotation](ms2-annotation.md).
+`ms2_annotations` (one row per scored candidate, ranked). Each row also carries
+the scan's `purity` / `runner_up_rel_int`; `annotate.min_purity` skips
+known-low-purity scans. Full detail in [MS2 annotation](ms2-annotation.md).
 
-## Stage 10 — Spatial AnnData per sample
+## Stage 10 — MS2 consensus (→ analysis DB)
+
+`run_consensus()` picks one representative MS2 scan per feature —
+`consensus_score = best library score × purity term × peak term` — into
+`feature_ms2_consensus`. Works library-free and purity-free. Controlled by
+`consensus.*`; set `consensus.enabled: false` to skip.
+
+## Stage 11 — Spatial AnnData per sample
 
 `create_spatial_adata()` quantifies every feature m/z across each pixel's MS1
 spectra (`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes
 `<sample>.h5ad`.
+
+## Stage 12 — Summary report (→ out_dir)
+
+`build_summary_report()` writes `summary_report.html` + `summary.json`:
+per-sample scan / pixel / peak / feature counts, a feature-overlap UpSet plot,
+and the MS2 association / `n_features_in_window` / purity distributions.
+Controlled by `report.*`; regenerate it any time with `msianalyzer report
+<analysis-db>`.
 
 ## What you end up with
 
@@ -107,4 +123,6 @@ spectra (`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes
     <sample>_peaks_data.csv   filtered peak list
     aligned_mzs.csv           the feature list
     analysis_<run-id>.db      everything parameter-dependent
+    summary_report.html       per-sample counts, overlap + MS2 distributions
+    summary.json              the same numbers, machine-readable
 ```

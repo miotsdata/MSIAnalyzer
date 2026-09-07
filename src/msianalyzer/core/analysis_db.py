@@ -19,6 +19,7 @@ ms2_associations     one row per MS2 scan snapped to a feature (grouper)
 ms2_window_features  features inside each scan's isolation window
 feature_ms2_summary  per-feature MS2 coverage roll-up
 precursor_purity     per-MS2 isolation-window purity vs. its parent MS1
+feature_ms2_consensus per-feature "best MS2 scan" pick
 annotation_libraries one row per spectral library used to annotate
 ms2_annotations      one row per (MS2 scan, library candidate) comparison
 """
@@ -238,6 +239,37 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_purity_value ON precursor_purity(purity)"
     )
 
+    # --- per-feature "best MS2 scan" pick (Stage A'' of annotation) ------
+    # Written by core.annotation.consensus.run_consensus. One row per
+    # feature that carries at least one (kept) MS2 scan; a re-run replaces
+    # every row. Folds annotation score (when available), purity and peak
+    # count into a single pick so downstream can grab one spectrum per
+    # feature without re-deriving the ranking.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS feature_ms2_consensus (
+            feature_id             INTEGER PRIMARY KEY,
+            feature_mz             REAL    NOT NULL,
+            best_sample_id         INTEGER,
+            best_scan_id           INTEGER NOT NULL,
+            n_ms2                  INTEGER NOT NULL,
+            n_ms2_considered       INTEGER NOT NULL,
+            n_ms2_scored           INTEGER NOT NULL,
+            consensus_score        REAL    NOT NULL,
+            purity                 REAL,
+            n_peaks                INTEGER,
+            best_annotation_score  REAL,
+            best_compound_name     TEXT,
+            best_inchikey          TEXT,
+            command_id             INTEGER,
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_consensus_score "
+        "ON feature_ms2_consensus(consensus_score)"
+    )
+
     # --- MS2 -> library annotation (Stage B of annotation) ---------------
     # Written by core.annotation.annotate. One row per spectral library
     # actually used; a re-run replaces the ms2_annotations rows.
@@ -283,6 +315,8 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             rank_feature           INTEGER,
             is_chimeric            INTEGER NOT NULL DEFAULT 0,
             n_features_in_window   INTEGER,
+            purity                 REAL,
+            runner_up_rel_int      REAL,
             precursor_only         INTEGER NOT NULL DEFAULT 0,
             emp_filtered_mz        BLOB,
             emp_filtered_intensity BLOB,

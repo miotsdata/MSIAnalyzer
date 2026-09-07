@@ -70,6 +70,13 @@ precursor_purity` before inserting. The `precursor_purity` `commands` check in
 `config.purity.enabled` is false. A forced re-run replaces every row and touches
 nothing else.
 
+## Consensus idempotence
+
+`persist_consensus` calls `create_analysis_schema` and then `DELETE FROM
+feature_ms2_consensus` before inserting. The `ms2_consensus` `commands` check in
+`run_core` skips the step once it has run; it is also skipped when
+`config.consensus.enabled` is false.
+
 ## Annotator idempotence
 
 `run_annotation` upserts the `annotation_libraries` row (keyed on `path`) and
