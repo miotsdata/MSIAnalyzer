@@ -83,7 +83,10 @@ Indexes: `rt`, `precursor_mz`, `isolation_window_target`, `tic`,
 | `pixel_id` | INTEGER | FK → `spatial_pixels(pixel_id)` |
 | `scan_id` | INTEGER | FK → `ms1_scans(scan_id)` |
 
-Primary key `(pixel_id, scan_id)`. Also creates `idx_ms1_scans_rt`.
+Primary key `(pixel_id, scan_id)`. `map_pixels_to_db` also creates
+`idx_ms1_scans_rt` and `idx_pms1_scan (scan_id)` — the composite PK cannot
+serve a lookup by `scan_id`, which downstream stages need. Databases parsed
+before this index existed pick it up on the next `map_pixels_to_db` run.
 
 ---
 

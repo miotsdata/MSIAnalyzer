@@ -71,6 +71,9 @@ def map_pixels_to_db(db_path: Path | str, df_pixels: pd.DataFrame) -> None:
 
             -- Index required for fast B-Tree range matching
             CREATE INDEX IF NOT EXISTS idx_ms1_scans_rt ON ms1_scans(rt);
+            -- the (pixel_id, scan_id) PK can't serve a lookup by scan_id;
+            -- downstream stages join / probe pixel_ms1_scans by scan_id
+            CREATE INDEX IF NOT EXISTS idx_pms1_scan ON pixel_ms1_scans(scan_id);
         """)
 
         # 1b. These two tables are fully derived from df_pixels + ms1_scans.rt,

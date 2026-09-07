@@ -33,6 +33,7 @@ Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
         - RasterGeometry
         - WindowPurity
         - ResolvedScans
+        - SampleScanIndex
         - PurityRow
         - PurityResult
         - window_bounds

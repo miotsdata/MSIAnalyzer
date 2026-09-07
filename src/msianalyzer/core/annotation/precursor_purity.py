@@ -35,8 +35,10 @@ Output table: ``precursor_purity`` (schema in
 
 from __future__ import annotations
 
+import bisect
 import logging
 import sqlite3
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Sequence
@@ -57,6 +59,7 @@ __all__ = [
     "RasterGeometry",
     "WindowPurity",
     "ResolvedScans",
+    "SampleScanIndex",
     "PurityRow",
     "PurityResult",
     "ppm_between",
@@ -168,17 +171,27 @@ def detect_window_peaks(
         An ``(k, 2)`` array of ``(mz, intensity)`` sorted by m/z; empty
         ``(0, 2)`` when the window holds no signal.
     """
-    mz = np.asarray(mz, dtype=float)
-    inten = np.asarray(inten, dtype=float)
+    mz = np.asarray(mz)
+    inten = np.asarray(inten)
     empty = np.empty((0, 2), dtype=float)
     if mz.size == 0 or mz.size != inten.size:
         return empty
 
-    in_win = (mz >= lo) & (mz <= hi)
-    if not np.any(in_win):
+    # Slice the (10^4-10^5 point) profile array by binary search *before*
+    # any dtype conversion, then upcast only the ~10^2-point window — a
+    # full-array `asarray(dtype=float)` copy on every one of millions of
+    # calls dominated the runtime. Fall back to a mask if not m/z-ascending.
+    if mz[0] <= mz[-1]:
+        lo_i = int(np.searchsorted(mz, lo, side="left"))
+        hi_i = int(np.searchsorted(mz, hi, side="right"))
+        w_mz = np.asarray(mz[lo_i:hi_i], dtype=float)
+        w_int = np.asarray(inten[lo_i:hi_i], dtype=float)
+    else:
+        in_win = (mz >= lo) & (mz <= hi)
+        w_mz = np.asarray(mz[in_win], dtype=float)
+        w_int = np.asarray(inten[in_win], dtype=float)
+    if w_mz.size == 0:
         return empty
-    w_mz = mz[in_win]
-    w_int = inten[in_win]
     base = float(w_int.max())
     if base <= 0.0:
         return empty
@@ -420,49 +433,146 @@ class ResolvedScans:
     bracket_kind: str
 
 
-def _load_ms1(
-    con: sqlite3.Connection, scan_id: int, cache: dict, decode
-) -> tuple[float, np.ndarray, np.ndarray] | None:
-    """``(rt, mz, intensity)`` for one MS1 scan, memoised by ``scan_id``."""
-    if scan_id in cache:
-        return cache[scan_id]
-    row = con.execute(
-        "SELECT rt, mz_array, intensity_array FROM ms1_scans WHERE scan_id = ?",
-        (int(scan_id),),
-    ).fetchone()
-    cache[scan_id] = (
-        None if row is None else (float(row[0]), decode(row[1]), decode(row[2]))
-    )
-    return cache[scan_id]
+class SampleScanIndex:
+    """Per-sample MS1 lookups, built once and queried in memory.
 
+    Preloads MS1 ``(scan_id, rt, polarity)`` sorted by rt, the
+    ``pixel_ms1_scans`` scan→pixel map and ``spatial_pixels`` geometry, so
+    :func:`resolve_parent_next` needs no per-scan SQL — the raw
+    ``pixel_ms1_scans`` table has no index on ``scan_id``, and one lookup
+    per MS2 scan against a 10^5-row table is what makes the naive version
+    unusable on a real acquisition. MS1 intensity arrays are still read on
+    demand, behind a small LRU (MS2 scans of one parent are consecutive in
+    ``scan_id`` order, so a handful of slots is plenty).
+    """
 
-def _pixel_of(con: sqlite3.Connection, scan_id: int) -> int | None:
-    try:
-        row = con.execute(
-            "SELECT pixel_id FROM pixel_ms1_scans WHERE scan_id = ? LIMIT 1",
-            (int(scan_id),),
-        ).fetchone()
-    except sqlite3.OperationalError:
+    def __init__(
+        self,
+        con: sqlite3.Connection,
+        *,
+        match_polarity: bool = True,
+        decode: Callable[[bytes], np.ndarray] | None = None,
+        array_cache_size: int = 8,
+    ) -> None:
+        from ..parser.mzml_parser import blob_to_array
+
+        self._con = con
+        self._decode = decode or blob_to_array
+        self._match_polarity = bool(match_polarity)
+        self._cache_size = max(1, int(array_cache_size))
+        self._arrays: "OrderedDict[int, tuple | None]" = OrderedDict()
+        # A single acquisition method almost always writes a byte-identical
+        # profile m/z grid to every MS1 scan; decoding it once per distinct
+        # blob roughly halves the zlib cost of this stage.
+        self._mz_by_blob: "OrderedDict[bytes, np.ndarray]" = OrderedDict()
+
+        rows = con.execute(
+            "SELECT scan_id, rt, polarity FROM ms1_scans ORDER BY rt"
+        ).fetchall()
+        self._ids = [int(r[0]) for r in rows]
+        self._rts = [float(r[1]) for r in rows]
+        self._pols = [r[2] for r in rows]
+        self._rt_of = dict(zip(self._ids, self._rts))
+
+        try:
+            self._pixel_of = {
+                int(sid): int(pid)
+                for sid, pid in con.execute(
+                    "SELECT scan_id, pixel_id FROM pixel_ms1_scans"
+                )
+            }
+        except sqlite3.OperationalError:
+            self._pixel_of = {}
+        try:
+            self._pixel_geom = {
+                int(pid): (float(x), float(y), float(ts), float(te))
+                for pid, x, y, ts, te in con.execute(
+                    "SELECT pixel_id, x, y, t_start, t_end FROM spatial_pixels"
+                )
+            }
+        except sqlite3.OperationalError:
+            self._pixel_geom = {}
+
+    def rt_of(self, scan_id: int | None) -> float | None:
+        return None if scan_id is None else self._rt_of.get(int(scan_id))
+
+    def _ok_pol(self, i: int, polarity) -> bool:
+        return (
+            not (self._match_polarity and polarity is not None)
+            or self._pols[i] == polarity
+        )
+
+    def parent_before(self, rt: float | None, polarity) -> int | None:
+        """Latest MS1 ``scan_id`` at or before ``rt`` (matching polarity)."""
+        if rt is None or not self._ids:
+            return None
+        i = bisect.bisect_right(self._rts, float(rt))
+        while i > 0:
+            i -= 1
+            if self._ok_pol(i, polarity):
+                return self._ids[i]
         return None
-    return None if row is None else int(row[0])
+
+    def next_after(self, rt: float | None, polarity) -> int | None:
+        """First MS1 ``scan_id`` strictly after ``rt`` (matching polarity)."""
+        if rt is None:
+            return None
+        i = bisect.bisect_right(self._rts, float(rt))
+        while i < len(self._ids):
+            if self._ok_pol(i, polarity):
+                return self._ids[i]
+            i += 1
+        return None
+
+    def arrays(
+        self, scan_id: int | None
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """``(mz, intensity)`` for one MS1 scan, LRU-cached; ``None`` if absent."""
+        if scan_id is None:
+            return None
+        scan_id = int(scan_id)
+        hit = self._arrays.get(scan_id, _MISSING)
+        if hit is not _MISSING:
+            self._arrays.move_to_end(scan_id)
+            return hit
+        row = self._con.execute(
+            "SELECT mz_array, intensity_array FROM ms1_scans WHERE scan_id = ?",
+            (scan_id,),
+        ).fetchone()
+        val = None if row is None else (self._decode_mz(row[0]), self._decode(row[1]))
+        self._arrays[scan_id] = val
+        if len(self._arrays) > self._cache_size:
+            self._arrays.popitem(last=False)
+        return val
+
+    def _decode_mz(self, blob: bytes) -> np.ndarray:
+        hit = self._mz_by_blob.get(blob)
+        if hit is not None:
+            self._mz_by_blob.move_to_end(blob)
+            return hit
+        arr = self._decode(blob)
+        self._mz_by_blob[blob] = arr
+        if len(self._mz_by_blob) > 4:
+            self._mz_by_blob.popitem(last=False)
+        return arr
+
+    def pixel_of(self, scan_id: int | None) -> int | None:
+        return None if scan_id is None else self._pixel_of.get(int(scan_id))
+
+    def pixel_geom(self, pixel_id: int | None):
+        return None if pixel_id is None else self._pixel_geom.get(int(pixel_id))
 
 
-def _pixel_xy_t(con: sqlite3.Connection, pixel_id: int):
-    row = con.execute(
-        "SELECT x, y, t_start, t_end FROM spatial_pixels WHERE pixel_id = ?",
-        (int(pixel_id),),
-    ).fetchone()
-    return None if row is None else (float(row[0]), float(row[1]), float(row[2]), float(row[3]))
+_MISSING = object()
 
 
 def resolve_parent_next(
-    con: sqlite3.Connection,
+    index: "SampleScanIndex | sqlite3.Connection",
     ms2_row: dict,
     geom: RasterGeometry | None,
     *,
     use_next: bool,
     match_polarity: bool = True,
-    ms1_cache: dict | None = None,
     decode: Callable[[bytes], np.ndarray] | None = None,
 ) -> ResolvedScans:
     """Find the parent MS1 scan of an MS2 scan and, when valid, the next one.
@@ -475,83 +585,68 @@ def resolve_parent_next(
     ``bracket_kind`` stays ``"parent_only"`` and the next scan is dropped.
 
     Args:
-        con: Open connection to the sample's raw database (read-only use).
+        index: A :class:`SampleScanIndex` for the sample. A raw
+            ``sqlite3.Connection`` is also accepted — a throw-away index is
+            built from it (fine for one-off calls, wasteful in a loop).
         ms2_row: Mapping with ``scan_id``, ``parent_scan_id``, ``rt`` and
             ``polarity``.
         geom: The sample's :class:`RasterGeometry`, or ``None`` to force
             parent-only.
         use_next: Master switch for interpolation.
-        match_polarity: Restrict MS1 candidates to the MS2's polarity.
-        ms1_cache: Optional dict reused across calls to memoise MS1 loads.
-        decode: Blob decoder; defaults to the parser's ``blob_to_array``.
+        match_polarity: Restrict MS1 candidates to the MS2's polarity (only
+            used when ``index`` is a bare connection).
+        decode: Blob decoder (only used when ``index`` is a bare
+            connection); defaults to the parser's ``blob_to_array``.
     """
-    if decode is None:
-        from ..parser.mzml_parser import blob_to_array as decode  # noqa: N813
-    cache = ms1_cache if ms1_cache is not None else {}
+    if isinstance(index, sqlite3.Connection):
+        index = SampleScanIndex(
+            index, match_polarity=match_polarity, decode=decode
+        )
 
     scan_id = int(ms2_row["scan_id"])
     ms2_rt = ms2_row.get("rt")
     polarity = ms2_row.get("polarity")
-    pol_ok = match_polarity and polarity is not None
 
-    # --- parent -------------------------------------------------------------
+    # --- parent ----------------------------------------------------------
     parent_id = ms2_row.get("parent_scan_id")
-    parent = _load_ms1(con, parent_id, cache, decode) if parent_id is not None else None
-    if parent is None:
-        params: list = []
-        clause = ""
-        if ms2_rt is not None:
-            clause = "WHERE rt <= ?"
-            params.append(float(ms2_rt))
-        if pol_ok:
-            clause = f"{clause + ' AND ' if clause else 'WHERE '}polarity = ?"
-            params.append(polarity)
-        row = con.execute(
-            f"SELECT scan_id FROM ms1_scans {clause} ORDER BY rt DESC LIMIT 1",
-            params,
-        ).fetchone()
-        parent_id = None if row is None else int(row[0])
-        parent = _load_ms1(con, parent_id, cache, decode) if parent_id is not None else None
+    parent_rt = index.rt_of(parent_id)
+    if parent_id is None or parent_rt is None:
+        parent_id = index.parent_before(ms2_rt, polarity)
+        parent_rt = index.rt_of(parent_id)
+    parent_arr = index.arrays(parent_id)
 
     none_result = ResolvedScans(
         ms2_scan_id=scan_id,
-        parent_scan_id=parent_id if parent is not None else None,
-        parent_rt=parent[0] if parent else None,
-        parent_mz=parent[1] if parent else None,
-        parent_inten=parent[2] if parent else None,
+        parent_scan_id=parent_id if parent_arr is not None else None,
+        parent_rt=parent_rt if parent_arr is not None else None,
+        parent_mz=parent_arr[0] if parent_arr is not None else None,
+        parent_inten=parent_arr[1] if parent_arr is not None else None,
         next_scan_id=None,
         next_rt=None,
         next_mz=None,
         next_inten=None,
         bracket_kind="parent_only",
     )
-    if parent is None or not use_next or geom is None:
+    if parent_arr is None or parent_rt is None or not use_next or geom is None:
         return none_result
 
-    # --- next -------------------------------------------------------------
-    params = [parent[0]]
-    clause = "WHERE rt > ?"
-    if pol_ok:
-        clause += " AND polarity = ?"
-        params.append(polarity)
-    row = con.execute(
-        f"SELECT scan_id FROM ms1_scans {clause} ORDER BY rt ASC LIMIT 1", params
-    ).fetchone()
-    if row is None:
+    # --- next ----------------------------------------------------------
+    next_id = index.next_after(parent_rt, polarity)
+    if next_id is None:
         return none_result
-    next_id = int(row[0])
-    nxt = _load_ms1(con, next_id, cache, decode)
-    if nxt is None:
+    next_arr = index.arrays(next_id)
+    if next_arr is None:
         return none_result
+    next_rt = index.rt_of(next_id)
 
-    parent_pixel = _pixel_of(con, parent_id)
-    next_pixel = _pixel_of(con, next_id)
+    parent_pixel = index.pixel_of(parent_id)
+    next_pixel = index.pixel_of(next_id)
     bracket = "parent_only"
     if parent_pixel is not None and parent_pixel == next_pixel:
         bracket = "same_pixel"
     elif parent_pixel is not None and next_pixel is not None:
-        p_xy = _pixel_xy_t(con, parent_pixel)
-        n_xy = _pixel_xy_t(con, next_pixel)
+        p_xy = index.pixel_geom(parent_pixel)
+        n_xy = index.pixel_geom(next_pixel)
         if p_xy is not None and n_xy is not None:
             if geom.fast_axis == "x":
                 d_fast, d_slow = abs(n_xy[0] - p_xy[0]), abs(n_xy[1] - p_xy[1])
@@ -566,13 +661,13 @@ def resolve_parent_next(
     return ResolvedScans(
         ms2_scan_id=scan_id,
         parent_scan_id=parent_id,
-        parent_rt=parent[0],
-        parent_mz=parent[1],
-        parent_inten=parent[2],
+        parent_rt=parent_rt,
+        parent_mz=parent_arr[0],
+        parent_inten=parent_arr[1],
         next_scan_id=next_id,
-        next_rt=nxt[0],
-        next_mz=nxt[1],
-        next_inten=nxt[2],
+        next_rt=next_rt,
+        next_mz=next_arr[0],
+        next_inten=next_arr[1],
         bracket_kind=bracket,
     )
 
@@ -811,8 +906,11 @@ def persist_purity(
 _MS2_QUERY = (
     "SELECT scan_id, parent_scan_id, rt, polarity, precursor_mz, "
     "isolation_window_target, isolation_window_lower, isolation_window_upper "
-    "FROM ms2_scans"
+    "FROM ms2_scans ORDER BY scan_id"
 )
+
+#: how often (in scans) the per-sample loop logs progress
+_PROGRESS_EVERY = 20_000
 
 
 def _make_result(rows: list[PurityRow]) -> PurityResult:
@@ -865,16 +963,17 @@ def run_precursor_purity(
         # opened for reading only — this stage never writes a raw database
         with sqlite3.connect(str(raw_db_path)) as rcon:
             geom = infer_raster_geometry(rcon, gap_override=gap_override)
+            index = SampleScanIndex(rcon, decode=blob_to_array)
             ms2_rows = rcon.execute(_MS2_QUERY).fetchall()
+            n = len(ms2_rows)
             logger.info(
                 "precursor purity: sample %s — %d MS2 scans, geometry=%s",
                 sample_id,
-                len(ms2_rows),
+                n,
                 geom,
                 extra={"source_file": str(raw_db_path)},
             )
-            ms1_cache: dict = {}
-            for r in ms2_rows:
+            for k, r in enumerate(ms2_rows):
                 ms2_row = {
                     "sample_id": sample_id,
                     "scan_id": r[0],
@@ -887,12 +986,7 @@ def run_precursor_purity(
                     "isolation_window_upper": r[7],
                 }
                 resolved = resolve_parent_next(
-                    rcon,
-                    ms2_row,
-                    geom,
-                    use_next=use_next,
-                    ms1_cache=ms1_cache,
-                    decode=blob_to_array,
+                    index, ms2_row, geom, use_next=use_next
                 )
                 rows.append(
                     compute_scan_purity(
@@ -904,6 +998,14 @@ def run_precursor_purity(
                         merge_ppm=merge_ppm,
                     )
                 )
+                if (k + 1) % _PROGRESS_EVERY == 0:
+                    logger.info(
+                        "precursor purity: sample %s — %d/%d scans scored",
+                        sample_id,
+                        k + 1,
+                        n,
+                        extra={"source_file": str(raw_db_path)},
+                    )
 
     result = _make_result(rows)
     persist_purity(analysis_db_path, result, command_id=command_id)

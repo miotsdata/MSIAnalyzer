@@ -97,3 +97,9 @@ Design choices:
   left to a later change; for now the narrative points users at the purity table.
 - `precursor_purity` is one row per MS2 scan per analysis — small next to
   `ms2_annotations`.
+- Scale: on a real run (10^6 MS2 scans) the parent/next resolution must not
+  touch SQLite per scan — `pixel_ms1_scans` has no `scan_id` index and the
+  MS1-array cache would blow memory if it kept every parent. `SampleScanIndex`
+  preloads the MS1 rt/polarity list, the scan→pixel map and pixel geometry once
+  per sample (bisect for parent/next), and holds MS1 arrays in a small LRU;
+  `map_pixels_to_db` also now writes `idx_pms1_scan`.

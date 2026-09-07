@@ -21,6 +21,7 @@ import pytest
 from msianalyzer.core.annotation.precursor_purity import (
     RasterGeometry,
     ResolvedScans,
+    SampleScanIndex,
     compute_scan_purity,
     detect_window_peaks,
     infer_raster_geometry,
@@ -498,6 +499,54 @@ _MS2_SEL = (
     "isolation_window_target, isolation_window_lower, isolation_window_upper "
     "FROM ms2_scans"
 )
+
+
+# ===========================================================================
+# SampleScanIndex
+# ===========================================================================
+
+
+def test_sample_scan_index_in_memory_lookups(tmp_path):
+    db = _build_raw_db(
+        tmp_path / "idx.db",
+        [
+            _ms1_scan(1, 5.0, 500.0, [(500.0, 100.0)]),
+            _ms1_scan(2, 15.0, 500.0, [(500.0, 100.0)]),
+            _ms1_scan(3, 25.0, 500.0, [(500.0, 100.0)]),
+        ],
+        [],
+        pixels=[(0, 0, 0.0, 10.0), (1, 0, 10.0, 20.0), (2, 0, 20.0, 30.0)],
+    )
+    with sqlite3.connect(db) as con:
+        idx = SampleScanIndex(con, array_cache_size=2)
+
+        assert idx.rt_of(2) == pytest.approx(15.0)
+        assert idx.parent_before(16.0, "+") == 2
+        assert idx.parent_before(4.0, "+") is None
+        assert idx.next_after(5.0, "+") == 2
+        assert idx.next_after(25.0, "+") is None
+        assert idx.pixel_of(1) == idx.pixel_of(1)  # stable
+        assert idx.pixel_of(1) != idx.pixel_of(2)
+
+        # arrays load + LRU eviction (cache size 2)
+        assert idx.arrays(1) is not None
+        idx.arrays(2)
+        idx.arrays(3)
+        assert 1 not in idx._arrays  # evicted
+        assert idx.arrays(999) is None
+
+
+def test_sample_scan_index_no_pixel_tables(tmp_path):
+    db = _build_raw_db(
+        tmp_path / "nopix.db",
+        [_ms1_scan(1, 5.0, 500.0, [(500.0, 100.0)])],
+        [],
+        pixels=None,
+    )
+    with sqlite3.connect(db) as con:
+        idx = SampleScanIndex(con)
+    assert idx.pixel_of(1) is None
+    assert idx.pixel_geom(1) is None
 
 
 def _ms2_dict(row) -> dict:

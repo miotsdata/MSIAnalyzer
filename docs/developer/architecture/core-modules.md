@@ -92,8 +92,11 @@ the feature list. Detail in
 - Pure (arrays only): `window_bounds`, `detect_window_peaks`, `score_window`,
   `interpolate_purity`, `compute_scan_purity`, `ppm_between`.
 - Raw-DB readers: `infer_raster_geometry(con)` (infers the fast raster axis +
-  inter-pixel gap tolerance), `resolve_parent_next(con, ms2_row, geom, …)`
-  (parent MS1 + a `same_pixel` / `same_line` next MS1, or `parent_only`).
+  inter-pixel gap tolerance), `SampleScanIndex(con)` (preloads MS1 rt/polarity,
+  the scan→pixel map and pixel geometry once per sample so the hot loop does no
+  per-scan SQL), `resolve_parent_next(index, ms2_row, geom, …)` (parent MS1 + a
+  `same_pixel` / `same_line` next MS1, or `parent_only`; also accepts a bare
+  connection for one-off calls).
 - Data classes: `RasterGeometry`, `WindowPurity`, `ResolvedScans`, `PurityRow`,
   `PurityResult`.
 - IO: `persist_purity(db_path, result, command_id)` (replace-and-insert),
