@@ -81,6 +81,25 @@ Stage A of annotation: snap each MS2 scan to a feature. Detail in
   `run_grouper(analysis_db_path, *, assoc_ppm, align_ppm, include_unmatched, …)`
   — the orchestration entry point used by `run.py`.
 
+## `annotation/precursor_purity.py`
+
+Stage A′ of annotation: per-MS2 isolation-window purity, measured against the
+scan's parent MS1 scan (and the next MS1 on the same raster line), independent of
+the feature list. Detail in
+[MS2 annotation](../../user-guide/ms2-annotation.md) and
+[ADR 8](../adr/0008-precursor-ion-purity.md).
+
+- Pure (arrays only): `window_bounds`, `detect_window_peaks`, `score_window`,
+  `interpolate_purity`, `compute_scan_purity`, `ppm_between`.
+- Raw-DB readers: `infer_raster_geometry(con)` (infers the fast raster axis +
+  inter-pixel gap tolerance), `resolve_parent_next(con, ms2_row, geom, …)`
+  (parent MS1 + a `same_pixel` / `same_line` next MS1, or `parent_only`).
+- Data classes: `RasterGeometry`, `WindowPurity`, `ResolvedScans`, `PurityRow`,
+  `PurityResult`.
+- IO: `persist_purity(db_path, result, command_id)` (replace-and-insert),
+  `run_precursor_purity(analysis_db_path, config, *, command_id) -> PurityResult`
+  — the orchestration entry point used by `run.py`.
+
 ## `annotation/spectral_match.py`
 
 - `reverse_dot_product(...) -> MatchResult` — MSDial-style coverage-aware reverse

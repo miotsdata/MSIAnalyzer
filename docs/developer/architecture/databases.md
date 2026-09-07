@@ -190,6 +190,35 @@ One row per feature with MS2 coverage; rebuilt on every grouper run.
 | `n_chimeric` | INTEGER |
 | `median_n_peaks` | REAL |
 
+### `precursor_purity`  (purity stage)
+
+One row per MS2 scan; rebuilt on every run of the purity stage. Chimericity
+measured against the scan's own **parent MS1** (`ms2_scans.parent_scan_id`, or
+the nearest earlier MS1) and, when the laser had moved to the same pixel or an
+adjacent pixel on the same raster line, the next MS1 — never the analysis-wide
+feature list. See [ADR 8](../adr/0008-precursor-ion-purity.md).
+
+| column | type | notes |
+|---|---|---|
+| `id` | INTEGER | PK |
+| `sample_id` | INTEGER | FK → `samples` |
+| `ms2_scan_id` | INTEGER | not null — the scan in the sample's raw `ms2_scans` |
+| `parent_ms1_scan_id` | INTEGER | the MS1 the scan was triggered from |
+| `next_ms1_scan_id` | INTEGER | second MS1 used for interpolation, else NULL |
+| `bracket_kind` | TEXT | not null — `parent_only` / `same_pixel` / `same_line` |
+| `rt_weight` | REAL | 0 = parent only … 1 = next MS1; the interpolation weight |
+| `window_lo_mz` / `window_hi_mz` | REAL | resolved isolation window bounds |
+| `precursor_found` | INTEGER | 0/1 — an in-window MS1 peak matched the precursor |
+| `precursor_mz_ms1` / `precursor_intensity_ms1` | REAL | that peak, in the parent MS1 |
+| `n_peaks_in_window` | INTEGER | not null — real peaks in the parent MS1 window (`> 1` ⇒ co-isolation) |
+| `runner_up_rel_int` | REAL | strongest non-precursor in-window peak / precursor peak |
+| `purity` | REAL | precursor / total in-window intensity, RT-interpolated when `next_ms1_scan_id` is set |
+| `purity_parent` | REAL | the same, parent MS1 only (always populated) |
+| `command_id` | INTEGER | FK → `commands` |
+
+`UNIQUE (sample_id, ms2_scan_id)`. Indexes: `idx_purity_scan (sample_id,
+ms2_scan_id)`, `idx_purity_value (purity)`.
+
 ### `annotation_libraries`  (annotator)
 
 One row per spectral library used to annotate.
@@ -241,5 +270,6 @@ Indexes: `idx_ann_scan (sample_id, scan_id)`, `idx_ann_feature (feature_id)`,
 |---|---|
 | re-run any stage | never rewrites a raw DB |
 | re-run the grouper | `DELETE` + repopulate `ms2_associations`, `ms2_window_features`, `feature_ms2_summary`; `features` / `samples` untouched |
+| re-run the purity stage | `DELETE FROM precursor_purity` then repopulate; nothing else touched |
 | re-run the annotator | `DELETE FROM ms2_annotations WHERE library_id = ?` then repopulate; `annotation_libraries` row is upserted |
 | re-run alignment | `DELETE FROM features` then repopulate |

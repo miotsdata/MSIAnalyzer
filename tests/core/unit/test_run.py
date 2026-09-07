@@ -77,6 +77,17 @@ class MockGroupMs2Config:
 
 
 @dataclass
+class MockPurityConfig:
+    enabled: bool = True
+    ppm_precursor_match: float = 20.0
+    default_half_window_da: float = 0.5
+    min_rel_intensity: float = 0.01
+    merge_ppm: float = 5.0
+    use_next_ms1: bool = True
+    max_interpixel_gap_sec: float | None = None
+
+
+@dataclass
 class MockAnnotateConfig:
     library_path: str | None = None
     noise_threshold: float = 0.01
@@ -114,6 +125,7 @@ class DummyConfig:
         self.peak = MockPeakConfig()
         self.align = MockAlignConfig()
         self.group_ms2 = MockGroupMs2Config()
+        self.purity = MockPurityConfig()
         self.annotate = MockAnnotateConfig()
         self.h5ad = MockH5ADConfig()
         self.analysis = MockAnalysisConfig()
@@ -413,6 +425,12 @@ def test_run_core_executes_successfully(mocker, tmp_path):
         "msianalyzer.core.run.run.run_grouper",
         return_value=mocker.MagicMock(associations=[], feature_summary=[]),
     )
+    mock_run_purity = mocker.patch(
+        "msianalyzer.core.run.run.run_precursor_purity",
+        return_value=mocker.MagicMock(
+            n_scans=0, n_multi_peak=0, n_precursor_missing=0, n_interpolated=0
+        ),
+    )
 
     config.annotate.library_path = str(tmp_path / "lib.db")
     mock_run_annotation = mocker.patch(
@@ -451,6 +469,9 @@ def test_run_core_executes_successfully(mocker, tmp_path):
     assert grouper_kwargs["assoc_ppm"] == config.group_ms2.assoc_ppm
     assert grouper_kwargs["align_ppm"] == config.align.align_ppm
 
+    mock_run_purity.assert_called_once()
+    assert mock_run_purity.call_args.args[1] is config.purity
+
     mock_run_annotation.assert_called_once()
     ann_args = mock_run_annotation.call_args
     assert ann_args.args[1] is config.annotate
@@ -488,6 +509,7 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     config.annotate.library_path = str(tmp_path / "lib.db")
     mock_align = mocker.patch("msianalyzer.core.run.run.align_mz_across_samples")
     mock_run_grouper = mocker.patch("msianalyzer.core.run.run.run_grouper")
+    mock_run_purity = mocker.patch("msianalyzer.core.run.run.run_precursor_purity")
     mock_run_annotation = mocker.patch("msianalyzer.core.run.run.run_annotation")
     mock_create_adata = mocker.patch("msianalyzer.core.run.run.create_spatial_adata")
 
@@ -501,6 +523,7 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
 
     mock_align.assert_not_called()
     mock_run_grouper.assert_not_called()
+    mock_run_purity.assert_not_called()
     mock_run_annotation.assert_not_called()
     mock_create_adata.assert_not_called()
 

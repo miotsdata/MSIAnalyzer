@@ -58,6 +58,7 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             "ms2_associations",
             "ms2_window_features",
             "feature_ms2_summary",
+            "precursor_purity",
             "annotation_libraries",
             "ms2_annotations",
         } <= tables
@@ -66,6 +67,23 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             row[1] for row in conn.execute("PRAGMA table_info(commands)").fetchall()
         }
         assert "sample_id" in cmd_cols
+        # precursor_purity carries the purity headline columns
+        purity_cols = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(precursor_purity)"
+            ).fetchall()
+        }
+        assert {
+            "ms2_scan_id",
+            "parent_ms1_scan_id",
+            "next_ms1_scan_id",
+            "bracket_kind",
+            "n_peaks_in_window",
+            "runner_up_rel_int",
+            "purity",
+            "purity_parent",
+        } <= purity_cols
     finally:
         conn.close()
 

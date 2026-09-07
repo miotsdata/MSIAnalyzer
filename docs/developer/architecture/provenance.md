@@ -62,6 +62,14 @@ dependent rows).
 removed; a forced re-run cleanly replaces the association without disturbing
 `features` or `samples`.
 
+## Purity-stage idempotence
+
+`persist_purity` calls `create_analysis_schema` and then `DELETE FROM
+precursor_purity` before inserting. The `precursor_purity` `commands` check in
+`run_core` skips the step once it has run; it is also skipped when
+`config.purity.enabled` is false. A forced re-run replaces every row and touches
+nothing else.
+
 ## Annotator idempotence
 
 `run_annotation` upserts the `annotation_libraries` row (keyed on `path`) and

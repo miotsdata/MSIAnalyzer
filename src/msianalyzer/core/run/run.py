@@ -18,6 +18,7 @@ import pandas as pd
 from msianalyzer.core import analysis_db
 from msianalyzer.core.annotation.annotate import run_annotation
 from msianalyzer.core.annotation.group_ms2 import run_grouper
+from msianalyzer.core.annotation.precursor_purity import run_precursor_purity
 from msianalyzer.core.config import Config
 from msianalyzer.core.parser import MzmlParser, log_command, parse_raster_xml
 from msianalyzer.core.plotting.plotter import Plotter
@@ -572,6 +573,34 @@ class Run:
             )
         else:
             logger.debug("Already run group_ms2")
+
+        # --- PRECURSOR ION PURITY (analysis DB) ---
+        purity_cfg = getattr(config, "purity", None)
+        if purity_cfg is not None and getattr(purity_cfg, "enabled", True):
+            if not analysis_db.is_command_already_run(
+                "precursor_purity", analysis_id, adb_path
+            ):
+                command_id = analysis_db.log_command(
+                    adb_path,
+                    command_name="precursor_purity",
+                    arguments={**vars(purity_cfg)},
+                    run_id=analysis_id,
+                )
+                purity_result = run_precursor_purity(
+                    adb_path, purity_cfg, command_id=command_id
+                )
+                logger.info(
+                    "Precursor purity: scored %d MS2 scans (%d with >1 in-window "
+                    "peak, %d with no precursor peak, %d interpolated)",
+                    purity_result.n_scans,
+                    purity_result.n_multi_peak,
+                    purity_result.n_precursor_missing,
+                    purity_result.n_interpolated,
+                )
+            else:
+                logger.debug("Already run precursor_purity")
+        else:
+            logger.info("Precursor purity disabled; skipping")
 
         # --- ANNOTATE MS2 AGAINST SPECTRAL LIBRARY (analysis DB) ---
         if config.annotate.library_path:

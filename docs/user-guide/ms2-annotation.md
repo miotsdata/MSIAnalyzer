@@ -1,9 +1,10 @@
 # MS2 annotation
 
-Annotation has two stages. **Stage A — association** ties every MS2 scan to a
-feature. **Stage B — library annotation** scores the fragment spectra against
-reference libraries. This page covers both: what each step does and how to read
-its output.
+Annotation has three steps. **Stage A — association** ties every MS2 scan to a
+feature. **Stage A′ — precursor purity** measures how clean each scan's
+isolation window was, judged against its own parent MS1 scan. **Stage B —
+library annotation** scores the fragment spectra against reference libraries.
+This page covers all three: what each step does and how to read its output.
 
 ## What the grouper does
 
@@ -89,6 +90,72 @@ A chimeric scan (`n_features_in_window > 1`) is associated **only to its nearest
 feature**; the alternatives are still recorded in `ms2_window_features` with
 their ppm differences. Stage B scores it against that primary feature and marks
 every result row `is_chimeric = 1` (see below).
+
+`n_features_in_window` counts the *analysis-wide* feature list, which is the
+union over every sample and pixel. On a large run a wide isolation window almost
+always straddles several features even when the scan's own parent MS1 held a
+single clean peak there, so this count over-flags. Use **Stage A′ / precursor
+purity** for a per-acquisition chimericity signal that does not depend on the
+feature list.
+
+---
+
+# Stage A′ — precursor ion purity
+
+`core.annotation.precursor_purity` asks a different question: not *"how many
+features could this window contain?"* but *"how much of the ion current actually
+in this window belonged to the precursor?"* It measures that where it physically
+happened — in the MS1 scan the MS2 was triggered from
+(`ms2_scans.parent_scan_id`, or the nearest earlier MS1) — and never touches the
+feature list. Set `purity.enabled = false` to skip the stage.
+
+## What it does
+
+For every MS2 scan:
+
+1. **Resolve the parent MS1** and slice it to the isolation window
+   `[target − lower, target + upper]` (missing offsets fall back to
+   `purity.default_half_window_da`).
+2. **Detect real peaks** in that slice — local maxima above
+   `purity.min_rel_intensity × (window base peak)`, refined by parabolic
+   interpolation and merged within `purity.merge_ppm`.
+3. **Identify the precursor peak** — the in-window peak nearest `precursor_mz`
+   (or `isolation_window_target`) within `purity.ppm_precursor_match`.
+4. **Score:** `purity = precursor intensity / total in-window intensity`;
+   `runner_up_rel_int = strongest other in-window peak / precursor peak`;
+   `n_peaks_in_window` = the peak count.
+5. **Interpolate** across the parent MS1 and the *next* MS1 scan when the laser
+   had only moved to the **same pixel** or an **adjacent pixel on the same
+   raster line** (`purity.use_next_ms1`, default on). The MS2's retention time
+   sets the blend weight (`rt_weight`). Otherwise only the parent MS1 is used
+   and `purity == purity_parent`.
+
+The "same raster line" test compares pixel identity, then `(x, y)` indices plus
+the acquisition-time gap (`purity.max_interpixel_gap_sec`, auto-derived when
+null) — never raw coordinates, so serpentine vs. flyback rastering is
+irrelevant. If pixel mapping never ran, the stage is parent-MS1-only.
+
+## `precursor_purity` — one row per MS2 scan
+
+| column | meaning |
+|---|---|
+| `sample_id`, `ms2_scan_id` | back-pointer into the sample's raw `ms2_scans` |
+| `parent_ms1_scan_id` | the MS1 the scan was triggered from |
+| `next_ms1_scan_id` | second MS1 used for interpolation, or NULL |
+| `bracket_kind` | `parent_only` / `same_pixel` / `same_line` |
+| `rt_weight` | 0 (parent only) … 1 (next MS1) — the interpolation weight |
+| `window_lo_mz`, `window_hi_mz` | resolved isolation window bounds |
+| `precursor_found` | `1` when an in-window MS1 peak matched the precursor |
+| `precursor_mz_ms1`, `precursor_intensity_ms1` | that peak in the parent MS1 |
+| `n_peaks_in_window` | real peaks in the parent MS1 window — `> 1` ⇒ co-isolation |
+| `runner_up_rel_int` | strongest non-precursor in-window peak ÷ precursor peak (`> 1` ⇒ the precursor was a minor ion) |
+| `purity` | precursor ÷ total in-window intensity, RT-interpolated when `next_ms1_scan_id` is set |
+| `purity_parent` | the same, parent MS1 only — always populated |
+
+Filter chimeras with `purity < 0.8` (or your own cutoff) rather than
+`n_features_in_window > 1`; `precursor_found = 0` means the precursor was too
+faint to see in MS1 and `purity` is NULL. The cutoff stays a query-time choice —
+the stage stores the measurement, not a verdict.
 
 ---
 

@@ -71,7 +71,16 @@ MS2 scan to a feature. It writes three tables — `ms2_associations`,
 `ms2_window_features`, `feature_ms2_summary` — and drops nothing. Controlled by
 the `group_ms2.*` settings. Full detail in [MS2 annotation](ms2-annotation.md).
 
-## Stage 8 — Annotate MS2 against a library (→ analysis DB)
+## Stage 8 — Precursor ion purity (→ analysis DB)
+
+`run_precursor_purity()` scores every MS2 scan's isolation window against its own
+parent MS1 scan (and the next MS1 on the same raster line): `purity`,
+`n_peaks_in_window`, `runner_up_rel_int` per scan, in `precursor_purity`. A
+feature-list-free chimericity signal that stays meaningful on large runs.
+Controlled by `purity.*`; set `purity.enabled: false` to skip. Full detail in
+[MS2 annotation](ms2-annotation.md).
+
+## Stage 9 — Annotate MS2 against a library (→ analysis DB)
 
 `run_annotation()` runs only when `annotate.library_path` is set. For every
 feature that carries MS2 it pulls library candidates near the feature m/z
@@ -80,7 +89,7 @@ coverage-aware reverse dot product, and writes `annotation_libraries` +
 `ms2_annotations` (one row per scored candidate, ranked). Controlled by the
 `annotate.*` settings. Full detail in [MS2 annotation](ms2-annotation.md).
 
-## Stage 9 — Spatial AnnData per sample
+## Stage 10 — Spatial AnnData per sample
 
 `create_spatial_adata()` quantifies every feature m/z across each pixel's MS1
 spectra (`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes

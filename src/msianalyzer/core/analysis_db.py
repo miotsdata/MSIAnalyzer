@@ -18,6 +18,7 @@ features             aligned cross-sample master m/z list
 ms2_associations     one row per MS2 scan snapped to a feature (grouper)
 ms2_window_features  features inside each scan's isolation window
 feature_ms2_summary  per-feature MS2 coverage roll-up
+precursor_purity     per-MS2 isolation-window purity vs. its parent MS1
 annotation_libraries one row per spectral library used to annotate
 ms2_annotations      one row per (MS2 scan, library candidate) comparison
 """
@@ -199,6 +200,43 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             FOREIGN KEY (feature_id) REFERENCES features(feature_id)
         )
     """)
+
+    # --- MS2 precursor ion purity (Stage A' of annotation) --------------
+    # Written by core.annotation.precursor_purity.run_precursor_purity. One
+    # row per MS2 scan; a re-run replaces every row. Chimericity measured
+    # against the scan's own parent MS1 (and the next MS1 on the same raster
+    # line), not the analysis-wide feature list.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS precursor_purity (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            sample_id               INTEGER,
+            ms2_scan_id             INTEGER NOT NULL,
+            parent_ms1_scan_id      INTEGER,
+            next_ms1_scan_id        INTEGER,
+            bracket_kind            TEXT    NOT NULL,
+            rt_weight               REAL,
+            window_lo_mz            REAL,
+            window_hi_mz            REAL,
+            precursor_found         INTEGER NOT NULL,
+            precursor_mz_ms1        REAL,
+            precursor_intensity_ms1 REAL,
+            n_peaks_in_window       INTEGER NOT NULL,
+            runner_up_rel_int       REAL,
+            purity                  REAL,
+            purity_parent           REAL,
+            command_id              INTEGER,
+            UNIQUE (sample_id, ms2_scan_id),
+            FOREIGN KEY (sample_id) REFERENCES samples(sample_id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_purity_scan "
+        "ON precursor_purity(sample_id, ms2_scan_id)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_purity_value ON precursor_purity(purity)"
+    )
 
     # --- MS2 -> library annotation (Stage B of annotation) ---------------
     # Written by core.annotation.annotate. One row per spectral library

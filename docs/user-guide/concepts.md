@@ -67,6 +67,13 @@ MS2 scan can be **chimeric**. MSIAnalyzer matches on `precursor_mz` (same kind o
 quantity as a feature) and uses the window only to count how many features could
 have contributed. See [ADR 5](../developer/adr/0005-three-ppm-tolerances.md).
 
+That count (`n_features_in_window`) uses the analysis-wide feature list and
+over-flags on large runs. The **precursor purity** stage
+([ADR 8](../developer/adr/0008-precursor-ion-purity.md)) instead measures how
+much of the ion current in the window actually belonged to the precursor,
+reading the scan's own parent MS1 — a chimericity signal that does not depend on
+how many samples the analysis spans.
+
 ## Fragmentation failure
 
 Sometimes fragmentation does not really happen — the MS2 spectrum is essentially

@@ -24,6 +24,7 @@ io:
 ms1:      {bin_width: 0.0001, min_mz: 70.0, max_mz: 900.0}
 align:    {align_ppm: 5.0, mz_decimals: 4}
 group_ms2: {assoc_ppm: 10.0, include_unmatched: true}
+purity:   {enabled: true, ppm_precursor_match: 20.0}
 annotate: {library_path: null}   # a path (or [list, of, paths]) enables Stage B
 ```
 
@@ -88,6 +89,22 @@ Relative paths are resolved against `project_folder`.
 | `default_isolation_half_width` | `0.5` | isolation half-width (Da) assumed when a scan carries no isolation offsets |
 | `precursor_only_tic_frac` | `0.8` | a scan is flagged `precursor_only` when at least this fraction of its fragment TIC is within `precursor_only_mz_tol_da` of the precursor |
 | `precursor_only_mz_tol_da` | `2.0` | half-width (Da) of the "on the precursor" band for the `precursor_only` test |
+
+### `purity` — precursor ion purity
+
+Measures each MS2 scan's isolation-window purity against its parent MS1 scan (and
+the next MS1 on the same raster line). Independent of the feature list — use it
+instead of the grouper's `n_features_in_window` on large runs.
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `true` | run the stage; `false` skips it entirely |
+| `ppm_precursor_match` | `20.0` | ppm tolerance for deciding which in-window MS1 peak is the precursor |
+| `default_half_window_da` | `0.5` | isolation half-width (Da) assumed when a scan carries no isolation offsets |
+| `min_rel_intensity` | `0.01` | drop in-window MS1 peaks below this fraction of the window's base peak |
+| `merge_ppm` | `5.0` | ppm tolerance for merging split profile peaks in the window slice |
+| `use_next_ms1` | `true` | interpolate purity across the parent MS1 and the next MS1 when it is the same pixel or an adjacent pixel on the same raster line |
+| `max_interpixel_gap_sec` | `null` | max parent→next-pixel time gap for interpolation; `null` derives it per sample from the median in-line pixel gap |
 
 ### `annotate` — MS2 spectral-library annotation
 

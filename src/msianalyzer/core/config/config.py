@@ -217,6 +217,48 @@ class GroupMs2Config:
 
 
 @dataclass
+class PurityConfig:
+    """Parameters for the precursor-ion-purity stage.
+
+    Stage A' of annotation (`core.annotation.precursor_purity`): for every
+    MS2 scan, measure how much of the isolation-window ion current in its
+    *parent* MS1 scan (and the next MS1 scan when it lies on the same
+    raster line) belonged to the precursor. Produces `purity`,
+    `n_peaks_in_window` and `runner_up_rel_int` per scan — a per-acquisition
+    chimericity signal that, unlike the grouper's `n_features_in_window`,
+    does not depend on the analysis-wide feature list.
+
+    Attributes:
+        enabled: Run the stage. When False it is skipped entirely.
+        ppm_precursor_match: ppm tolerance for deciding which in-window MS1
+            peak is the precursor (matched against `precursor_mz`, or
+            `isolation_window_target` when the scan carries no precursor
+            m/z).
+        default_half_window_da: Isolation half-width, in Da, assumed when a
+            scan carries no isolation-window offsets.
+        min_rel_intensity: In-window MS1 peaks below this fraction of the
+            window's base peak are dropped before counting and scoring.
+        merge_ppm: ppm tolerance for merging split profile peaks within the
+            window slice.
+        use_next_ms1: Interpolate purity across the parent MS1 and the
+            immediately following MS1 scan when the latter is the same
+            pixel, or an adjacent pixel on the same raster line. When False,
+            only the parent MS1 is used.
+        max_interpixel_gap_sec: Largest tolerated time gap between the
+            parent pixel and an adjacent-line next pixel for interpolation.
+            None derives it per sample from the median in-line pixel gap.
+    """
+
+    enabled: bool = True
+    ppm_precursor_match: float = 20.0
+    default_half_window_da: float = 0.5
+    min_rel_intensity: float = 0.01
+    merge_ppm: float = 5.0
+    use_next_ms1: bool = True
+    max_interpixel_gap_sec: float | None = None
+
+
+@dataclass
 class AnnotateConfig:
     """Parameters for annotating MS2 scans against spectral libraries.
 
@@ -310,6 +352,7 @@ GROUPS: dict[str, type] = {
     "peak": PeakConfig,
     "align": AlignMzSamples,
     "group_ms2": GroupMs2Config,
+    "purity": PurityConfig,
     "annotate": AnnotateConfig,
     "h5ad": H5adConfig,
     "analysis": AnalysisConfig,
@@ -323,6 +366,7 @@ GROUP_TITLES: dict[str, str] = {
     "peak": "peak threshold",
     "align": "align all mzs",
     "group_ms2": "group MS2",
+    "purity": "precursor purity",
     "annotate": "annotate MS2",
     "h5ad": "create h5ad",
     "analysis": "analysis database",
@@ -333,9 +377,9 @@ class Config:
     """Full configuration for a processing run, grouped by pipeline stage.
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
-    `align`, `group_ms2`, `annotate`, `h5ad`, `analysis`) and provides
-    (de)serialization to and from YAML and TOML. Only `io` is required; the
-    remaining groups fall back to their dataclass defaults.
+    `align`, `group_ms2`, `purity`, `annotate`, `h5ad`, `analysis`) and
+    provides (de)serialization to and from YAML and TOML. Only `io` is
+    required; the remaining groups fall back to their dataclass defaults.
 
     Attributes:
         version: Config schema version; checked on load.
@@ -345,12 +389,13 @@ class Config:
         peak: Peak filtering parameters.
         align: Cross-sample m/z alignment parameters.
         group_ms2: MS2-to-feature association parameters.
+        purity: Precursor-ion-purity parameters.
         annotate: MS2 spectral-library annotation parameters.
         h5ad: Spatial `AnnData` assembly parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 5
+    version: int = 6
 
     def __init__(
         self,
@@ -360,6 +405,7 @@ class Config:
         peak: PeakConfig | None = None,
         align: AlignMzSamples | None = None,
         group_ms2: GroupMs2Config | None = None,
+        purity: PurityConfig | None = None,
         annotate: AnnotateConfig | None = None,
         h5ad: H5adConfig | None = None,
         analysis: AnalysisConfig | None = None,
@@ -370,6 +416,7 @@ class Config:
         self.peak: PeakConfig = peak or PeakConfig()
         self.align: AlignMzSamples = align or AlignMzSamples()
         self.group_ms2: GroupMs2Config = group_ms2 or GroupMs2Config()
+        self.purity: PurityConfig = purity or PurityConfig()
         self.annotate: AnnotateConfig = annotate or AnnotateConfig()
         self.h5ad: H5adConfig = h5ad or H5adConfig()
         self.analysis: AnalysisConfig = analysis or AnalysisConfig()

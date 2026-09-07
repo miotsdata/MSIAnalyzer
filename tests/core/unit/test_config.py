@@ -11,6 +11,7 @@ from msianalyzer.core.config.config import (
     PeakConfig,
     AlignMzSamples,
     GroupMs2Config,
+    PurityConfig,
     AnnotateConfig,
     H5adConfig,
     AnalysisConfig,
@@ -94,6 +95,10 @@ def test_default_dataclass_initializations():
     assert AlignMzSamples().align_ppm == 5.0
     assert GroupMs2Config().assoc_ppm == 10.0
     assert GroupMs2Config().include_unmatched is True
+    assert PurityConfig().enabled is True
+    assert PurityConfig().ppm_precursor_match == 20.0
+    assert PurityConfig().use_next_ms1 is True
+    assert PurityConfig().max_interpixel_gap_sec is None
     assert AnnotateConfig().library_path is None
     assert AnnotateConfig().noise_threshold == 0.01
     assert AnnotateConfig().candidate_ppm == 10.0
@@ -125,7 +130,7 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     d = config.to_dict()
 
-    assert d["version"] == 5
+    assert d["version"] == 6
     assert isinstance(d["io"]["project_folder"], str)
     assert isinstance(d["io"]["mzml_paths"][0], str)
     assert d["ms1"]["chunk_size"] == 2000
@@ -134,7 +139,7 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
 def test_config_from_dict_success(sample_io_config: IOConfig):
     """Verify creating Config from a valid dictionary."""
     raw_data = {
-        "version": 5,
+        "version": 6,
         "io": {
             "project_folder": str(sample_io_config.project_folder),
             "mzml_paths": [str(p) for p in sample_io_config.mzml_paths],
@@ -160,7 +165,7 @@ def test_config_from_dict_version_mismatch():
 
 def test_config_from_dict_missing_required_io_fields():
     """Verify TypeError inside dataclasses wraps cleanly into ValueError."""
-    bad_data = {"version": 5, "io": {}}  # Missing required IO fields
+    bad_data = {"version": 6, "io": {}}  # Missing required IO fields
     with pytest.raises(ValueError, match="Invalid or incomplete config"):
         Config.from_dict(bad_data)
 
@@ -221,10 +226,11 @@ def test_config_str_representation(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     output = str(config)
 
-    assert "Config(version=5)" in output
+    assert "Config(version=6)" in output
     assert "input/output:" in output
     assert "detect centroids:" in output
     assert "group MS2:" in output
+    assert "precursor purity:" in output
     assert "annotate MS2:" in output
     assert "prominence_factor" in output
     assert "assoc_ppm" in output
@@ -280,7 +286,7 @@ def test_create_config_file_force_overwrite(tmp_path: Path):
     )
 
     loaded = Config.load(config_file)
-    assert loaded.version == 5
+    assert loaded.version == 6
 
 
 def test_create_config_file_nonexistent_project_folder(tmp_path: Path):

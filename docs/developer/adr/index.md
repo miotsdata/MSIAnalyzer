@@ -16,3 +16,4 @@ useful).
 | [5](0005-three-ppm-tolerances.md) | Three separate ppm tolerances | Accepted |
 | [6](0006-schema-single-source-of-truth.md) | One schema builder per database | Accepted |
 | [7](0007-library-annotation-design.md) | Library annotation design (Stage B) | Accepted |
+| [8](0008-precursor-ion-purity.md) | Precursor ion purity (Stage A′) | Accepted |

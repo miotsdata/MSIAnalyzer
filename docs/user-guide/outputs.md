@@ -40,6 +40,10 @@ Key tables (full schema in the
 - **`feature_ms2_summary`** — one row per feature: how many MS2 scans hit it,
   across how many samples, and how many were `precursor_only` / single-peak /
   chimeric.
+- **`precursor_purity`** — one row per MS2 scan: `purity`, `n_peaks_in_window`
+  and `runner_up_rel_int` measured against the scan's parent MS1 (and the next
+  MS1 on the same raster line). A chimericity signal independent of the feature
+  list — prefer `purity < 0.8` over `n_features_in_window > 1`.
 - **`annotation_libraries`** — one row per spectral library used to annotate
   (`path`, `name`, spectrum / compound counts).
 - **`ms2_annotations`** — one row per (MS2 scan, library candidate) comparison:
@@ -66,6 +70,7 @@ adata.obs        # pixel x / y coordinates
   the same samples reuses the parsed databases and skips straight to averaging.
 - Re-running the grouper replaces `ms2_associations`, `ms2_window_features` and
   `feature_ms2_summary`; `features` and `samples` are untouched.
+- Re-running the purity stage replaces every `precursor_purity` row.
 - Re-running annotation replaces that library's `ms2_annotations` rows.
 - A stage whose output file or `commands` row already exists is skipped; delete
   the output to force recomputation.
