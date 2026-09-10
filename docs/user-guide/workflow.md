@@ -107,9 +107,11 @@ spectra (`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes
 
 `build_summary_report()` writes `summary_report.html` + `summary.json`:
 per-sample scan / pixel / peak / feature counts, a feature-overlap UpSet plot,
-and the MS2 association / `n_features_in_window` / purity distributions.
-Controlled by `report.*`; regenerate it any time with `msianalyzer report
-<analysis-db>`.
+MS2 association (overall donut + a 100%-stacked bar per sample), precursor
+purity (overall histogram + a box per sample), and a recheck of the
+unassociated MS2 against each sample's *pre-filter* MS1 peaks (how many miss
+only because peak filtering dropped the peak). Controlled by `report.*`;
+regenerate it any time with `msianalyzer report <analysis-db>`.
 
 ## What you end up with
 
@@ -123,6 +125,6 @@ Controlled by `report.*`; regenerate it any time with `msianalyzer report
     <sample>_peaks_data.csv   filtered peak list
     aligned_mzs.csv           the feature list
     analysis_<run-id>.db      everything parameter-dependent
-    summary_report.html       per-sample counts, overlap + MS2 distributions
+    summary_report.html       per-sample counts, feature overlap, MS2 + purity plots
     summary.json              the same numbers, machine-readable
 ```

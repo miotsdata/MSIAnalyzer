@@ -145,7 +145,7 @@ highest-scoring scan per feature wins. Runs library-free and purity-free.
 |---|---|---|
 | `enabled` | `true` | write `summary_report.html` + `summary.json` after every other stage |
 | `overlap_top_n` | `30` | max sample-combination bars in the feature-overlap UpSet plot |
-| `purity_cutoff` | `0.8` | reference line + "low purity" threshold in the report |
+| `purity_cutoff` | `0.8` | reference line on the purity plots + the "low purity" count |
 
 ### `h5ad` — spatial AnnData assembly
 

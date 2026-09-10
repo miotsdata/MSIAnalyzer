@@ -126,10 +126,15 @@ database, read-only) and writes `summary_report.html` + `summary.json`. Detail
 in [Outputs](../../user-guide/outputs.md).
 
 - Pure stats: `per_sample_counts`, `feature_membership`, `overlap_combos`,
-  `ms2_summary`, `purity_vs_nfw`, `collect_stats` → `SummaryStats`.
+  `ms2_summary`, `per_sample_ms2`, `per_sample_purity`, `unassociated_recheck`
+  (re-tests unassociated MS2 against the sample's *pre-filter* centroids —
+  `detect_ms1_centroids` output — with the grouper's own `assoc_ppm`),
+  `collect_stats` → `SummaryStats`.
 - Figures (Plotly, no new dependency): `figure_per_sample`,
-  `figure_overlap_upset` (hand-rolled UpSet), `figure_ms2_association`,
-  `figure_nfw`, `figure_purity`, `figure_purity_vs_nfw`.
+  `figure_overlap_upset` (hand-rolled UpSet), `figure_ms2_association` (overall
+  donut) + `figure_ms2_association_per_sample` (100%-stacked bar), `figure_purity`
+  (overall histogram) + `figure_purity_per_sample` (box per sample),
+  `figure_unassociated_recheck`.
 - Entry point: `build_summary_report(analysis_db_path, raw_db_paths, out_dir,
   *, config)` — called by `run.py` and by the `msianalyzer report` CLI.
 

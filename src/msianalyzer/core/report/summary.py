@@ -1,9 +1,10 @@
 """Build the end-of-run summary report (``summary_report.html`` + ``summary.json``).
 
 Pure stat functions (``per_sample_counts``, ``feature_membership``,
-``overlap_combos``, ``ms2_summary``, ``purity_vs_nfw``) read the analysis
-database (and each sample's raw database, read-only) and return plain data;
-the ``figure_*`` builders turn that data into Plotly figures;
+``overlap_combos``, ``ms2_summary``, ``per_sample_ms2``,
+``per_sample_purity``, ``unassociated_recheck``) read the analysis database
+(and each sample's raw database, read-only) and return plain data; the
+``figure_*`` builders turn that data into Plotly figures;
 :func:`build_summary_report` glues it together and writes the two files.
 Nothing here writes to a database.
 """
@@ -33,24 +34,35 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "SampleCounts",
     "Ms2Summary",
+    "PerSampleMs2",
+    "PerSamplePurity",
+    "RecheckSummary",
     "SummaryStats",
     "per_sample_counts",
     "feature_membership",
     "overlap_combos",
     "ms2_summary",
-    "purity_vs_nfw",
+    "per_sample_ms2",
+    "per_sample_purity",
+    "unassociated_recheck",
     "figure_per_sample",
     "figure_overlap_upset",
     "figure_ms2_association",
-    "figure_nfw",
+    "figure_ms2_association_per_sample",
     "figure_purity",
-    "figure_purity_vs_nfw",
+    "figure_purity_per_sample",
+    "figure_unassociated_recheck",
     "collect_stats",
     "build_summary_report",
 ]
 
 _REPORT_HTML = "summary_report.html"
 _REPORT_JSON = "summary.json"
+
+_C_OK = "#1f77b4"
+_C_BAD = "#d62728"
+_C_MUTED = "#999999"
+_C_GOOD = "#2ca02c"
 
 
 # ---------------------------------------------------------------------------
@@ -73,20 +85,69 @@ class SampleCounts:
 
 @dataclass
 class Ms2Summary:
-    """Analysis-wide MS2 association + window + purity roll-up."""
+    """Analysis-wide MS2 association + purity roll-up."""
 
     n_total: int
     n_associated: int
     n_unassociated: int
     n_precursor_only: int
-    n_empty_window: int
-    n_unique_window: int
-    n_chimeric_window: int
-    nfw_distribution: dict[int, int]
     n_purity_scored: int
     n_low_purity: int
     purity_cutoff: float
     purity_values: list[float] = field(default_factory=list)
+
+
+@dataclass
+class PerSampleMs2:
+    """MS2 association counts for one sample."""
+
+    sample_id: int
+    name: str
+    n_total: int
+    n_associated: int
+    n_unassociated: int
+
+
+@dataclass
+class PerSamplePurity:
+    """Scored precursor-purity values for one sample."""
+
+    sample_id: int
+    name: str
+    n_scored: int
+    n_low: int
+    values: list[float] = field(default_factory=list)
+
+
+@dataclass
+class RecheckSummary:
+    """Would the unassociated MS2 associate against the *pre-filter* MS1 peaks?
+
+    The grouper matches an MS2 precursor to the aligned ``features`` list.
+    Some MS2 miss only because peak filtering (``filter_spectra``) dropped
+    the peak in that sample. This re-tests every unassociated scan against
+    the sample's ``detect_ms1_centroids`` output (centroided, *before* the
+    MAD/threshold filter), using the same ``assoc_ppm`` and isolation
+    window the grouper used.
+
+    Attributes:
+        assoc_ppm: The tolerance the grouper ran with.
+        n_unassociated: Unassociated MS2 scans considered.
+        n_would_associate: Of those, how many have a pre-filter centroid
+            within ``assoc_ppm`` and inside the isolation window.
+        n_still_unassociated: The remainder that still match nothing.
+        n_no_precursor_mz: Scans with neither ``precursor_mz`` nor
+            ``isolation_window_target`` (cannot be re-tested).
+        per_sample: One ``{name, n_unassociated, n_would_associate,
+            n_still_unassociated, n_no_precursor_mz}`` dict per sample.
+    """
+
+    assoc_ppm: float
+    n_unassociated: int
+    n_would_associate: int
+    n_still_unassociated: int
+    n_no_precursor_mz: int
+    per_sample: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -97,12 +158,17 @@ class SummaryStats:
     n_features: int
     overlap_combos: list[tuple[list[str], int]]
     ms2: Ms2Summary
+    per_sample_ms2: list[PerSampleMs2]
+    per_sample_purity: list[PerSamplePurity]
+    recheck: RecheckSummary
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        # purity_values is large and already summarised — keep the JSON small
+        # raw purity value lists are large and already summarised
         d["ms2"].pop("purity_values", None)
         d["ms2"]["n_purity_values"] = len(self.ms2.purity_values)
+        for ps in d["per_sample_purity"]:
+            ps.pop("values", None)
         d["overlap_combos"] = [
             {"samples": list(s), "n_features": n} for s, n in self.overlap_combos
         ]
@@ -110,7 +176,7 @@ class SummaryStats:
 
 
 # ---------------------------------------------------------------------------
-# small raw-DB helpers
+# small helpers
 # ---------------------------------------------------------------------------
 
 
@@ -122,23 +188,41 @@ def _scalar(con: sqlite3.Connection, sql: str, default: int = 0) -> int:
     return int(row[0]) if row and row[0] is not None else default
 
 
-def _detected_peak_count(con: sqlite3.Connection, sample_id: int) -> int:
-    """Length of the sample's most recent ``filter_spectra`` aggregated array."""
+def _aggregated_mz(
+    con: sqlite3.Connection, command_name: str, sample_id: int
+) -> np.ndarray:
+    """The m/z array of a sample's most recent ``command_name`` aggregate."""
     try:
         row = con.execute(
             "SELECT a.mz_array FROM aggregated_spectra a "
             "JOIN commands c ON a.command_id = c.id "
-            "WHERE c.command_name = 'filter_spectra' AND a.sample_id = ? "
+            "WHERE c.command_name = ? AND a.sample_id = ? "
             "ORDER BY a.id DESC LIMIT 1",
-            (sample_id,),
+            (command_name, sample_id),
         ).fetchone()
     except sqlite3.OperationalError:
-        return 0
+        return np.array([])
     if row is None or row[0] is None:
-        return 0
+        return np.array([])
     from ..parser.mzml_parser import blob_to_array
 
-    return int(np.asarray(blob_to_array(row[0])).size)
+    return np.asarray(blob_to_array(row[0]), dtype=float)
+
+
+def _group_ms2_args(con: sqlite3.Connection) -> dict:
+    try:
+        row = con.execute(
+            "SELECT arguments FROM commands WHERE command_name = 'group_ms2' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    if not row or not row[0]:
+        return {}
+    try:
+        return json.loads(row[0])
+    except (ValueError, TypeError):
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +265,9 @@ def per_sample_counts(
                 n_ms2 = _scalar(rcon, "SELECT COUNT(*) FROM ms2_scans")
                 n_pixels = _scalar(rcon, "SELECT COUNT(*) FROM spatial_pixels")
             with sqlite3.connect(analysis_db_path) as acon:
-                n_peaks = _detected_peak_count(acon, sample_id)
+                n_peaks = int(
+                    _aggregated_mz(acon, "filter_spectra", int(sample_id)).size
+                )
         n_feat = (
             int(features_df[name].notna().sum())
             if name in getattr(features_df, "columns", [])
@@ -231,12 +317,11 @@ def overlap_combos(
 def ms2_summary(
     analysis_db_path: Path | str, *, purity_cutoff: float = 0.8
 ) -> Ms2Summary:
-    """Association / isolation-window / purity roll-up over every MS2 scan."""
+    """Association + purity roll-up over every MS2 scan."""
     analysis_db_path = Path(analysis_db_path)
     with sqlite3.connect(analysis_db_path) as con:
         assoc = con.execute(
-            "SELECT feature_id, n_features_in_window, precursor_only "
-            "FROM ms2_associations"
+            "SELECT feature_id, precursor_only FROM ms2_associations"
         ).fetchall()
         purity = [
             float(r[0])
@@ -246,15 +331,8 @@ def ms2_summary(
         ]
 
     n_total = len(assoc)
-    n_assoc = sum(1 for f, _, _ in assoc if f is not None)
-    n_prec_only = sum(1 for _, _, p in assoc if p)
-    nfw = [int(n) if n is not None else 0 for _, n, _ in assoc]
-    dist: dict[int, int] = {}
-    for v in nfw:
-        dist[v] = dist.get(v, 0) + 1
-    n_empty = sum(1 for v in nfw if v == 0)
-    n_unique = sum(1 for v in nfw if v == 1)
-    n_chimeric = sum(1 for v in nfw if v > 1)
+    n_assoc = sum(1 for f, _ in assoc if f is not None)
+    n_prec_only = sum(1 for _, p in assoc if p)
     n_low = sum(1 for v in purity if v < purity_cutoff)
 
     return Ms2Summary(
@@ -262,10 +340,6 @@ def ms2_summary(
         n_associated=n_assoc,
         n_unassociated=n_total - n_assoc,
         n_precursor_only=n_prec_only,
-        n_empty_window=n_empty,
-        n_unique_window=n_unique,
-        n_chimeric_window=n_chimeric,
-        nfw_distribution=dict(sorted(dist.items())),
         n_purity_scored=len(purity),
         n_low_purity=n_low,
         purity_cutoff=float(purity_cutoff),
@@ -274,24 +348,161 @@ def ms2_summary(
 
 
 @log_call(source="analysis_db_path")
-def purity_vs_nfw(
-    analysis_db_path: Path | str,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Paired ``(purity, n_features_in_window)`` for scans that have both."""
+def per_sample_ms2(analysis_db_path: Path | str) -> list[PerSampleMs2]:
+    """MS2 association counts broken down per sample."""
     analysis_db_path = Path(analysis_db_path)
     with sqlite3.connect(analysis_db_path) as con:
+        names = dict(
+            con.execute("SELECT sample_id, name FROM samples").fetchall()
+        )
         rows = con.execute(
-            "SELECT p.purity, a.n_features_in_window "
-            "FROM precursor_purity p "
-            "JOIN ms2_associations a "
-            "  ON a.sample_id = p.sample_id AND a.scan_id = p.ms2_scan_id "
-            "WHERE p.purity IS NOT NULL AND a.n_features_in_window IS NOT NULL"
+            "SELECT sample_id, "
+            "  SUM(CASE WHEN feature_id IS NOT NULL THEN 1 ELSE 0 END), "
+            "  COUNT(*) "
+            "FROM ms2_associations GROUP BY sample_id ORDER BY sample_id"
         ).fetchall()
+
+    out: list[PerSampleMs2] = []
+    for sample_id, n_assoc, n_total in rows:
+        n_assoc = int(n_assoc or 0)
+        n_total = int(n_total or 0)
+        out.append(
+            PerSampleMs2(
+                sample_id=int(sample_id) if sample_id is not None else -1,
+                name=str(names.get(sample_id, sample_id)),
+                n_total=n_total,
+                n_associated=n_assoc,
+                n_unassociated=n_total - n_assoc,
+            )
+        )
+    return out
+
+
+@log_call(source="analysis_db_path")
+def per_sample_purity(
+    analysis_db_path: Path | str, *, purity_cutoff: float = 0.8
+) -> list[PerSamplePurity]:
+    """Scored precursor-purity values, one :class:`PerSamplePurity` per sample."""
+    analysis_db_path = Path(analysis_db_path)
+    with sqlite3.connect(analysis_db_path) as con:
+        names = dict(
+            con.execute("SELECT sample_id, name FROM samples").fetchall()
+        )
+        rows = con.execute(
+            "SELECT sample_id, purity FROM precursor_purity "
+            "WHERE purity IS NOT NULL ORDER BY sample_id"
+        ).fetchall()
+
+    by_sample: dict[int, list[float]] = {}
+    for sample_id, purity in rows:
+        by_sample.setdefault(int(sample_id), []).append(float(purity))
+
+    out: list[PerSamplePurity] = []
+    for sample_id in sorted(names) if names else sorted(by_sample):
+        vals = by_sample.get(sample_id, [])
+        out.append(
+            PerSamplePurity(
+                sample_id=int(sample_id),
+                name=str(names.get(sample_id, sample_id)),
+                n_scored=len(vals),
+                n_low=sum(1 for v in vals if v < purity_cutoff),
+                values=vals,
+            )
+        )
+    return out
+
+
+def _recheck_one(
+    prefilter_mz: np.ndarray,
+    rows: Sequence[tuple],
+    *,
+    assoc_ppm: float,
+    default_half: float,
+) -> tuple[int, int, int]:
+    """``(n_would_associate, n_still_unassociated, n_no_precursor_mz)``.
+
+    ``rows`` are ``(precursor_mz, target, lower, upper)`` for the sample's
+    currently-unassociated MS2 scans.
+    """
     if not rows:
-        return np.array([]), np.array([])
-    purity = np.array([float(r[0]) for r in rows])
-    nfw = np.array([int(r[1]) for r in rows])
-    return purity, nfw
+        return 0, 0, 0
+    prec = np.array([r[0] if r[0] is not None else np.nan for r in rows], dtype=float)
+    tgt = np.array([r[1] if r[1] is not None else np.nan for r in rows], dtype=float)
+    low = np.array([r[2] if r[2] is not None else np.nan for r in rows], dtype=float)
+    upp = np.array([r[3] if r[3] is not None else np.nan for r in rows], dtype=float)
+
+    match_val = np.where(np.isnan(prec), tgt, prec)
+    center = np.where(np.isnan(tgt), match_val, tgt)
+    valid = ~np.isnan(match_val)
+    n_no_prec = int((~valid).sum())
+
+    if prefilter_mz.size == 0 or not valid.any():
+        return 0, int(valid.sum()), n_no_prec
+
+    lo_off = np.where(np.isnan(low) | (low <= 0), default_half, low)
+    up_off = np.where(np.isnan(upp) | (upp <= 0), default_half, upp)
+    mv = np.where(valid, match_val, 0.0)
+    cv = np.where(valid, center, 0.0)
+    lo = np.maximum(mv * (1.0 - assoc_ppm / 1e6), cv - lo_off)
+    hi = np.minimum(mv * (1.0 + assoc_ppm / 1e6), cv + up_off)
+
+    grid = np.sort(prefilter_mz)
+    li = np.searchsorted(grid, lo, side="left")
+    ji = np.searchsorted(grid, hi, side="right")
+    would = (ji > li) & valid & (hi >= lo)
+    return int(would.sum()), int((valid & ~would).sum()), n_no_prec
+
+
+@log_call(source="analysis_db_path")
+def unassociated_recheck(analysis_db_path: Path | str) -> RecheckSummary:
+    """Re-test unassociated MS2 against each sample's pre-filter MS1 peaks."""
+    analysis_db_path = Path(analysis_db_path)
+    with sqlite3.connect(analysis_db_path) as con:
+        args = _group_ms2_args(con)
+        assoc_ppm = float(args.get("assoc_ppm", 10.0))
+        default_half = float(args.get("default_isolation_half_width", 0.5))
+        samples = con.execute(
+            "SELECT sample_id, name FROM samples ORDER BY sample_id"
+        ).fetchall()
+
+        per_sample: list[dict] = []
+        tot_un = tot_would = tot_still = tot_noprec = 0
+        for sample_id, name in samples:
+            prefilter_mz = _aggregated_mz(
+                con, "detect_ms1_centroids", int(sample_id)
+            )
+            rows = con.execute(
+                "SELECT precursor_mz, isolation_window_target, "
+                "       isolation_window_lower, isolation_window_upper "
+                "FROM ms2_associations "
+                "WHERE feature_id IS NULL AND sample_id = ?",
+                (sample_id,),
+            ).fetchall()
+            would, still, noprec = _recheck_one(
+                prefilter_mz, rows, assoc_ppm=assoc_ppm, default_half=default_half
+            )
+            per_sample.append(
+                {
+                    "name": str(name),
+                    "n_unassociated": len(rows),
+                    "n_would_associate": would,
+                    "n_still_unassociated": still,
+                    "n_no_precursor_mz": noprec,
+                }
+            )
+            tot_un += len(rows)
+            tot_would += would
+            tot_still += still
+            tot_noprec += noprec
+
+    return RecheckSummary(
+        assoc_ppm=assoc_ppm,
+        n_unassociated=tot_un,
+        n_would_associate=tot_would,
+        n_still_unassociated=tot_still,
+        n_no_precursor_mz=tot_noprec,
+        per_sample=per_sample,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +565,7 @@ def figure_overlap_upset(
         row_heights=[0.62, 0.38],
         vertical_spacing=0.04,
     )
-    fig.add_bar(x=idx, y=sizes, marker_color="#1f77b4", name="features", row=1, col=1)
+    fig.add_bar(x=idx, y=sizes, marker_color=_C_OK, name="features", row=1, col=1)
 
     on_x, on_y, off_x, off_y = [], [], [], []
     for i, (combo, _) in enumerate(combos):
@@ -372,7 +583,7 @@ def figure_overlap_upset(
     )
     fig.add_scatter(
         x=on_x, y=on_y, mode="markers",
-        marker=dict(size=11, color="#1f77b4"), showlegend=False, row=2, col=1,
+        marker=dict(size=11, color=_C_OK), showlegend=False, row=2, col=1,
     )
     fig.update_yaxes(
         tickmode="array", tickvals=list(range(len(names))), ticktext=names,
@@ -385,7 +596,7 @@ def figure_overlap_upset(
 
 
 def figure_ms2_association(summary: Ms2Summary) -> go.Figure:
-    """Donut of associated vs. unassociated MS2 scans."""
+    """Donut of associated vs. unassociated MS2 scans (analysis-wide)."""
     if summary.n_total == 0:
         return _empty("MS2 association")
     fig = go.Figure(
@@ -393,11 +604,11 @@ def figure_ms2_association(summary: Ms2Summary) -> go.Figure:
             labels=["associated", "unassociated"],
             values=[summary.n_associated, summary.n_unassociated],
             hole=0.55,
-            marker_colors=["#1f77b4", "#d62728"],
+            marker_colors=[_C_OK, _C_BAD],
         )
     )
     fig.update_layout(
-        title="MS2 association",
+        title="MS2 association (overall)",
         annotations=[
             dict(
                 text=f"{summary.n_total} MS2<br>{summary.n_precursor_only} precursor-only",
@@ -408,40 +619,53 @@ def figure_ms2_association(summary: Ms2Summary) -> go.Figure:
     return fig
 
 
-def figure_nfw(summary: Ms2Summary) -> go.Figure:
-    """Bar histogram of ``n_features_in_window`` (0 / 1 / >1 coloured)."""
-    if not summary.nfw_distribution:
-        return _empty("Features per isolation window")
-    keys = sorted(summary.nfw_distribution)
-    values = [summary.nfw_distribution[k] for k in keys]
-    colors = [
-        "#999999" if k == 0 else "#1f77b4" if k == 1 else "#d62728" for k in keys
-    ]
-    fig = go.Figure(go.Bar(x=keys, y=values, marker_color=colors))
+def figure_ms2_association_per_sample(
+    per_sample: Sequence[PerSampleMs2],
+) -> go.Figure:
+    """100%-stacked bar of associated / unassociated MS2 per sample."""
+    if not per_sample:
+        return _empty("MS2 association by sample")
+    names = [p.name for p in per_sample]
+    denom = [max(p.n_total, 1) for p in per_sample]
+    pct_a = [100.0 * p.n_associated / d for p, d in zip(per_sample, denom)]
+    pct_u = [100.0 * p.n_unassociated / d for p, d in zip(per_sample, denom)]
+    fig = go.Figure()
+    fig.add_bar(
+        name="associated", x=names, y=pct_a, marker_color=_C_OK,
+        customdata=[p.n_associated for p in per_sample],
+        hovertemplate="%{x}<br>associated %{y:.1f}%% (%{customdata})<extra></extra>",
+    )
+    fig.add_bar(
+        name="unassociated", x=names, y=pct_u, marker_color=_C_BAD,
+        customdata=[p.n_unassociated for p in per_sample],
+        hovertemplate="%{x}<br>unassociated %{y:.1f}%% (%{customdata})<extra></extra>",
+    )
     fig.update_layout(
-        title="Features per isolation window (grouper)",
-        xaxis=dict(title="n_features_in_window", dtick=1),
-        yaxis=dict(title="MS2 scans"),
+        title="MS2 association by sample",
+        barmode="stack",
+        yaxis=dict(title="% of MS2 scans", range=[0, 100]),
+        xaxis=dict(title="sample"),
+        legend=dict(orientation="h"),
     )
     return fig
 
 
 def figure_purity(summary: Ms2Summary) -> go.Figure:
-    """Histogram of scored precursor purity with the cutoff line."""
+    """Histogram of scored precursor purity with the cutoff line (overall)."""
     if not summary.purity_values:
         return _empty("Precursor ion purity")
     fig = go.Figure(
-        go.Histogram(x=summary.purity_values, nbinsx=40, marker_color="#1f77b4")
+        go.Histogram(x=summary.purity_values, nbinsx=40, marker_color=_C_OK)
     )
     fig.add_vline(
         x=summary.purity_cutoff,
-        line=dict(color="#d62728", dash="dash"),
+        line=dict(color=_C_BAD, dash="dash"),
         annotation_text=f"cutoff {summary.purity_cutoff:g}",
     )
     unscored = summary.n_total - summary.n_purity_scored
     fig.update_layout(
         title=(
-            f"Precursor ion purity — {summary.n_low_purity} of "
+            f"Precursor ion purity (overall) — {summary.n_low_purity} of "
             f"{summary.n_purity_scored} scored below cutoff "
             f"({unscored} unscored)"
         ),
@@ -451,23 +675,62 @@ def figure_purity(summary: Ms2Summary) -> go.Figure:
     return fig
 
 
-def figure_purity_vs_nfw(purity: np.ndarray, nfw: np.ndarray) -> go.Figure:
-    """2-D density of purity against the grouper's window feature count."""
-    if purity.size == 0:
-        return _empty("Purity vs. window feature count")
-    fig = go.Figure(
-        go.Histogram2d(
-            x=nfw,
-            y=purity,
-            colorscale="Blues",
-            xbins=dict(start=-0.5, end=float(nfw.max()) + 0.5, size=1),
-            ybins=dict(start=0.0, end=1.0, size=0.05),
+def figure_purity_per_sample(
+    per_sample: Sequence[PerSamplePurity], cutoff: float = 0.8
+) -> go.Figure:
+    """Box of scored precursor purity per sample."""
+    if not any(p.values for p in per_sample):
+        return _empty("Precursor ion purity by sample")
+    fig = go.Figure()
+    for p in per_sample:
+        fig.add_box(
+            y=p.values or [None],
+            name=f"{p.name}<br>(n={p.n_scored})",
+            boxpoints="outliers",
+            marker_color=_C_OK,
+            line_color=_C_OK,
         )
+    fig.add_hline(
+        y=cutoff, line=dict(color=_C_BAD, dash="dash"),
+        annotation_text=f"cutoff {cutoff:g}",
     )
     fig.update_layout(
-        title="Purity vs. n_features_in_window",
-        xaxis=dict(title="n_features_in_window", dtick=1),
+        title="Precursor ion purity by sample",
         yaxis=dict(title="purity", range=[0, 1]),
+        showlegend=False,
+    )
+    return fig
+
+
+def figure_unassociated_recheck(recheck: RecheckSummary) -> go.Figure:
+    """Stacked bar: of the unassociated MS2, how many the pre-filter peaks recover."""
+    if recheck.n_unassociated == 0:
+        return _empty("Unassociated MS2 — pre-filter recheck")
+    fig = go.Figure()
+    fig.add_bar(
+        name="would associate on pre-filter peaks",
+        x=[recheck.n_would_associate], y=["unassociated MS2"],
+        orientation="h", marker_color=_C_GOOD,
+    )
+    fig.add_bar(
+        name="still unassociated",
+        x=[recheck.n_still_unassociated], y=["unassociated MS2"],
+        orientation="h", marker_color=_C_BAD,
+    )
+    if recheck.n_no_precursor_mz:
+        fig.add_bar(
+            name="no precursor m/z",
+            x=[recheck.n_no_precursor_mz], y=["unassociated MS2"],
+            orientation="h", marker_color=_C_MUTED,
+        )
+    fig.update_layout(
+        title=(
+            f"Unassociated MS2 rechecked against pre-filter MS1 peaks "
+            f"(assoc_ppm {recheck.assoc_ppm:g})"
+        ),
+        barmode="stack",
+        xaxis=dict(title="MS2 scans"),
+        legend=dict(orientation="h"),
     )
     return fig
 
@@ -498,6 +761,11 @@ def collect_stats(
         n_features=0 if features_df is None else int(len(features_df)),
         overlap_combos=overlap_combos(membership, overlap_top_n),
         ms2=ms2_summary(analysis_db_path, purity_cutoff=purity_cutoff),
+        per_sample_ms2=per_sample_ms2(analysis_db_path),
+        per_sample_purity=per_sample_purity(
+            analysis_db_path, purity_cutoff=purity_cutoff
+        ),
+        recheck=unassociated_recheck(analysis_db_path),
     )
 
 
@@ -515,6 +783,25 @@ def _table_html(counts: Sequence[SampleCounts]) -> str:
     return (
         "<table style='border-collapse:collapse' border='1' cellpadding='6'>"
         f"{head}{rows}</table>"
+    )
+
+
+def _recheck_sentence(r: RecheckSummary) -> str:
+    if r.n_unassociated == 0:
+        return "<p>Every MS2 scan associated to a feature.</p>"
+    pct = 100.0 * r.n_would_associate / r.n_unassociated
+    extra = (
+        f" {r.n_no_precursor_mz} carry no precursor m/z and could not be rechecked."
+        if r.n_no_precursor_mz
+        else ""
+    )
+    return (
+        f"<p>Of {r.n_unassociated} unassociated MS2 scans, "
+        f"<b>{r.n_would_associate} ({pct:.1f}%)</b> would have matched a peak in "
+        f"their sample's pre-filter centroid list (within {r.assoc_ppm:g} ppm and "
+        f"the isolation window) — i.e. peak filtering, not fragmentation, is why "
+        f"they are unassociated. {r.n_still_unassociated} still match nothing.{extra}"
+        f"</p>"
     )
 
 
@@ -547,28 +834,26 @@ def build_summary_report(
         analysis_db_path, raw_db_paths, overlap_top_n=top_n, purity_cutoff=cutoff
     )
     sample_names = [c.name for c in stats.samples]
-    pv, nfw = purity_vs_nfw(analysis_db_path)
 
     figures = [
         figure_per_sample(stats.samples),
         figure_overlap_upset(stats.overlap_combos, sample_names),
         figure_ms2_association(stats.ms2),
-        figure_nfw(stats.ms2),
+        figure_ms2_association_per_sample(stats.per_sample_ms2),
         figure_purity(stats.ms2),
-        figure_purity_vs_nfw(pv, nfw),
+        figure_purity_per_sample(stats.per_sample_purity, cutoff),
+        figure_unassociated_recheck(stats.recheck),
     ]
 
     json_path = out_dir / _REPORT_JSON
     json_path.write_text(json.dumps(stats.to_dict(), indent=2))
 
-    blocks = []
-    for i, fig in enumerate(figures):
-        blocks.append(
-            fig.to_html(
-                full_html=False,
-                include_plotlyjs="cdn" if i == 0 else False,
-            )
+    blocks = [
+        fig.to_html(
+            full_html=False, include_plotlyjs="cdn" if i == 0 else False
         )
+        for i, fig in enumerate(figures)
+    ]
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<title>MSIAnalyzer summary report</title>"
@@ -579,8 +864,8 @@ def build_summary_report(
         f"<p>{len(stats.samples)} sample(s) &middot; {stats.n_features} features "
         f"&middot; {stats.ms2.n_total} MS2 scans "
         f"({stats.ms2.n_associated} associated, "
-        f"{stats.ms2.n_chimeric_window} chimeric by window, "
         f"{stats.ms2.n_low_purity} below purity {cutoff:g})</p>"
+        f"{_recheck_sentence(stats.recheck)}"
         "<h2>Per-sample counts</h2>"
         f"{_table_html(stats.samples)}"
         + "".join(f"<div>{b}</div>" for b in blocks)

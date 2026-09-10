@@ -9,17 +9,23 @@ End-of-run summary: reads a finished analysis database and writes
       members:
         - SampleCounts
         - Ms2Summary
+        - PerSampleMs2
+        - PerSamplePurity
+        - RecheckSummary
         - SummaryStats
         - per_sample_counts
         - feature_membership
         - overlap_combos
         - ms2_summary
-        - purity_vs_nfw
+        - per_sample_ms2
+        - per_sample_purity
+        - unassociated_recheck
         - figure_per_sample
         - figure_overlap_upset
         - figure_ms2_association
-        - figure_nfw
+        - figure_ms2_association_per_sample
         - figure_purity
-        - figure_purity_vs_nfw
+        - figure_purity_per_sample
+        - figure_unassociated_recheck
         - collect_stats
         - build_summary_report

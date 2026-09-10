@@ -9,21 +9,31 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import pytest
 
-from msianalyzer.core.analysis_db import init_analysis_db, register_sample, save_features
+from msianalyzer.core.analysis_db import (
+    init_analysis_db,
+    log_command,
+    register_sample,
+    save_features,
+)
 from msianalyzer.core.report.summary import (
+    Ms2Summary,
+    RecheckSummary,
     build_summary_report,
     collect_stats,
     feature_membership,
-    figure_nfw,
+    figure_ms2_association_per_sample,
     figure_overlap_upset,
     figure_per_sample,
     figure_purity,
+    figure_purity_per_sample,
+    figure_unassociated_recheck,
     ms2_summary,
     overlap_combos,
     per_sample_counts,
-    purity_vs_nfw,
+    per_sample_ms2,
+    per_sample_purity,
+    unassociated_recheck,
 )
 
 
@@ -64,8 +74,21 @@ def _raw_db(path: Path, *, n_ms1: int, n_ms2: int, n_pixels: int) -> Path:
     return path
 
 
+def _agg(con, run_id, sample_id, command_id, mz):
+    from msianalyzer.core.parser.mzml_parser import array_to_blob
+
+    blob = array_to_blob(np.asarray(mz, dtype=float))
+    con.execute(
+        "INSERT INTO aggregated_spectra (run_id, sample_id, command_id, mz_array, "
+        "intensity_array) VALUES (?,?,?,?,?)",
+        (run_id, sample_id, command_id, blob, blob),
+    )
+
+
 def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
-    """Two samples, a 3-feature overlap, and a few MS2 rows with purity."""
+    """Two samples: overlapping features, MS2 with purity, and a mix of
+    associated / unassociated (recoverable, unrecoverable, no-precursor) scans.
+    """
     raw1 = _raw_db(tmp_path / "s1.db", n_ms1=40, n_ms2=6, n_pixels=5)
     raw2 = _raw_db(tmp_path / "s2.db", n_ms1=30, n_ms2=4, n_pixels=4)
 
@@ -81,17 +104,39 @@ def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
     )
     save_features(adb, feats)
 
+    log_command(
+        adb, "group_ms2",
+        {"assoc_ppm": 10.0, "default_isolation_half_width": 0.5}, run_id="r",
+    )
+    c_cent1 = log_command(adb, "detect_ms1_centroids", {}, run_id="r", sample_id=sid1)
+    c_cent2 = log_command(adb, "detect_ms1_centroids", {}, run_id="r", sample_id=sid2)
+    c_filt1 = log_command(adb, "filter_spectra", {}, run_id="r", sample_id=sid1)
+    c_filt2 = log_command(adb, "filter_spectra", {}, run_id="r", sample_id=sid2)
+
     with sqlite3.connect(adb) as con:
         con.execute("PRAGMA foreign_keys = ON")
+        # pre-filter centroids (detect_ms1_centroids) and filtered peaks
+        _agg(con, "r", sid1, c_cent1, [500.0, 555.5, 600.0])
+        _agg(con, "r", sid2, c_cent2, [500.0, 700.0])
+        _agg(con, "r", sid1, c_filt1, [500.0, 600.0])
+        _agg(con, "r", sid2, c_filt2, [500.0])
+
         con.executemany(
             "INSERT INTO ms2_associations "
             "(sample_id, scan_id, feature_id, match_key, n_features_in_window, "
-            " n_peaks, precursor_only) VALUES (?,?,?,?,?,?,?)",
+            " n_peaks, precursor_only, precursor_mz, isolation_window_target, "
+            " isolation_window_lower, isolation_window_upper) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [
-                (sid1, 1001, 1, "precursor_mz", 1, 10, 0),
-                (sid1, 1002, 1, "precursor_mz", 3, 20, 0),
-                (sid1, 1003, None, "none", 0, 2, 1),
-                (sid2, 1001, 2, "precursor_mz", 2, 8, 0),
+                # s1: two associated, one unassociated but recoverable (555.5)
+                (sid1, 1001, 1, "precursor_mz", 1, 10, 0, 500.0, 500.0, 0.5, 0.5),
+                (sid1, 1002, 1, "precursor_mz", 3, 20, 0, 500.0, 500.0, 0.5, 0.5),
+                (sid1, 1003, None, "precursor_mz", 0, 2, 1, 555.5, 555.5, 0.5, 0.5),
+                # s2: one associated, one unassociated + unrecoverable (999.0),
+                #     one unassociated with no precursor m/z at all
+                (sid2, 1001, 2, "precursor_mz", 2, 8, 0, 700.0, 700.0, 0.5, 0.5),
+                (sid2, 1002, None, "precursor_mz", 0, 4, 0, 999.0, 999.0, 0.5, 0.5),
+                (sid2, 1003, None, "none", 0, 1, 0, None, None, None, None),
             ],
         )
         con.executemany(
@@ -116,13 +161,13 @@ def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
 
 def test_per_sample_counts(tmp_path):
     adb, raw_map = _analysis_db(tmp_path)
-    counts = per_sample_counts(adb, raw_map)
-    by_name = {c.name: c for c in counts}
+    by_name = {c.name: c for c in per_sample_counts(adb, raw_map)}
     assert by_name["s1"].n_ms1 == 40
     assert by_name["s1"].n_ms2 == 6
     assert by_name["s1"].n_pixels == 5
-    assert by_name["s1"].n_features == 2  # contributed to 500 and 600
-    assert by_name["s2"].n_features == 2  # contributed to 500 and 700
+    assert by_name["s1"].n_detected_peaks == 2  # filter_spectra length
+    assert by_name["s1"].n_features == 2
+    assert by_name["s2"].n_features == 2
 
 
 def test_feature_membership_and_overlap_combos():
@@ -131,8 +176,7 @@ def test_feature_membership_and_overlap_combos():
          "b": pd.array([0, pd.NA, 0], dtype="Int64")},
         index=[10.0, 20.0, 30.0],
     )
-    membership = feature_membership(feats)
-    combos = overlap_combos(membership, top_n=10)
+    combos = overlap_combos(feature_membership(feats), top_n=10)
     as_dict = {tuple(s): n for s, n in combos}
     assert as_dict[("a", "b")] == 1
     assert as_dict[("a",)] == 1
@@ -146,23 +190,45 @@ def test_overlap_combos_empty():
 def test_ms2_summary(tmp_path):
     adb, _ = _analysis_db(tmp_path)
     s = ms2_summary(adb, purity_cutoff=0.8)
-    assert s.n_total == 4
+    assert s.n_total == 6
     assert s.n_associated == 3
-    assert s.n_unassociated == 1
+    assert s.n_unassociated == 3
     assert s.n_precursor_only == 1
-    assert s.n_unique_window == 1  # only scan 1001/s1
-    assert s.n_chimeric_window == 2
-    assert s.n_empty_window == 1
-    assert s.nfw_distribution == {0: 1, 1: 1, 2: 1, 3: 1}
     assert s.n_purity_scored == 3
     assert s.n_low_purity == 2  # 0.35 and 0.60
 
 
-def test_purity_vs_nfw(tmp_path):
+def test_per_sample_ms2(tmp_path):
     adb, _ = _analysis_db(tmp_path)
-    purity, nfw = purity_vs_nfw(adb)
-    assert purity.shape == nfw.shape == (3,)
-    assert set(nfw.tolist()) == {1, 3, 2}
+    by_name = {p.name: p for p in per_sample_ms2(adb)}
+    assert (by_name["s1"].n_total, by_name["s1"].n_associated) == (3, 2)
+    assert by_name["s1"].n_unassociated == 1
+    assert (by_name["s2"].n_total, by_name["s2"].n_associated) == (3, 1)
+    assert by_name["s2"].n_unassociated == 2
+
+
+def test_per_sample_purity(tmp_path):
+    adb, _ = _analysis_db(tmp_path)
+    by_name = {p.name: p for p in per_sample_purity(adb, purity_cutoff=0.8)}
+    assert sorted(by_name["s1"].values) == [0.35, 0.97]
+    assert by_name["s1"].n_scored == 2
+    assert by_name["s1"].n_low == 1
+    assert by_name["s2"].values == [0.60]
+    assert by_name["s2"].n_low == 1
+
+
+def test_unassociated_recheck(tmp_path):
+    adb, _ = _analysis_db(tmp_path)
+    r = unassociated_recheck(adb)
+    assert r.assoc_ppm == 10.0
+    assert r.n_unassociated == 3
+    assert r.n_would_associate == 1  # s1/1003 precursor 555.5 hits pre-filter peak
+    assert r.n_still_unassociated == 1  # s2/1002 precursor 999.0 hits nothing
+    assert r.n_no_precursor_mz == 1  # s2/1003 has no precursor m/z
+    by_name = {p["name"]: p for p in r.per_sample}
+    assert by_name["s1"]["n_would_associate"] == 1
+    assert by_name["s2"]["n_still_unassociated"] == 1
+    assert by_name["s2"]["n_no_precursor_mz"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -170,17 +236,28 @@ def test_purity_vs_nfw(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _empty_ms2_summary() -> Ms2Summary:
+    return Ms2Summary(0, 0, 0, 0, 0, 0, 0.8, [])
+
+
 def test_figures_return_figures_and_tolerate_empty():
     assert isinstance(figure_per_sample([]), go.Figure)
     assert isinstance(figure_overlap_upset([], []), go.Figure)
-    assert isinstance(figure_nfw(ms2_summary_empty()), go.Figure)
-    assert isinstance(figure_purity(ms2_summary_empty()), go.Figure)
+    assert isinstance(figure_ms2_association_per_sample([]), go.Figure)
+    assert isinstance(figure_purity(_empty_ms2_summary()), go.Figure)
+    assert isinstance(figure_purity_per_sample([], 0.8), go.Figure)
+    assert isinstance(
+        figure_unassociated_recheck(RecheckSummary(10.0, 0, 0, 0, 0, [])),
+        go.Figure,
+    )
 
 
-def ms2_summary_empty():
-    from msianalyzer.core.report.summary import Ms2Summary
-
-    return Ms2Summary(0, 0, 0, 0, 0, 0, 0, {}, 0, 0, 0.8, [])
+def test_figure_ms2_association_per_sample_is_100_pct(tmp_path):
+    adb, _ = _analysis_db(tmp_path)
+    fig = figure_ms2_association_per_sample(per_sample_ms2(adb))
+    # two stacked traces, each bar sums to 100
+    totals = np.array(fig.data[0].y) + np.array(fig.data[1].y)
+    np.testing.assert_allclose(totals, 100.0)
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +270,15 @@ def test_collect_stats(tmp_path):
     stats = collect_stats(adb, raw_map)
     assert stats.n_features == 3
     assert len(stats.samples) == 2
-    assert stats.ms2.n_total == 4
+    assert stats.ms2.n_total == 6
+    assert len(stats.per_sample_ms2) == 2
+    assert stats.recheck.n_would_associate == 1
+
     d = stats.to_dict()
     assert d["ms2"]["n_purity_values"] == 3
     assert "purity_values" not in d["ms2"]
+    assert all("values" not in ps for ps in d["per_sample_purity"])
+    assert d["recheck"]["n_would_associate"] == 1
 
 
 def test_build_summary_report_writes_files(tmp_path):
@@ -205,15 +287,16 @@ def test_build_summary_report_writes_files(tmp_path):
     html_path = build_summary_report(adb, raw_db_paths=raw_map, out_dir=out)
 
     assert html_path == out / "summary_report.html"
-    assert html_path.exists()
     text = html_path.read_text()
     assert "MSIAnalyzer summary report" in text
-    assert "Plotly" in text or "plotly" in text
+    assert "plotly" in text.lower()
+    assert "pre-filter centroid list" in text  # the recheck sentence
 
     payload = json.loads((out / "summary.json").read_text())
     assert payload["n_features"] == 3
-    assert payload["ms2"]["n_total"] == 4
-    assert len(payload["samples"]) == 2
+    assert payload["ms2"]["n_total"] == 6
+    assert payload["recheck"]["assoc_ppm"] == 10.0
+    assert len(payload["per_sample_ms2"]) == 2
 
 
 def test_build_summary_report_defaults_out_dir_to_db_parent(tmp_path):
