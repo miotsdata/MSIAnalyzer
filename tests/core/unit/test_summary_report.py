@@ -345,9 +345,9 @@ def _seed_annotations(adb: Path) -> None:
         "INSERT INTO ms2_annotations (sample_id, scan_id, feature_id, library_id, "
         "library_spectrum_id, inchikey, compound_name, score, dot_product_score, "
         "lib_coverage, emp_coverage, coverage_score, n_matched_peaks, n_lib_peaks, "
-        "n_emp_peaks_raw, n_emp_peaks_filtered, rank, rank_feature, "
-        "precursor_confirmed, is_chimeric, precursor_only) "
-        "VALUES (?,?,?,1,?,?,?,?,?,1,1,1,3,3,5,4,?,?,?,?,?)"
+        "n_emp_peaks_raw, n_emp_peaks_filtered, rank_ms2, rank_feature, "
+        "rank_feature_sample, precursor_confirmed, is_chimeric, precursor_only) "
+        "VALUES (?,?,?,1,?,?,?,?,?,1,1,1,3,3,5,4,?,?,?,?,?,?)"
     )
     with sqlite3.connect(adb) as con:
         con.execute("PRAGMA foreign_keys = ON")
@@ -358,12 +358,12 @@ def _seed_annotations(adb: Path) -> None:
         con.executemany(
             _ann,
             [
-                # sid, scan, feat, lib_spec_id, inchikey, name, score, dot,
-                # rank, rank_feature, confirmed, chimeric, precursor_only
-                (1, 1001, 1, 10, "COMPA0000000AA", "Alpha", 0.85, 0.9, 1, 1, 1, 0, 0),
-                (1, 1001, 1, 11, "COMPB0000000BB", "Beta", 0.55, 0.6, 2, 1, 1, 0, 0),
-                (1, 1002, 1, 10, "COMPA0000000AA", "Alpha", 0.60, 0.7, 1, 2, 1, 0, 0),
-                (2, 1001, 2, 12, "COMPC0000000CC", "Gamma", 0.72, 0.8, 1, 1, 1, 0, 0),
+                # sid, scan, feat, lib_spec_id, inchikey, name, score, dot, rank_ms2,
+                # rank_feature, rank_feature_sample, confirmed, chimeric, prec_only
+                (1, 1001, 1, 10, "COMPA0000000AA", "Alpha", 0.85, 0.9, 1, 1, 1, 1, 0, 0),
+                (1, 1001, 1, 11, "COMPB0000000BB", "Beta", 0.55, 0.6, 2, 1, 1, 1, 0, 0),
+                (1, 1002, 1, 10, "COMPA0000000AA", "Alpha", 0.60, 0.7, 1, 2, 2, 1, 0, 0),
+                (2, 1001, 2, 12, "COMPC0000000CC", "Gamma", 0.72, 0.8, 1, 1, 1, 1, 0, 0),
             ],
         )
         con.execute(

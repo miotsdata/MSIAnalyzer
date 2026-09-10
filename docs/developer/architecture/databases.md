@@ -251,7 +251,7 @@ One row per MS2-bearing feature; rebuilt on every run of the consensus stage.
 | `n_ms2_scored` | INTEGER | of those, how many had a library hit |
 | `consensus_score` | REAL | not null — the winning scan's score |
 | `purity` / `n_peaks` | — | the winning scan's purity and fragment count |
-| `best_annotation_score` | REAL | its `ms2_annotations.score` at `rank = 1`, or NULL |
+| `best_annotation_score` | REAL | its `ms2_annotations.score` at `rank_ms2 = 1`, or NULL |
 | `best_compound_name` / `best_inchikey` | TEXT | that hit's identity, when present |
 | `command_id` | INTEGER | FK → `commands` |
 
@@ -274,7 +274,7 @@ One row per spectral library used to annotate.
 One row per (MS2 scan, library candidate) comparison that shared at least
 `min_matched_peaks` fragments. Written only when `annotate.library_path` is set;
 with several libraries configured the rows are interleaved and distinguished by
-`library_id`, and `rank` is the best hit across all of them.
+`library_id`, and `rank_ms2` is the best hit across all of them.
 
 | column | type | notes |
 |---|---|---|
@@ -288,8 +288,9 @@ with several libraries configured the rows are interleaved and distinguished by
 | `dot_product_score` | REAL | weighted reverse dot product, not null |
 | `lib_coverage` / `emp_coverage` / `coverage_score` | REAL | not null |
 | `n_matched_peaks` / `n_lib_peaks` / `n_emp_peaks_raw` / `n_emp_peaks_filtered` | INTEGER | not null |
-| `rank` | INTEGER | not null — 1 = best candidate for this scan |
-| `rank_feature` | INTEGER | 1 = best-scoring scan on this feature |
+| `rank_ms2` | INTEGER | not null — 1 = best candidate for this scan |
+| `rank_feature` | INTEGER | 1 = the feature's best-scoring scan across all samples (broadcast to that scan's rows) |
+| `rank_feature_sample` | INTEGER | 1 = the feature's best-scoring scan within this sample (broadcast to that scan's rows) |
 | `is_chimeric` | INTEGER | 0/1, from the grouper |
 | `n_features_in_window` | INTEGER | from the grouper |
 | `purity` / `runner_up_rel_int` / `precursor_confirmed` / `precursor_frac` | — | left-joined from `precursor_purity`; NULL when the scan was not purity-scored |

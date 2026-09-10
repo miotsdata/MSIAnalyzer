@@ -8,7 +8,7 @@ feature against every candidate with a coverage-aware reverse dot product
 (:mod:`msianalyzer.core.annotation.spectral_match`).
 
 ``config.library_path`` may name a single library or a list of them; the
-candidates from every configured library are pooled per scan, so ``rank``
+candidates from every configured library are pooled per scan, so ``rank_ms2``
 orders the best hit across all of them and each stored row carries its own
 ``library_id``.
 
@@ -19,7 +19,8 @@ Design (see ADR 0007):
   across worker processes.
 * **Store every candidate** that shares at least ``min_matched_peaks``
   fragments with the (noise-filtered) empirical spectrum, each with a
-  ``rank`` within its scan. ``rank_feature`` then orders the scans of a
+  ``rank_ms2`` within its scan. ``rank_feature`` (all samples) and
+  ``rank_feature_sample`` (within one sample) then order the scans of a
   feature by their best hit.
 * **Chimeric scans** (isolation window held >1 feature) are scored against
   their primary feature and flagged ``is_chimeric``; ``annotate_chimeric``
@@ -50,7 +51,7 @@ from dataclasses import dataclass
 from functools import partial
 from logging.handlers import QueueHandler
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 
@@ -74,7 +75,7 @@ __all__ = [
     "normalize_library_paths",
     "score_scan_against_candidates",
     "rank_scan_rows",
-    "assign_rank_feature",
+    "assign_feature_ranks",
     "annotate_feature",
     "load_library",
     "persist_annotations",
@@ -121,8 +122,9 @@ class LibraryInfo:
 class AnnotationRow:
     """One (MS2 scan, library candidate) comparison (one ``ms2_annotations`` row).
 
-    Mutable on purpose: ``rank`` is stamped after a scan's candidates are
-    scored, ``rank_feature`` after every batch has returned.
+    Mutable on purpose: ``rank_ms2`` is stamped after a scan's candidates are
+    scored; ``rank_feature`` / ``rank_feature_sample`` after every batch has
+    returned.
     """
 
     sample_id: int | None
@@ -150,8 +152,9 @@ class AnnotationRow:
     emp_filtered_intensity: np.ndarray
     lib_filtered_mz: np.ndarray
     lib_filtered_intensity: np.ndarray
-    rank: int = 0
+    rank_ms2: int = 0
     rank_feature: int | None = None
+    rank_feature_sample: int | None = None
     purity: float | None = None
     runner_up_rel_int: float | None = None
     precursor_confirmed: bool | None = None
@@ -235,33 +238,57 @@ def score_scan_against_candidates(
 
 
 def rank_scan_rows(rows: list[AnnotationRow]) -> list[AnnotationRow]:
-    """Stamp ``rank`` 1..n (by ``score`` desc) on every row of one scan."""
+    """Stamp ``rank_ms2`` 1..n (by ``score`` desc) on every row of one scan."""
     ordered = sorted(rows, key=lambda r: r.score, reverse=True)
     for i, r in enumerate(ordered, start=1):
-        r.rank = i
+        r.rank_ms2 = i
     return ordered
 
 
-def assign_rank_feature(rows: list[AnnotationRow]) -> list[AnnotationRow]:
-    """Stamp ``rank_feature`` on every row.
+def _rank_scans_by_best_score(
+    rows: list[AnnotationRow],
+    group_key: Callable[[AnnotationRow], object],
+    attr: str,
+) -> None:
+    """Rank each group's MS2 scans by their best score; broadcast onto ``attr``.
 
-    Within one feature, scans are ordered by their best (highest) score;
-    every row of the best-scoring scan gets ``rank_feature = 1``, and so on.
+    Scans are ordered by their highest-scoring candidate; every row of the
+    best scan gets ``1``, the next scan ``2``, and so on (strictly
+    increasing — ties do not share a rank). The rank is written to
+    ``attr`` on every row of the scan it ranks.
     """
-    by_feature: dict[int | None, list[AnnotationRow]] = defaultdict(list)
+    by_group: dict[object, list[AnnotationRow]] = defaultdict(list)
     for r in rows:
-        by_feature[r.feature_id].append(r)
+        by_group[group_key(r)].append(r)
 
-    for frows in by_feature.values():
+    for grows in by_group.values():
         best_by_scan: dict[tuple[int | None, int], float] = {}
-        for r in frows:
+        for r in grows:
             key = (r.sample_id, r.scan_id)
             if key not in best_by_scan or r.score > best_by_scan[key]:
                 best_by_scan[key] = r.score
         order = sorted(best_by_scan, key=lambda k: best_by_scan[k], reverse=True)
         rank_of = {k: i for i, k in enumerate(order, start=1)}
-        for r in frows:
-            r.rank_feature = rank_of[(r.sample_id, r.scan_id)]
+        for r in grows:
+            setattr(r, attr, rank_of[(r.sample_id, r.scan_id)])
+
+
+def assign_feature_ranks(rows: list[AnnotationRow]) -> list[AnnotationRow]:
+    """Stamp ``rank_feature`` and ``rank_feature_sample`` on every row.
+
+    Both rank a feature's MS2 scans by their best hit and broadcast the rank
+    onto every row of the scan:
+
+    * ``rank_feature`` — across every sample (``1`` = the feature's globally
+      best-scoring MS2 scan).
+    * ``rank_feature_sample`` — within one sample (``1`` = the best-scoring
+      MS2 scan for this feature *in that sample*). Each MS2 scan belongs to a
+      single feature, so ``(feature_id, sample_id)`` groups are well defined.
+    """
+    _rank_scans_by_best_score(rows, lambda r: r.feature_id, "rank_feature")
+    _rank_scans_by_best_score(
+        rows, lambda r: (r.feature_id, r.sample_id), "rank_feature_sample"
+    )
     return rows
 
 
@@ -331,8 +358,8 @@ def annotate_feature(
             skipped.
 
     Returns:
-        All rows for the feature, each with ``rank`` filled (per scan) but
-        ``rank_feature`` still None.
+        All rows for the feature, each with ``rank_ms2`` filled (per scan)
+        but ``rank_feature`` / ``rank_feature_sample`` still None.
 
     Not ``@log_call``-decorated and issues no per-feature logging: it runs
     thousands of times inside forked pool workers, and streaming that
@@ -491,7 +518,7 @@ def _annotate_feature_batch(
     """Annotate one chunk of features (a worker task).
 
     Candidates from every configured library are pooled per scan, so
-    ``rank`` orders the best hit across all of them. ``precursor_purity`` is
+    ``rank_ms2`` orders the best hit across all of them. ``precursor_purity`` is
     left-joined so every row can carry the scan's ``purity`` /
     ``runner_up_rel_int`` and ``min_purity`` can drop low-purity scans.
     """
@@ -606,8 +633,9 @@ _ANN_COLS = (
     "n_lib_peaks",
     "n_emp_peaks_raw",
     "n_emp_peaks_filtered",
-    "rank",
+    "rank_ms2",
     "rank_feature",
+    "rank_feature_sample",
     "is_chimeric",
     "n_features_in_window",
     "purity",
@@ -646,7 +674,8 @@ def persist_annotations(
 
     Args:
         db_path: Path to the analysis database.
-        rows: Rows to store (``rank`` / ``rank_feature`` already stamped).
+        rows: Rows to store (``rank_ms2`` / ``rank_feature`` /
+            ``rank_feature_sample`` already stamped).
             Each row carries its own ``library_id``.
         library_ids: The ``annotation_libraries.id``(s) this call owns —
             their existing ``ms2_annotations`` rows are cleared first when
@@ -696,8 +725,9 @@ def persist_annotations(
                         r.n_lib_peaks,
                         r.n_emp_peaks_raw,
                         r.n_emp_peaks_filtered,
-                        r.rank,
+                        r.rank_ms2,
                         r.rank_feature,
+                        r.rank_feature_sample,
                         int(r.is_chimeric),
                         r.n_features_in_window,
                         r.purity,
@@ -900,7 +930,7 @@ def run_annotation(
                             "annotation: %d/%d batches done", i, n_batches
                         )
 
-    assign_rank_feature(rows)
+    assign_feature_ranks(rows)
     persist_annotations(
         analysis_db_path,
         rows,

@@ -123,7 +123,7 @@ the best library score, precursor `purity` and fragment-peak count into one
 - Data classes: `ScanStat`, `ConsensusRow`, `ConsensusResult`.
 - IO: `persist_consensus(db_path, result, command_id)` (replace-and-insert),
   `run_consensus(analysis_db_path, config, *, command_id) -> ConsensusResult` —
-  reads `ms2_associations` + `precursor_purity` + `ms2_annotations` (rank 1),
+  reads `ms2_associations` + `precursor_purity` + `ms2_annotations` (rank_ms2 1),
   used by `run.py`. Works with annotation and/or purity absent.
 
 ## `report/summary.py`
@@ -168,7 +168,7 @@ Detail in [MS2 annotation](../../user-guide/ms2-annotation.md) and
 [ADR 7](../adr/0007-library-annotation-design.md).
 
 - Pure: `normalize_polarity`, `normalize_library_paths`,
-  `score_scan_against_candidates`, `rank_scan_rows`, `assign_rank_feature`,
+  `score_scan_against_candidates`, `rank_scan_rows`, `assign_feature_ranks`,
   `annotate_feature`.
 - Data classes: `Candidate`, `LibraryInfo`, `AnnotationRow`, `AnnotationResult`
   (`AnnotationResult.libraries` is a list).

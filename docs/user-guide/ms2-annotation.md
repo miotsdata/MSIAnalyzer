@@ -203,9 +203,10 @@ The unit of work is **one feature**:
    (`annotate.mz_power` / `annotate.int_power`) plus a coverage term gives
    `score = dot_product_score × coverage_score` in `[0, 1]`.
 3. **Keep every candidate** that shared at least `annotate.min_matched_peaks`
-   fragment peaks, each stored with a `rank` within its scan.
-4. **Rank scans within a feature** (`rank_feature`) by their best hit, so you can
-   pick the single most convincing MS2 per feature.
+   fragment peaks, each stored with a `rank_ms2` within its scan.
+4. **Rank a feature's scans by their best hit**, so you can pick the single most
+   convincing MS2 per feature — `rank_feature` across all samples,
+   `rank_feature_sample` within one sample.
 
 Leaving `annotate.library_path` empty (`null` or `[]`) disables the whole stage.
 
@@ -228,8 +229,9 @@ points back via `library_id`.
 | `dot_product_score` | weighted reverse dot product alone |
 | `lib_coverage`, `emp_coverage`, `coverage_score` | fraction of each side matched, and their geometric mean |
 | `n_matched_peaks`, `n_lib_peaks`, `n_emp_peaks_raw`, `n_emp_peaks_filtered` | peak counts |
-| `rank` | 1 = best candidate for this scan |
-| `rank_feature` | 1 = this scan is the best-scoring MS2 on its feature |
+| `rank_ms2` | 1 = best candidate for this scan |
+| `rank_feature` | 1 = this scan is the feature's best-scoring MS2 across all samples (same value on every row of the scan) |
+| `rank_feature_sample` | 1 = this scan is the feature's best-scoring MS2 within its own sample |
 | `is_chimeric`, `n_features_in_window` | carried through from the grouper |
 | `purity`, `runner_up_rel_int`, `precursor_confirmed`, `precursor_frac` | carried through from the purity stage (NULL when the scan was not purity-scored) |
 | `precursor_only` | carried through — fragmentation looked to have failed |
@@ -259,7 +261,7 @@ filter never guesses. Every stored row carries the scan's `purity` and
 ## In the summary report
 
 When a library ran, `summary_report.html` gains an **MS2 annotation** section:
-MS2-bearing features by best-hit confidence (`rank_feature = 1 AND rank = 1`
+MS2-bearing features by best-hit confidence (`rank_feature = 1 AND rank_ms2 = 1`
 score ≥ 0.5 / ≥ 0.75), the best-score distribution, how many distinct plausible
 compounds each feature has (candidates ≥ 0.5), whether a feature's repeat scans
 agree on the top compound, plus top-compound and per-library tables. It also
@@ -276,7 +278,7 @@ feature?"*. For each MS2-bearing feature it folds three per-scan signals into
 consensus_score = best_score × purity_term × peak_term
 ```
 
-* `best_score` — the scan's `ms2_annotations.score` at `rank = 1`, or `1.0` when
+* `best_score` — the scan's `ms2_annotations.score` at `rank_ms2 = 1`, or `1.0` when
   no library ran;
 * `purity_term` — `clamp(purity)`, or `consensus.neutral_purity` (default `0.5`)
   when the scan was not purity-scored;
@@ -300,5 +302,5 @@ skip it.
 | `n_ms2_scored` | of those, how many had a library hit |
 | `consensus_score` | the winning scan's score |
 | `purity`, `n_peaks` | the winning scan's purity and fragment count |
-| `best_annotation_score` | its `rank = 1` library score, or NULL |
+| `best_annotation_score` | its `rank_ms2 = 1` library score, or NULL |
 | `best_compound_name`, `best_inchikey` | that hit's identity, when present |

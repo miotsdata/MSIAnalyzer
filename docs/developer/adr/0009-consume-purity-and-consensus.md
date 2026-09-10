@@ -37,7 +37,7 @@ purity into a per-feature decision. Two gaps followed:
   annotation, new table `feature_ms2_consensus` (one row per MS2-bearing
   feature), new config group `consensus`.
 - `consensus_score = best_score x purity_term x peak_term` where
-  `best_score` is the scan's `ms2_annotations.score` at `rank = 1` (or `1.0`
+  `best_score` is the scan's `ms2_annotations.score` at `rank_ms2 = 1` (or `1.0`
   when annotation did not run), `purity_term = clamp(purity or neutral_purity)`,
   `peak_term = min(1, n_peaks / target_peaks)` on the scan's fragment count.
 - `min_purity` (its own knob) drops scans from the *pick* but not from `n_ms2`.
@@ -70,5 +70,5 @@ below).
   small (≤ one row per feature).
 - Re-running the consensus stage replaces every `feature_ms2_consensus` row and
   touches nothing else.
-- The consensus reads `ms2_annotations` at `rank = 1`; it must run *after*
+- The consensus reads `ms2_annotations` at `rank_ms2 = 1`; it must run *after*
   annotation, which `run_core` guarantees.

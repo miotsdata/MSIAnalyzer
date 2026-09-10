@@ -137,7 +137,7 @@ def _analysis_db(tmp_path: Path, *, with_purity=True, with_annotations=True) -> 
                 "(sample_id, scan_id, feature_id, library_id, library_spectrum_id, "
                 " score, dot_product_score, lib_coverage, emp_coverage, "
                 " coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
-                " n_emp_peaks_filtered, rank, compound_name, inchikey) "
+                " n_emp_peaks_filtered, rank_ms2, compound_name, inchikey) "
                 "VALUES (?,?,?,1,?,?,?,1,1,1,3,3,5,4,1,?,?)",
                 [
                     (1, 10, 1, 100, 0.7, 0.7, "CleanHit", "KEY-CLEAN"),

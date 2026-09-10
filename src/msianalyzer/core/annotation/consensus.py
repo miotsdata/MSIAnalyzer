@@ -7,8 +7,8 @@ spectrum per feature. This stage folds three per-scan signals into a single
 ``consensus_score`` and records the winner:
 
 * the best library score for the scan (``ms2_annotations.score`` at
-  ``rank = 1``) when Stage B ran — otherwise treated as ``1.0`` so the pick
-  still works library-free;
+  ``rank_ms2 = 1``) when Stage B ran — otherwise treated as ``1.0`` so the
+  pick still works library-free;
 * the precursor-ion ``purity`` from the purity stage (Stage A′), or
   ``config.neutral_purity`` when the scan could not be scored;
 * a peak-richness term ``min(1, n_peaks / target_peaks)`` on the scan's
@@ -67,7 +67,7 @@ class ScanStat:
         n_peaks: fragment-peak count of the scan.
         best_score: best ``ms2_annotations.score`` for the scan, or ``None``
             when annotation did not run / produced nothing.
-        best_compound_name / best_inchikey: the ``rank = 1`` candidate's
+        best_compound_name / best_inchikey: the ``rank_ms2 = 1`` candidate's
             identity, when available.
     """
 
@@ -327,7 +327,7 @@ def run_consensus(
         ).fetchall()
         ann_rows = con.execute(
             "SELECT sample_id, scan_id, score, compound_name, inchikey "
-            "FROM ms2_annotations WHERE rank = 1"
+            "FROM ms2_annotations WHERE rank_ms2 = 1"
         ).fetchall()
 
     purity_by_scan = {(s, sc): p for s, sc, p in purity_rows}

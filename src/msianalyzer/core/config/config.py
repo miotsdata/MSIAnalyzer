@@ -285,7 +285,7 @@ class AnnotateConfig:
     the grouper snapped to a feature is compared against library spectra
     whose precursor m/z is near that feature's m/z, scored with a
     coverage-aware reverse dot product, and every candidate sharing at
-    least `min_matched_peaks` fragments is stored with its rank.
+    least `min_matched_peaks` fragments is stored with its `rank_ms2`.
 
     Leaving `library_path` empty (`None` or `[]`) disables the whole step.
 
@@ -474,7 +474,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 9
+    version: int = 10
 
     def __init__(
         self,

@@ -312,11 +312,13 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         )
     """)
     # One row per (MS2 scan, library candidate) comparison that shared at
-    # least min_matched_peaks fragments. `rank` orders candidates within a
-    # scan (1 = best); `rank_feature` orders scans within a feature by their
-    # best hit. The four *_filtered_* blobs are the noise-filtered,
-    # max-normalised spectra actually scored (for mirror plots); NULL when
-    # store_filtered_spectra was off.
+    # least min_matched_peaks fragments. `rank_ms2` orders candidates within
+    # a scan (1 = best); `rank_feature` orders a feature's scans by their best
+    # hit across every sample, `rank_feature_sample` does the same within one
+    # sample (both broadcast onto every row of the scan). The four
+    # *_filtered_* blobs are the noise-filtered, max-normalised spectra
+    # actually scored (for mirror plots); NULL when store_filtered_spectra
+    # was off.
     con.execute("""
         CREATE TABLE IF NOT EXISTS ms2_annotations (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -338,8 +340,9 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             n_lib_peaks            INTEGER NOT NULL,
             n_emp_peaks_raw        INTEGER NOT NULL,
             n_emp_peaks_filtered   INTEGER NOT NULL,
-            rank                   INTEGER NOT NULL,
+            rank_ms2               INTEGER NOT NULL,
             rank_feature           INTEGER,
+            rank_feature_sample    INTEGER,
             is_chimeric            INTEGER NOT NULL DEFAULT 0,
             n_features_in_window   INTEGER,
             purity                 REAL,

@@ -37,7 +37,8 @@ Design choices:
    (`ProcessPoolExecutor`, `batch_size` features per worker, library loaded once
    per worker via the pool initializer).
 2. **Store every candidate** sharing ≥ `min_matched_peaks` fragments, each with
-   a `rank` within its scan. `rank_feature` then orders a feature's scans by
+   a `rank_ms2` within its scan. `rank_feature` (all samples) and
+   `rank_feature_sample` (within one sample) then order a feature's scans by
    their best hit. "All comparison results", not just the top-N.
 3. **Reuse the reverse-dot-product + coverage score** rather than a plain
    cosine — the coverage term is what penalises a mixed/partial spectrum.
@@ -54,7 +55,7 @@ Design choices:
 7. **`library_path` may be a list.** `normalize_library_paths` coerces
    `None` / str / list to a de-duplicated list; each library gets its own
    `annotation_libraries` row, workers load them all once, and per scan the
-   candidates from every library are pooled before ranking (so `rank` is the
+   candidates from every library are pooled before ranking (so `rank_ms2` is the
    best hit across all libraries). Each `ms2_annotations` row carries its own
    `library_id`; a re-run clears rows for every configured `library_id`.
 
@@ -85,3 +86,12 @@ row per library used) and `ms2_annotations` (one row per scored candidate).
   step after the grouper.
 - The scorer now lives under `annotation/`; `plotting/plotter.py` imports
   `_align_peaks` from the new path.
+- **Follow-up (v10): rank scheme rearranged.** `rank` → `rank_ms2` (unchanged
+  meaning: the row's rank among its scan's candidates), and a new
+  `rank_feature_sample` joins `rank_feature` — both rank a feature's MS2 scans
+  by their best hit and broadcast onto the scan's rows, `rank_feature` over
+  every sample and `rank_feature_sample` within one sample ("best MS2 for this
+  feature in this sample"). `assign_rank_feature` → `assign_feature_ranks`
+  stamps both. Consumers move from `rank = 1` to `rank_ms2 = 1`. Schema uses
+  `CREATE TABLE IF NOT EXISTS` (no migration), so this is breaking for old
+  analysis DBs — re-run annotation. Config `version` 9 → 10.

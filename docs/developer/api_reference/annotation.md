@@ -85,7 +85,7 @@ Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
         - normalize_library_paths
         - score_scan_against_candidates
         - rank_scan_rows
-        - assign_rank_feature
+        - assign_feature_ranks
         - annotate_feature
         - load_library
         - persist_annotations

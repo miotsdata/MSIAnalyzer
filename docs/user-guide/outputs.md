@@ -56,7 +56,8 @@ Key tables (full schema in the
 - **`annotation_libraries`** — one row per spectral library used to annotate
   (`path`, `name`, spectrum / compound counts).
 - **`ms2_annotations`** — one row per (MS2 scan, library candidate) comparison:
-  the compound, all sub-scores, `rank` within the scan, `rank_feature` across the
+  the compound, all sub-scores, `rank_ms2` within the scan, `rank_feature` /
+  `rank_feature_sample` across the
   feature, and (unless disabled) the filtered empirical + library spectra for
   mirror plots. Only written when `annotate.library_path` is set.
 - **`aggregated_spectra`** — averaged / centroided / filtered MS1 spectra,

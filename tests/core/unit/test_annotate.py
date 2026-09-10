@@ -17,7 +17,7 @@ from msianalyzer.core.annotation.annotate import (
     AnnotationRow,
     Candidate,
     annotate_feature,
-    assign_rank_feature,
+    assign_feature_ranks,
     normalize_library_paths,
     normalize_polarity,
     persist_annotations,
@@ -166,21 +166,41 @@ def test_score_filters_by_min_matched_peaks_and_sorts_by_score():
 def test_rank_scan_rows_orders_by_score():
     rows = [_row(1, 0.2), _row(1, 0.9), _row(1, 0.5)]
     ranked = rank_scan_rows(rows)
-    assert [r.rank for r in ranked] == [1, 2, 3]
+    assert [r.rank_ms2 for r in ranked] == [1, 2, 3]
     assert ranked[0].score == pytest.approx(0.9)
 
 
-def test_assign_rank_feature_orders_scans_by_best_hit():
+def test_assign_feature_ranks_orders_scans_by_best_hit():
     rows = [
         _row(10, 0.4),
         _row(10, 0.9),  # scan 10 best = 0.9
         _row(20, 0.5),  # scan 20 best = 0.5
         _row(20, 0.1),
     ]
-    assign_rank_feature(rows)
-    rf = {(r.scan_id): r.rank_feature for r in rows}
+    assign_feature_ranks(rows)
+    rf = {r.scan_id: r.rank_feature for r in rows}
     assert rf[10] == 1
     assert rf[20] == 2
+
+
+def test_assign_feature_ranks_scopes_sample_rank_within_each_sample():
+    # feature 1: scan 10 (sample 1, best 0.9), scan 20 (sample 1, best 0.4),
+    #            scan 30 (sample 2, best 0.6)
+    rows = [
+        _row(10, 0.9, sample_id=1),
+        _row(20, 0.4, sample_id=1),
+        _row(30, 0.6, sample_id=2),
+    ]
+    assign_feature_ranks(rows)
+    by_scan = {r.scan_id: r for r in rows}
+    # global order: 10 (0.9) > 30 (0.6) > 20 (0.4)
+    assert by_scan[10].rank_feature == 1
+    assert by_scan[30].rank_feature == 2
+    assert by_scan[20].rank_feature == 3
+    # within sample 1: 10 then 20; sample 2 has only scan 30 -> rank 1
+    assert by_scan[10].rank_feature_sample == 1
+    assert by_scan[20].rank_feature_sample == 2
+    assert by_scan[30].rank_feature_sample == 1
 
 
 # ---------------------------------------------------------------------------
@@ -217,8 +237,8 @@ def test_annotate_feature_true_compound_outranks_decoys_and_carries_filtered_arr
     )
 
     assert rows, "true compound shares peaks -> at least one row"
-    top = min(rows, key=lambda r: r.rank)
-    assert top.rank == 1
+    top = min(rows, key=lambda r: r.rank_ms2)
+    assert top.rank_ms2 == 1
     assert top.compound_name == "true"
     assert top.feature_id == 5
     assert top.emp_filtered_mz.size > 0
@@ -320,8 +340,9 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
     db = _fresh_analysis_db(tmp_path)
 
     r = _row(3, 0.87, feature_id=None)
-    r.rank = 1
+    r.rank_ms2 = 1
     r.rank_feature = 1
+    r.rank_feature_sample = 1
     r.emp_filtered_mz = np.array([100.1234, 150.5678])
     r.emp_filtered_intensity = np.array([1.0, 0.4])
     r.lib_filtered_mz = np.array([100.1230, 150.5680, 200.9999])
@@ -331,14 +352,15 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
 
     with sqlite3.connect(db) as con:
         row = con.execute(
-            "SELECT score, rank, rank_feature, emp_filtered_mz, emp_filtered_intensity, "
+            "SELECT score, rank_ms2, rank_feature, rank_feature_sample, "
+            "emp_filtered_mz, emp_filtered_intensity, "
             "lib_filtered_mz, lib_filtered_intensity FROM ms2_annotations"
         ).fetchone()
     assert row[0] == pytest.approx(0.87)
-    assert (row[1], row[2]) == (1, 1)
-    np.testing.assert_allclose(blob_to_array(row[3]), [100.1234, 150.5678], atol=1e-3)
-    np.testing.assert_allclose(blob_to_array(row[4]), [1.0, 0.4], atol=1e-3)
-    assert blob_to_array(row[5]).size == 3
+    assert (row[1], row[2], row[3]) == (1, 1, 1)
+    np.testing.assert_allclose(blob_to_array(row[4]), [100.1234, 150.5678], atol=1e-3)
+    np.testing.assert_allclose(blob_to_array(row[5]), [1.0, 0.4], atol=1e-3)
+    assert blob_to_array(row[6]).size == 3
 
     # a second call replaces rather than appends
     persist_annotations(db, [r], 1)
@@ -451,16 +473,18 @@ def test_run_annotation_end_to_end_ranks_true_compound(
     with sqlite3.connect(adb) as con:
         n_libs = con.execute("SELECT COUNT(*) FROM annotation_libraries").fetchone()[0]
         top = con.execute(
-            "SELECT compound_name, rank, rank_feature, emp_filtered_mz, lib_filtered_mz "
-            "FROM ms2_annotations WHERE scan_id = ? AND rank = 1",
+            "SELECT compound_name, rank_ms2, rank_feature, rank_feature_sample, "
+            "emp_filtered_mz, lib_filtered_mz "
+            "FROM ms2_annotations WHERE scan_id = ? AND rank_ms2 = 1",
             (single_scan_id,),
         ).fetchone()
     assert n_libs == 1
     assert top is not None
     assert top[0] == "TrueCompound"
     assert top[2] == 1  # best (only) scan on its feature
-    assert blob_to_array(top[3]).size > 0
+    assert top[3] == 1  # ... and the only scan in its sample
     assert blob_to_array(top[4]).size > 0
+    assert blob_to_array(top[5]).size > 0
 
 
 def test_run_annotation_flags_chimeric_scans(
@@ -546,7 +570,7 @@ def test_run_annotation_multiple_libraries_pooled_and_registered(
         # the "single" feature is only in lib_a; its rank-1 hit is the true cpd
         single_top = con.execute(
             "SELECT compound_name FROM ms2_annotations "
-            "WHERE scan_id = ? AND rank = 1",
+            "WHERE scan_id = ? AND rank_ms2 = 1",
             (single_scan_id,),
         ).fetchone()
         # the chimeric feature is only in lib_b; it is still annotated + flagged

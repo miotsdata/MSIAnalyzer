@@ -253,8 +253,8 @@ class AnnotationLibraryInfo:
 class AnnotationSummary:
     """Roll-up of Stage B — only built when a library was used.
 
-    "best hit" = the `rank_feature = 1 AND rank = 1` row of a feature: the
-    top candidate of that feature's top-scoring scan, one per annotated
+    "best hit" = the `rank_feature = 1 AND rank_ms2 = 1` row of a feature:
+    the top candidate of that feature's top-scoring scan, one per annotated
     feature.
 
     Attributes:
@@ -800,7 +800,7 @@ def annotation_summary(
             "SELECT feature_id, sample_id, scan_id, score, inchikey, "
             "       compound_name, precursor_confirmed, is_chimeric, "
             "       precursor_only, library_id "
-            "FROM ms2_annotations WHERE rank_feature = 1 AND rank = 1"
+            "FROM ms2_annotations WHERE rank_feature = 1 AND rank_ms2 = 1"
         ).fetchall()
         # distinct plausible compounds per feature (candidates >= low cutoff)
         cand = con.execute(
@@ -812,7 +812,7 @@ def annotation_summary(
         # per-scan top hit, for cross-scan agreement
         per_scan = con.execute(
             "SELECT feature_id, sample_id, scan_id, inchikey "
-            "FROM ms2_annotations WHERE rank = 1 AND inchikey IS NOT NULL"
+            "FROM ms2_annotations WHERE rank_ms2 = 1 AND inchikey IS NOT NULL"
         ).fetchall()
         consensus = con.execute(
             "SELECT feature_id, best_sample_id, best_scan_id "
