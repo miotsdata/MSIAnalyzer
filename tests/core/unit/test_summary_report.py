@@ -10,6 +10,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import pytest
 
 from msianalyzer.core.analysis_db import (
     init_analysis_db,
@@ -18,9 +19,11 @@ from msianalyzer.core.analysis_db import (
     save_features,
 )
 from msianalyzer.core.report.summary import (
+    AssociatedPuritySummary,
     Ms2Summary,
     RecheckSummary,
     UnscoredSummary,
+    associated_purity,
     build_summary_report,
     collect_stats,
     feature_membership,
@@ -35,7 +38,6 @@ from msianalyzer.core.report.summary import (
     overlap_combos,
     per_sample_counts,
     per_sample_ms2,
-    per_sample_purity,
     purity_unscored,
     unassociated_recheck,
 )
@@ -168,19 +170,19 @@ def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
             "INSERT INTO precursor_purity "
             "(sample_id, ms2_scan_id, bracket_kind, parent_ms1_scan_id, "
             " window_lo_mz, precursor_found, n_peaks_in_window, purity, "
-            " precursor_confirmed) "
-            "VALUES (?,?,'parent_only',?,?,?,?,?,?)",
+            " precursor_confirmed, precursor_frac) "
+            "VALUES (?,?,'parent_only',?,?,?,?,?,?,?)",
             [
-                # s1: 2 scored + 5 unscored, one per reason
-                (sid1, 1001, 1, 499.5, 1, 1, 0.97, 1),
-                (sid1, 1002, 1, 499.5, 1, 3, 0.35, 1),
-                (sid1, 2001, 1, 499.5, 0, 2, None, 1),   # on-pixel, confirmed, peak unresolved
-                (sid1, 2005, 1, 499.5, 0, 2, None, 0),   # on-pixel, NOT confirmed
-                (sid1, 2002, 99, 499.5, 0, 2, None, 1),  # parent MS1 off-pixel
-                (sid1, 2003, 1, None, 0, 0, None, 0),    # no precursor m/z (no window)
-                (sid1, 2004, None, None, 0, 0, None, 0), # no parent MS1
-                # s2: 1 scored
-                (sid2, 1001, 5, 699.5, 1, 2, 0.60, 1),
+                # s1: 1001/1002 are ASSOCIATED (feature_id=1); 2001.. are extras
+                (sid1, 1001, 1, 499.5, 1, 1, 0.97, 1, 0.90),
+                (sid1, 1002, 1, 499.5, 1, 3, 0.35, 1, 0.40),
+                (sid1, 2001, 1, 499.5, 0, 2, None, 1, 0.05),   # on-pixel, confirmed, peak unresolved
+                (sid1, 2005, 1, 499.5, 0, 2, None, 0, 0.001),  # on-pixel, NOT confirmed
+                (sid1, 2002, 99, 499.5, 0, 2, None, 1, 0.05),  # parent MS1 off-pixel
+                (sid1, 2003, 1, None, 0, 0, None, 0, None),    # no precursor m/z (no window)
+                (sid1, 2004, None, None, 0, 0, None, 0, None), # no parent MS1
+                # s2: 1001 is ASSOCIATED (feature_id=2)
+                (sid2, 1001, 5, 699.5, 1, 2, 0.60, 1, 0.70),
             ],
         )
         con.commit()
@@ -223,13 +225,11 @@ def test_overlap_combos_empty():
 
 def test_ms2_summary(tmp_path):
     adb, _ = _analysis_db(tmp_path)
-    s = ms2_summary(adb, purity_cutoff=0.8)
+    s = ms2_summary(adb)
     assert s.n_total == 6
     assert s.n_associated == 3
     assert s.n_unassociated == 3
     assert s.n_precursor_only == 1
-    assert s.n_purity_scored == 3
-    assert s.n_low_purity == 2  # 0.35 and 0.60
 
 
 def test_per_sample_ms2(tmp_path):
@@ -241,14 +241,20 @@ def test_per_sample_ms2(tmp_path):
     assert by_name["s2"].n_unassociated == 2
 
 
-def test_per_sample_purity(tmp_path):
+def test_associated_purity_scopes_to_associated_ms2(tmp_path):
     adb, _ = _analysis_db(tmp_path)
-    by_name = {p.name: p for p in per_sample_purity(adb, purity_cutoff=0.8)}
-    assert sorted(by_name["s1"].values) == [0.35, 0.97]
-    assert by_name["s1"].n_scored == 2
-    assert by_name["s1"].n_low == 1
-    assert by_name["s2"].values == [0.60]
-    assert by_name["s2"].n_low == 1
+    a = associated_purity(adb, cutoff=0.8)
+    # only the 3 associated scans (feature_id not null) count
+    assert a.n_associated == 3
+    assert sorted(a.frac_values) == [0.4, 0.7, 0.9]
+    assert a.n_ge_cutoff == 1  # 0.9 only
+    assert round(a.pct_ge_cutoff) == 33
+    # every scan with a non-null precursor_frac is in the context list
+    assert len(a.frac_values_all) == 6
+    by_name = {p.name: p for p in a.per_sample}
+    assert sorted(by_name["s1"].frac_values) == [0.4, 0.9]
+    assert by_name["s1"].n_ge_cutoff == 1
+    assert by_name["s2"].frac_values == [0.7]
 
 
 def test_unassociated_recheck(tmp_path):
@@ -295,16 +301,16 @@ def test_purity_unscored_without_pixel_map_folds_off_pixel_by_confirmed(tmp_path
 # ---------------------------------------------------------------------------
 
 
-def _empty_ms2_summary() -> Ms2Summary:
-    return Ms2Summary(0, 0, 0, 0, 0, 0, 0.8, [])
+def _empty_assoc_purity() -> AssociatedPuritySummary:
+    return AssociatedPuritySummary(0.8, 0, 0, [], [], [])
 
 
 def test_figures_return_figures_and_tolerate_empty():
     assert isinstance(figure_per_sample([]), go.Figure)
     assert isinstance(figure_overlap_upset([], []), go.Figure)
     assert isinstance(figure_ms2_association_per_sample([]), go.Figure)
-    assert isinstance(figure_purity(_empty_ms2_summary()), go.Figure)
-    assert isinstance(figure_purity_per_sample([], 0.8), go.Figure)
+    assert isinstance(figure_purity(_empty_assoc_purity()), go.Figure)
+    assert isinstance(figure_purity_per_sample(_empty_assoc_purity()), go.Figure)
     assert isinstance(
         figure_unassociated_recheck(RecheckSummary(10.0, 0, 0, 0, 0, [])),
         go.Figure,
@@ -337,11 +343,15 @@ def test_collect_stats(tmp_path):
     assert stats.recheck.n_would_associate == 1
     assert stats.unscored.n_unscored == 5
     assert stats.unscored.n_off_pixel == 1
+    assert stats.associated_purity.n_associated == 3
+    assert stats.associated_purity.n_ge_cutoff == 1
 
     d = stats.to_dict()
-    assert d["ms2"]["n_purity_values"] == 3
-    assert "purity_values" not in d["ms2"]
-    assert all("values" not in ps for ps in d["per_sample_purity"])
+    ap = d["associated_purity"]
+    assert ap["n_frac_values"] == 3
+    assert "frac_values" not in ap and "frac_values_all" not in ap
+    assert all("frac_values" not in ps for ps in ap["per_sample"])
+    assert ap["pct_ge_cutoff"] == pytest.approx(33.33, abs=0.1)
     assert d["recheck"]["n_would_associate"] == 1
     assert d["unscored"]["n_unscored"] == 5
     assert d["unscored"]["n_off_pixel"] == 1
@@ -359,6 +369,8 @@ def test_build_summary_report_writes_files(tmp_path):
     assert "pre-filter centroid list" in text  # the recheck sentence
     assert "unscored for" in text  # the unscored-purity sentence
     assert "laser flyback" in text
+    assert "feed the library search" in text  # the associated-purity sentence
+    assert "precursor_frac" in text
 
     payload = json.loads((out / "summary.json").read_text())
     assert payload["n_features"] == 3
@@ -366,6 +378,7 @@ def test_build_summary_report_writes_files(tmp_path):
     assert payload["recheck"]["assoc_ppm"] == 10.0
     assert len(payload["per_sample_ms2"]) == 2
     assert payload["unscored"]["n_unscored"] == 5
+    assert payload["associated_purity"]["n_associated"] == 3
 
 
 def test_build_summary_report_defaults_out_dir_to_db_parent(tmp_path):

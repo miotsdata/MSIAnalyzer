@@ -32,7 +32,8 @@ __all__ = [
     "SampleCounts",
     "Ms2Summary",
     "PerSampleMs2",
-    "PerSamplePurity",
+    "AssocPuritySample",
+    "AssociatedPuritySummary",
     "UnscoredPurity",
     "UnscoredSummary",
     "RecheckSummary",
@@ -42,7 +43,7 @@ __all__ = [
     "overlap_combos",
     "ms2_summary",
     "per_sample_ms2",
-    "per_sample_purity",
+    "associated_purity",
     "purity_unscored",
     "unassociated_recheck",
     "figure_per_sample",
@@ -101,16 +102,12 @@ class SampleCounts:
 
 @dataclass
 class Ms2Summary:
-    """Analysis-wide MS2 association + purity roll-up."""
+    """Analysis-wide MS2 association roll-up."""
 
     n_total: int
     n_associated: int
     n_unassociated: int
     n_precursor_only: int
-    n_purity_scored: int
-    n_low_purity: int
-    purity_cutoff: float
-    purity_values: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -125,14 +122,40 @@ class PerSampleMs2:
 
 
 @dataclass
-class PerSamplePurity:
-    """Scored precursor-purity values for one sample."""
+class AssocPuritySample:
+    """`precursor_frac` of one sample's *associated* MS2 (fed to annotation)."""
 
     sample_id: int
     name: str
-    n_scored: int
-    n_low: int
-    values: list[float] = field(default_factory=list)
+    n_associated: int
+    n_ge_cutoff: int
+    frac_values: list[float] = field(default_factory=list)
+
+
+@dataclass
+class AssociatedPuritySummary:
+    """Precursor purity restricted to the MS2 that will actually be annotated.
+
+    ``precursor_frac`` (peak-detection-free, always populated) is the metric;
+    the population is MS2 with a non-NULL ``feature_id`` in
+    ``ms2_associations``. ``frac_values_all`` keeps every scan's value for a
+    faint context overlay only.
+    """
+
+    cutoff: float
+    n_associated: int
+    n_ge_cutoff: int
+    frac_values: list[float]
+    frac_values_all: list[float]
+    per_sample: list[AssocPuritySample]
+
+    @property
+    def pct_ge_cutoff(self) -> float:
+        return (
+            100.0 * self.n_ge_cutoff / self.n_associated
+            if self.n_associated
+            else 0.0
+        )
 
 
 @dataclass
@@ -215,17 +238,20 @@ class SummaryStats:
     overlap_combos: list[tuple[list[str], int]]
     ms2: Ms2Summary
     per_sample_ms2: list[PerSampleMs2]
-    per_sample_purity: list[PerSamplePurity]
+    associated_purity: AssociatedPuritySummary
     unscored: UnscoredSummary
     recheck: RecheckSummary
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        # raw purity value lists are large and already summarised
-        d["ms2"].pop("purity_values", None)
-        d["ms2"]["n_purity_values"] = len(self.ms2.purity_values)
-        for ps in d["per_sample_purity"]:
-            ps.pop("values", None)
+        ap = d["associated_purity"]
+        # raw value lists are large and already summarised
+        ap["n_frac_values"] = len(self.associated_purity.frac_values)
+        ap.pop("frac_values", None)
+        ap.pop("frac_values_all", None)
+        for ps in ap["per_sample"]:
+            ps.pop("frac_values", None)
+        ap["pct_ge_cutoff"] = round(self.associated_purity.pct_ge_cutoff, 2)
         d["unscored"]["n_unscored"] = self.unscored.n_unscored
         d["overlap_combos"] = [
             {"samples": list(s), "n_features": n} for s, n in self.overlap_combos
@@ -386,36 +412,78 @@ def overlap_combos(
 
 
 @log_call(source="analysis_db_path")
-def ms2_summary(
-    analysis_db_path: Path | str, *, purity_cutoff: float = 0.8
-) -> Ms2Summary:
-    """Association + purity roll-up over every MS2 scan."""
+def ms2_summary(analysis_db_path: Path | str) -> Ms2Summary:
+    """MS2 association roll-up over every scan."""
     analysis_db_path = Path(analysis_db_path)
     with sqlite3.connect(analysis_db_path) as con:
         assoc = con.execute(
             "SELECT feature_id, precursor_only FROM ms2_associations"
         ).fetchall()
-        purity = [
-            float(r[0])
-            for r in con.execute(
-                "SELECT purity FROM precursor_purity WHERE purity IS NOT NULL"
-            ).fetchall()
-        ]
 
     n_total = len(assoc)
     n_assoc = sum(1 for f, _ in assoc if f is not None)
-    n_prec_only = sum(1 for _, p in assoc if p)
-    n_low = sum(1 for v in purity if v < purity_cutoff)
-
     return Ms2Summary(
         n_total=n_total,
         n_associated=n_assoc,
         n_unassociated=n_total - n_assoc,
-        n_precursor_only=n_prec_only,
-        n_purity_scored=len(purity),
-        n_low_purity=n_low,
-        purity_cutoff=float(purity_cutoff),
-        purity_values=purity,
+        n_precursor_only=sum(1 for _, p in assoc if p),
+    )
+
+
+@log_call(source="analysis_db_path")
+def associated_purity(
+    analysis_db_path: Path | str, *, cutoff: float = 0.8
+) -> AssociatedPuritySummary:
+    """`precursor_frac` distribution for the MS2 that will be annotated.
+
+    Population: scans with a non-NULL ``feature_id`` in ``ms2_associations``
+    (an unassociated MS2 fragmented an ion you cannot image, so its purity is
+    not actionable). ``frac_values_all`` keeps every scan's value for a faint
+    context overlay only.
+    """
+    analysis_db_path = Path(analysis_db_path)
+    with sqlite3.connect(analysis_db_path) as con:
+        names = dict(con.execute("SELECT sample_id, name FROM samples").fetchall())
+        all_frac = [
+            float(r[0])
+            for r in con.execute(
+                "SELECT precursor_frac FROM precursor_purity "
+                "WHERE precursor_frac IS NOT NULL"
+            ).fetchall()
+        ]
+        assoc_rows = con.execute(
+            "SELECT p.sample_id, p.precursor_frac "
+            "FROM precursor_purity p "
+            "JOIN ms2_associations a "
+            "  ON a.sample_id = p.sample_id AND a.scan_id = p.ms2_scan_id "
+            "WHERE p.precursor_frac IS NOT NULL AND a.feature_id IS NOT NULL"
+        ).fetchall()
+
+    by_sample: dict[int, list[float]] = {}
+    for sid, frac in assoc_rows:
+        by_sample.setdefault(int(sid), []).append(float(frac))
+    assoc_frac = [v for vs in by_sample.values() for v in vs]
+
+    per_sample: list[AssocPuritySample] = []
+    for sid in (sorted(names) if names else sorted(by_sample)):
+        vals = by_sample.get(sid, [])
+        per_sample.append(
+            AssocPuritySample(
+                sample_id=int(sid),
+                name=str(names.get(sid, sid)),
+                n_associated=len(vals),
+                n_ge_cutoff=sum(1 for v in vals if v >= cutoff),
+                frac_values=vals,
+            )
+        )
+
+    return AssociatedPuritySummary(
+        cutoff=float(cutoff),
+        n_associated=len(assoc_frac),
+        n_ge_cutoff=sum(1 for v in assoc_frac if v >= cutoff),
+        frac_values=assoc_frac,
+        frac_values_all=all_frac,
+        per_sample=per_sample,
     )
 
 
@@ -445,40 +513,6 @@ def per_sample_ms2(analysis_db_path: Path | str) -> list[PerSampleMs2]:
                 n_total=n_total,
                 n_associated=n_assoc,
                 n_unassociated=n_total - n_assoc,
-            )
-        )
-    return out
-
-
-@log_call(source="analysis_db_path")
-def per_sample_purity(
-    analysis_db_path: Path | str, *, purity_cutoff: float = 0.8
-) -> list[PerSamplePurity]:
-    """Scored precursor-purity values, one :class:`PerSamplePurity` per sample."""
-    analysis_db_path = Path(analysis_db_path)
-    with sqlite3.connect(analysis_db_path) as con:
-        names = dict(
-            con.execute("SELECT sample_id, name FROM samples").fetchall()
-        )
-        rows = con.execute(
-            "SELECT sample_id, purity FROM precursor_purity "
-            "WHERE purity IS NOT NULL ORDER BY sample_id"
-        ).fetchall()
-
-    by_sample: dict[int, list[float]] = {}
-    for sample_id, purity in rows:
-        by_sample.setdefault(int(sample_id), []).append(float(purity))
-
-    out: list[PerSamplePurity] = []
-    for sample_id in sorted(names) if names else sorted(by_sample):
-        vals = by_sample.get(sample_id, [])
-        out.append(
-            PerSamplePurity(
-                sample_id=int(sample_id),
-                name=str(names.get(sample_id, sample_id)),
-                n_scored=len(vals),
-                n_low=sum(1 for v in vals if v < purity_cutoff),
-                values=vals,
             )
         )
     return out
@@ -834,45 +868,53 @@ def figure_unassociated_recheck(recheck: RecheckSummary) -> go.Figure:
     return fig
 
 
-def figure_purity(summary: Ms2Summary) -> go.Figure:
-    """Histogram of scored precursor purity with the cutoff line (overall)."""
-    if not summary.purity_values:
-        return _empty("Precursor ion purity")
-    fig = go.Figure(
-        go.Histogram(
-            x=summary.purity_values, nbinsx=40, marker_color=_C_OK,
-            hovertemplate="purity %{x}<br>%{y:,} MS2 scans<extra></extra>",
+def figure_purity(assoc: AssociatedPuritySummary) -> go.Figure:
+    """`precursor_frac` histogram for **associated** MS2, all-MS2 as faint context."""
+    if not assoc.frac_values:
+        return _empty("Precursor purity of associated MS2")
+    fig = go.Figure()
+    if assoc.frac_values_all:
+        fig.add_histogram(
+            x=assoc.frac_values_all, name="all MS2", nbinsx=40,
+            histnorm="percent", marker_color=_C_MUTED, opacity=0.35,
+            hovertemplate="precursor_frac %{x}<br>%{y:.1f}%% of all MS2<extra></extra>",
         )
+    fig.add_histogram(
+        x=assoc.frac_values, name="associated MS2", nbinsx=40,
+        histnorm="percent", marker_color=_C_OK,
+        hovertemplate=(
+            "precursor_frac %{x}<br>%{y:.1f}%% of associated MS2<extra></extra>"
+        ),
     )
     fig.add_vline(
-        x=summary.purity_cutoff,
-        line=dict(color=_C_BAD, dash="dash"),
-        annotation_text=f"cutoff {summary.purity_cutoff:g}",
+        x=assoc.cutoff, line=dict(color=_C_BAD, dash="dash"),
+        annotation_text=f"cutoff {assoc.cutoff:g}",
     )
-    unscored = summary.n_total - summary.n_purity_scored
     fig.update_layout(
         title=(
-            f"Precursor ion purity (overall) — {_fmt(summary.n_low_purity)} of "
-            f"{_fmt(summary.n_purity_scored)} scored below cutoff "
-            f"({_fmt(unscored)} unscored)"
+            f"Precursor purity (precursor_frac) — {_fmt(assoc.n_ge_cutoff)} of "
+            f"{_fmt(assoc.n_associated)} associated MS2 at ≥ {assoc.cutoff:g} "
+            f"({assoc.pct_ge_cutoff:.0f}%)"
         ),
-        xaxis=dict(title="purity", range=[0, 1]),
-        yaxis=dict(title="MS2 scans", tickformat=","),
+        barmode="overlay",
+        xaxis=dict(title="precursor_frac", range=[0, 1]),
+        yaxis=dict(title="% of MS2"),
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
     )
     return fig
 
 
-def figure_purity_per_sample(
-    per_sample: Sequence[PerSamplePurity], cutoff: float = 0.8
-) -> go.Figure:
-    """Violin of scored precursor purity per sample (the score distribution)."""
-    if not any(p.values for p in per_sample):
-        return _empty("Precursor ion purity by sample")
+def figure_purity_per_sample(assoc: AssociatedPuritySummary) -> go.Figure:
+    """Violin of `precursor_frac` for associated MS2, per sample."""
+    ps = assoc.per_sample
+    if not any(p.frac_values for p in ps):
+        return _empty("Precursor purity of associated MS2, by sample")
     fig = go.Figure()
-    for p in per_sample:
+    for p in ps:
         fig.add_violin(
-            y=p.values or [None],
-            name=f"{p.name}<br>(n={_fmt(p.n_scored)})",
+            y=p.frac_values or [None],
+            name=f"{p.name}<br>(n={_fmt(p.n_associated)})",
             box_visible=True,
             meanline_visible=True,
             points=False,
@@ -882,12 +924,12 @@ def figure_purity_per_sample(
             opacity=0.65,
         )
     fig.add_hline(
-        y=cutoff, line=dict(color=_C_BAD, dash="dash"),
-        annotation_text=f"cutoff {cutoff:g}",
+        y=assoc.cutoff, line=dict(color=_C_BAD, dash="dash"),
+        annotation_text=f"cutoff {assoc.cutoff:g}",
     )
     fig.update_layout(
-        title="Precursor ion purity distribution by sample",
-        yaxis=dict(title="purity", range=[0, 1]),
+        title="Precursor purity (precursor_frac) of associated MS2, by sample",
+        yaxis=dict(title="precursor_frac", range=[0, 1]),
         showlegend=False,
     )
     return fig
@@ -954,11 +996,9 @@ def collect_stats(
         samples=samples,
         n_features=0 if features_df is None else int(len(features_df)),
         overlap_combos=overlap_combos(membership, overlap_top_n),
-        ms2=ms2_summary(analysis_db_path, purity_cutoff=purity_cutoff),
+        ms2=ms2_summary(analysis_db_path),
         per_sample_ms2=per_sample_ms2(analysis_db_path),
-        per_sample_purity=per_sample_purity(
-            analysis_db_path, purity_cutoff=purity_cutoff
-        ),
+        associated_purity=associated_purity(analysis_db_path, cutoff=purity_cutoff),
         unscored=purity_unscored(analysis_db_path, raw_db_paths),
         recheck=unassociated_recheck(analysis_db_path),
     )
@@ -978,6 +1018,17 @@ def _table_html(counts: Sequence[SampleCounts]) -> str:
     return (
         "<table style='border-collapse:collapse' border='1' cellpadding='6'>"
         f"{head}{rows}</table>"
+    )
+
+
+def _assoc_purity_sentence(a: AssociatedPuritySummary) -> str:
+    if a.n_associated == 0:
+        return "<p>No MS2 scan associated to a feature.</p>"
+    return (
+        f"<p>Of {_fmt(a.n_associated)} MS2 associated to a feature (the spectra "
+        f"that feed the library search), <b>{a.pct_ge_cutoff:.0f}%</b> have "
+        f"<code>precursor_frac</code> &ge; {a.cutoff:g} — the precursor dominates "
+        f"its isolation window in that pixel's own MS1.</p>"
     )
 
 
@@ -1077,8 +1128,8 @@ def build_summary_report(
         figure_ms2_association(stats.ms2),
         figure_ms2_association_per_sample(stats.per_sample_ms2),
         figure_unassociated_recheck(stats.recheck),
-        figure_purity(stats.ms2),
-        figure_purity_per_sample(stats.per_sample_purity, cutoff),
+        figure_purity(stats.associated_purity),
+        figure_purity_per_sample(stats.associated_purity),
         figure_purity_unscored(stats.unscored),
     ]
 
@@ -1101,8 +1152,8 @@ def build_summary_report(
         f"<p>{_fmt(len(stats.samples))} sample(s) &middot; "
         f"{_fmt(stats.n_features)} features &middot; "
         f"{_fmt(stats.ms2.n_total)} MS2 scans "
-        f"({_fmt(stats.ms2.n_associated)} associated, "
-        f"{_fmt(stats.ms2.n_low_purity)} below purity {cutoff:g})</p>"
+        f"({_fmt(stats.ms2.n_associated)} associated to a feature)</p>"
+        f"{_assoc_purity_sentence(stats.associated_purity)}"
         f"{_recheck_sentence(stats.recheck)}"
         f"{_unscored_sentence(stats.unscored)}"
         "<h2>Per-sample counts</h2>"

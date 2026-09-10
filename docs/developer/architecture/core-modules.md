@@ -130,7 +130,9 @@ database, read-only) and writes `summary_report.html` + `summary.json`. Detail
 in [Outputs](../../user-guide/outputs.md).
 
 - Pure stats: `per_sample_counts`, `feature_membership`, `overlap_combos`,
-  `ms2_summary`, `per_sample_ms2`, `per_sample_purity`, `purity_unscored`
+  `ms2_summary`, `per_sample_ms2`, `associated_purity` (`precursor_frac`
+  distribution restricted to MS2 that associated to a feature — the ones that
+  feed the library search), `purity_unscored`
   (classifies every `precursor_purity` row: scored / faint precursor not in MS1
   / parent MS1 off-pixel [flyback] / no precursor m/z / no parent),
   `unassociated_recheck` (re-tests unassociated MS2 against the sample's

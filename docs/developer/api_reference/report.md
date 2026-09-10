@@ -10,7 +10,8 @@ End-of-run summary: reads a finished analysis database and writes
         - SampleCounts
         - Ms2Summary
         - PerSampleMs2
-        - PerSamplePurity
+        - AssocPuritySample
+        - AssociatedPuritySummary
         - UnscoredPurity
         - UnscoredSummary
         - RecheckSummary
@@ -20,7 +21,7 @@ End-of-run summary: reads a finished analysis database and writes
         - overlap_combos
         - ms2_summary
         - per_sample_ms2
-        - per_sample_purity
+        - associated_purity
         - purity_unscored
         - unassociated_recheck
         - figure_per_sample

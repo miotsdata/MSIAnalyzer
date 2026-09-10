@@ -109,11 +109,12 @@ spectra (`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes
 per-sample scan / pixel / peak / feature counts, a feature-overlap UpSet plot,
 MS2 association (overall donut + a 100%-stacked bar per sample), a recheck of
 the unassociated MS2 against each sample's *pre-filter* MS1 peaks (how many miss
-only because peak filtering dropped the peak), precursor purity (overall
-histogram + a per-sample distribution), and a breakdown of why purity is
-unscored for the rest (faint precursor not seen in MS1 / parent MS1 off-pixel
-from laser flyback / no precursor m/z). Controlled by `report.*`; regenerate it
-any time with `msianalyzer report <analysis-db>`.
+only because peak filtering dropped the peak), the `precursor_frac` distribution
+of the **associated** MS2 (overall + per sample — the spectra that feed the
+library search, with all-MS2 as faint context), and a per-sample breakdown of
+why the peak-based purity is unscored for the rest (precursor present but
+unresolved / not confirmed / off-pixel flyback / no precursor m/z). Controlled
+by `report.*`; regenerate it any time with `msianalyzer report <analysis-db>`.
 
 ## What you end up with
 
