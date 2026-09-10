@@ -103,3 +103,18 @@ Design choices:
   preloads the MS1 rt/polarity list, the scan→pixel map and pixel geometry once
   per sample (bisect for parent/next), and holds MS1 arrays in a small LRU;
   `map_pixels_to_db` also now writes `idx_pms1_scan`.
+- **Follow-up (v8): peak-detection-free confirmation + m/z snap.** On real
+  MALDI-imaging data the step-2 peak-picker failed to emit a peak at
+  `precursor_mz` for ~56 % of scans in dense, matrix-heavy, low-m/z 2-Da
+  windows — even though the precursor signal was plainly there (direct
+  integration: median ~48 % of the window base peak, never zero). So the stage
+  now also records `precursor_frac` (above-baseline profile area within
+  `precursor_confirm_ppm` of `precursor_mz`, over the window — no peak needed),
+  the boolean `precursor_confirmed`, and `precursor_mz_snapped` /
+  `snap_shift_ppm` (snap to the nearest parent-MS1 local max within a tight
+  `precursor_snap_ppm`). Association is **not** re-run — the aligned feature
+  list is a better m/z reference than any single survey scan, and re-deriving
+  the precursor from the window argmax would mis-assign the ~50 % of scans
+  where the precursor is a minor co-isolate. `precursor_confirmed` /
+  `precursor_frac` are carried onto `ms2_annotations` as an annotation-
+  confidence gate. Config `version` 7 → 8.

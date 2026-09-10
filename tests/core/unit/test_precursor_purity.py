@@ -25,11 +25,13 @@ from msianalyzer.core.annotation.precursor_purity import (
     compute_scan_purity,
     detect_window_peaks,
     infer_raster_geometry,
+    integrate_precursor_fraction,
     interpolate_purity,
     persist_purity,
     resolve_parent_next,
     run_precursor_purity,
     score_window,
+    snap_precursor_mz,
     window_bounds,
 )
 from msianalyzer.core.analysis_db import (
@@ -231,6 +233,72 @@ def test_score_window_empty_returns_zero_peaks():
     assert wp.n_peaks_in_window == 0
     assert wp.purity is None
     assert wp.precursor_found is False
+
+
+# ===========================================================================
+# integrate_precursor_fraction  (peak-detection-free confirmation)
+# ===========================================================================
+
+
+def test_integrate_precursor_fraction_clean_precursor_near_one():
+    mz, inten = _profile([(500.0, 100.0)], 499.0, 501.0)
+    frac = integrate_precursor_fraction(mz, inten, 499.0, 501.0, 500.0, band_ppm=30.0)
+    assert frac > 0.8
+
+
+def test_integrate_precursor_fraction_minor_precursor_is_small():
+    # precursor 500.0 is 5% of a dominant co-isolant at 500.4
+    mz, inten = _profile([(500.0, 5.0), (500.4, 95.0)], 499.0, 501.0)
+    frac = integrate_precursor_fraction(mz, inten, 499.0, 501.0, 500.0, band_ppm=30.0)
+    assert frac < 0.15
+
+
+def test_integrate_precursor_fraction_no_signal_returns_zero():
+    mz, inten = _profile([(500.0, 100.0)], 499.0, 501.0)
+    # window far from any peak
+    assert integrate_precursor_fraction(mz, inten, 480.0, 481.0, 480.5, band_ppm=30.0) == 0.0
+
+
+def test_integrate_precursor_fraction_none_ref_returns_zero():
+    mz, inten = _profile([(500.0, 100.0)], 499.0, 501.0)
+    assert integrate_precursor_fraction(mz, inten, 499.0, 501.0, None, band_ppm=30.0) == 0.0
+
+
+# ===========================================================================
+# snap_precursor_mz
+# ===========================================================================
+
+
+def test_snap_precursor_mz_moves_to_nearby_apex():
+    mz, inten = _profile([(500.010, 100.0)], 499.0, 501.0)
+    ref = 500.010 * (1 + 8e-6)  # 8 ppm off the true apex
+    snapped, shift = snap_precursor_mz(mz, inten, ref, snap_ppm=15.0)
+    assert abs(snapped - 500.010) < 500.010 * 3e-6
+    assert abs(shift) == pytest.approx(8.0, abs=1.0)
+
+
+def test_snap_precursor_mz_noop_when_already_on_peak():
+    mz, inten = _profile([(500.0, 100.0)], 499.0, 501.0)
+    snapped, shift = snap_precursor_mz(mz, inten, 500.0, snap_ppm=15.0)
+    assert snapped == pytest.approx(500.0, abs=1e-3)
+    assert abs(shift) < 2.0
+
+
+def test_snap_precursor_mz_noop_when_disabled():
+    mz, inten = _profile([(500.010, 100.0)], 499.0, 501.0)
+    assert snap_precursor_mz(mz, inten, 500.005, snap_ppm=0.0) == (500.005, 0.0)
+
+
+def test_snap_precursor_mz_noop_when_no_local_max_in_band():
+    mz, inten = _profile([(500.0, 100.0)], 499.0, 501.0)
+    ref = 500.0 * (1 + 200e-6)  # 200 ppm away, nothing within snap_ppm
+    snapped, shift = snap_precursor_mz(mz, inten, ref, snap_ppm=15.0)
+    assert snapped == pytest.approx(ref)
+    assert shift == 0.0
+
+
+def test_snap_precursor_mz_none_ref():
+    assert snap_precursor_mz(np.array([]), np.array([]), None, snap_ppm=15.0) == (None, 0.0)
 
 
 # ===========================================================================
@@ -641,6 +709,31 @@ def test_compute_scan_purity_no_parent_returns_empty_row():
     assert row.n_peaks_in_window == 0
     assert row.purity is None
     assert row.precursor_found is False
+    assert row.precursor_confirmed is None
+    assert row.precursor_frac is None
+    assert row.precursor_mz_snapped is None
+
+
+def test_compute_scan_purity_confirms_and_snaps_when_peak_unresolved():
+    # a matrix-dominated window: peak-picker matches nothing near precursor_mz,
+    # but the precursor signal is plainly there -> confirmed, and snappable
+    scan = dict(_SCAN, precursor_mz=500.0 * (1 + 6e-6))  # 6 ppm off the real apex
+    p_mz, p_int = _profile([(500.0, 2.0e4), (500.45, 9.0e5)], 497.0, 503.0)
+    resolved = ResolvedScans(
+        ms2_scan_id=1, parent_scan_id=10, parent_rt=0.0,
+        parent_mz=p_mz, parent_inten=p_int,
+        next_scan_id=None, next_rt=None, next_mz=None, next_inten=None,
+        bracket_kind="parent_only",
+    )
+    row = compute_scan_purity(
+        scan, resolved, ppm=5.0, default_half_width=0.5,
+        min_rel_intensity=0.01, merge_ppm=5.0,
+        confirm_ppm=25.0, confirm_min_frac=0.01, snap_ppm=15.0,
+    )
+    assert row.precursor_found is False          # peak-picker missed it (5 ppm)
+    assert row.precursor_confirmed is True       # but the ion is there
+    assert 0.0 < row.precursor_frac < 0.2        # minor co-isolate
+    assert abs(row.snap_shift_ppm) == pytest.approx(6.0, abs=1.5)
 
 
 # ===========================================================================
@@ -701,6 +794,20 @@ def test_run_precursor_purity_persists_rows_and_returns_result(tmp_path):
     assert rows[101][1] == pytest.approx(0.2, abs=3e-2)  # chimeric
     assert rows[101][2] == 2
     assert rows[101][3] == 1
+
+    with sqlite3.connect(adb) as con:
+        conf = {
+            r[0]: r[1:]
+            for r in con.execute(
+                "SELECT ms2_scan_id, precursor_confirmed, precursor_frac, "
+                "precursor_mz_snapped FROM precursor_purity"
+            ).fetchall()
+        }
+    # both precursors are real peaks -> confirmed, frac populated, snap ~ no-op
+    assert conf[100][0] == 1 and conf[101][0] == 1
+    assert conf[100][1] is not None and conf[100][1] > 0.5
+    assert conf[100][2] == pytest.approx(500.0, abs=1e-2)
+    assert result.n_confirmed == 2
 
 
 def test_run_precursor_purity_is_idempotent(tmp_path):

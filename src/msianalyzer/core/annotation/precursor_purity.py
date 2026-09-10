@@ -20,6 +20,22 @@ the immediately following MS1 scan. For each MS2 scan it records:
 * ``runner_up_rel_int`` — most intense non-precursor in-window peak divided
   by the precursor peak; ``> 1`` means the precursor was a minor ion.
 
+The peak-detection above fails in dense, matrix-heavy, low-m/z windows even
+when the precursor ion is plainly present, so the stage also records a
+**peak-detection-free** view, always computable:
+
+* ``precursor_frac`` — above-baseline profile area within
+  ``precursor_confirm_ppm`` of the recorded ``precursor_mz`` over the whole
+  isolation window's area. A purity proxy that needs no resolved peak.
+* ``precursor_confirmed`` — ``precursor_frac >= precursor_confirm_min_frac``:
+  the recorded precursor really does carry signal in its own parent MS1
+  (association-confidence gate; carried onto ``ms2_annotations``).
+* ``precursor_mz_snapped`` / ``snap_shift_ppm`` — ``precursor_mz`` snapped
+  to the nearest parent-MS1 local maximum within ``precursor_snap_ppm``
+  (a tight radius, so it can never jump to a neighbouring ion; a no-op when
+  the recorded value is already on a peak). Association is **not** re-run —
+  this is a refined value for downstream QC.
+
 None of these depend on the feature list, so they stay meaningful however
 many samples the analysis spans.
 
@@ -65,6 +81,8 @@ __all__ = [
     "ppm_between",
     "window_bounds",
     "detect_window_peaks",
+    "integrate_precursor_fraction",
+    "snap_precursor_mz",
     "score_window",
     "interpolate_purity",
     "infer_raster_geometry",
@@ -215,6 +233,91 @@ def detect_window_peaks(
     if refined.shape[0] == 0:
         return empty
     return _merge_ppm(refined, merge_ppm)
+
+
+# ---------------------------------------------------------------------------
+# peak-detection-free precursor confirmation + m/z snap
+# ---------------------------------------------------------------------------
+
+
+def integrate_precursor_fraction(
+    mz: Sequence[float] | np.ndarray,
+    inten: Sequence[float] | np.ndarray,
+    lo: float,
+    hi: float,
+    ref_mz: float | None,
+    *,
+    band_ppm: float,
+    baseline_pct: float = 10.0,
+) -> float:
+    """Above-baseline profile area within ``band_ppm`` of ``ref_mz`` / window area.
+
+    A purity proxy that needs no peak detection: ``1.0`` means all of the
+    isolation window's ion current sits on the precursor, ``~0`` means the
+    precursor is a minor co-isolate. Robust where :func:`detect_window_peaks`
+    fails to resolve the precursor as a discrete peak (dense, matrix-heavy,
+    low-m/z windows). Returns ``0.0`` when there is no signal.
+    """
+    if ref_mz is None or hi <= lo:
+        return 0.0
+    mz = np.asarray(mz)
+    inten = np.asarray(inten)
+    if mz.size == 0 or mz.size != inten.size:
+        return 0.0
+    i0 = int(np.searchsorted(mz, lo, side="left"))
+    i1 = int(np.searchsorted(mz, hi, side="right"))
+    w_mz = np.asarray(mz[i0:i1], dtype=float)
+    w_it = np.asarray(inten[i0:i1], dtype=float)
+    if w_mz.size == 0:
+        return 0.0
+    base = float(np.percentile(w_it, baseline_pct))
+    above = np.clip(w_it - base, 0.0, None)
+    total = float(above.sum())
+    if total <= 0.0:
+        return 0.0
+    b_lo = max(lo, ref_mz * (1.0 - band_ppm / 1e6))
+    b_hi = min(hi, ref_mz * (1.0 + band_ppm / 1e6))
+    band = (w_mz >= b_lo) & (w_mz <= b_hi)
+    return float(above[band].sum() / total)
+
+
+def snap_precursor_mz(
+    mz: Sequence[float] | np.ndarray,
+    inten: Sequence[float] | np.ndarray,
+    ref_mz: float | None,
+    *,
+    snap_ppm: float,
+) -> tuple[float | None, float]:
+    """Snap ``ref_mz`` to the nearest parent-MS1 local maximum within ``snap_ppm``.
+
+    Returns ``(snapped_mz, signed_ppm_shift)``. A no-op — ``(ref_mz, 0.0)`` —
+    when snapping is disabled (``snap_ppm <= 0``), ``ref_mz`` is ``None``, or
+    no local maximum lies in the band (e.g. the precursor is an unresolved
+    shoulder). The search radius is deliberately tight so the snap can never
+    jump to a neighbouring ion.
+    """
+    if ref_mz is None:
+        return None, 0.0
+    if snap_ppm <= 0:
+        return float(ref_mz), 0.0
+    mz = np.asarray(mz)
+    inten = np.asarray(inten)
+    if mz.size < 3:
+        return float(ref_mz), 0.0
+    lo = ref_mz * (1.0 - snap_ppm / 1e6)
+    hi = ref_mz * (1.0 + snap_ppm / 1e6)
+    i0 = int(np.searchsorted(mz, lo, side="left"))
+    i1 = int(np.searchsorted(mz, hi, side="right"))
+    if i1 - i0 < 3:
+        return float(ref_mz), 0.0
+    b_mz = np.asarray(mz[i0:i1], dtype=float)
+    b_it = np.asarray(inten[i0:i1], dtype=float)
+    idx, _ = find_peaks(b_it)
+    if idx.size == 0:
+        return float(ref_mz), 0.0
+    j = int(idx[np.argmin(np.abs(b_mz[idx] - ref_mz))])
+    apex_mz, _ = _parabolic(b_mz, b_it, j)
+    return float(apex_mz), float(ppm_between(apex_mz, ref_mz))
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +799,10 @@ class PurityRow:
     runner_up_rel_int: float | None
     purity: float | None
     purity_parent: float | None
+    precursor_confirmed: bool | None
+    precursor_frac: float | None
+    precursor_mz_snapped: float | None
+    snap_shift_ppm: float | None
 
 
 def _ref_and_target(ms2_row: dict) -> tuple[float | None, float | None]:
@@ -715,6 +822,9 @@ def compute_scan_purity(
     default_half_width: float,
     min_rel_intensity: float,
     merge_ppm: float,
+    confirm_ppm: float = 25.0,
+    confirm_min_frac: float = 0.01,
+    snap_ppm: float = 15.0,
 ) -> PurityRow:
     """Turn one MS2 scan + its resolved MS1 bracket into a :class:`PurityRow`."""
     sample_id = ms2_row.get("sample_id")
@@ -737,6 +847,10 @@ def compute_scan_purity(
         runner_up_rel_int=None,
         purity=None,
         purity_parent=None,
+        precursor_confirmed=None,
+        precursor_frac=None,
+        precursor_mz_snapped=None,
+        snap_shift_ppm=None,
     )
     if center is None or resolved.parent_mz is None:
         return base
@@ -747,6 +861,16 @@ def compute_scan_purity(
         ms2_row.get("isolation_window_upper"),
         default_half_width,
     )
+
+    # peak-detection-free confirmation + m/z snap, both against the parent MS1
+    frac = integrate_precursor_fraction(
+        resolved.parent_mz, resolved.parent_inten, lo, hi, ref_mz,
+        band_ppm=confirm_ppm,
+    )
+    snapped_mz, snap_shift = snap_precursor_mz(
+        resolved.parent_mz, resolved.parent_inten, ref_mz, snap_ppm=snap_ppm
+    )
+
     parent_peaks = detect_window_peaks(
         resolved.parent_mz,
         resolved.parent_inten,
@@ -799,6 +923,10 @@ def compute_scan_purity(
         runner_up_rel_int=wp.runner_up_rel_int,
         purity=purity,
         purity_parent=purity_parent,
+        precursor_confirmed=bool(frac >= confirm_min_frac),
+        precursor_frac=float(frac),
+        precursor_mz_snapped=snapped_mz,
+        snap_shift_ppm=float(snap_shift),
     )
 
 
@@ -818,6 +946,10 @@ class PurityResult:
         n_precursor_missing: Rows where no in-window peak matched the
             precursor reference m/z.
         n_interpolated: Rows whose purity used a second MS1 scan.
+        n_confirmed: Rows where the precursor was confirmed present in its
+            own parent MS1 (peak-detection-free).
+        n_snapped: Rows whose ``precursor_mz`` was moved to a parent-MS1
+            local maximum.
     """
 
     rows: list[PurityRow]
@@ -825,6 +957,8 @@ class PurityResult:
     n_multi_peak: int
     n_precursor_missing: int
     n_interpolated: int
+    n_confirmed: int
+    n_snapped: int
 
 
 _PURITY_COLS = (
@@ -843,6 +977,10 @@ _PURITY_COLS = (
     "runner_up_rel_int",
     "purity",
     "purity_parent",
+    "precursor_confirmed",
+    "precursor_frac",
+    "precursor_mz_snapped",
+    "snap_shift_ppm",
     "command_id",
 )
 
@@ -888,6 +1026,10 @@ def persist_purity(
                     r.runner_up_rel_int,
                     r.purity,
                     r.purity_parent,
+                    None if r.precursor_confirmed is None else int(r.precursor_confirmed),
+                    r.precursor_frac,
+                    r.precursor_mz_snapped,
+                    r.snap_shift_ppm,
                     command_id,
                 )
                 for r in result.rows
@@ -920,6 +1062,8 @@ def _make_result(rows: list[PurityRow]) -> PurityResult:
         n_multi_peak=sum(r.n_peaks_in_window > 1 for r in rows),
         n_precursor_missing=sum(not r.precursor_found for r in rows),
         n_interpolated=sum(r.next_ms1_scan_id is not None for r in rows),
+        n_confirmed=sum(bool(r.precursor_confirmed) for r in rows),
+        n_snapped=sum(bool(r.snap_shift_ppm) for r in rows),
     )
 
 
@@ -957,6 +1101,9 @@ def run_precursor_purity(
     merge_ppm = float(config.merge_ppm)
     use_next = bool(config.use_next_ms1)
     gap_override = config.max_interpixel_gap_sec
+    confirm_ppm = float(getattr(config, "precursor_confirm_ppm", 25.0))
+    confirm_min_frac = float(getattr(config, "precursor_confirm_min_frac", 0.01))
+    snap_ppm = float(getattr(config, "precursor_snap_ppm", 15.0))
 
     rows: list[PurityRow] = []
     for sample_id, raw_db_path in samples:
@@ -996,6 +1143,9 @@ def run_precursor_purity(
                         default_half_width=default_half,
                         min_rel_intensity=min_rel,
                         merge_ppm=merge_ppm,
+                        confirm_ppm=confirm_ppm,
+                        confirm_min_frac=confirm_min_frac,
+                        snap_ppm=snap_ppm,
                     )
                 )
                 if (k + 1) % _PROGRESS_EVERY == 0:
@@ -1010,11 +1160,16 @@ def run_precursor_purity(
     result = _make_result(rows)
     persist_purity(analysis_db_path, result, command_id=command_id)
     logger.info(
-        "precursor purity: %d scans (%d multi-peak, %d precursor-missing, "
-        "%d interpolated)",
+        "precursor purity: %d scans (%d multi-peak, %d peak-unmatched, "
+        "%d of those precursor-confirmed in MS1, %d interpolated, %d snapped)",
         result.n_scans,
         result.n_multi_peak,
         result.n_precursor_missing,
+        sum(
+            (not r.precursor_found) and bool(r.precursor_confirmed)
+            for r in result.rows
+        ),
         result.n_interpolated,
+        result.n_snapped,
     )
     return result

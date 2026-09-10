@@ -224,8 +224,12 @@ feature list. See [ADR 8](../adr/0008-precursor-ion-purity.md).
 | `precursor_mz_ms1` / `precursor_intensity_ms1` | REAL | that peak, in the parent MS1 |
 | `n_peaks_in_window` | INTEGER | not null — real peaks in the parent MS1 window (`> 1` ⇒ co-isolation) |
 | `runner_up_rel_int` | REAL | strongest non-precursor in-window peak / precursor peak |
-| `purity` | REAL | precursor / total in-window intensity, RT-interpolated when `next_ms1_scan_id` is set |
-| `purity_parent` | REAL | the same, parent MS1 only (always populated) |
+| `purity` | REAL | precursor / total in-window intensity, RT-interpolated when `next_ms1_scan_id` is set. **Peak-based → NULL when `precursor_found = 0`.** |
+| `purity_parent` | REAL | the same, parent MS1 only |
+| `precursor_frac` | REAL | **peak-detection-free** purity proxy: above-baseline profile area within `purity.precursor_confirm_ppm` of the recorded `precursor_mz`, over the whole isolation window. Always computed (`0` if no signal). |
+| `precursor_confirmed` | INTEGER | 0/1 — `precursor_frac >= purity.precursor_confirm_min_frac`: the recorded precursor really carries signal in its own parent MS1 |
+| `precursor_mz_snapped` | REAL | `precursor_mz` moved to the nearest parent-MS1 local max within `purity.precursor_snap_ppm` (no-op when already on a peak; association is *not* re-run) |
+| `snap_shift_ppm` | REAL | signed ppm shift the snap applied (`0` = no move) |
 | `command_id` | INTEGER | FK → `commands` |
 
 `UNIQUE (sample_id, ms2_scan_id)`. Indexes: `idx_purity_scan (sample_id,
@@ -288,7 +292,7 @@ with several libraries configured the rows are interleaved and distinguished by
 | `rank_feature` | INTEGER | 1 = best-scoring scan on this feature |
 | `is_chimeric` | INTEGER | 0/1, from the grouper |
 | `n_features_in_window` | INTEGER | from the grouper |
-| `purity` / `runner_up_rel_int` | REAL | left-joined from `precursor_purity`; NULL when the scan was not purity-scored |
+| `purity` / `runner_up_rel_int` / `precursor_confirmed` / `precursor_frac` | — | left-joined from `precursor_purity`; NULL when the scan was not purity-scored |
 | `precursor_only` | INTEGER | 0/1, from the grouper |
 | `emp_filtered_mz` / `emp_filtered_intensity` | BLOB | filtered, normalised empirical spectrum (zlib float32); NULL if `store_filtered_spectra` off |
 | `lib_filtered_mz` / `lib_filtered_intensity` | BLOB | same for the library spectrum |

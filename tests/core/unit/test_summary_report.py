@@ -167,18 +167,20 @@ def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
         con.executemany(
             "INSERT INTO precursor_purity "
             "(sample_id, ms2_scan_id, bracket_kind, parent_ms1_scan_id, "
-            " window_lo_mz, precursor_found, n_peaks_in_window, purity) "
-            "VALUES (?,?,'parent_only',?,?,?,?,?)",
+            " window_lo_mz, precursor_found, n_peaks_in_window, purity, "
+            " precursor_confirmed) "
+            "VALUES (?,?,'parent_only',?,?,?,?,?,?)",
             [
-                # s1: 2 scored + 4 unscored, one per reason
-                (sid1, 1001, 1, 499.5, 1, 1, 0.97),
-                (sid1, 1002, 1, 499.5, 1, 3, 0.35),
-                (sid1, 2001, 1, 499.5, 0, 2, None),   # on-pixel, precursor not found
-                (sid1, 2002, 99, 499.5, 0, 2, None),  # parent MS1 off-pixel
-                (sid1, 2003, 1, None, 0, 0, None),    # no precursor m/z (no window)
-                (sid1, 2004, None, None, 0, 0, None), # no parent MS1
+                # s1: 2 scored + 5 unscored, one per reason
+                (sid1, 1001, 1, 499.5, 1, 1, 0.97, 1),
+                (sid1, 1002, 1, 499.5, 1, 3, 0.35, 1),
+                (sid1, 2001, 1, 499.5, 0, 2, None, 1),   # on-pixel, confirmed, peak unresolved
+                (sid1, 2005, 1, 499.5, 0, 2, None, 0),   # on-pixel, NOT confirmed
+                (sid1, 2002, 99, 499.5, 0, 2, None, 1),  # parent MS1 off-pixel
+                (sid1, 2003, 1, None, 0, 0, None, 0),    # no precursor m/z (no window)
+                (sid1, 2004, None, None, 0, 0, None, 0), # no parent MS1
                 # s2: 1 scored
-                (sid2, 1001, 5, 699.5, 1, 2, 0.60),
+                (sid2, 1001, 5, 699.5, 1, 2, 0.60, 1),
             ],
         )
         con.commit()
@@ -267,23 +269,25 @@ def test_purity_unscored(tmp_path):
     adb, raw_map = _analysis_db(tmp_path)
     u = purity_unscored(adb, raw_map)
     assert u.n_scored == 3  # 2 in s1 + 1 in s2
-    assert u.n_no_precursor_peak == 1
-    assert u.n_off_pixel == 1
-    assert u.n_no_precursor_mz == 1
-    assert u.n_no_parent == 1
-    assert u.n_unscored == 4
+    assert u.n_unresolved_confirmed == 1  # 2001: on-pixel, confirmed, peak unresolved
+    assert u.n_not_confirmed == 1         # 2005: on-pixel, not confirmed
+    assert u.n_off_pixel == 1             # 2002
+    assert u.n_no_precursor_mz == 1       # 2003
+    assert u.n_no_parent == 1             # 2004
+    assert u.n_unscored == 5
     s1 = next(p for p in u.per_sample if p.name == "s1")
-    assert (s1.n_scored, s1.n_off_pixel, s1.n_no_precursor_peak) == (2, 1, 1)
+    assert (s1.n_scored, s1.n_off_pixel, s1.n_unresolved_confirmed) == (2, 1, 1)
 
 
-def test_purity_unscored_without_pixel_map_folds_off_pixel_into_no_peak(tmp_path):
+def test_purity_unscored_without_pixel_map_folds_off_pixel_by_confirmed(tmp_path):
     adb, raw_map = _analysis_db(tmp_path)
     sid1, sid2 = sorted(raw_map)
     # point s1 at the raw DB that has no pixel_ms1_scans table
     u = purity_unscored(adb, raw_db_paths={sid1: raw_map[sid2]})
-    # the off-pixel scan can no longer be told apart from a faint precursor
+    # off-pixel can no longer be distinguished; 2002 was confirmed -> unresolved
     assert u.n_off_pixel == 0
-    assert u.n_no_precursor_peak == 2
+    assert u.n_unresolved_confirmed == 2  # 2001 + 2002
+    assert u.n_not_confirmed == 1         # 2005
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +310,7 @@ def test_figures_return_figures_and_tolerate_empty():
         go.Figure,
     )
     assert isinstance(
-        figure_purity_unscored(UnscoredSummary([], 0, 0, 0, 0, 0)), go.Figure
+        figure_purity_unscored(UnscoredSummary([], 0, 0, 0, 0, 0, 0)), go.Figure
     )
 
 
@@ -331,7 +335,7 @@ def test_collect_stats(tmp_path):
     assert stats.ms2.n_total == 6
     assert len(stats.per_sample_ms2) == 2
     assert stats.recheck.n_would_associate == 1
-    assert stats.unscored.n_unscored == 4
+    assert stats.unscored.n_unscored == 5
     assert stats.unscored.n_off_pixel == 1
 
     d = stats.to_dict()
@@ -339,7 +343,7 @@ def test_collect_stats(tmp_path):
     assert "purity_values" not in d["ms2"]
     assert all("values" not in ps for ps in d["per_sample_purity"])
     assert d["recheck"]["n_would_associate"] == 1
-    assert d["unscored"]["n_unscored"] == 4
+    assert d["unscored"]["n_unscored"] == 5
     assert d["unscored"]["n_off_pixel"] == 1
 
 
@@ -361,7 +365,7 @@ def test_build_summary_report_writes_files(tmp_path):
     assert payload["ms2"]["n_total"] == 6
     assert payload["recheck"]["assoc_ppm"] == 10.0
     assert len(payload["per_sample_ms2"]) == 2
-    assert payload["unscored"]["n_unscored"] == 4
+    assert payload["unscored"]["n_unscored"] == 5
 
 
 def test_build_summary_report_defaults_out_dir_to_db_parent(tmp_path):

@@ -129,6 +129,19 @@ For every MS2 scan:
    raster line** (`purity.use_next_ms1`, default on). The MS2's retention time
    sets the blend weight (`rt_weight`). Otherwise only the parent MS1 is used
    and `purity == purity_parent`.
+6. **Confirm the precursor without peak detection.** The peak-picker in step 2
+   fails in dense, matrix-heavy, low-m/z windows even when the precursor is
+   plainly there. So the stage also integrates the raw profile: `precursor_frac
+   = I(precursor_mz ± purity.precursor_confirm_ppm) / I(isolation window)`
+   (above-baseline area). `precursor_confirmed = precursor_frac >=
+   purity.precursor_confirm_min_frac` — the recorded precursor really carries
+   signal in its own parent MS1. `precursor_frac` is a purity value that is
+   *always* available.
+7. **Snap `precursor_mz`.** Move it to the nearest parent-MS1 local maximum
+   within `purity.precursor_snap_ppm` (a tight radius, so it can never jump to
+   a neighbour; a no-op when the recorded value is already on a peak). Stored
+   as `precursor_mz_snapped` / `snap_shift_ppm`. **Association is not re-run** —
+   this is a refined value for downstream QC.
 
 The "same raster line" test compares pixel identity, then `(x, y)` indices plus
 the acquisition-time gap (`purity.max_interpixel_gap_sec`, auto-derived when
@@ -149,13 +162,17 @@ irrelevant. If pixel mapping never ran, the stage is parent-MS1-only.
 | `precursor_mz_ms1`, `precursor_intensity_ms1` | that peak in the parent MS1 |
 | `n_peaks_in_window` | real peaks in the parent MS1 window — `> 1` ⇒ co-isolation |
 | `runner_up_rel_int` | strongest non-precursor in-window peak ÷ precursor peak (`> 1` ⇒ the precursor was a minor ion) |
-| `purity` | precursor ÷ total in-window intensity, RT-interpolated when `next_ms1_scan_id` is set |
-| `purity_parent` | the same, parent MS1 only — always populated |
+| `purity` | precursor ÷ total in-window intensity, RT-interpolated when `next_ms1_scan_id` is set. **Peak-based → NULL when `precursor_found = 0`.** |
+| `purity_parent` | the same, parent MS1 only |
+| `precursor_frac` | **peak-detection-free** purity proxy (see step 6). Always populated. |
+| `precursor_confirmed` | `1` when `precursor_frac` clears the threshold — the precursor is really there in its own MS1 |
+| `precursor_mz_snapped` / `snap_shift_ppm` | `precursor_mz` snapped to a parent-MS1 peak, and the ppm it moved |
 
-Filter chimeras with `purity < 0.8` (or your own cutoff) rather than
-`n_features_in_window > 1`; `precursor_found = 0` means the precursor was too
-faint to see in MS1 and `purity` is NULL. The cutoff stays a query-time choice —
-the stage stores the measurement, not a verdict.
+Filter chimeras with `precursor_frac < 0.5` (or `purity < 0.8` where it is
+non-NULL) rather than `n_features_in_window > 1`. `precursor_found = 0` with
+`precursor_confirmed = 1` means the peak-picker could not resolve a discrete
+peak but the precursor **is** present — use `precursor_frac`, not "faint
+precursor". The stage stores the measurement, not a verdict.
 
 ---
 
@@ -210,7 +227,7 @@ points back via `library_id`.
 | `rank` | 1 = best candidate for this scan |
 | `rank_feature` | 1 = this scan is the best-scoring MS2 on its feature |
 | `is_chimeric`, `n_features_in_window` | carried through from the grouper |
-| `purity`, `runner_up_rel_int` | carried through from the purity stage (NULL when the scan was not purity-scored) |
+| `purity`, `runner_up_rel_int`, `precursor_confirmed`, `precursor_frac` | carried through from the purity stage (NULL when the scan was not purity-scored) |
 | `precursor_only` | carried through — fragmentation looked to have failed |
 | `emp_filtered_mz` / `emp_filtered_intensity` | the noise-filtered, normalised **empirical** spectrum that was scored |
 | `lib_filtered_mz` / `lib_filtered_intensity` | the same for the **library** spectrum |

@@ -90,7 +90,11 @@ the feature list. Detail in
 [ADR 8](../adr/0008-precursor-ion-purity.md).
 
 - Pure (arrays only): `window_bounds`, `detect_window_peaks`, `score_window`,
-  `interpolate_purity`, `compute_scan_purity`, `ppm_between`.
+  `interpolate_purity`, `compute_scan_purity`, `ppm_between`;
+  `integrate_precursor_fraction` (peak-detection-free `precursor_frac` /
+  `precursor_confirmed` — the recorded precursor really carries signal in its
+  own parent MS1) and `snap_precursor_mz` (refine `precursor_mz` to a
+  parent-MS1 local max within a tight radius; association is not re-run).
 - Raw-DB readers: `infer_raster_geometry(con)` (infers the fast raster axis +
   inter-pixel gap tolerance), `SampleScanIndex(con)` (preloads MS1 rt/polarity,
   the scan→pixel map and pixel geometry once per sample so the hot loop does no

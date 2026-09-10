@@ -154,6 +154,8 @@ class AnnotationRow:
     rank_feature: int | None = None
     purity: float | None = None
     runner_up_rel_int: float | None = None
+    precursor_confirmed: bool | None = None
+    precursor_frac: float | None = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +292,8 @@ def _row_from_match(
         precursor_only=bool(scan.get("precursor_only")),
         purity=scan.get("purity"),
         runner_up_rel_int=scan.get("runner_up_rel_int"),
+        precursor_confirmed=scan.get("precursor_confirmed"),
+        precursor_frac=scan.get("precursor_frac"),
         emp_filtered_mz=m.filtered_mz,
         emp_filtered_intensity=m.filtered_intensity,
         lib_filtered_mz=m.lib_filtered_mz,
@@ -499,7 +503,8 @@ def _annotate_feature_batch(
         for feature_id, feature_mz in batch:
             assoc = adb.execute(
                 "SELECT a.scan_id, a.sample_id, a.n_features_in_window, "
-                "a.precursor_only, a.polarity, p.purity, p.runner_up_rel_int "
+                "a.precursor_only, a.polarity, p.purity, p.runner_up_rel_int, "
+                "p.precursor_confirmed, p.precursor_frac "
                 "FROM ms2_associations a "
                 "LEFT JOIN precursor_purity p "
                 "  ON p.sample_id = a.sample_id AND p.ms2_scan_id = a.scan_id "
@@ -510,7 +515,10 @@ def _annotate_feature_batch(
                 continue
 
             scans_by_pol: dict[str | None, list[dict]] = defaultdict(list)
-            for scan_id, sample_id, n_in_win, prec_only, pol, purity, runner_up in assoc:
+            for (
+                scan_id, sample_id, n_in_win, prec_only, pol,
+                purity, runner_up, confirmed, frac,
+            ) in assoc:
                 is_chimeric = (n_in_win or 0) > 1
                 if is_chimeric and not annotate_chimeric:
                     continue
@@ -530,6 +538,10 @@ def _annotate_feature_batch(
                         "precursor_only": bool(prec_only),
                         "purity": purity,
                         "runner_up_rel_int": runner_up,
+                        "precursor_confirmed": (
+                            None if confirmed is None else bool(confirmed)
+                        ),
+                        "precursor_frac": frac,
                         "emp_mz": emp_mz,
                         "emp_int": emp_int,
                     }
@@ -600,6 +612,8 @@ _ANN_COLS = (
     "n_features_in_window",
     "purity",
     "runner_up_rel_int",
+    "precursor_confirmed",
+    "precursor_frac",
     "precursor_only",
     "emp_filtered_mz",
     "emp_filtered_intensity",
@@ -688,6 +702,8 @@ def persist_annotations(
                         r.n_features_in_window,
                         r.purity,
                         r.runner_up_rel_int,
+                        None if r.precursor_confirmed is None else int(r.precursor_confirmed),
+                        r.precursor_frac,
                         int(r.precursor_only),
                         _blob_or_none(r.emp_filtered_mz, store_filtered_spectra),
                         _blob_or_none(

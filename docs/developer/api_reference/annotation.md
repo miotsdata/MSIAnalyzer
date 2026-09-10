@@ -38,6 +38,8 @@ Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
         - PurityResult
         - window_bounds
         - detect_window_peaks
+        - integrate_precursor_fraction
+        - snap_precursor_mz
         - score_window
         - interpolate_purity
         - infer_raster_geometry

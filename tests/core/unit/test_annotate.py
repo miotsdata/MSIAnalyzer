@@ -389,14 +389,14 @@ def _seeded_analysis_db(tmp_path, mock, make_ms2_db):
     return adb
 
 
-def _seed_purity(adb, scan_id, purity, *, sample_id=1):
+def _seed_purity(adb, scan_id, purity, *, sample_id=1, confirmed=1, frac=0.42):
     with sqlite3.connect(adb) as con:
         con.execute("PRAGMA foreign_keys = ON")
         con.execute(
             "INSERT INTO precursor_purity (sample_id, ms2_scan_id, bracket_kind, "
-            "precursor_found, n_peaks_in_window, purity) "
-            "VALUES (?,?,'parent_only',1,3,?)",
-            (sample_id, scan_id, purity),
+            "precursor_found, n_peaks_in_window, purity, precursor_confirmed, "
+            "precursor_frac) VALUES (?,?,'parent_only',1,3,?,?,?)",
+            (sample_id, scan_id, purity, confirmed, frac),
         )
         con.commit()
 
@@ -413,10 +413,14 @@ def test_run_annotation_carries_purity_and_min_purity_filters(
     cfg = AnnotateConfig(library_path=str(lib), candidate_ppm=25.0, n_workers=1)
     run_annotation(adb, cfg)
     with sqlite3.connect(adb) as con:
-        purity = con.execute(
-            "SELECT purity FROM ms2_annotations WHERE scan_id = ?", (single_scan,)
+        row = con.execute(
+            "SELECT purity, precursor_confirmed, precursor_frac "
+            "FROM ms2_annotations WHERE scan_id = ?", (single_scan,)
         ).fetchone()
-    assert purity is not None and purity[0] == pytest.approx(0.2)
+    assert row is not None
+    assert row[0] == pytest.approx(0.2)
+    assert row[1] == 1  # precursor_confirmed carried through
+    assert row[2] == pytest.approx(0.42)
 
     cfg_filtered = AnnotateConfig(
         library_path=str(lib), candidate_ppm=25.0, n_workers=1, min_purity=0.5

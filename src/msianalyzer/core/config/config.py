@@ -247,6 +247,17 @@ class PurityConfig:
         max_interpixel_gap_sec: Largest tolerated time gap between the
             parent pixel and an adjacent-line next pixel for interpolation.
             None derives it per sample from the median in-line pixel gap.
+        precursor_confirm_ppm: Half-width, in ppm, of the band around the
+            recorded `precursor_mz` used for the peak-detection-free
+            confirmation: `precursor_frac = I(band) / I(isolation window)`.
+        precursor_confirm_min_frac: `precursor_frac >= this` sets the
+            `precursor_confirmed` flag — the precursor carries at least this
+            fraction of the isolation window's above-baseline ion current in
+            its own parent MS1.
+        precursor_snap_ppm: Snap the recorded `precursor_mz` to the nearest
+            parent-MS1 local maximum within this many ppm (stored as
+            `precursor_mz_snapped`; a no-op when the recorded value is
+            already on a peak). `0` disables snapping.
     """
 
     enabled: bool = True
@@ -256,6 +267,9 @@ class PurityConfig:
     merge_ppm: float = 5.0
     use_next_ms1: bool = True
     max_interpixel_gap_sec: float | None = None
+    precursor_confirm_ppm: float = 25.0
+    precursor_confirm_min_frac: float = 0.01
+    precursor_snap_ppm: float = 15.0
 
 
 @dataclass
@@ -455,7 +469,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 7
+    version: int = 8
 
     def __init__(
         self,

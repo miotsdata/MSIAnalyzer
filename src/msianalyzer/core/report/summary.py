@@ -137,19 +137,22 @@ class PerSamplePurity:
 
 @dataclass
 class UnscoredPurity:
-    """Why precursor purity is unscored for one sample's MS2 scans.
+    """Why precursor purity (the peak-based value) is unscored for one sample.
 
     Mutually exclusive, in priority order:
 
     Attributes:
-        n_scored: purity was computed.
+        n_scored: peak-based purity was computed.
         n_no_parent: no MS1 scan resolved before the MS2 (rare).
         n_no_precursor_mz: scan carries no ``precursor_mz`` / isolation target.
         n_off_pixel: the parent MS1 is not among the sample's imaged pixels
             (laser flyback / off-tissue / warm-up scans).
-        n_no_precursor_peak: parent MS1 is on-pixel and the window is
-            defined, but the precursor ion was not a detectable peak in that
-            survey scan — a genuinely low-abundance precursor.
+        n_unresolved_confirmed: the precursor ion *is* present in its own
+            parent MS1 (``precursor_confirmed``), the peak-picker just could
+            not resolve it as a discrete peak (dense low-m/z window). Not a
+            data problem — ``precursor_frac`` still measures its purity.
+        n_not_confirmed: no real signal at ``precursor_mz`` in the parent MS1
+            (dynamic-exclusion carry-over, wrong pixel, precursor gone).
     """
 
     sample_id: int
@@ -158,7 +161,8 @@ class UnscoredPurity:
     n_no_parent: int
     n_no_precursor_mz: int
     n_off_pixel: int
-    n_no_precursor_peak: int
+    n_unresolved_confirmed: int
+    n_not_confirmed: int
 
 
 @dataclass
@@ -168,7 +172,8 @@ class UnscoredSummary:
     n_no_parent: int
     n_no_precursor_mz: int
     n_off_pixel: int
-    n_no_precursor_peak: int
+    n_unresolved_confirmed: int
+    n_not_confirmed: int
 
     @property
     def n_unscored(self) -> int:
@@ -176,7 +181,8 @@ class UnscoredSummary:
             self.n_no_parent
             + self.n_no_precursor_mz
             + self.n_off_pixel
-            + self.n_no_precursor_peak
+            + self.n_unresolved_confirmed
+            + self.n_not_confirmed
         )
 
 
@@ -486,17 +492,19 @@ def purity_unscored(
     """Classify every ``precursor_purity`` row: scored, or why not.
 
     ``raw_db_paths`` (or ``samples.raw_db_path``) is needed to tell an
-    off-pixel parent MS1 (laser flyback / off-tissue) apart from a genuinely
-    faint precursor; without it those two collapse into ``n_no_precursor_peak``.
+    off-pixel parent MS1 (laser flyback / off-tissue) apart from an in-ROI
+    scan; without it those collapse into the peak-based buckets.
     """
     analysis_db_path = Path(analysis_db_path)
+    _keys = ("scored", "no_parent", "no_precursor_mz", "off_pixel",
+             "unresolved_confirmed", "not_confirmed")
     with sqlite3.connect(analysis_db_path) as con:
         samples = con.execute(
             "SELECT sample_id, name, raw_db_path FROM samples ORDER BY sample_id"
         ).fetchall()
 
         per_sample: list[UnscoredPurity] = []
-        tot = dict(scored=0, no_parent=0, no_precursor_mz=0, off_pixel=0, no_peak=0)
+        tot = {k: 0 for k in _keys}
         for sample_id, name, raw_db_path in samples:
             path = (
                 raw_db_paths.get(sample_id, raw_db_path)
@@ -505,13 +513,13 @@ def purity_unscored(
             )
             pixel_ids = _pixel_scan_ids(path)
             rows = con.execute(
-                "SELECT parent_ms1_scan_id, window_lo_mz, purity "
+                "SELECT parent_ms1_scan_id, window_lo_mz, purity, precursor_confirmed "
                 "FROM precursor_purity WHERE sample_id = ?",
                 (sample_id,),
             ).fetchall()
 
-            s = dict(scored=0, no_parent=0, no_precursor_mz=0, off_pixel=0, no_peak=0)
-            for parent_id, window_lo, purity in rows:
+            s = {k: 0 for k in _keys}
+            for parent_id, window_lo, purity, confirmed in rows:
                 if purity is not None:
                     s["scored"] += 1
                 elif parent_id is None:
@@ -520,8 +528,10 @@ def purity_unscored(
                     s["no_precursor_mz"] += 1
                 elif pixel_ids is not None and int(parent_id) not in pixel_ids:
                     s["off_pixel"] += 1
+                elif confirmed:
+                    s["unresolved_confirmed"] += 1
                 else:
-                    s["no_peak"] += 1
+                    s["not_confirmed"] += 1
             for k in tot:
                 tot[k] += s[k]
             per_sample.append(
@@ -532,7 +542,8 @@ def purity_unscored(
                     n_no_parent=s["no_parent"],
                     n_no_precursor_mz=s["no_precursor_mz"],
                     n_off_pixel=s["off_pixel"],
-                    n_no_precursor_peak=s["no_peak"],
+                    n_unresolved_confirmed=s["unresolved_confirmed"],
+                    n_not_confirmed=s["not_confirmed"],
                 )
             )
 
@@ -542,7 +553,8 @@ def purity_unscored(
         n_no_parent=tot["no_parent"],
         n_no_precursor_mz=tot["no_precursor_mz"],
         n_off_pixel=tot["off_pixel"],
-        n_no_precursor_peak=tot["no_peak"],
+        n_unresolved_confirmed=tot["unresolved_confirmed"],
+        n_not_confirmed=tot["not_confirmed"],
     )
 
 
@@ -882,8 +894,9 @@ def figure_purity_per_sample(
 
 
 _UNSCORED_SEGMENTS = [
-    ("scored", "n_scored", _C_OK),
-    ("precursor not detected in MS1", "n_no_precursor_peak", _C_WARN),
+    ("purity scored (peak resolved)", "n_scored", _C_OK),
+    ("precursor confirmed in MS1, peak not resolved", "n_unresolved_confirmed", _C_GOOD),
+    ("precursor not confirmed in MS1", "n_not_confirmed", _C_WARN),
     ("parent MS1 off-pixel (flyback)", "n_off_pixel", _C_MUTED),
     ("no MS1 before the scan", "n_no_parent", _C_DARK),
     ("no precursor m/z", "n_no_precursor_mz", _C_FAINT),
@@ -990,13 +1003,20 @@ def _recheck_sentence(r: RecheckSummary) -> str:
 
 def _unscored_sentence(u: UnscoredSummary) -> str:
     if u.n_unscored == 0:
-        return "<p>Precursor purity was scored for every MS2 scan.</p>"
+        return "<p>Peak-based precursor purity was scored for every MS2 scan.</p>"
     parts = []
-    if u.n_no_precursor_peak:
+    if u.n_unresolved_confirmed:
         parts.append(
-            f"{_fmt(u.n_no_precursor_peak)} because the precursor ion was not a "
-            f"detectable peak in its survey (MS1) scan — a genuinely "
-            f"low-abundance precursor"
+            f"{_fmt(u.n_unresolved_confirmed)} where the precursor <b>is</b> "
+            f"present in its own parent MS1 but the peak-picker could not "
+            f"resolve it (dense low-m/z window) — <code>precursor_frac</code> "
+            f"still measures its purity"
+        )
+    if u.n_not_confirmed:
+        parts.append(
+            f"{_fmt(u.n_not_confirmed)} with no real signal at the recorded "
+            f"precursor m/z in the parent MS1 (dynamic-exclusion carry-over, "
+            f"wrong pixel, or the precursor was gone)"
         )
     if u.n_off_pixel:
         parts.append(
@@ -1007,10 +1027,17 @@ def _unscored_sentence(u: UnscoredSummary) -> str:
         parts.append(f"{_fmt(u.n_no_parent)} with no MS1 scan before them")
     if u.n_no_precursor_mz:
         parts.append(f"{_fmt(u.n_no_precursor_mz)} carrying no precursor m/z")
+    tail = ""
+    if u.n_unresolved_confirmed:
+        tail += (
+            " The first group is a peak-picking limitation, not a data problem "
+            "— filter on <code>precursor_confirmed</code> / <code>precursor_frac</code>."
+        )
+    if u.n_off_pixel:
+        tail += " The off-pixel scans can be treated as out-of-ROI acquisitions."
     return (
-        f"<p>Precursor purity is unscored for {_fmt(u.n_unscored)} MS2 scans: "
-        + "; ".join(parts)
-        + ". The off-pixel scans can be treated as out-of-ROI acquisitions.</p>"
+        f"<p>Peak-based precursor purity is unscored for {_fmt(u.n_unscored)} "
+        f"MS2 scans: " + "; ".join(parts) + "." + tail + "</p>"
     )
 
 

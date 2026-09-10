@@ -86,6 +86,10 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             "runner_up_rel_int",
             "purity",
             "purity_parent",
+            "precursor_confirmed",
+            "precursor_frac",
+            "precursor_mz_snapped",
+            "snap_shift_ppm",
         } <= purity_cols
         # ms2_annotations carries the purity carry-through columns
         ann_cols = {
@@ -94,7 +98,9 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
                 "PRAGMA table_info(ms2_annotations)"
             ).fetchall()
         }
-        assert {"purity", "runner_up_rel_int"} <= ann_cols
+        assert {
+            "purity", "runner_up_rel_int", "precursor_confirmed", "precursor_frac"
+        } <= ann_cols
         # feature_ms2_consensus shape
         cons_cols = {
             row[1]

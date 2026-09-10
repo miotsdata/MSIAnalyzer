@@ -107,6 +107,9 @@ instead of the grouper's `n_features_in_window` on large runs.
 | `merge_ppm` | `5.0` | ppm tolerance for merging split profile peaks in the window slice |
 | `use_next_ms1` | `true` | interpolate purity across the parent MS1 and the next MS1 when it is the same pixel or an adjacent pixel on the same raster line |
 | `max_interpixel_gap_sec` | `null` | max parent→next-pixel time gap for interpolation; `null` derives it per sample from the median in-line pixel gap |
+| `precursor_confirm_ppm` | `25.0` | half-width (ppm) of the band around `precursor_mz` for the peak-detection-free `precursor_frac` |
+| `precursor_confirm_min_frac` | `0.01` | `precursor_frac >= this` sets `precursor_confirmed` |
+| `precursor_snap_ppm` | `15.0` | snap `precursor_mz` to the nearest parent-MS1 local max within this many ppm (`0` disables); stored as `precursor_mz_snapped` — association is **not** re-run |
 
 ### `annotate` — MS2 spectral-library annotation
 
