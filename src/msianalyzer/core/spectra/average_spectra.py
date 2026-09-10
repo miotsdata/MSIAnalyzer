@@ -8,6 +8,7 @@ from typing import Literal
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial import cKDTree
+from msianalyzer.core.analysis_db import connect as _analysis_connect
 from msianalyzer.core.parser import array_to_blob, blob_to_array
 from msianalyzer.core.utils.db import safe_execute
 from msianalyzer.core.utils.logging_utils import log_call
@@ -96,10 +97,15 @@ def save_aggregated_spectra(
     """Persist an aggregated m/z / intensity spectrum to the analysis database.
 
     Inserts the spectrum as zlib-compressed blobs attributed to one
-    sample and one `commands` entry. The `aggregated_spectra` table is
-    normally created by `analysis_db.init_analysis_db`; a
-    `CREATE TABLE IF NOT EXISTS` guard is kept here so the function is
-    usable in isolation.
+    sample and one `commands` entry.
+
+    The `aggregated_spectra` table must already exist —
+    `analysis_db.init_analysis_db` owns the whole schema. This function
+    issues **no DDL on purpose**: the per-sample workers call it
+    concurrently, and a `CREATE TABLE/INDEX` from several processes at once
+    takes a schema lock on the shared WAL file and has corrupted it in the
+    field. The connection is opened via `analysis_db.connect` for the same
+    reason (WAL + a long busy timeout so writers queue instead of racing).
 
     Args:
         mzs_array: m/z values to store.
@@ -112,21 +118,7 @@ def save_aggregated_spectra(
     """
     mzs_blob = array_to_blob(mzs_array)
     intensities_blob = array_to_blob(intensities_array)
-    with sqlite3.connect(Path(analysis_db_path)) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS aggregated_spectra (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            sample_id INTEGER,
-            command_id INTEGER,
-            mz_array BLOB,
-            intensity_array BLOB
-            );
-        """)
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_agg_run_id ON aggregated_spectra(run_id)"
-        )
+    with _analysis_connect(analysis_db_path) as conn:
         safe_execute(
             conn,
             """
@@ -396,10 +388,8 @@ def load_aggregated_spectra(
         if the step ran more than once.
     """
 
-    with sqlite3.connect(Path(analysis_db_path)) as conn:
-        cursor = conn.cursor()
-
-        cursor.execute(
+    with _analysis_connect(analysis_db_path) as conn:
+        cursor = conn.execute(
             """
             SELECT a.mz_array, a.intensity_array
             FROM aggregated_spectra AS a

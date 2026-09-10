@@ -116,7 +116,7 @@ def test_save_aggregated_spectra_targets_analysis_db(mocker):
     mock_conn = mocker.MagicMock()
     mock_conn.__enter__.return_value = mock_conn
     mock_cursor = mocker.MagicMock()
-    mocker.patch(f"{MODULE_PATH}.sqlite3.connect", return_value=mock_conn)
+    mocker.patch(f"{MODULE_PATH}._analysis_connect", return_value=mock_conn)
     mock_conn.cursor.return_value = mock_cursor
 
     mocker.patch(
@@ -133,13 +133,17 @@ def test_save_aggregated_spectra_targets_analysis_db(mocker):
         command_id=99,
     )
 
-    # the INSERT now runs through utils.db.safe_execute -> conn.execute
+    # the INSERT runs through utils.db.safe_execute -> conn.execute; and the
+    # function issues NO DDL (concurrent CREATE TABLE corrupts the shared DB)
     insert_calls = [
         c
         for c in mock_conn.execute.call_args_list
         if "INSERT" in _norm(c.args[0])
     ]
     assert len(insert_calls) == 1
+    assert not any(
+        "CREATE" in _norm(c.args[0]) for c in mock_conn.execute.call_args_list
+    )
     sql, params = insert_calls[0].args
     assert _norm(sql) == _norm(
         "INSERT INTO aggregated_spectra "
@@ -155,8 +159,8 @@ def test_load_aggregated_spectra_filters_by_sample(mocker):
     mock_conn = mocker.MagicMock()
     mock_conn.__enter__.return_value = mock_conn
     mock_cursor = mocker.MagicMock()
-    mocker.patch(f"{MODULE_PATH}.sqlite3.connect", return_value=mock_conn)
-    mock_conn.cursor.return_value = mock_cursor
+    mock_conn.execute.return_value = mock_cursor
+    mocker.patch(f"{MODULE_PATH}._analysis_connect", return_value=mock_conn)
 
     mock_cursor.fetchone.return_value = (b"mz_blob", b"int_blob")
     expected_mzs = np.array([100.0, 200.0])
@@ -177,7 +181,7 @@ def test_load_aggregated_spectra_filters_by_sample(mocker):
     np.testing.assert_array_equal(mzs, expected_mzs)
     np.testing.assert_array_equal(intensities, expected_ints)
 
-    sql, params = mock_cursor.execute.call_args.args
+    sql, params = mock_conn.execute.call_args.args
     norm_sql = _norm(sql)
     assert "JOIN commands" in norm_sql
     assert "c.command_name = ? AND c.run_id = ? AND a.sample_id = ?" in norm_sql

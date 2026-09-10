@@ -42,6 +42,29 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_TEMPLATE = "analysis_{run_id}.db"
 
+#: how long a connection waits for a competing writer before raising
+#: ``SQLITE_BUSY``. The per-sample workers all append to this one file in
+#: parallel; WAL serialises writers, this makes them queue rather than fail.
+_BUSY_TIMEOUT_MS = 60_000
+
+
+def connect(db_path: Path | str) -> sqlite3.Connection:
+    """Open the analysis database the way every caller must.
+
+    WAL + a long busy timeout so the parallel per-sample workers queue on
+    the single-writer lock instead of racing or raising. WAL is already
+    persisted in the file header; re-asserting it is harmless and keeps a
+    hand-built database honest. Callers issue **no** DDL — the schema is
+    owned solely by :func:`create_analysis_schema` (see
+    :func:`init_analysis_db`) so concurrent writers never take a schema lock.
+    """
+    con = sqlite3.connect(Path(db_path), timeout=_BUSY_TIMEOUT_MS / 1000)
+    con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+    con.execute("PRAGMA journal_mode = WAL")
+    con.execute("PRAGMA synchronous = NORMAL")
+    con.execute("PRAGMA foreign_keys = ON")
+    return con
+
 
 # ---------------------------------------------------------------------------
 # Path helper
@@ -350,10 +373,7 @@ def init_analysis_db(db_path: Path | str) -> sqlite3.Connection:
     Returns:
         An open connection with WAL journalling and foreign keys enabled.
     """
-    con = sqlite3.connect(db_path)
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
-    con.execute("PRAGMA foreign_keys = ON")
+    con = connect(db_path)
     create_analysis_schema(con)
     con.commit()
     return con
@@ -377,7 +397,7 @@ def register_sample(
     raw database is a no-op that returns the original ``sample_id``.
     """
     raw_db_path = str(Path(raw_db_path))
-    with sqlite3.connect(Path(db_path)) as con:
+    with connect(db_path) as con:
         cur = con.execute(
             "SELECT sample_id FROM samples WHERE raw_db_path = ?", (raw_db_path,)
         )
@@ -422,7 +442,7 @@ def log_command(
     Returns:
         The new ``commands.id``.
     """
-    with sqlite3.connect(Path(db_path)) as con:
+    with connect(db_path) as con:
         cur = safe_execute(
             con,
             "INSERT INTO commands (command_name, datetime, arguments, run_id, sample_id) "
@@ -458,7 +478,7 @@ def is_command_already_run(
             Only meaningful for analysis databases (the raw ``commands``
             table has no ``sample_id`` column).
     """
-    with sqlite3.connect(Path(db_path)) as con:
+    with connect(db_path) as con:
         if sample_id is None:
             cur = con.execute(
                 "SELECT 1 FROM commands WHERE command_name = ? AND run_id = ? LIMIT 1",
@@ -476,7 +496,7 @@ def is_command_already_run(
 @log_call(source="db_path")
 def write_metadata(db_path: Path | str, rows: dict[str, str]) -> None:
     """Upsert key/value pairs into the analysis ``metadata`` table."""
-    with sqlite3.connect(Path(db_path)) as con:
+    with connect(db_path) as con:
         safe_executemany(
             con,
             "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
@@ -530,7 +550,7 @@ def save_features(
         }
         records.append((float(mz), json.dumps(members), command_id))
 
-    with sqlite3.connect(Path(db_path)) as con:
+    with connect(db_path) as con:
         con.execute("DELETE FROM features")
         safe_executemany(
             con,
@@ -552,7 +572,7 @@ def load_features(db_path: Path | str) -> pd.DataFrame:
         column per sample, matching the shape returned by
         ``align_mz_across_samples``.
     """
-    with sqlite3.connect(Path(db_path)) as con:
+    with connect(db_path) as con:
         rows = con.execute(
             "SELECT mz, members_json FROM features ORDER BY mz"
         ).fetchall()

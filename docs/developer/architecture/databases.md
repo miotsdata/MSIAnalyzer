@@ -96,6 +96,15 @@ Created by `analysis_db.create_analysis_schema`. One file per run; because the
 file is unique to the run, `run_id` in `commands` is informational rather than a
 scoping key.
 
+The per-sample workers all append to this one file in parallel. Two rules keep
+that safe: every connection is opened through `analysis_db.connect` (WAL + a
+60 s busy timeout, so writers **queue** on the single-writer lock instead of
+failing or racing), and **only `create_analysis_schema` issues DDL** —
+`init_analysis_db` runs it once, up front; no other function (in particular
+`save_aggregated_spectra`) runs `CREATE TABLE`/`CREATE INDEX`, because
+concurrent schema statements on a shared WAL file have corrupted it in the
+field.
+
 ### `metadata`
 
 Analysis-level provenance (`analysis_id`, `project_id`, `created`, `n_samples`).

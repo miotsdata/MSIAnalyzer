@@ -4,6 +4,7 @@
     options:
       members:
         - analysis_db_path
+        - connect
         - create_analysis_schema
         - init_analysis_db
         - register_sample

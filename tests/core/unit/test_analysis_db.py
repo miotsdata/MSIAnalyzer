@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,7 @@ from msianalyzer.core.analysis_db import (
     save_features,
     write_metadata,
 )
+from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 
 
@@ -249,3 +251,49 @@ def test_attach_raw_rejects_bad_alias(tmp_path: Path):
             attach_raw(conn, tmp_path / "raw.db", alias="bad alias;")
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# concurrent writers (the per-sample workers all append to one file)
+# ---------------------------------------------------------------------------
+
+
+def _hammer_analysis_db(args) -> int:
+    """Worker: log a command + write an aggregated spectrum, a few times."""
+    db_path, sample_id, n = args
+    mz = np.linspace(100.0, 900.0, 20_000)
+    inten = np.ones_like(mz)
+    for i in range(n):
+        cid = log_command(
+            db_path, "detect_ms1_centroids", {"i": i}, run_id="r", sample_id=sample_id
+        )
+        save_aggregated_spectra(
+            mz, inten,
+            analysis_db_path=db_path, run_id="r", sample_id=sample_id, command_id=cid,
+        )
+    return sample_id
+
+
+def test_concurrent_workers_do_not_corrupt_the_analysis_db(tmp_path: Path):
+    """4 processes appending in parallel must not corrupt the WAL file.
+
+    Regression for ``sqlite3.DatabaseError: database disk image is malformed``
+    seen on a real 6-sample run — caused by concurrent ``CREATE TABLE`` DDL
+    and a zero busy timeout.
+    """
+    adb = tmp_path / "analysis.db"
+    init_analysis_db(adb).close()
+    for k in range(4):
+        register_sample(adb, name=f"s{k}", raw_db_path=tmp_path / f"s{k}.db")
+
+    jobs = [(str(adb), k + 1, 8) for k in range(4)]
+    with ProcessPoolExecutor(max_workers=4) as ex:
+        done = sorted(ex.map(_hammer_analysis_db, jobs))
+    assert done == [1, 2, 3, 4]
+
+    with sqlite3.connect(adb) as con:
+        assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert con.execute("SELECT COUNT(*) FROM aggregated_spectra").fetchone()[0] == 32
+        assert con.execute(
+            "SELECT COUNT(*) FROM commands WHERE command_name = 'detect_ms1_centroids'"
+        ).fetchone()[0] == 32
