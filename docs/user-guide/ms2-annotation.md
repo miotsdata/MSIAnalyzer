@@ -204,9 +204,12 @@ The unit of work is **one feature**:
    `score = dot_product_score × coverage_score` in `[0, 1]`.
 3. **Keep every candidate** that shared at least `annotate.min_matched_peaks`
    fragment peaks, each stored with a `rank_ms2` within its scan.
-4. **Rank a feature's scans by their best hit**, so you can pick the single most
-   convincing MS2 per feature — `rank_feature` across all samples,
-   `rank_feature_sample` within one sample.
+4. **Rank the feature's hits.** `rank_feature` / `rank_feature_sample` rank
+   *rows* outright — `rank_feature = 1` **is** the feature's single best hit
+   (add `AND sample_id = ?` via `rank_feature_sample = 1` for one sample).
+   `rank_scan_feature` / `rank_scan_feature_sample` instead rank the feature's
+   *scans* by their best hit and broadcast that onto the scan's rows — pair
+   with `rank_ms2` to walk one spectrum's candidates.
 
 Leaving `annotate.library_path` empty (`null` or `[]`) disables the whole stage.
 
@@ -230,8 +233,10 @@ points back via `library_id`.
 | `lib_coverage`, `emp_coverage`, `coverage_score` | fraction of each side matched, and their geometric mean |
 | `n_matched_peaks`, `n_lib_peaks`, `n_emp_peaks_raw`, `n_emp_peaks_filtered` | peak counts |
 | `rank_ms2` | 1 = best candidate for this scan |
-| `rank_feature` | 1 = this scan is the feature's best-scoring MS2 across all samples (same value on every row of the scan) |
-| `rank_feature_sample` | 1 = this scan is the feature's best-scoring MS2 within its own sample |
+| `rank_feature` | row rank over the whole feature — **1 = the feature's single best hit** |
+| `rank_feature_sample` | row rank over one (feature, sample) — 1 = the feature's best hit in this sample |
+| `rank_scan_feature` | the feature's *scans* ranked by best hit (all samples), value repeated on every row of the scan |
+| `rank_scan_feature_sample` | same, within one sample |
 | `is_chimeric`, `n_features_in_window` | carried through from the grouper |
 | `purity`, `runner_up_rel_int`, `precursor_confirmed`, `precursor_frac` | carried through from the purity stage (NULL when the scan was not purity-scored) |
 | `precursor_only` | carried through — fragmentation looked to have failed |
@@ -243,6 +248,24 @@ The four `*_filtered_*` columns are zlib-compressed float32 blobs (decode with
 can be drawn straight from a result row without re-running the matcher. Set
 `annotate.store_filtered_spectra = false` to write them NULL and keep the table
 small.
+
+### `feature_compound_scores` — view: best score per (feature, compound)
+
+A `CREATE VIEW` over `ms2_annotations` (no stored data — always current). One
+row per `(feature_id, inchikey)` with `best_score = MAX(score)`,
+`best_scan_id` / `best_sample_id` / `best_library_id` of that row, plus
+`compound_name`, `n_candidate_rows` and `n_scans`. Rows with a NULL InChIKey
+are dropped.
+
+```sql
+SELECT inchikey, compound_name, best_score, best_scan_id
+FROM feature_compound_scores
+WHERE feature_id = 1223
+ORDER BY best_score DESC;
+```
+
+or `analysis_db.load_feature_compound_scores(db, feature_id=1223)` for a
+DataFrame.
 
 ## Chimeric, low-purity and precursor-only scans
 
@@ -261,11 +284,12 @@ filter never guesses. Every stored row carries the scan's `purity` and
 ## In the summary report
 
 When a library ran, `summary_report.html` gains an **MS2 annotation** section:
-MS2-bearing features by best-hit confidence (`rank_feature = 1 AND rank_ms2 = 1`
-score ≥ 0.5 / ≥ 0.75), the best-score distribution, how many distinct plausible
-compounds each feature has (candidates ≥ 0.5), whether a feature's repeat scans
-agree on the top compound, plus top-compound and per-library tables. It also
-reports how often the Stage A″ consensus scan is the annotated best scan.
+MS2-bearing features by best-hit confidence (`rank_feature = 1` score ≥ 0.5 /
+≥ 0.75), the best-score distribution, how many distinct plausible compounds each
+feature has (best-per-compound ≥ 0.5, from the `feature_compound_scores` view),
+whether a feature's repeat scans agree on the top compound, plus top-compound
+and per-library tables. It also reports how often the Stage A″ consensus scan is
+the annotated best scan.
 
 ---
 

@@ -289,8 +289,10 @@ with several libraries configured the rows are interleaved and distinguished by
 | `lib_coverage` / `emp_coverage` / `coverage_score` | REAL | not null |
 | `n_matched_peaks` / `n_lib_peaks` / `n_emp_peaks_raw` / `n_emp_peaks_filtered` | INTEGER | not null |
 | `rank_ms2` | INTEGER | not null — 1 = best candidate for this scan |
-| `rank_feature` | INTEGER | 1 = the feature's best-scoring scan across all samples (broadcast to that scan's rows) |
-| `rank_feature_sample` | INTEGER | 1 = the feature's best-scoring scan within this sample (broadcast to that scan's rows) |
+| `rank_feature` | INTEGER | row rank over the whole feature — **1 = the feature's single best (scan, candidate) hit** |
+| `rank_feature_sample` | INTEGER | row rank over one (feature, sample) — 1 = the feature's best hit in this sample |
+| `rank_scan_feature` | INTEGER | the feature's *scans* ranked by their best hit (all samples), broadcast onto that scan's rows |
+| `rank_scan_feature_sample` | INTEGER | same, within one sample |
 | `is_chimeric` | INTEGER | 0/1, from the grouper |
 | `n_features_in_window` | INTEGER | from the grouper |
 | `purity` / `runner_up_rel_int` / `precursor_confirmed` / `precursor_frac` | — | left-joined from `precursor_purity`; NULL when the scan was not purity-scored |
@@ -301,6 +303,26 @@ with several libraries configured the rows are interleaved and distinguished by
 
 Indexes: `idx_ann_scan (sample_id, scan_id)`, `idx_ann_feature (feature_id)`,
 `idx_ann_score (score)`, `idx_ann_inchikey (inchikey)`.
+
+### `feature_compound_scores`  (view)
+
+A view, not a table — pure aggregation over `ms2_annotations`, so it always
+reflects the current rows and costs no storage. One row per
+`(feature_id, inchikey)`: the best library score for that compound on that
+feature, and the row it came from.
+
+| column | notes |
+|---|---|
+| `feature_id`, `inchikey` | the group |
+| `compound_name`, `compound_formula` | from the top-scoring row |
+| `best_score` | `MAX(ms2_annotations.score)` for the group |
+| `best_dot_product_score` | that row's `dot_product_score` |
+| `best_sample_id` / `best_scan_id` / `best_library_id` | which row the max came from |
+| `n_candidate_rows` | rows for this (feature, compound) |
+| `n_scans` | distinct MS2 scans among them |
+
+Rows with `inchikey IS NULL` are excluded. `msianalyzer report` and
+`analysis_db.load_feature_compound_scores(db, feature_id=None)` read it.
 
 ---
 

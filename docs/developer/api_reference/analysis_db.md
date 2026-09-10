@@ -14,3 +14,4 @@
         - attach_raw
         - save_features
         - load_features
+        - load_feature_compound_scores

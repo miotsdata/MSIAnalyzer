@@ -312,13 +312,17 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         )
     """)
     # One row per (MS2 scan, library candidate) comparison that shared at
-    # least min_matched_peaks fragments. `rank_ms2` orders candidates within
-    # a scan (1 = best); `rank_feature` orders a feature's scans by their best
-    # hit across every sample, `rank_feature_sample` does the same within one
-    # sample (both broadcast onto every row of the scan). The four
-    # *_filtered_* blobs are the noise-filtered, max-normalised spectra
-    # actually scored (for mirror plots); NULL when store_filtered_spectra
-    # was off.
+    # least min_matched_peaks fragments. Ranks (all 1 = best):
+    #   rank_ms2                  - candidates within one scan
+    #   rank_feature              - every row of the feature (all samples);
+    #                              rank_feature = 1 IS the feature's best hit
+    #   rank_feature_sample       - every row of one (feature, sample)
+    #   rank_scan_feature         - the feature's scans by their best hit
+    #                              (all samples), broadcast onto the scan's rows
+    #   rank_scan_feature_sample  - same, within one sample
+    # The four *_filtered_* blobs are the noise-filtered, max-normalised
+    # spectra actually scored (for mirror plots); NULL when
+    # store_filtered_spectra was off.
     con.execute("""
         CREATE TABLE IF NOT EXISTS ms2_annotations (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,9 +344,11 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             n_lib_peaks            INTEGER NOT NULL,
             n_emp_peaks_raw        INTEGER NOT NULL,
             n_emp_peaks_filtered   INTEGER NOT NULL,
-            rank_ms2               INTEGER NOT NULL,
-            rank_feature           INTEGER,
-            rank_feature_sample    INTEGER,
+            rank_ms2                 INTEGER NOT NULL,
+            rank_feature             INTEGER,
+            rank_feature_sample      INTEGER,
+            rank_scan_feature        INTEGER,
+            rank_scan_feature_sample INTEGER,
             is_chimeric            INTEGER NOT NULL DEFAULT 0,
             n_features_in_window   INTEGER,
             purity                 REAL,
@@ -373,6 +379,30 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_ann_inchikey ON ms2_annotations(inchikey)"
     )
+
+    # Convenience view: for every (feature, distinct compound) the best
+    # library score and the row it came from. Pure aggregation over
+    # ms2_annotations (no stored data), so it always reflects the current
+    # rows. SQLite fills the bare columns from the MAX(score) row.
+    con.execute("DROP VIEW IF EXISTS feature_compound_scores")
+    con.execute("""
+        CREATE VIEW feature_compound_scores AS
+        SELECT
+            feature_id,
+            inchikey,
+            compound_name,
+            compound_formula,
+            library_id                                   AS best_library_id,
+            sample_id                                    AS best_sample_id,
+            scan_id                                      AS best_scan_id,
+            MAX(score)                                   AS best_score,
+            dot_product_score                            AS best_dot_product_score,
+            COUNT(*)                                     AS n_candidate_rows,
+            COUNT(DISTINCT COALESCE(sample_id, -1) || ':' || scan_id) AS n_scans
+        FROM ms2_annotations
+        WHERE inchikey IS NOT NULL
+        GROUP BY feature_id, inchikey
+    """)
 
 
 @log_call(source="db_path")
@@ -596,3 +626,35 @@ def load_features(db_path: Path | str) -> pd.DataFrame:
     for col in df.columns:
         df[col] = df[col].astype("Int64")
     return df
+
+
+@log_call(source="db_path")
+def load_feature_compound_scores(
+    db_path: Path | str, feature_id: int | None = None
+) -> pd.DataFrame:
+    """Best library score per (feature, distinct compound) from the analysis DB.
+
+    Thin reader over the ``feature_compound_scores`` view: one row per
+    ``(feature_id, inchikey)`` with the top ``best_score`` and the row it
+    came from (``best_sample_id`` / ``best_scan_id`` / ``best_library_id``),
+    plus ``n_candidate_rows`` / ``n_scans``. Empty when annotation never ran.
+
+    Args:
+        db_path: The analysis database.
+        feature_id: Restrict to one feature; ``None`` returns every feature.
+
+    Returns:
+        A DataFrame ordered by ``feature_id`` then ``best_score`` desc.
+    """
+    sql = "SELECT * FROM feature_compound_scores"
+    params: tuple = ()
+    if feature_id is not None:
+        sql += " WHERE feature_id = ?"
+        params = (int(feature_id),)
+    sql += " ORDER BY feature_id, best_score DESC"
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con, params=params)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            # view absent (schema predates it) or ms2_annotations missing
+            return pd.DataFrame()

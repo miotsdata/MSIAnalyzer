@@ -253,9 +253,8 @@ class AnnotationLibraryInfo:
 class AnnotationSummary:
     """Roll-up of Stage B — only built when a library was used.
 
-    "best hit" = the `rank_feature = 1 AND rank_ms2 = 1` row of a feature:
-    the top candidate of that feature's top-scoring scan, one per annotated
-    feature.
+    "best hit" = the `rank_feature = 1` row of a feature: its single
+    highest-scoring (scan, candidate) row, one per annotated feature.
 
     Attributes:
         libraries: one entry per library used.
@@ -795,18 +794,17 @@ def annotation_summary(
             "WHERE feature_id IS NOT NULL"
         ).fetchone()[0]
 
-        # one row per annotated feature: top candidate of its top scan
+        # one row per annotated feature: its single best (scan, candidate) hit
         best = con.execute(
             "SELECT feature_id, sample_id, scan_id, score, inchikey, "
             "       compound_name, precursor_confirmed, is_chimeric, "
             "       precursor_only, library_id "
-            "FROM ms2_annotations WHERE rank_feature = 1 AND rank_ms2 = 1"
+            "FROM ms2_annotations WHERE rank_feature = 1"
         ).fetchall()
-        # distinct plausible compounds per feature (candidates >= low cutoff)
+        # distinct plausible compounds per feature (best per compound >= cutoff)
         cand = con.execute(
-            "SELECT feature_id, inchikey, MAX(score) FROM ms2_annotations "
-            "WHERE score >= ? AND inchikey IS NOT NULL "
-            "GROUP BY feature_id, inchikey",
+            "SELECT feature_id, inchikey, best_score "
+            "FROM feature_compound_scores WHERE best_score >= ?",
             (lo,),
         ).fetchall()
         # per-scan top hit, for cross-scan agreement

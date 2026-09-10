@@ -13,6 +13,7 @@ from msianalyzer.core.analysis_db import (
     attach_raw,
     init_analysis_db,
     is_command_already_run,
+    load_feature_compound_scores,
     load_features,
     log_command,
     register_sample,
@@ -101,6 +102,21 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
         assert {
             "purity", "runner_up_rel_int", "precursor_confirmed", "precursor_frac"
         } <= ann_cols
+        assert {
+            "rank_ms2",
+            "rank_feature",
+            "rank_feature_sample",
+            "rank_scan_feature",
+            "rank_scan_feature_sample",
+        } <= ann_cols
+        # the feature_compound_scores view exists
+        views = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'view'"
+            ).fetchall()
+        }
+        assert "feature_compound_scores" in views
         # feature_ms2_consensus shape
         cons_cols = {
             row[1]
@@ -226,6 +242,85 @@ def test_load_features_empty(tmp_path: Path):
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
     assert load_features(db).empty
+
+
+# ---------------------------------------------------------------------------
+# feature_compound_scores view / load_feature_compound_scores
+# ---------------------------------------------------------------------------
+
+
+_ANN_INSERT = (
+    "INSERT INTO ms2_annotations (sample_id, scan_id, feature_id, library_id, "
+    "library_spectrum_id, inchikey, compound_name, score, dot_product_score, "
+    "lib_coverage, emp_coverage, coverage_score, n_matched_peaks, n_lib_peaks, "
+    "n_emp_peaks_raw, n_emp_peaks_filtered, rank_ms2) "
+    "VALUES (?,?,?,1,?,?,?,?,?,1,1,1,3,3,5,4,?)"
+)
+
+
+def _seed_two_feature_annotations(db: Path) -> None:
+    with sqlite3.connect(db) as con:
+        # FK enforcement is per-connection and off by default here, so we can
+        # seed ms2_annotations without materialising `features` rows.
+        con.execute(
+            "INSERT INTO annotation_libraries (id, path, name) "
+            "VALUES (1, 'lib.db', 'lib')"
+        )
+        con.executemany(
+            _ANN_INSERT,
+            [
+                # feature 7, compound AAA: 3 candidate rows over 2 scans,
+                # best 0.80 on s1/scan 11
+                (1, 10, 7, 100, "AAA0000000000A", "Acid", 0.60, 0.6, 1),
+                (1, 11, 7, 101, "AAA0000000000A", "Acid", 0.80, 0.8, 1),
+                (1, 11, 7, 102, "AAA0000000000A", "Acid", 0.55, 0.5, 2),
+                # feature 7, compound BBB: single row 0.70
+                (1, 11, 7, 103, "BBB0000000000B", "Base", 0.70, 0.7, 3),
+                # feature 9, compound CCC: 0.40
+                (2, 30, 9, 104, "CCC0000000000C", "Ketone", 0.40, 0.4, 1),
+                # a NULL-inchikey row is ignored by the view
+                (1, 10, 7, 105, None, None, 0.99, 0.9, 4),
+            ],
+        )
+        con.commit()
+
+
+def test_feature_compound_scores_view_best_per_compound(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_annotations(db)
+
+    with sqlite3.connect(db) as con:
+        rows = con.execute(
+            "SELECT feature_id, inchikey, best_score, best_sample_id, "
+            "best_scan_id, n_candidate_rows, n_scans "
+            "FROM feature_compound_scores ORDER BY feature_id, best_score DESC"
+        ).fetchall()
+
+    assert rows == [
+        (7, "AAA0000000000A", 0.80, 1, 11, 3, 2),  # 3 rows, 2 distinct scans
+        (7, "BBB0000000000B", 0.70, 1, 11, 1, 1),
+        (9, "CCC0000000000C", 0.40, 2, 30, 1, 1),
+    ]
+
+
+def test_load_feature_compound_scores_helper(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_annotations(db)
+
+    all_df = load_feature_compound_scores(db)
+    assert list(all_df["best_score"]) == [0.80, 0.70, 0.40]  # feature, score desc
+
+    one = load_feature_compound_scores(db, feature_id=7)
+    assert set(one["inchikey"]) == {"AAA0000000000A", "BBB0000000000B"}
+    assert one.iloc[0]["best_score"] == 0.80
+
+
+def test_load_feature_compound_scores_empty_without_annotations(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    assert load_feature_compound_scores(db).empty
 
 
 # ---------------------------------------------------------------------------

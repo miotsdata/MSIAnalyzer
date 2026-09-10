@@ -65,6 +65,9 @@ Schema and provenance helpers for `analysis_<id>.db`. See the
 - `register_sample`, `log_command`, `is_command_already_run`, `write_metadata`.
 - `attach_raw(con, raw_db_path, alias)` — `ATTACH DATABASE` for cross-DB reads.
 - `save_features` / `load_features` — round-trip the aligned frame to `features`.
+- `load_feature_compound_scores(db, feature_id=None)` — read the
+  `feature_compound_scores` view (best library score per feature × distinct
+  compound) into a DataFrame; empty when annotation never ran.
 
 ## `annotation/group_ms2.py`
 
@@ -168,7 +171,9 @@ Detail in [MS2 annotation](../../user-guide/ms2-annotation.md) and
 [ADR 7](../adr/0007-library-annotation-design.md).
 
 - Pure: `normalize_polarity`, `normalize_library_paths`,
-  `score_scan_against_candidates`, `rank_scan_rows`, `assign_feature_ranks`,
+  `score_scan_against_candidates`, `rank_scan_rows` (`rank_ms2`),
+  `assign_feature_ranks` (`rank_feature` / `rank_feature_sample` row-level,
+  `rank_scan_feature` / `rank_scan_feature_sample` scan-level),
   `annotate_feature`.
 - Data classes: `Candidate`, `LibraryInfo`, `AnnotationRow`, `AnnotationResult`
   (`AnnotationResult.libraries` is a list).

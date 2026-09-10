@@ -474,7 +474,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 10
+    version: int = 11
 
     def __init__(
         self,

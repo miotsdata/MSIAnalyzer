@@ -19,9 +19,10 @@ Design (see ADR 0007):
   across worker processes.
 * **Store every candidate** that shares at least ``min_matched_peaks``
   fragments with the (noise-filtered) empirical spectrum, each with a
-  ``rank_ms2`` within its scan. ``rank_feature`` (all samples) and
-  ``rank_feature_sample`` (within one sample) then order the scans of a
-  feature by their best hit.
+  ``rank_ms2`` within its scan. ``rank_feature`` /
+  ``rank_feature_sample`` then rank the feature's rows outright (``1`` = its
+  single best hit), and ``rank_scan_feature`` /
+  ``rank_scan_feature_sample`` rank its *scans* by their best hit.
 * **Chimeric scans** (isolation window held >1 feature) are scored against
   their primary feature and flagged ``is_chimeric``; ``annotate_chimeric``
   can drop them entirely.
@@ -123,8 +124,9 @@ class AnnotationRow:
     """One (MS2 scan, library candidate) comparison (one ``ms2_annotations`` row).
 
     Mutable on purpose: ``rank_ms2`` is stamped after a scan's candidates are
-    scored; ``rank_feature`` / ``rank_feature_sample`` after every batch has
-    returned.
+    scored; the four feature-level ranks (``rank_feature`` /
+    ``rank_feature_sample`` / ``rank_scan_feature`` /
+    ``rank_scan_feature_sample``) after every batch has returned.
     """
 
     sample_id: int | None
@@ -155,6 +157,8 @@ class AnnotationRow:
     rank_ms2: int = 0
     rank_feature: int | None = None
     rank_feature_sample: int | None = None
+    rank_scan_feature: int | None = None
+    rank_scan_feature_sample: int | None = None
     purity: float | None = None
     runner_up_rel_int: float | None = None
     precursor_confirmed: bool | None = None
@@ -245,6 +249,28 @@ def rank_scan_rows(rows: list[AnnotationRow]) -> list[AnnotationRow]:
     return ordered
 
 
+def _rank_rows_by_score(
+    rows: list[AnnotationRow],
+    group_key: Callable[[AnnotationRow], object],
+    attr: str,
+) -> None:
+    """Rank every row of a group 1..n by ``score`` desc; write onto ``attr``.
+
+    A per-row rank (like :func:`rank_scan_rows`, but over a wider group), so
+    ``attr == 1`` marks the single best (scan, candidate) row of the group.
+    Strictly increasing — ties do not share a rank.
+    """
+    by_group: dict[object, list[AnnotationRow]] = defaultdict(list)
+    for r in rows:
+        by_group[group_key(r)].append(r)
+
+    for grows in by_group.values():
+        for i, r in enumerate(
+            sorted(grows, key=lambda r: r.score, reverse=True), start=1
+        ):
+            setattr(r, attr, i)
+
+
 def _rank_scans_by_best_score(
     rows: list[AnnotationRow],
     group_key: Callable[[AnnotationRow], object],
@@ -274,20 +300,30 @@ def _rank_scans_by_best_score(
 
 
 def assign_feature_ranks(rows: list[AnnotationRow]) -> list[AnnotationRow]:
-    """Stamp ``rank_feature`` and ``rank_feature_sample`` on every row.
+    """Stamp the four feature-level ranks on every row.
 
-    Both rank a feature's MS2 scans by their best hit and broadcast the rank
-    onto every row of the scan:
+    Row-level (``attr == 1`` is the single best (scan, candidate) row):
 
-    * ``rank_feature`` — across every sample (``1`` = the feature's globally
-      best-scoring MS2 scan).
-    * ``rank_feature_sample`` — within one sample (``1`` = the best-scoring
-      MS2 scan for this feature *in that sample*). Each MS2 scan belongs to a
-      single feature, so ``(feature_id, sample_id)`` groups are well defined.
+    * ``rank_feature`` — over every row of the feature, all samples.
+    * ``rank_feature_sample`` — over every row of one ``(feature, sample)``.
+
+    Scan-level — the feature's MS2 *scans* ordered by their best hit, the
+    rank broadcast onto every row of the scan (use with ``rank_ms2`` to walk
+    that scan's candidates):
+
+    * ``rank_scan_feature`` — over the feature's scans, all samples.
+    * ``rank_scan_feature_sample`` — over the feature's scans in one sample.
+
+    Each MS2 scan belongs to a single feature, so ``(feature_id, sample_id)``
+    groups are well defined.
     """
-    _rank_scans_by_best_score(rows, lambda r: r.feature_id, "rank_feature")
-    _rank_scans_by_best_score(
+    _rank_rows_by_score(rows, lambda r: r.feature_id, "rank_feature")
+    _rank_rows_by_score(
         rows, lambda r: (r.feature_id, r.sample_id), "rank_feature_sample"
+    )
+    _rank_scans_by_best_score(rows, lambda r: r.feature_id, "rank_scan_feature")
+    _rank_scans_by_best_score(
+        rows, lambda r: (r.feature_id, r.sample_id), "rank_scan_feature_sample"
     )
     return rows
 
@@ -359,7 +395,7 @@ def annotate_feature(
 
     Returns:
         All rows for the feature, each with ``rank_ms2`` filled (per scan)
-        but ``rank_feature`` / ``rank_feature_sample`` still None.
+        but the four feature-level ranks still None.
 
     Not ``@log_call``-decorated and issues no per-feature logging: it runs
     thousands of times inside forked pool workers, and streaming that
@@ -636,6 +672,8 @@ _ANN_COLS = (
     "rank_ms2",
     "rank_feature",
     "rank_feature_sample",
+    "rank_scan_feature",
+    "rank_scan_feature_sample",
     "is_chimeric",
     "n_features_in_window",
     "purity",
@@ -674,8 +712,8 @@ def persist_annotations(
 
     Args:
         db_path: Path to the analysis database.
-        rows: Rows to store (``rank_ms2`` / ``rank_feature`` /
-            ``rank_feature_sample`` already stamped).
+        rows: Rows to store (``rank_ms2`` and the four feature-level ranks
+            already stamped).
             Each row carries its own ``library_id``.
         library_ids: The ``annotation_libraries.id``(s) this call owns —
             their existing ``ms2_annotations`` rows are cleared first when
@@ -728,6 +766,8 @@ def persist_annotations(
                         r.rank_ms2,
                         r.rank_feature,
                         r.rank_feature_sample,
+                        r.rank_scan_feature,
+                        r.rank_scan_feature_sample,
                         int(r.is_chimeric),
                         r.n_features_in_window,
                         r.purity,

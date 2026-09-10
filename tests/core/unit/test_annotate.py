@@ -170,7 +170,22 @@ def test_rank_scan_rows_orders_by_score():
     assert ranked[0].score == pytest.approx(0.9)
 
 
-def test_assign_feature_ranks_orders_scans_by_best_hit():
+def test_assign_feature_ranks_row_level_marks_single_best_hit():
+    rows = [
+        _row(10, 0.4),
+        _row(10, 0.9),
+        _row(20, 0.5),
+        _row(20, 0.1),
+    ]
+    assign_feature_ranks(rows)
+    ordered = sorted(rows, key=lambda r: r.rank_feature)
+    assert [r.score for r in ordered] == [0.9, 0.5, 0.4, 0.1]
+    assert ordered[0].rank_feature == 1
+    # exactly one row is rank_feature == 1
+    assert sum(r.rank_feature == 1 for r in rows) == 1
+
+
+def test_assign_feature_ranks_scan_level_orders_scans_by_best_hit():
     rows = [
         _row(10, 0.4),
         _row(10, 0.9),  # scan 10 best = 0.9
@@ -178,29 +193,49 @@ def test_assign_feature_ranks_orders_scans_by_best_hit():
         _row(20, 0.1),
     ]
     assign_feature_ranks(rows)
-    rf = {r.scan_id: r.rank_feature for r in rows}
-    assert rf[10] == 1
-    assert rf[20] == 2
+    rsf = {r.scan_id: r.rank_scan_feature for r in rows}
+    assert rsf[10] == 1
+    assert rsf[20] == 2
+    # broadcast onto every row of the scan
+    assert [r.rank_scan_feature for r in rows if r.scan_id == 10] == [1, 1]
 
 
-def test_assign_feature_ranks_scopes_sample_rank_within_each_sample():
-    # feature 1: scan 10 (sample 1, best 0.9), scan 20 (sample 1, best 0.4),
-    #            scan 30 (sample 2, best 0.6)
+def test_assign_feature_ranks_sample_scoping():
+    # feature 1, scans: 10 (s1: rows 0.9, 0.3), 20 (s1: row 0.4),
+    #                   30 (s2: rows 0.6, 0.5)
     rows = [
         _row(10, 0.9, sample_id=1),
+        _row(10, 0.3, sample_id=1),
         _row(20, 0.4, sample_id=1),
         _row(30, 0.6, sample_id=2),
+        _row(30, 0.5, sample_id=2),
     ]
     assign_feature_ranks(rows)
-    by_scan = {r.scan_id: r for r in rows}
-    # global order: 10 (0.9) > 30 (0.6) > 20 (0.4)
-    assert by_scan[10].rank_feature == 1
-    assert by_scan[30].rank_feature == 2
-    assert by_scan[20].rank_feature == 3
-    # within sample 1: 10 then 20; sample 2 has only scan 30 -> rank 1
-    assert by_scan[10].rank_feature_sample == 1
-    assert by_scan[20].rank_feature_sample == 2
-    assert by_scan[30].rank_feature_sample == 1
+    by_key = {(r.scan_id, r.score): r for r in rows}
+
+    # row-level, all samples: 0.9 > 0.6 > 0.5 > 0.4 > 0.3
+    assert by_key[(10, 0.9)].rank_feature == 1
+    assert by_key[(30, 0.6)].rank_feature == 2
+    assert by_key[(30, 0.5)].rank_feature == 3
+    assert by_key[(20, 0.4)].rank_feature == 4
+    assert by_key[(10, 0.3)].rank_feature == 5
+
+    # row-level, per sample
+    assert by_key[(10, 0.9)].rank_feature_sample == 1  # s1
+    assert by_key[(20, 0.4)].rank_feature_sample == 2  # s1
+    assert by_key[(10, 0.3)].rank_feature_sample == 3  # s1
+    assert by_key[(30, 0.6)].rank_feature_sample == 1  # s2
+    assert by_key[(30, 0.5)].rank_feature_sample == 2  # s2
+
+    # scan-level, all samples: scan 10 (0.9) > 30 (0.6) > 20 (0.4)
+    assert by_key[(10, 0.9)].rank_scan_feature == 1
+    assert by_key[(30, 0.6)].rank_scan_feature == 2
+    assert by_key[(20, 0.4)].rank_scan_feature == 3
+
+    # scan-level, per sample: s1 -> 10 then 20; s2 -> 30 alone
+    assert by_key[(10, 0.9)].rank_scan_feature_sample == 1
+    assert by_key[(20, 0.4)].rank_scan_feature_sample == 2
+    assert by_key[(30, 0.6)].rank_scan_feature_sample == 1
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +378,8 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
     r.rank_ms2 = 1
     r.rank_feature = 1
     r.rank_feature_sample = 1
+    r.rank_scan_feature = 1
+    r.rank_scan_feature_sample = 1
     r.emp_filtered_mz = np.array([100.1234, 150.5678])
     r.emp_filtered_intensity = np.array([1.0, 0.4])
     r.lib_filtered_mz = np.array([100.1230, 150.5680, 200.9999])
@@ -353,14 +390,15 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
     with sqlite3.connect(db) as con:
         row = con.execute(
             "SELECT score, rank_ms2, rank_feature, rank_feature_sample, "
+            "rank_scan_feature, rank_scan_feature_sample, "
             "emp_filtered_mz, emp_filtered_intensity, "
             "lib_filtered_mz, lib_filtered_intensity FROM ms2_annotations"
         ).fetchone()
     assert row[0] == pytest.approx(0.87)
-    assert (row[1], row[2], row[3]) == (1, 1, 1)
-    np.testing.assert_allclose(blob_to_array(row[4]), [100.1234, 150.5678], atol=1e-3)
-    np.testing.assert_allclose(blob_to_array(row[5]), [1.0, 0.4], atol=1e-3)
-    assert blob_to_array(row[6]).size == 3
+    assert (row[1], row[2], row[3], row[4], row[5]) == (1, 1, 1, 1, 1)
+    np.testing.assert_allclose(blob_to_array(row[6]), [100.1234, 150.5678], atol=1e-3)
+    np.testing.assert_allclose(blob_to_array(row[7]), [1.0, 0.4], atol=1e-3)
+    assert blob_to_array(row[8]).size == 3
 
     # a second call replaces rather than appends
     persist_annotations(db, [r], 1)
@@ -474,6 +512,7 @@ def test_run_annotation_end_to_end_ranks_true_compound(
         n_libs = con.execute("SELECT COUNT(*) FROM annotation_libraries").fetchone()[0]
         top = con.execute(
             "SELECT compound_name, rank_ms2, rank_feature, rank_feature_sample, "
+            "rank_scan_feature, rank_scan_feature_sample, "
             "emp_filtered_mz, lib_filtered_mz "
             "FROM ms2_annotations WHERE scan_id = ? AND rank_ms2 = 1",
             (single_scan_id,),
@@ -481,10 +520,10 @@ def test_run_annotation_end_to_end_ranks_true_compound(
     assert n_libs == 1
     assert top is not None
     assert top[0] == "TrueCompound"
-    assert top[2] == 1  # best (only) scan on its feature
-    assert top[3] == 1  # ... and the only scan in its sample
-    assert blob_to_array(top[4]).size > 0
-    assert blob_to_array(top[5]).size > 0
+    # its single best scan, single best row, only scan in its sample
+    assert (top[2], top[3], top[4], top[5]) == (1, 1, 1, 1)
+    assert blob_to_array(top[6]).size > 0
+    assert blob_to_array(top[7]).size > 0
 
 
 def test_run_annotation_flags_chimeric_scans(

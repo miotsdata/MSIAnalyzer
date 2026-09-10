@@ -57,9 +57,13 @@ Key tables (full schema in the
   (`path`, `name`, spectrum / compound counts).
 - **`ms2_annotations`** — one row per (MS2 scan, library candidate) comparison:
   the compound, all sub-scores, `rank_ms2` within the scan, `rank_feature` /
-  `rank_feature_sample` across the
-  feature, and (unless disabled) the filtered empirical + library spectra for
-  mirror plots. Only written when `annotate.library_path` is set.
+  `rank_feature_sample` over the feature's rows (`rank_feature = 1` is the
+  feature's single best hit), `rank_scan_feature` / `rank_scan_feature_sample`
+  ranking its scans, and (unless disabled) the filtered empirical + library
+  spectra for mirror plots. Only written when `annotate.library_path` is set.
+- **`feature_compound_scores`** (view) — best library score per
+  `(feature, distinct compound)`, with the row it came from. Always reflects
+  the current `ms2_annotations`.
 - **`aggregated_spectra`** — averaged / centroided / filtered MS1 spectra,
   attributed per sample and per `commands` row.
 - **`commands`** — the provenance log: one row per step with its JSON arguments.
