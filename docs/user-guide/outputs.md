@@ -14,7 +14,7 @@ Everything else lands in the analysis' `io.out_dir`.
 | `<sample>.h5ad` | `out_dir` | sample | `AnnData` — pixels × features quantification matrix with spatial coordinates |
 | `<sample>_filtered_ms1.html` | `out_dir` | sample | interactive figure of the filtered MS1 peak list |
 | `<sample>_peaks_data.csv` | `out_dir` | sample | the filtered MS1 peak list as `mz,intensity` |
-| `summary_report.html` | `out_dir` | run | per-sample counts, feature-overlap UpSet plot, MS2 association (overall + per sample), a recheck of the unassociated MS2 against each sample's pre-filter MS1 peaks, the `precursor_frac` distribution of the **associated** MS2 (overall + per sample — the spectra that feed the library search), and a breakdown of *why* peak-based purity is unscored (precursor present but unresolved / not confirmed / off-pixel flyback / no precursor m/z) |
+| `summary_report.html` | `out_dir` | run | per-sample counts, feature-overlap UpSet plot, MS2 association (overall + per sample), a recheck of the unassociated MS2 against each sample's pre-filter MS1 peaks, the `precursor_frac` distribution of the **associated** MS2 (overall + per sample), a breakdown of *why* peak-based purity is unscored, and — when a library ran — an **MS2 annotation** section: features by best-hit confidence, best-score distribution, plausible-compounds-per-feature, cross-scan agreement, and top-compound / per-library tables |
 | `summary.json` | `out_dir` | run | the same numbers, machine-readable |
 | `debug_<run-id>.log` | `<project>/logs/` | run | full-DEBUG trace of the run (always written); plus `run -l PATH` for a user log at the `-v` level |
 

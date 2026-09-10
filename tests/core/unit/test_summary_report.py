@@ -23,6 +23,7 @@ from msianalyzer.core.report.summary import (
     Ms2Summary,
     RecheckSummary,
     UnscoredSummary,
+    annotation_summary,
     associated_purity,
     build_summary_report,
     collect_stats,
@@ -329,6 +330,108 @@ def test_figure_ms2_association_per_sample_is_100_pct(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# annotation section
+# ---------------------------------------------------------------------------
+
+
+def _seed_annotations(adb: Path) -> None:
+    """A library + ms2_annotations on the `_analysis_db` fixture.
+
+    Feature 1 (scans 1001/1002 of s1): CompA is the best hit (0.85), CompB a
+    second plausible one (0.55); both scans' top hit is CompA. Feature 2
+    (scan 1001 of s2): CompC (0.72). Consensus for feature 1 points at 1001.
+    """
+    _ann = (
+        "INSERT INTO ms2_annotations (sample_id, scan_id, feature_id, library_id, "
+        "library_spectrum_id, inchikey, compound_name, score, dot_product_score, "
+        "lib_coverage, emp_coverage, coverage_score, n_matched_peaks, n_lib_peaks, "
+        "n_emp_peaks_raw, n_emp_peaks_filtered, rank, rank_feature, "
+        "precursor_confirmed, is_chimeric, precursor_only) "
+        "VALUES (?,?,?,1,?,?,?,?,?,1,1,1,3,3,5,4,?,?,?,?,?)"
+    )
+    with sqlite3.connect(adb) as con:
+        con.execute("PRAGMA foreign_keys = ON")
+        con.execute(
+            "INSERT INTO annotation_libraries (id, path, name, n_spectra, n_compounds) "
+            "VALUES (1, 'lib.db', 'lib', 100, 50)"
+        )
+        con.executemany(
+            _ann,
+            [
+                # sid, scan, feat, lib_spec_id, inchikey, name, score, dot,
+                # rank, rank_feature, confirmed, chimeric, precursor_only
+                (1, 1001, 1, 10, "COMPA0000000AA", "Alpha", 0.85, 0.9, 1, 1, 1, 0, 0),
+                (1, 1001, 1, 11, "COMPB0000000BB", "Beta", 0.55, 0.6, 2, 1, 1, 0, 0),
+                (1, 1002, 1, 10, "COMPA0000000AA", "Alpha", 0.60, 0.7, 1, 2, 1, 0, 0),
+                (2, 1001, 2, 12, "COMPC0000000CC", "Gamma", 0.72, 0.8, 1, 1, 1, 0, 0),
+            ],
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_consensus (feature_id, feature_mz, "
+            "best_sample_id, best_scan_id, n_ms2, n_ms2_considered, n_ms2_scored, "
+            "consensus_score) VALUES (1, 500.0, ?, 1001, 2, 2, 2, 0.7)",
+            (1,),
+        )
+        con.commit()
+
+
+def test_annotation_summary_none_without_library(tmp_path):
+    adb, _ = _analysis_db(tmp_path)
+    assert annotation_summary(adb) is None
+
+
+def test_annotation_summary(tmp_path):
+    adb, _ = _analysis_db(tmp_path)
+    _seed_annotations(adb)
+    a = annotation_summary(adb)
+    assert a is not None
+    assert a.n_ms2_bearing_features == 2   # features 1 and 2 have associated MS2
+    assert a.n_features_annotated == 2
+    assert sorted(a.best_score_values) == [0.72, 0.85]
+    assert a.n_ge == {0.5: 2, 0.75: 1}
+    assert a.n_distinct_compounds == 2     # COMPA + COMPC (best hits >= 0.5)
+    assert a.ambiguity == {1: 1, 2: 1}     # feature 2 unique, feature 1 has A+B
+    assert a.median_gap == pytest.approx(0.30)
+    assert a.n_unique_call == 1
+    assert (a.n_multiscan_features, a.n_multiscan_agree) == (1, 1)
+    assert a.n_best_confident == 1
+    assert a.n_confident_precursor_confirmed == 1
+    assert (a.n_consensus, a.n_consensus_matches_best) == (1, 1)
+    names = {c[0] for c in a.top_compounds}
+    assert names == {"COMPA0000000AA", "COMPC0000000CC"}
+    assert a.libraries[0].n_best_hits == 2
+
+
+def test_annotation_figures_and_report_section(tmp_path):
+    adb, raw_map = _analysis_db(tmp_path)
+    _seed_annotations(adb)
+    from msianalyzer.core.report.summary import (
+        figure_annotation_agreement,
+        figure_annotation_ambiguity,
+        figure_annotation_score,
+        figure_annotation_yield,
+    )
+
+    a = annotation_summary(adb)
+    for fn in (
+        figure_annotation_yield, figure_annotation_score,
+        figure_annotation_ambiguity, figure_annotation_agreement,
+    ):
+        assert isinstance(fn(a), go.Figure)
+
+    out = tmp_path / "r"
+    build_summary_report(adb, raw_db_paths=raw_map, out_dir=out)
+    text = (out / "summary_report.html").read_text()
+    assert "MS2 annotation" in text
+    assert "Top compounds by feature count" in text
+    assert "COMPA00000" in text
+    payload = json.loads((out / "summary.json").read_text())
+    assert payload["annotation"]["n_features_annotated"] == 2
+    assert payload["annotation"]["n_ge"] == {"0.5": 2, "0.75": 1}
+    assert "best_score_values" not in payload["annotation"]
+
+
+# ---------------------------------------------------------------------------
 # end to end
 # ---------------------------------------------------------------------------
 
@@ -355,6 +458,8 @@ def test_collect_stats(tmp_path):
     assert d["recheck"]["n_would_associate"] == 1
     assert d["unscored"]["n_unscored"] == 5
     assert d["unscored"]["n_off_pixel"] == 1
+    assert stats.annotation is None  # no library in the base fixture
+    assert d["annotation"] is None
 
 
 def test_build_summary_report_writes_files(tmp_path):

@@ -37,6 +37,8 @@ __all__ = [
     "UnscoredPurity",
     "UnscoredSummary",
     "RecheckSummary",
+    "AnnotationLibraryInfo",
+    "AnnotationSummary",
     "SummaryStats",
     "per_sample_counts",
     "feature_membership",
@@ -46,6 +48,7 @@ __all__ = [
     "associated_purity",
     "purity_unscored",
     "unassociated_recheck",
+    "annotation_summary",
     "figure_per_sample",
     "figure_overlap_upset",
     "figure_ms2_association",
@@ -54,9 +57,16 @@ __all__ = [
     "figure_purity",
     "figure_purity_per_sample",
     "figure_purity_unscored",
+    "figure_annotation_yield",
+    "figure_annotation_score",
+    "figure_annotation_ambiguity",
+    "figure_annotation_agreement",
     "collect_stats",
     "build_summary_report",
 ]
+
+#: fixed score references for the annotation section (no config knob yet)
+_ANNOTATION_CUTOFFS = (0.5, 0.75)
 
 _REPORT_HTML = "summary_report.html"
 _REPORT_JSON = "summary.json"
@@ -230,6 +240,70 @@ class RecheckSummary:
 
 
 @dataclass
+class AnnotationLibraryInfo:
+    """One spectral library used, plus how many features it best-annotated."""
+
+    name: str
+    n_spectra: int
+    n_compounds: int
+    n_best_hits: int
+
+
+@dataclass
+class AnnotationSummary:
+    """Roll-up of Stage B — only built when a library was used.
+
+    "best hit" = the `rank_feature = 1 AND rank = 1` row of a feature: the
+    top candidate of that feature's top-scoring scan, one per annotated
+    feature.
+
+    Attributes:
+        libraries: one entry per library used.
+        n_ms2_bearing_features / n_features_annotated: features with any
+            associated MS2, and of those how many got a hit.
+        n_ge: ``{cutoff: features whose best score >= cutoff}``.
+        n_distinct_compounds: distinct InChIKeys among best hits at the low
+            cutoff.
+        best_score_values: best score per annotated feature.
+        ambiguity: ``{k: features with k distinct plausible compounds}``
+            (candidates at the low cutoff).
+        median_gap: median (best − runner-up) score across features with
+            >= 2 plausible compounds; ``None`` if none.
+        n_unique_call: features with exactly one plausible compound.
+        n_multiscan_features / n_multiscan_agree: features fragmented >= 2x,
+            and of those how many have every scan's top hit on the same
+            compound.
+        top_compounds: ``(inchikey, name, n_features, median_score)`` rows,
+            most features first.
+        n_best_confident / n_confident_*: of the best hits at the high
+            cutoff, how many come from a confirmed precursor / non-chimeric
+            window / real fragmentation.
+        n_consensus / n_consensus_matches_best: ``feature_ms2_consensus``
+            rows, and how often its scan is the annotated best scan.
+    """
+
+    cutoffs: tuple[float, float]
+    libraries: list[AnnotationLibraryInfo]
+    n_ms2_bearing_features: int
+    n_features_annotated: int
+    n_ge: dict[float, int]
+    n_distinct_compounds: int
+    best_score_values: list[float]
+    ambiguity: dict[int, int]
+    median_gap: float | None
+    n_unique_call: int
+    n_multiscan_features: int
+    n_multiscan_agree: int
+    top_compounds: list[tuple[str, str, int, float]]
+    n_best_confident: int
+    n_confident_precursor_confirmed: int
+    n_confident_not_chimeric: int
+    n_confident_not_precursor_only: int
+    n_consensus: int
+    n_consensus_matches_best: int
+
+
+@dataclass
 class SummaryStats:
     """Everything the report renders."""
 
@@ -241,6 +315,7 @@ class SummaryStats:
     associated_purity: AssociatedPuritySummary
     unscored: UnscoredSummary
     recheck: RecheckSummary
+    annotation: "AnnotationSummary | None"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -256,6 +331,12 @@ class SummaryStats:
         d["overlap_combos"] = [
             {"samples": list(s), "n_features": n} for s, n in self.overlap_combos
         ]
+        if d.get("annotation") is not None:
+            an = d["annotation"]
+            an["n_best_score_values"] = len(self.annotation.best_score_values)
+            an.pop("best_score_values", None)
+            an["n_ge"] = {str(k): v for k, v in an["n_ge"].items()}
+            an["ambiguity"] = {str(k): v for k, v in an["ambiguity"].items()}
         return d
 
 
@@ -685,6 +766,174 @@ def unassociated_recheck(analysis_db_path: Path | str) -> RecheckSummary:
     )
 
 
+def _median(xs: Sequence[float]) -> float | None:
+    xs = sorted(xs)
+    n = len(xs)
+    if n == 0:
+        return None
+    return xs[n // 2] if n % 2 else 0.5 * (xs[n // 2 - 1] + xs[n // 2])
+
+
+@log_call(source="analysis_db_path")
+def annotation_summary(
+    analysis_db_path: Path | str,
+    *,
+    cutoffs: tuple[float, float] = _ANNOTATION_CUTOFFS,
+) -> AnnotationSummary | None:
+    """Roll up ``ms2_annotations`` — or ``None`` when no library was used."""
+    analysis_db_path = Path(analysis_db_path)
+    lo, hi = cutoffs
+    with sqlite3.connect(analysis_db_path) as con:
+        libs = con.execute(
+            "SELECT id, name, n_spectra, n_compounds FROM annotation_libraries"
+        ).fetchall()
+        if not libs:
+            return None
+
+        n_ms2_feat = con.execute(
+            "SELECT COUNT(DISTINCT feature_id) FROM ms2_associations "
+            "WHERE feature_id IS NOT NULL"
+        ).fetchone()[0]
+
+        # one row per annotated feature: top candidate of its top scan
+        best = con.execute(
+            "SELECT feature_id, sample_id, scan_id, score, inchikey, "
+            "       compound_name, precursor_confirmed, is_chimeric, "
+            "       precursor_only, library_id "
+            "FROM ms2_annotations WHERE rank_feature = 1 AND rank = 1"
+        ).fetchall()
+        # distinct plausible compounds per feature (candidates >= low cutoff)
+        cand = con.execute(
+            "SELECT feature_id, inchikey, MAX(score) FROM ms2_annotations "
+            "WHERE score >= ? AND inchikey IS NOT NULL "
+            "GROUP BY feature_id, inchikey",
+            (lo,),
+        ).fetchall()
+        # per-scan top hit, for cross-scan agreement
+        per_scan = con.execute(
+            "SELECT feature_id, sample_id, scan_id, inchikey "
+            "FROM ms2_annotations WHERE rank = 1 AND inchikey IS NOT NULL"
+        ).fetchall()
+        consensus = con.execute(
+            "SELECT feature_id, best_sample_id, best_scan_id "
+            "FROM feature_ms2_consensus"
+        ).fetchall()
+
+    lib_name = {r[0]: (r[1] or f"library {r[0]}") for r in libs}
+    best_by_lib: dict[int, int] = {}
+    best_scores: list[float] = []
+    best_scan: dict[int, tuple] = {}
+    n_confident = n_conf_confirmed = n_conf_not_chim = n_conf_not_po = 0
+    compound_feats: dict[str, set[int]] = {}
+    compound_name: dict[str, str] = {}
+    compound_scores: dict[str, list[float]] = {}
+    for fid, sid, scid, score, ik, name, confirmed, chim, po, lib_id in best:
+        score = float(score or 0.0)
+        best_scores.append(score)
+        best_scan[fid] = (sid, scid)
+        best_by_lib[lib_id] = best_by_lib.get(lib_id, 0) + 1
+        if ik is not None:
+            compound_feats.setdefault(ik, set()).add(fid)
+            compound_name.setdefault(ik, name or ik)
+            compound_scores.setdefault(ik, []).append(score)
+        if score >= hi:
+            n_confident += 1
+            n_conf_confirmed += int(bool(confirmed))
+            n_conf_not_chim += int(not chim)
+            n_conf_not_po += int(not po)
+
+    n_ge = {c: sum(1 for s in best_scores if s >= c) for c in (lo, hi)}
+    # distinct compounds actually *called* (best hit per feature, score >= lo)
+    n_distinct_compounds = len(
+        {
+            ik
+            for fid, sid, scid, score, ik, *_ in best
+            if ik is not None and float(score or 0.0) >= lo
+        }
+    )
+
+    # ambiguity + gap
+    by_feat_scores: dict[int, list[float]] = {}
+    for fid, ik, mx in cand:
+        by_feat_scores.setdefault(fid, []).append(float(mx))
+    ambiguity: dict[int, int] = {}
+    gaps: list[float] = []
+    n_unique = 0
+    for fid, scs in by_feat_scores.items():
+        k = len(scs)
+        ambiguity[k] = ambiguity.get(k, 0) + 1
+        scs.sort(reverse=True)
+        if k == 1:
+            n_unique += 1
+        else:
+            gaps.append(scs[0] - scs[1])
+
+    # cross-scan agreement
+    feat_scans: dict[int, set[tuple]] = {}
+    feat_iks: dict[int, set[str]] = {}
+    for fid, sid, scid, ik in per_scan:
+        feat_scans.setdefault(fid, set()).add((sid, scid))
+        feat_iks.setdefault(fid, set()).add(ik)
+    n_multiscan = sum(1 for v in feat_scans.values() if len(v) >= 2)
+    n_multiscan_agree = sum(
+        1
+        for fid, v in feat_scans.items()
+        if len(v) >= 2 and len(feat_iks.get(fid, set())) == 1
+    )
+
+    # consensus overlap
+    n_consensus = len(consensus)
+    n_cons_match = sum(
+        1
+        for fid, csid, cscid in consensus
+        if fid in best_scan and best_scan[fid] == (csid, cscid)
+    )
+
+    top_compounds = sorted(
+        (
+            (
+                ik,
+                compound_name.get(ik, ik),
+                len(feats),
+                round(_median(compound_scores.get(ik, [])) or 0.0, 3),
+            )
+            for ik, feats in compound_feats.items()
+        ),
+        key=lambda t: t[2],
+        reverse=True,
+    )[:15]
+
+    return AnnotationSummary(
+        cutoffs=(lo, hi),
+        libraries=[
+            AnnotationLibraryInfo(
+                name=str(r[1] or f"library {r[0]}"),
+                n_spectra=int(r[2] or 0),
+                n_compounds=int(r[3] or 0),
+                n_best_hits=best_by_lib.get(r[0], 0),
+            )
+            for r in libs
+        ],
+        n_ms2_bearing_features=int(n_ms2_feat or 0),
+        n_features_annotated=len(best),
+        n_ge=n_ge,
+        n_distinct_compounds=n_distinct_compounds,
+        best_score_values=best_scores,
+        ambiguity=dict(sorted(ambiguity.items())),
+        median_gap=_median(gaps),
+        n_unique_call=n_unique,
+        n_multiscan_features=n_multiscan,
+        n_multiscan_agree=n_multiscan_agree,
+        top_compounds=top_compounds,
+        n_best_confident=n_confident,
+        n_confident_precursor_confirmed=n_conf_confirmed,
+        n_confident_not_chimeric=n_conf_not_chim,
+        n_confident_not_precursor_only=n_conf_not_po,
+        n_consensus=n_consensus,
+        n_consensus_matches_best=n_cons_match,
+    )
+
+
 # ---------------------------------------------------------------------------
 # figures
 # ---------------------------------------------------------------------------
@@ -971,6 +1220,120 @@ def figure_purity_unscored(unscored: UnscoredSummary) -> go.Figure:
     return fig
 
 
+# --- annotation (Stage B) figures -----------------------------------------
+
+
+def figure_annotation_yield(a: AnnotationSummary) -> go.Figure:
+    """Donut: MS2-bearing features by best-hit confidence."""
+    lo, hi = a.cutoffs
+    m = a.n_ms2_bearing_features
+    if m == 0:
+        return _empty("MS2 annotation yield")
+    confident = a.n_ge[hi]
+    weak = a.n_features_annotated - confident
+    none = m - a.n_features_annotated
+    fig = go.Figure(
+        go.Pie(
+            labels=[f"best score ≥ {hi:g}", f"hit, < {hi:g}", "no hit"],
+            values=[confident, weak, none],
+            hole=0.55,
+            marker_colors=[_C_GOOD, _C_WARN, _C_FAINT],
+            texttemplate="%{label}<br>%{value:,}<br>%{percent}",
+            hovertemplate="%{label}: %{value:,} (%{percent})<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="MS2 annotation — features by best-hit confidence",
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
+        annotations=[
+            dict(
+                text=(
+                    f"{_fmt(a.n_ms2_bearing_features)} MS2-bearing<br>"
+                    f"{_fmt(a.n_distinct_compounds)} compounds"
+                ),
+                x=0.5, y=0.5, showarrow=False, font=dict(size=12),
+            )
+        ],
+    )
+    return fig
+
+
+def figure_annotation_score(a: AnnotationSummary) -> go.Figure:
+    """Histogram of the best score per annotated feature."""
+    if not a.best_score_values:
+        return _empty("Annotation — best score per feature")
+    lo, hi = a.cutoffs
+    fig = go.Figure(
+        go.Histogram(
+            x=a.best_score_values, nbinsx=40, marker_color=_C_OK,
+            hovertemplate="score %{x}<br>%{y:,} features<extra></extra>",
+        )
+    )
+    for c, col in ((lo, _C_MUTED), (hi, _C_BAD)):
+        fig.add_vline(
+            x=c, line=dict(color=col, dash="dash"),
+            annotation_text=f"{c:g}",
+        )
+    fig.update_layout(
+        title=(
+            f"Annotation — best score per feature "
+            f"({_fmt(a.n_ge[lo])} ≥ {lo:g}, {_fmt(a.n_ge[hi])} ≥ {hi:g} of "
+            f"{_fmt(a.n_features_annotated)})"
+        ),
+        xaxis=dict(title="score", range=[0, 1]),
+        yaxis=dict(title="features", tickformat=","),
+    )
+    return fig
+
+
+def figure_annotation_ambiguity(a: AnnotationSummary) -> go.Figure:
+    """Bar: distinct plausible compounds per feature."""
+    if not a.ambiguity:
+        return _empty("Annotation — plausible compounds per feature")
+    lo, _ = a.cutoffs
+    keys = sorted(a.ambiguity)
+    vals = [a.ambiguity[k] for k in keys]
+    colors = [_C_GOOD if k == 1 else _C_WARN if k == 2 else _C_BAD for k in keys]
+    fig = go.Figure(go.Bar(x=keys, y=vals, marker_color=colors))
+    fig.update_layout(
+        title=(
+            f"Annotation — distinct plausible compounds per feature "
+            f"(candidates ≥ {lo:g}); {_fmt(a.n_unique_call)} unambiguous"
+        ),
+        xaxis=dict(title="distinct compounds", dtick=1),
+        yaxis=dict(title="features", tickformat=","),
+    )
+    return fig
+
+
+def figure_annotation_agreement(a: AnnotationSummary) -> go.Figure:
+    """Bar: of multiply-fragmented features, how many scans agree on the ID."""
+    if a.n_multiscan_features == 0:
+        return _empty("Annotation — cross-scan agreement")
+    agree = a.n_multiscan_agree
+    disagree = a.n_multiscan_features - agree
+    fig = go.Figure()
+    fig.add_bar(
+        name="all scans agree", x=[agree], y=["features fragmented ≥2×"],
+        orientation="h", marker_color=_C_GOOD,
+        hovertemplate="agree: %{x:,}<extra></extra>",
+    )
+    fig.add_bar(
+        name="scans disagree", x=[disagree], y=["features fragmented ≥2×"],
+        orientation="h", marker_color=_C_BAD,
+        hovertemplate="disagree: %{x:,}<extra></extra>",
+    )
+    fig.update_layout(
+        title="Annotation — do a feature's scans agree on the top compound?",
+        barmode="stack",
+        xaxis=dict(title="features", tickformat=","),
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
+    )
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # assembly
 # ---------------------------------------------------------------------------
@@ -1001,6 +1364,7 @@ def collect_stats(
         associated_purity=associated_purity(analysis_db_path, cutoff=purity_cutoff),
         unscored=purity_unscored(analysis_db_path, raw_db_paths),
         recheck=unassociated_recheck(analysis_db_path),
+        annotation=annotation_summary(analysis_db_path),
     )
 
 
@@ -1092,6 +1456,80 @@ def _unscored_sentence(u: UnscoredSummary) -> str:
     )
 
 
+def _annotation_section_html(a: AnnotationSummary) -> str:
+    lo, hi = a.cutoffs
+    libs = "; ".join(
+        f"{lib.name} ({_fmt(lib.n_spectra)} spectra, {_fmt(lib.n_compounds)} compounds)"
+        for lib in a.libraries
+    )
+    gap = (
+        f" median best−runner-up score gap {a.median_gap:.2f}."
+        if a.median_gap is not None
+        else ""
+    )
+    agree = (
+        f" Of {_fmt(a.n_multiscan_features)} features fragmented ≥2×, "
+        f"{100.0 * a.n_multiscan_agree / a.n_multiscan_features:.0f}% have every "
+        f"scan on the same compound."
+        if a.n_multiscan_features
+        else ""
+    )
+    trust = ""
+    if a.n_best_confident:
+        c = a.n_best_confident
+        trust = (
+            f" Of the {_fmt(c)} best hits ≥ {hi:g}: "
+            f"{100.0 * a.n_confident_precursor_confirmed / c:.0f}% from a "
+            f"confirmed precursor, {100.0 * a.n_confident_not_chimeric / c:.0f}% "
+            f"non-chimeric, {100.0 * a.n_confident_not_precursor_only / c:.0f}% "
+            f"with real fragmentation."
+        )
+    cons = (
+        f" The consensus scan is the annotated best scan for "
+        f"{_fmt(a.n_consensus_matches_best)}/{_fmt(a.n_consensus)} features."
+        if a.n_consensus
+        else ""
+    )
+    sentence = (
+        f"<p><b>MS2 annotation.</b> {libs}. Of {_fmt(a.n_ms2_bearing_features)} "
+        f"MS2-bearing features, {_fmt(a.n_features_annotated)} got a hit — "
+        f"{_fmt(a.n_ge[lo])} with best score ≥ {lo:g}, "
+        f"<b>{_fmt(a.n_ge[hi])}</b> ≥ {hi:g} — across "
+        f"{_fmt(a.n_distinct_compounds)} distinct compounds.{gap}{agree}"
+        f"{trust}{cons}</p>"
+    )
+
+    comp_rows = "".join(
+        f"<tr><td>{name}</td><td style='font-family:monospace'>{ik[:14]}</td>"
+        f"<td>{_fmt(nf)}</td><td>{ms:.2f}</td></tr>"
+        for ik, name, nf, ms in a.top_compounds
+    )
+    comp_table = (
+        "<h3>Top compounds by feature count</h3>"
+        "<table style='border-collapse:collapse' border='1' cellpadding='6'>"
+        "<tr><th>compound</th><th>inchikey</th><th># features</th>"
+        "<th>median score</th></tr>"
+        f"{comp_rows}</table>"
+        if a.top_compounds
+        else ""
+    )
+    lib_table = ""
+    if len(a.libraries) > 1:
+        lr = "".join(
+            f"<tr><td>{lib.name}</td><td>{_fmt(lib.n_spectra)}</td>"
+            f"<td>{_fmt(lib.n_compounds)}</td><td>{_fmt(lib.n_best_hits)}</td></tr>"
+            for lib in a.libraries
+        )
+        lib_table = (
+            "<h3>Per library</h3>"
+            "<table style='border-collapse:collapse' border='1' cellpadding='6'>"
+            "<tr><th>library</th><th># spectra</th><th># compounds</th>"
+            "<th># features best-annotated</th></tr>"
+            f"{lr}</table>"
+        )
+    return sentence + comp_table + lib_table
+
+
 @log_call(source="analysis_db_path")
 def build_summary_report(
     analysis_db_path: Path | str,
@@ -1132,6 +1570,14 @@ def build_summary_report(
         figure_purity_per_sample(stats.associated_purity),
         figure_purity_unscored(stats.unscored),
     ]
+    ann = stats.annotation
+    if ann is not None:
+        figures += [
+            figure_annotation_yield(ann),
+            figure_annotation_score(ann),
+            figure_annotation_ambiguity(ann),
+            figure_annotation_agreement(ann),
+        ]
 
     json_path = out_dir / _REPORT_JSON
     json_path.write_text(json.dumps(stats.to_dict(), indent=2))
@@ -1142,12 +1588,21 @@ def build_summary_report(
         )
         for i, fig in enumerate(figures)
     ]
+    n_base = 8
+    base_blocks = "".join(f"<div>{b}</div>" for b in blocks[:n_base])
+    ann_html = ""
+    if ann is not None:
+        ann_blocks = "".join(f"<div>{b}</div>" for b in blocks[n_base:])
+        ann_html = (
+            "<h2>MS2 annotation</h2>"
+            f"{_annotation_section_html(ann)}{ann_blocks}"
+        )
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<title>MSIAnalyzer summary report</title>"
         "<style>body{font-family:system-ui,sans-serif;margin:24px;max-width:1100px}"
         "table{font-size:14px}h1{font-size:20px}h2{font-size:16px;margin-top:32px}"
-        "</style></head><body>"
+        "h3{font-size:14px;margin-top:20px}</style></head><body>"
         "<h1>MSIAnalyzer summary report</h1>"
         f"<p>{_fmt(len(stats.samples))} sample(s) &middot; "
         f"{_fmt(stats.n_features)} features &middot; "
@@ -1158,7 +1613,8 @@ def build_summary_report(
         f"{_unscored_sentence(stats.unscored)}"
         "<h2>Per-sample counts</h2>"
         f"{_table_html(stats.samples)}"
-        + "".join(f"<div>{b}</div>" for b in blocks)
+        + base_blocks
+        + ann_html
         + "</body></html>"
     )
     html_path = out_dir / _REPORT_HTML

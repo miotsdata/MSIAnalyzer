@@ -301,7 +301,6 @@ def _row_from_match(
     )
 
 
-@log_call
 def annotate_feature(
     feature_id: int,
     feature_mz: float,
@@ -334,14 +333,11 @@ def annotate_feature(
     Returns:
         All rows for the feature, each with ``rank`` filled (per scan) but
         ``rank_feature`` still None.
+
+    Not ``@log_call``-decorated and issues no per-feature logging: it runs
+    thousands of times inside forked pool workers, and streaming that
+    through the multiprocessing log queue deadlocks the pool at shutdown.
     """
-    logger.debug(
-        "Annotating feature %s (m/z %.4f): %d scan(s), %d candidate(s)",
-        feature_id,
-        feature_mz,
-        len(scans),
-        len(candidates),
-    )
     rows: list[AnnotationRow] = []
     for scan in scans:
         if scan.get("is_chimeric") and not annotate_chimeric:
@@ -443,14 +439,18 @@ def _init_worker(lib_specs: Sequence[tuple[int, str]], log_queue=None) -> None:
     ``lib_specs`` is ``[(library_id, path), ...]``; the loaded handles are
     kept in module state as ``[(library_id, Library), ...]``. When
     ``log_queue`` is given the worker's root logger is pointed at it so
-    records reach the main process.
+    records reach the main process — but only ``WARNING`` and above:
+    forwarding every ``DEBUG`` record from many forked workers through one
+    ``multiprocessing.Queue`` backs the queue up and deadlocks the pool at
+    shutdown (the feeder thread cannot flush a full pipe, so workers never
+    exit and ``ProcessPoolExecutor.shutdown`` blocks forever).
     """
     global _WORKER_LIBRARIES
     if log_queue is not None:
         root = logging.getLogger()
         root.handlers.clear()
         root.addHandler(QueueHandler(log_queue))
-        root.setLevel(logging.DEBUG)
+        root.setLevel(logging.WARNING)
     _WORKER_LIBRARIES = [(int(lid), load_library(path)) for lid, path in lib_specs]
 
 
@@ -874,22 +874,31 @@ def run_annotation(
     )
 
     rows: list[AnnotationRow] = []
+    n_batches = len(batches)
     n_workers = config.n_workers
     if n_workers is not None and n_workers <= 1:
         _init_worker(lib_specs)
-        for b in batches:
+        for i, b in enumerate(batches, start=1):
             rows.extend(worker(b))
+            if i % 20 == 0 or i == n_batches:
+                logger.info("annotation: %d/%d batches done", i, n_batches)
     else:
         # `_init_worker` handles both library loading and log forwarding;
         # `worker_logging` just runs the listener over the parent handlers.
+        # Progress is logged here, in the parent — workers forward WARNING+
+        # only (see `_init_worker`).
         with worker_logging() as (log_queue, _):
             with ProcessPoolExecutor(
                 max_workers=n_workers,
                 initializer=_init_worker,
                 initargs=(lib_specs, log_queue),
             ) as executor:
-                for part in executor.map(worker, batches):
+                for i, part in enumerate(executor.map(worker, batches), start=1):
                     rows.extend(part)
+                    if i % 20 == 0 or i == n_batches:
+                        logger.info(
+                            "annotation: %d/%d batches done", i, n_batches
+                        )
 
     assign_rank_feature(rows)
     persist_annotations(

@@ -132,7 +132,9 @@ in [Outputs](../../user-guide/outputs.md).
 - Pure stats: `per_sample_counts`, `feature_membership`, `overlap_combos`,
   `ms2_summary`, `per_sample_ms2`, `associated_purity` (`precursor_frac`
   distribution restricted to MS2 that associated to a feature — the ones that
-  feed the library search), `purity_unscored`
+  feed the library search), `purity_unscored`, `annotation_summary` (Stage B
+  roll-up: best-hit-per-feature scores, plausible-compounds-per-feature,
+  cross-scan agreement, top compounds; returns `None` when no library ran)
   (classifies every `precursor_purity` row: scored / faint precursor not in MS1
   / parent MS1 off-pixel [flyback] / no precursor m/z / no parent),
   `unassociated_recheck` (re-tests unassociated MS2 against the sample's

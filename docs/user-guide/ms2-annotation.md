@@ -252,6 +252,15 @@ score (`precursor_found = 0`, or the stage disabled) are always kept — the
 filter never guesses. Every stored row carries the scan's `purity` and
 `runner_up_rel_int` regardless, so you can also filter at query time.
 
+## In the summary report
+
+When a library ran, `summary_report.html` gains an **MS2 annotation** section:
+MS2-bearing features by best-hit confidence (`rank_feature = 1 AND rank = 1`
+score ≥ 0.5 / ≥ 0.75), the best-score distribution, how many distinct plausible
+compounds each feature has (candidates ≥ 0.5), whether a feature's repeat scans
+agree on the top compound, plus top-compound and per-library tables. It also
+reports how often the Stage A″ consensus scan is the annotated best scan.
+
 ---
 
 # Stage A″ — MS2 consensus

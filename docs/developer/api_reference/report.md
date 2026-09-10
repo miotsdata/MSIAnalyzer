@@ -15,6 +15,8 @@ End-of-run summary: reads a finished analysis database and writes
         - UnscoredPurity
         - UnscoredSummary
         - RecheckSummary
+        - AnnotationLibraryInfo
+        - AnnotationSummary
         - SummaryStats
         - per_sample_counts
         - feature_membership
@@ -24,6 +26,7 @@ End-of-run summary: reads a finished analysis database and writes
         - associated_purity
         - purity_unscored
         - unassociated_recheck
+        - annotation_summary
         - figure_per_sample
         - figure_overlap_upset
         - figure_ms2_association
@@ -32,5 +35,9 @@ End-of-run summary: reads a finished analysis database and writes
         - figure_purity
         - figure_purity_per_sample
         - figure_purity_unscored
+        - figure_annotation_yield
+        - figure_annotation_score
+        - figure_annotation_ambiguity
+        - figure_annotation_agreement
         - collect_stats
         - build_summary_report
