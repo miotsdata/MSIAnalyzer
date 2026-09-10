@@ -14,7 +14,7 @@ Everything else lands in the analysis' `io.out_dir`.
 | `<sample>.h5ad` | `out_dir` | sample | `AnnData` — pixels × features quantification matrix with spatial coordinates |
 | `<sample>_filtered_ms1.html` | `out_dir` | sample | interactive figure of the filtered MS1 peak list |
 | `<sample>_peaks_data.csv` | `out_dir` | sample | the filtered MS1 peak list as `mz,intensity` |
-| `summary_report.html` | `out_dir` | run | per-sample counts, feature-overlap UpSet plot, MS2 association (overall + per sample) and purity (overall + per sample), and a recheck of the unassociated MS2 against each sample's pre-filter MS1 peaks |
+| `summary_report.html` | `out_dir` | run | per-sample counts, feature-overlap UpSet plot, MS2 association (overall + per sample) and purity (overall histogram + per-sample distribution), a recheck of the unassociated MS2 against each sample's pre-filter MS1 peaks, and a breakdown of *why* purity is unscored (faint precursor / off-pixel flyback / no precursor m/z) |
 | `summary.json` | `out_dir` | run | the same numbers, machine-readable |
 | `debug_<run-id>.log` | `<project>/logs/` | run | full-DEBUG trace of the run (always written); plus `run -l PATH` for a user log at the `-v` level |
 

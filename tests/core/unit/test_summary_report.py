@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,7 @@ from msianalyzer.core.analysis_db import (
 from msianalyzer.core.report.summary import (
     Ms2Summary,
     RecheckSummary,
+    UnscoredSummary,
     build_summary_report,
     collect_stats,
     feature_membership,
@@ -27,12 +29,14 @@ from msianalyzer.core.report.summary import (
     figure_per_sample,
     figure_purity,
     figure_purity_per_sample,
+    figure_purity_unscored,
     figure_unassociated_recheck,
     ms2_summary,
     overlap_combos,
     per_sample_counts,
     per_sample_ms2,
     per_sample_purity,
+    purity_unscored,
     unassociated_recheck,
 )
 
@@ -42,7 +46,14 @@ from msianalyzer.core.report.summary import (
 # ---------------------------------------------------------------------------
 
 
-def _raw_db(path: Path, *, n_ms1: int, n_ms2: int, n_pixels: int) -> Path:
+def _raw_db(
+    path: Path,
+    *,
+    n_ms1: int,
+    n_ms2: int,
+    n_pixels: int,
+    pixel_ms1_ids: Sequence[int] | None = None,
+) -> Path:
     from msianalyzer.core.parser.mzml_parser import array_to_blob, init_raw_db
 
     blob = array_to_blob(np.array([1.0, 2.0, 3.0]))
@@ -68,6 +79,16 @@ def _raw_db(path: Path, *, n_ms1: int, n_ms2: int, n_pixels: int) -> Path:
                 "INSERT INTO spatial_pixels (x, y, t_start, t_end) VALUES (?,?,?,?)",
                 [(i, 0, float(i), float(i) + 1) for i in range(n_pixels)],
             )
+        if pixel_ms1_ids is not None:
+            con.execute(
+                "CREATE TABLE pixel_ms1_scans ("
+                "pixel_id INTEGER NOT NULL, scan_id INTEGER NOT NULL, "
+                "PRIMARY KEY (pixel_id, scan_id))"
+            )
+            con.executemany(
+                "INSERT INTO pixel_ms1_scans (pixel_id, scan_id) VALUES (?,?)",
+                [(1, int(sid)) for sid in pixel_ms1_ids],
+            )
         con.commit()
     finally:
         con.close()
@@ -89,7 +110,11 @@ def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
     """Two samples: overlapping features, MS2 with purity, and a mix of
     associated / unassociated (recoverable, unrecoverable, no-precursor) scans.
     """
-    raw1 = _raw_db(tmp_path / "s1.db", n_ms1=40, n_ms2=6, n_pixels=5)
+    # raw1 maps MS1 scans 1..20 to pixels; scan 99 is "off-pixel"
+    raw1 = _raw_db(
+        tmp_path / "s1.db", n_ms1=40, n_ms2=6, n_pixels=5,
+        pixel_ms1_ids=range(1, 21),
+    )
     raw2 = _raw_db(tmp_path / "s2.db", n_ms1=30, n_ms2=4, n_pixels=4)
 
     adb = tmp_path / "analysis.db"
@@ -141,12 +166,19 @@ def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
         )
         con.executemany(
             "INSERT INTO precursor_purity "
-            "(sample_id, ms2_scan_id, bracket_kind, precursor_found, "
-            " n_peaks_in_window, purity) VALUES (?,?,'parent_only',?,?,?)",
+            "(sample_id, ms2_scan_id, bracket_kind, parent_ms1_scan_id, "
+            " window_lo_mz, precursor_found, n_peaks_in_window, purity) "
+            "VALUES (?,?,'parent_only',?,?,?,?,?)",
             [
-                (sid1, 1001, 1, 1, 0.97),
-                (sid1, 1002, 1, 3, 0.35),
-                (sid2, 1001, 1, 2, 0.60),
+                # s1: 2 scored + 4 unscored, one per reason
+                (sid1, 1001, 1, 499.5, 1, 1, 0.97),
+                (sid1, 1002, 1, 499.5, 1, 3, 0.35),
+                (sid1, 2001, 1, 499.5, 0, 2, None),   # on-pixel, precursor not found
+                (sid1, 2002, 99, 499.5, 0, 2, None),  # parent MS1 off-pixel
+                (sid1, 2003, 1, None, 0, 0, None),    # no precursor m/z (no window)
+                (sid1, 2004, None, None, 0, 0, None), # no parent MS1
+                # s2: 1 scored
+                (sid2, 1001, 5, 699.5, 1, 2, 0.60),
             ],
         )
         con.commit()
@@ -231,6 +263,29 @@ def test_unassociated_recheck(tmp_path):
     assert by_name["s2"]["n_no_precursor_mz"] == 1
 
 
+def test_purity_unscored(tmp_path):
+    adb, raw_map = _analysis_db(tmp_path)
+    u = purity_unscored(adb, raw_map)
+    assert u.n_scored == 3  # 2 in s1 + 1 in s2
+    assert u.n_no_precursor_peak == 1
+    assert u.n_off_pixel == 1
+    assert u.n_no_precursor_mz == 1
+    assert u.n_no_parent == 1
+    assert u.n_unscored == 4
+    s1 = next(p for p in u.per_sample if p.name == "s1")
+    assert (s1.n_scored, s1.n_off_pixel, s1.n_no_precursor_peak) == (2, 1, 1)
+
+
+def test_purity_unscored_without_pixel_map_folds_off_pixel_into_no_peak(tmp_path):
+    adb, raw_map = _analysis_db(tmp_path)
+    sid1, sid2 = sorted(raw_map)
+    # point s1 at the raw DB that has no pixel_ms1_scans table
+    u = purity_unscored(adb, raw_db_paths={sid1: raw_map[sid2]})
+    # the off-pixel scan can no longer be told apart from a faint precursor
+    assert u.n_off_pixel == 0
+    assert u.n_no_precursor_peak == 2
+
+
 # ---------------------------------------------------------------------------
 # figures
 # ---------------------------------------------------------------------------
@@ -249,6 +304,9 @@ def test_figures_return_figures_and_tolerate_empty():
     assert isinstance(
         figure_unassociated_recheck(RecheckSummary(10.0, 0, 0, 0, 0, [])),
         go.Figure,
+    )
+    assert isinstance(
+        figure_purity_unscored(UnscoredSummary([], 0, 0, 0, 0, 0)), go.Figure
     )
 
 
@@ -273,12 +331,16 @@ def test_collect_stats(tmp_path):
     assert stats.ms2.n_total == 6
     assert len(stats.per_sample_ms2) == 2
     assert stats.recheck.n_would_associate == 1
+    assert stats.unscored.n_unscored == 4
+    assert stats.unscored.n_off_pixel == 1
 
     d = stats.to_dict()
     assert d["ms2"]["n_purity_values"] == 3
     assert "purity_values" not in d["ms2"]
     assert all("values" not in ps for ps in d["per_sample_purity"])
     assert d["recheck"]["n_would_associate"] == 1
+    assert d["unscored"]["n_unscored"] == 4
+    assert d["unscored"]["n_off_pixel"] == 1
 
 
 def test_build_summary_report_writes_files(tmp_path):
@@ -291,12 +353,15 @@ def test_build_summary_report_writes_files(tmp_path):
     assert "MSIAnalyzer summary report" in text
     assert "plotly" in text.lower()
     assert "pre-filter centroid list" in text  # the recheck sentence
+    assert "unscored for" in text  # the unscored-purity sentence
+    assert "laser flyback" in text
 
     payload = json.loads((out / "summary.json").read_text())
     assert payload["n_features"] == 3
     assert payload["ms2"]["n_total"] == 6
     assert payload["recheck"]["assoc_ppm"] == 10.0
     assert len(payload["per_sample_ms2"]) == 2
+    assert payload["unscored"]["n_unscored"] == 4
 
 
 def test_build_summary_report_defaults_out_dir_to_db_parent(tmp_path):

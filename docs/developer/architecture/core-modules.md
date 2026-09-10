@@ -126,15 +126,19 @@ database, read-only) and writes `summary_report.html` + `summary.json`. Detail
 in [Outputs](../../user-guide/outputs.md).
 
 - Pure stats: `per_sample_counts`, `feature_membership`, `overlap_combos`,
-  `ms2_summary`, `per_sample_ms2`, `per_sample_purity`, `unassociated_recheck`
-  (re-tests unassociated MS2 against the sample's *pre-filter* centroids —
-  `detect_ms1_centroids` output — with the grouper's own `assoc_ppm`),
-  `collect_stats` → `SummaryStats`.
-- Figures (Plotly, no new dependency): `figure_per_sample`,
-  `figure_overlap_upset` (hand-rolled UpSet), `figure_ms2_association` (overall
-  donut) + `figure_ms2_association_per_sample` (100%-stacked bar), `figure_purity`
-  (overall histogram) + `figure_purity_per_sample` (box per sample),
-  `figure_unassociated_recheck`.
+  `ms2_summary`, `per_sample_ms2`, `per_sample_purity`, `purity_unscored`
+  (classifies every `precursor_purity` row: scored / faint precursor not in MS1
+  / parent MS1 off-pixel [flyback] / no precursor m/z / no parent),
+  `unassociated_recheck` (re-tests unassociated MS2 against the sample's
+  *pre-filter* centroids — `detect_ms1_centroids` output — with the grouper's
+  own `assoc_ppm`), `collect_stats` → `SummaryStats`.
+- Figures (Plotly, no new dependency; horizontal legends sit above the plot,
+  counts use a thousands separator): `figure_per_sample`, `figure_overlap_upset`
+  (hand-rolled UpSet), `figure_ms2_association` (overall donut) +
+  `figure_ms2_association_per_sample` (100%-stacked bar),
+  `figure_unassociated_recheck`, `figure_purity` (overall histogram) +
+  `figure_purity_per_sample` (violin per sample) + `figure_purity_unscored`
+  (scored-vs-reason stacked bar).
 - Entry point: `build_summary_report(analysis_db_path, raw_db_paths, out_dir,
   *, config)` — called by `run.py` and by the `msianalyzer report` CLI.
 

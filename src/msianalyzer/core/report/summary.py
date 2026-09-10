@@ -1,12 +1,9 @@
 """Build the end-of-run summary report (``summary_report.html`` + ``summary.json``).
 
-Pure stat functions (``per_sample_counts``, ``feature_membership``,
-``overlap_combos``, ``ms2_summary``, ``per_sample_ms2``,
-``per_sample_purity``, ``unassociated_recheck``) read the analysis database
-(and each sample's raw database, read-only) and return plain data; the
-``figure_*`` builders turn that data into Plotly figures;
-:func:`build_summary_report` glues it together and writes the two files.
-Nothing here writes to a database.
+Pure stat functions read the analysis database (and each sample's raw
+database, read-only) and return plain data; the ``figure_*`` builders turn
+that data into Plotly figures; :func:`build_summary_report` glues it
+together and writes the two files. Nothing here writes to a database.
 """
 
 from __future__ import annotations
@@ -36,6 +33,8 @@ __all__ = [
     "Ms2Summary",
     "PerSampleMs2",
     "PerSamplePurity",
+    "UnscoredPurity",
+    "UnscoredSummary",
     "RecheckSummary",
     "SummaryStats",
     "per_sample_counts",
@@ -44,14 +43,16 @@ __all__ = [
     "ms2_summary",
     "per_sample_ms2",
     "per_sample_purity",
+    "purity_unscored",
     "unassociated_recheck",
     "figure_per_sample",
     "figure_overlap_upset",
     "figure_ms2_association",
     "figure_ms2_association_per_sample",
+    "figure_unassociated_recheck",
     "figure_purity",
     "figure_purity_per_sample",
-    "figure_unassociated_recheck",
+    "figure_purity_unscored",
     "collect_stats",
     "build_summary_report",
 ]
@@ -61,8 +62,23 @@ _REPORT_JSON = "summary.json"
 
 _C_OK = "#1f77b4"
 _C_BAD = "#d62728"
-_C_MUTED = "#999999"
+_C_WARN = "#ff7f0e"
+_C_MUTED = "#9e9e9e"
+_C_DARK = "#5c5c5c"
+_C_FAINT = "#d9d9d9"
 _C_GOOD = "#2ca02c"
+
+# horizontal legend above the plot area (keeps it off the x-axis tick labels)
+_LEGEND_TOP = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+_MARGIN_TOP = dict(t=80)
+
+
+def _fmt(n) -> str:
+    """Integer with a thousands separator, for HTML text."""
+    try:
+        return f"{int(round(float(n))):,}"
+    except (TypeError, ValueError):
+        return str(n)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +136,51 @@ class PerSamplePurity:
 
 
 @dataclass
+class UnscoredPurity:
+    """Why precursor purity is unscored for one sample's MS2 scans.
+
+    Mutually exclusive, in priority order:
+
+    Attributes:
+        n_scored: purity was computed.
+        n_no_parent: no MS1 scan resolved before the MS2 (rare).
+        n_no_precursor_mz: scan carries no ``precursor_mz`` / isolation target.
+        n_off_pixel: the parent MS1 is not among the sample's imaged pixels
+            (laser flyback / off-tissue / warm-up scans).
+        n_no_precursor_peak: parent MS1 is on-pixel and the window is
+            defined, but the precursor ion was not a detectable peak in that
+            survey scan — a genuinely low-abundance precursor.
+    """
+
+    sample_id: int
+    name: str
+    n_scored: int
+    n_no_parent: int
+    n_no_precursor_mz: int
+    n_off_pixel: int
+    n_no_precursor_peak: int
+
+
+@dataclass
+class UnscoredSummary:
+    per_sample: list[UnscoredPurity]
+    n_scored: int
+    n_no_parent: int
+    n_no_precursor_mz: int
+    n_off_pixel: int
+    n_no_precursor_peak: int
+
+    @property
+    def n_unscored(self) -> int:
+        return (
+            self.n_no_parent
+            + self.n_no_precursor_mz
+            + self.n_off_pixel
+            + self.n_no_precursor_peak
+        )
+
+
+@dataclass
 class RecheckSummary:
     """Would the unassociated MS2 associate against the *pre-filter* MS1 peaks?
 
@@ -129,17 +190,6 @@ class RecheckSummary:
     the sample's ``detect_ms1_centroids`` output (centroided, *before* the
     MAD/threshold filter), using the same ``assoc_ppm`` and isolation
     window the grouper used.
-
-    Attributes:
-        assoc_ppm: The tolerance the grouper ran with.
-        n_unassociated: Unassociated MS2 scans considered.
-        n_would_associate: Of those, how many have a pre-filter centroid
-            within ``assoc_ppm`` and inside the isolation window.
-        n_still_unassociated: The remainder that still match nothing.
-        n_no_precursor_mz: Scans with neither ``precursor_mz`` nor
-            ``isolation_window_target`` (cannot be re-tested).
-        per_sample: One ``{name, n_unassociated, n_would_associate,
-            n_still_unassociated, n_no_precursor_mz}`` dict per sample.
     """
 
     assoc_ppm: float
@@ -160,6 +210,7 @@ class SummaryStats:
     ms2: Ms2Summary
     per_sample_ms2: list[PerSampleMs2]
     per_sample_purity: list[PerSamplePurity]
+    unscored: UnscoredSummary
     recheck: RecheckSummary
 
     def to_dict(self) -> dict:
@@ -169,6 +220,7 @@ class SummaryStats:
         d["ms2"]["n_purity_values"] = len(self.ms2.purity_values)
         for ps in d["per_sample_purity"]:
             ps.pop("values", None)
+        d["unscored"]["n_unscored"] = self.unscored.n_unscored
         d["overlap_combos"] = [
             {"samples": list(s), "n_features": n} for s, n in self.overlap_combos
         ]
@@ -223,6 +275,20 @@ def _group_ms2_args(con: sqlite3.Connection) -> dict:
         return json.loads(row[0])
     except (ValueError, TypeError):
         return {}
+
+
+def _pixel_scan_ids(raw_db_path: str | Path | None) -> set[int] | None:
+    """The set of MS1 ``scan_id`` mapped to a pixel, or ``None`` if unknown."""
+    if not raw_db_path or not Path(raw_db_path).exists():
+        return None
+    try:
+        with sqlite3.connect(str(raw_db_path)) as con:
+            rows = con.execute(
+                "SELECT scan_id FROM pixel_ms1_scans"
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    return {int(r[0]) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +478,74 @@ def per_sample_purity(
     return out
 
 
+@log_call(source="analysis_db_path")
+def purity_unscored(
+    analysis_db_path: Path | str,
+    raw_db_paths: dict[int, str | Path] | None = None,
+) -> UnscoredSummary:
+    """Classify every ``precursor_purity`` row: scored, or why not.
+
+    ``raw_db_paths`` (or ``samples.raw_db_path``) is needed to tell an
+    off-pixel parent MS1 (laser flyback / off-tissue) apart from a genuinely
+    faint precursor; without it those two collapse into ``n_no_precursor_peak``.
+    """
+    analysis_db_path = Path(analysis_db_path)
+    with sqlite3.connect(analysis_db_path) as con:
+        samples = con.execute(
+            "SELECT sample_id, name, raw_db_path FROM samples ORDER BY sample_id"
+        ).fetchall()
+
+        per_sample: list[UnscoredPurity] = []
+        tot = dict(scored=0, no_parent=0, no_precursor_mz=0, off_pixel=0, no_peak=0)
+        for sample_id, name, raw_db_path in samples:
+            path = (
+                raw_db_paths.get(sample_id, raw_db_path)
+                if raw_db_paths is not None
+                else raw_db_path
+            )
+            pixel_ids = _pixel_scan_ids(path)
+            rows = con.execute(
+                "SELECT parent_ms1_scan_id, window_lo_mz, purity "
+                "FROM precursor_purity WHERE sample_id = ?",
+                (sample_id,),
+            ).fetchall()
+
+            s = dict(scored=0, no_parent=0, no_precursor_mz=0, off_pixel=0, no_peak=0)
+            for parent_id, window_lo, purity in rows:
+                if purity is not None:
+                    s["scored"] += 1
+                elif parent_id is None:
+                    s["no_parent"] += 1
+                elif window_lo is None:
+                    s["no_precursor_mz"] += 1
+                elif pixel_ids is not None and int(parent_id) not in pixel_ids:
+                    s["off_pixel"] += 1
+                else:
+                    s["no_peak"] += 1
+            for k in tot:
+                tot[k] += s[k]
+            per_sample.append(
+                UnscoredPurity(
+                    sample_id=int(sample_id),
+                    name=str(name),
+                    n_scored=s["scored"],
+                    n_no_parent=s["no_parent"],
+                    n_no_precursor_mz=s["no_precursor_mz"],
+                    n_off_pixel=s["off_pixel"],
+                    n_no_precursor_peak=s["no_peak"],
+                )
+            )
+
+    return UnscoredSummary(
+        per_sample=per_sample,
+        n_scored=tot["scored"],
+        n_no_parent=tot["no_parent"],
+        n_no_precursor_mz=tot["no_precursor_mz"],
+        n_off_pixel=tot["off_pixel"],
+        n_no_precursor_peak=tot["no_peak"],
+    )
+
+
 def _recheck_one(
     prefilter_mz: np.ndarray,
     rows: Sequence[tuple],
@@ -537,12 +671,16 @@ def figure_per_sample(counts: Sequence[SampleCounts]) -> go.Figure:
     fig = go.Figure()
     for label, values in metrics:
         fig.add_bar(name=label, x=names, y=values)
+    fig.update_traces(
+        hovertemplate="%{fullData.name}<br>%{x}: %{y:,}<extra></extra>"
+    )
     fig.update_layout(
         title="Per-sample counts",
         barmode="group",
-        yaxis=dict(title="count", type="log"),
+        yaxis=dict(title="count", type="log", tickformat=","),
         xaxis=dict(title="sample"),
-        legend=dict(orientation="h"),
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
     )
     return fig
 
@@ -559,27 +697,23 @@ def figure_overlap_upset(
     sizes = [n for _, n in combos]
 
     fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        row_heights=[0.62, 0.38],
-        vertical_spacing=0.04,
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.62, 0.38], vertical_spacing=0.04,
     )
-    fig.add_bar(x=idx, y=sizes, marker_color=_C_OK, name="features", row=1, col=1)
+    fig.add_bar(
+        x=idx, y=sizes, marker_color=_C_OK, name="features",
+        hovertemplate="%{y:,} features<extra></extra>", row=1, col=1,
+    )
 
     on_x, on_y, off_x, off_y = [], [], [], []
     for i, (combo, _) in enumerate(combos):
         member = set(combo)
         for j, s in enumerate(names):
-            if s in member:
-                on_x.append(i)
-                on_y.append(j)
-            else:
-                off_x.append(i)
-                off_y.append(j)
+            (on_x if s in member else off_x).append(i)
+            (on_y if s in member else off_y).append(j)
     fig.add_scatter(
         x=off_x, y=off_y, mode="markers",
-        marker=dict(size=9, color="#dddddd"), showlegend=False, row=2, col=1,
+        marker=dict(size=9, color=_C_FAINT), showlegend=False, row=2, col=1,
     )
     fig.add_scatter(
         x=on_x, y=on_y, mode="markers",
@@ -590,7 +724,7 @@ def figure_overlap_upset(
         row=2, col=1,
     )
     fig.update_xaxes(title_text="sample combination", showticklabels=False, row=2, col=1)
-    fig.update_yaxes(title_text="features", type="log", row=1, col=1)
+    fig.update_yaxes(title_text="features", type="log", tickformat=",", row=1, col=1)
     fig.update_layout(title="Feature overlap across samples", showlegend=False)
     return fig
 
@@ -605,13 +739,20 @@ def figure_ms2_association(summary: Ms2Summary) -> go.Figure:
             values=[summary.n_associated, summary.n_unassociated],
             hole=0.55,
             marker_colors=[_C_OK, _C_BAD],
+            texttemplate="%{label}<br>%{value:,}<br>%{percent}",
+            hovertemplate="%{label}: %{value:,} (%{percent})<extra></extra>",
         )
     )
     fig.update_layout(
         title="MS2 association (overall)",
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
         annotations=[
             dict(
-                text=f"{summary.n_total} MS2<br>{summary.n_precursor_only} precursor-only",
+                text=(
+                    f"{_fmt(summary.n_total)} MS2<br>"
+                    f"{_fmt(summary.n_precursor_only)} precursor-only"
+                ),
                 x=0.5, y=0.5, showarrow=False, font=dict(size=13),
             )
         ],
@@ -633,71 +774,20 @@ def figure_ms2_association_per_sample(
     fig.add_bar(
         name="associated", x=names, y=pct_a, marker_color=_C_OK,
         customdata=[p.n_associated for p in per_sample],
-        hovertemplate="%{x}<br>associated %{y:.1f}%% (%{customdata})<extra></extra>",
+        hovertemplate="%{x}<br>associated %{y:.1f}%% (%{customdata:,})<extra></extra>",
     )
     fig.add_bar(
         name="unassociated", x=names, y=pct_u, marker_color=_C_BAD,
         customdata=[p.n_unassociated for p in per_sample],
-        hovertemplate="%{x}<br>unassociated %{y:.1f}%% (%{customdata})<extra></extra>",
+        hovertemplate="%{x}<br>unassociated %{y:.1f}%% (%{customdata:,})<extra></extra>",
     )
     fig.update_layout(
         title="MS2 association by sample",
         barmode="stack",
         yaxis=dict(title="% of MS2 scans", range=[0, 100]),
         xaxis=dict(title="sample"),
-        legend=dict(orientation="h"),
-    )
-    return fig
-
-
-def figure_purity(summary: Ms2Summary) -> go.Figure:
-    """Histogram of scored precursor purity with the cutoff line (overall)."""
-    if not summary.purity_values:
-        return _empty("Precursor ion purity")
-    fig = go.Figure(
-        go.Histogram(x=summary.purity_values, nbinsx=40, marker_color=_C_OK)
-    )
-    fig.add_vline(
-        x=summary.purity_cutoff,
-        line=dict(color=_C_BAD, dash="dash"),
-        annotation_text=f"cutoff {summary.purity_cutoff:g}",
-    )
-    unscored = summary.n_total - summary.n_purity_scored
-    fig.update_layout(
-        title=(
-            f"Precursor ion purity (overall) — {summary.n_low_purity} of "
-            f"{summary.n_purity_scored} scored below cutoff "
-            f"({unscored} unscored)"
-        ),
-        xaxis=dict(title="purity", range=[0, 1]),
-        yaxis=dict(title="MS2 scans"),
-    )
-    return fig
-
-
-def figure_purity_per_sample(
-    per_sample: Sequence[PerSamplePurity], cutoff: float = 0.8
-) -> go.Figure:
-    """Box of scored precursor purity per sample."""
-    if not any(p.values for p in per_sample):
-        return _empty("Precursor ion purity by sample")
-    fig = go.Figure()
-    for p in per_sample:
-        fig.add_box(
-            y=p.values or [None],
-            name=f"{p.name}<br>(n={p.n_scored})",
-            boxpoints="outliers",
-            marker_color=_C_OK,
-            line_color=_C_OK,
-        )
-    fig.add_hline(
-        y=cutoff, line=dict(color=_C_BAD, dash="dash"),
-        annotation_text=f"cutoff {cutoff:g}",
-    )
-    fig.update_layout(
-        title="Precursor ion purity by sample",
-        yaxis=dict(title="purity", range=[0, 1]),
-        showlegend=False,
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
     )
     return fig
 
@@ -707,21 +797,17 @@ def figure_unassociated_recheck(recheck: RecheckSummary) -> go.Figure:
     if recheck.n_unassociated == 0:
         return _empty("Unassociated MS2 — pre-filter recheck")
     fig = go.Figure()
-    fig.add_bar(
-        name="would associate on pre-filter peaks",
-        x=[recheck.n_would_associate], y=["unassociated MS2"],
-        orientation="h", marker_color=_C_GOOD,
-    )
-    fig.add_bar(
-        name="still unassociated",
-        x=[recheck.n_still_unassociated], y=["unassociated MS2"],
-        orientation="h", marker_color=_C_BAD,
-    )
+    segs = [
+        ("would associate on pre-filter peaks", recheck.n_would_associate, _C_GOOD),
+        ("still unassociated", recheck.n_still_unassociated, _C_BAD),
+    ]
     if recheck.n_no_precursor_mz:
+        segs.append(("no precursor m/z", recheck.n_no_precursor_mz, _C_MUTED))
+    for name, val, color in segs:
         fig.add_bar(
-            name="no precursor m/z",
-            x=[recheck.n_no_precursor_mz], y=["unassociated MS2"],
-            orientation="h", marker_color=_C_MUTED,
+            name=name, x=[val], y=["unassociated MS2"], orientation="h",
+            marker_color=color,
+            hovertemplate=f"{name}: %{{x:,}}<extra></extra>",
         )
     fig.update_layout(
         title=(
@@ -729,8 +815,103 @@ def figure_unassociated_recheck(recheck: RecheckSummary) -> go.Figure:
             f"(assoc_ppm {recheck.assoc_ppm:g})"
         ),
         barmode="stack",
-        xaxis=dict(title="MS2 scans"),
-        legend=dict(orientation="h"),
+        xaxis=dict(title="MS2 scans", tickformat=","),
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
+    )
+    return fig
+
+
+def figure_purity(summary: Ms2Summary) -> go.Figure:
+    """Histogram of scored precursor purity with the cutoff line (overall)."""
+    if not summary.purity_values:
+        return _empty("Precursor ion purity")
+    fig = go.Figure(
+        go.Histogram(
+            x=summary.purity_values, nbinsx=40, marker_color=_C_OK,
+            hovertemplate="purity %{x}<br>%{y:,} MS2 scans<extra></extra>",
+        )
+    )
+    fig.add_vline(
+        x=summary.purity_cutoff,
+        line=dict(color=_C_BAD, dash="dash"),
+        annotation_text=f"cutoff {summary.purity_cutoff:g}",
+    )
+    unscored = summary.n_total - summary.n_purity_scored
+    fig.update_layout(
+        title=(
+            f"Precursor ion purity (overall) — {_fmt(summary.n_low_purity)} of "
+            f"{_fmt(summary.n_purity_scored)} scored below cutoff "
+            f"({_fmt(unscored)} unscored)"
+        ),
+        xaxis=dict(title="purity", range=[0, 1]),
+        yaxis=dict(title="MS2 scans", tickformat=","),
+    )
+    return fig
+
+
+def figure_purity_per_sample(
+    per_sample: Sequence[PerSamplePurity], cutoff: float = 0.8
+) -> go.Figure:
+    """Violin of scored precursor purity per sample (the score distribution)."""
+    if not any(p.values for p in per_sample):
+        return _empty("Precursor ion purity by sample")
+    fig = go.Figure()
+    for p in per_sample:
+        fig.add_violin(
+            y=p.values or [None],
+            name=f"{p.name}<br>(n={_fmt(p.n_scored)})",
+            box_visible=True,
+            meanline_visible=True,
+            points=False,
+            spanmode="hard",
+            line_color=_C_OK,
+            fillcolor=_C_OK,
+            opacity=0.65,
+        )
+    fig.add_hline(
+        y=cutoff, line=dict(color=_C_BAD, dash="dash"),
+        annotation_text=f"cutoff {cutoff:g}",
+    )
+    fig.update_layout(
+        title="Precursor ion purity distribution by sample",
+        yaxis=dict(title="purity", range=[0, 1]),
+        showlegend=False,
+    )
+    return fig
+
+
+_UNSCORED_SEGMENTS = [
+    ("scored", "n_scored", _C_OK),
+    ("precursor not detected in MS1", "n_no_precursor_peak", _C_WARN),
+    ("parent MS1 off-pixel (flyback)", "n_off_pixel", _C_MUTED),
+    ("no MS1 before the scan", "n_no_parent", _C_DARK),
+    ("no precursor m/z", "n_no_precursor_mz", _C_FAINT),
+]
+
+
+def figure_purity_unscored(unscored: UnscoredSummary) -> go.Figure:
+    """Stacked bar per sample: scored vs. each reason purity is unscored."""
+    ps = unscored.per_sample
+    if not ps:
+        return _empty("Precursor purity — scored vs. unscored")
+    names = [p.name for p in ps]
+    fig = go.Figure()
+    for label, attr, color in _UNSCORED_SEGMENTS:
+        vals = [getattr(p, attr) for p in ps]
+        if not any(vals):
+            continue
+        fig.add_bar(
+            name=label, x=names, y=vals, marker_color=color,
+            hovertemplate=f"%{{x}}<br>{label}: %{{y:,}}<extra></extra>",
+        )
+    fig.update_layout(
+        title="Precursor purity — scored vs. why unscored",
+        barmode="stack",
+        xaxis=dict(title="sample"),
+        yaxis=dict(title="MS2 scans", tickformat=","),
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
     )
     return fig
 
@@ -765,6 +946,7 @@ def collect_stats(
         per_sample_purity=per_sample_purity(
             analysis_db_path, purity_cutoff=purity_cutoff
         ),
+        unscored=purity_unscored(analysis_db_path, raw_db_paths),
         recheck=unassociated_recheck(analysis_db_path),
     )
 
@@ -775,9 +957,9 @@ def _table_html(counts: Sequence[SampleCounts]) -> str:
         "<th>detected peaks</th><th>features</th></tr>"
     )
     rows = "".join(
-        f"<tr><td>{c.name}</td><td>{c.n_ms1}</td><td>{c.n_ms2}</td>"
-        f"<td>{c.n_pixels}</td><td>{c.n_detected_peaks}</td>"
-        f"<td>{c.n_features}</td></tr>"
+        f"<tr><td>{c.name}</td><td>{_fmt(c.n_ms1)}</td><td>{_fmt(c.n_ms2)}</td>"
+        f"<td>{_fmt(c.n_pixels)}</td><td>{_fmt(c.n_detected_peaks)}</td>"
+        f"<td>{_fmt(c.n_features)}</td></tr>"
         for c in counts
     )
     return (
@@ -791,17 +973,44 @@ def _recheck_sentence(r: RecheckSummary) -> str:
         return "<p>Every MS2 scan associated to a feature.</p>"
     pct = 100.0 * r.n_would_associate / r.n_unassociated
     extra = (
-        f" {r.n_no_precursor_mz} carry no precursor m/z and could not be rechecked."
+        f" {_fmt(r.n_no_precursor_mz)} carry no precursor m/z and could not be "
+        f"rechecked."
         if r.n_no_precursor_mz
         else ""
     )
     return (
-        f"<p>Of {r.n_unassociated} unassociated MS2 scans, "
-        f"<b>{r.n_would_associate} ({pct:.1f}%)</b> would have matched a peak in "
-        f"their sample's pre-filter centroid list (within {r.assoc_ppm:g} ppm and "
-        f"the isolation window) — i.e. peak filtering, not fragmentation, is why "
-        f"they are unassociated. {r.n_still_unassociated} still match nothing.{extra}"
-        f"</p>"
+        f"<p>Of {_fmt(r.n_unassociated)} unassociated MS2 scans, "
+        f"<b>{_fmt(r.n_would_associate)} ({pct:.1f}%)</b> would have matched a "
+        f"peak in their sample's pre-filter centroid list (within "
+        f"{r.assoc_ppm:g} ppm and the isolation window) — i.e. peak filtering, "
+        f"not fragmentation, is why they are unassociated. "
+        f"{_fmt(r.n_still_unassociated)} still match nothing.{extra}</p>"
+    )
+
+
+def _unscored_sentence(u: UnscoredSummary) -> str:
+    if u.n_unscored == 0:
+        return "<p>Precursor purity was scored for every MS2 scan.</p>"
+    parts = []
+    if u.n_no_precursor_peak:
+        parts.append(
+            f"{_fmt(u.n_no_precursor_peak)} because the precursor ion was not a "
+            f"detectable peak in its survey (MS1) scan — a genuinely "
+            f"low-abundance precursor"
+        )
+    if u.n_off_pixel:
+        parts.append(
+            f"{_fmt(u.n_off_pixel)} because the parent MS1 falls outside the "
+            f"sample's imaged pixels (laser flyback / off-tissue)"
+        )
+    if u.n_no_parent:
+        parts.append(f"{_fmt(u.n_no_parent)} with no MS1 scan before them")
+    if u.n_no_precursor_mz:
+        parts.append(f"{_fmt(u.n_no_precursor_mz)} carrying no precursor m/z")
+    return (
+        f"<p>Precursor purity is unscored for {_fmt(u.n_unscored)} MS2 scans: "
+        + "; ".join(parts)
+        + ". The off-pixel scans can be treated as out-of-ROI acquisitions.</p>"
     )
 
 
@@ -840,9 +1049,10 @@ def build_summary_report(
         figure_overlap_upset(stats.overlap_combos, sample_names),
         figure_ms2_association(stats.ms2),
         figure_ms2_association_per_sample(stats.per_sample_ms2),
+        figure_unassociated_recheck(stats.recheck),
         figure_purity(stats.ms2),
         figure_purity_per_sample(stats.per_sample_purity, cutoff),
-        figure_unassociated_recheck(stats.recheck),
+        figure_purity_unscored(stats.unscored),
     ]
 
     json_path = out_dir / _REPORT_JSON
@@ -861,11 +1071,13 @@ def build_summary_report(
         "table{font-size:14px}h1{font-size:20px}h2{font-size:16px;margin-top:32px}"
         "</style></head><body>"
         "<h1>MSIAnalyzer summary report</h1>"
-        f"<p>{len(stats.samples)} sample(s) &middot; {stats.n_features} features "
-        f"&middot; {stats.ms2.n_total} MS2 scans "
-        f"({stats.ms2.n_associated} associated, "
-        f"{stats.ms2.n_low_purity} below purity {cutoff:g})</p>"
+        f"<p>{_fmt(len(stats.samples))} sample(s) &middot; "
+        f"{_fmt(stats.n_features)} features &middot; "
+        f"{_fmt(stats.ms2.n_total)} MS2 scans "
+        f"({_fmt(stats.ms2.n_associated)} associated, "
+        f"{_fmt(stats.ms2.n_low_purity)} below purity {cutoff:g})</p>"
         f"{_recheck_sentence(stats.recheck)}"
+        f"{_unscored_sentence(stats.unscored)}"
         "<h2>Per-sample counts</h2>"
         f"{_table_html(stats.samples)}"
         + "".join(f"<div>{b}</div>" for b in blocks)
