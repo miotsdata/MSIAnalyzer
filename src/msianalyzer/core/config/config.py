@@ -258,6 +258,10 @@ class PurityConfig:
             parent-MS1 local maximum within this many ppm (stored as
             `precursor_mz_snapped`; a no-op when the recorded value is
             already on a peak). `0` disables snapping.
+        n_workers: Number of samples to score in parallel, one process per
+            sample. `None` / `0` uses `os.cpu_count()`; `1` forces the serial
+            path. Capped at the sample count. Each worker holds one sample's
+            in-memory scan index, so lower this if memory is tight.
     """
 
     enabled: bool = True
@@ -270,6 +274,7 @@ class PurityConfig:
     precursor_confirm_ppm: float = 25.0
     precursor_confirm_min_frac: float = 0.01
     precursor_snap_ppm: float = 15.0
+    n_workers: int | None = None
 
 
 @dataclass
@@ -469,7 +474,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 8
+    version: int = 9
 
     def __init__(
         self,

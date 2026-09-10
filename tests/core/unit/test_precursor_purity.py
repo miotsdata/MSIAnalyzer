@@ -748,7 +748,7 @@ def _analysis_db_with_sample(tmp_path, raw_db: Path) -> Path:
     return adb
 
 
-def _run_raw_db(tmp_path) -> Path:
+def _run_raw_db(tmp_path, name: str = "sample.db") -> Path:
     """One sample: a clean MS2 and a chimeric MS2, both on the same pixel line."""
     ms1 = [
         _ms1_scan(1, 5.0, 500.0, [(500.0, 1.0e5)]),
@@ -768,7 +768,7 @@ def _run_raw_db(tmp_path) -> Path:
         },
     ]
     pixels = [(0, 0, 0.0, 10.0), (1, 0, 10.0, 20.0), (2, 0, 20.0, 30.0)]
-    return _build_raw_db(tmp_path / "sample.db", ms1, ms2, pixels=pixels)
+    return _build_raw_db(tmp_path / name, ms1, ms2, pixels=pixels)
 
 
 def test_run_precursor_purity_persists_rows_and_returns_result(tmp_path):
@@ -852,3 +852,37 @@ def test_persist_purity_replaces_and_stamps_command_id(tmp_path):
             r[0] for r in con.execute("SELECT command_id FROM precursor_purity")
         }
     assert cmd_ids == {cmd_id}
+
+
+def test_run_precursor_purity_parallel_matches_serial(tmp_path):
+    """Two samples scored on a process pool give the same rows as serial."""
+    raw1 = _run_raw_db(tmp_path, "s1.db")
+    raw2 = _run_raw_db(tmp_path, "s2.db")
+
+    adb_serial = tmp_path / "serial.db"
+    init_analysis_db(adb_serial).close()
+    sid1_s = register_sample(adb_serial, name="s1", raw_db_path=raw1)
+    sid2_s = register_sample(adb_serial, name="s2", raw_db_path=raw2)
+    serial = run_precursor_purity(adb_serial, PurityConfig(), n_workers=1)
+
+    adb_par = tmp_path / "parallel.db"
+    init_analysis_db(adb_par).close()
+    register_sample(adb_par, name="s1", raw_db_path=raw1)
+    register_sample(adb_par, name="s2", raw_db_path=raw2)
+    parallel = run_precursor_purity(adb_par, PurityConfig(), n_workers=2)
+
+    assert serial.n_scans == parallel.n_scans == 4
+    assert {sid1_s, sid2_s} == {1, 2}
+
+    def _snapshot(db: Path):
+        with sqlite3.connect(db) as con:
+            return {
+                (r[0], r[1]): (round(r[2], 6) if r[2] is not None else None, r[3])
+                for r in con.execute(
+                    "SELECT sample_id, ms2_scan_id, purity, n_peaks_in_window "
+                    "FROM precursor_purity"
+                )
+            }
+
+    assert _snapshot(adb_serial) == _snapshot(adb_par)
+    assert len(_snapshot(adb_par)) == 4

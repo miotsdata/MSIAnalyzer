@@ -148,6 +148,10 @@ the acquisition-time gap (`purity.max_interpixel_gap_sec`, auto-derived when
 null) — never raw coordinates, so serpentine vs. flyback rastering is
 irrelevant. If pixel mapping never ran, the stage is parent-MS1-only.
 
+Samples are scored **one process per sample** (`purity.n_workers`, default one
+per CPU, capped at the sample count; set `1` to force the serial path). The
+`precursor_purity` table is written once, after every sample is in.
+
 ## `precursor_purity` — one row per MS2 scan
 
 | column | meaning |

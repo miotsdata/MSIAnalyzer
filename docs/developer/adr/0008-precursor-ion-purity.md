@@ -118,3 +118,14 @@ Design choices:
   where the precursor is a minor co-isolate. `precursor_confirmed` /
   `precursor_frac` are carried onto `ms2_annotations` as an annotation-
   confidence gate. Config `version` 7 → 8.
+- **Follow-up (v9): per-sample parallelism.** Each sample is fully
+  independent — its own read-only raw DB, its own `SampleScanIndex`, no
+  analysis-DB writes during scoring (the parent persists the whole table once,
+  at the end). So `run_precursor_purity` now scores samples one process per
+  sample via `ProcessPoolExecutor` (`purity.n_workers`, default
+  `os.cpu_count()`, capped at the sample count; `1` or a single sample keeps
+  the serial path). Workers raise their inherited root logger to `WARNING` so
+  a forked worker cannot stream DEBUG records into the shared debug log — the
+  parent logs per-sample completion as futures finish. No logging `Queue`,
+  unlike the annotator: purity workers emit nothing on the hot path.
+  Config `version` 8 → 9.

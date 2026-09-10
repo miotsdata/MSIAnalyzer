@@ -104,8 +104,11 @@ the feature list. Detail in
 - Data classes: `RasterGeometry`, `WindowPurity`, `ResolvedScans`, `PurityRow`,
   `PurityResult`.
 - IO: `persist_purity(db_path, result, command_id)` (replace-and-insert),
-  `run_precursor_purity(analysis_db_path, config, *, command_id) -> PurityResult`
-  — the orchestration entry point used by `run.py`.
+  `run_precursor_purity(analysis_db_path, config, *, command_id, n_workers)
+  -> PurityResult` — the orchestration entry point used by `run.py`. Samples
+  are independent, so it scores them one process per sample
+  (`purity.n_workers`, default `os.cpu_count()`; `1` or a single sample →
+  serial), then writes `precursor_purity` once in the parent.
 
 ## `annotation/consensus.py`
 
@@ -207,7 +210,7 @@ Detail in [MS2 annotation](../../user-guide/ms2-annotation.md) and
 ## `config/config.py`
 
 - `Config` + one dataclass per stage; `GROUPS` / `GROUP_TITLES` drive
-  (de)serialisation, `__str__` and CLI wiring. `version = 5`.
+  (de)serialisation, `__str__` and CLI wiring. `version = 9`.
 - `create_config_file(...)` — write a defaulted config with the given paths.
 
 ## `project/project.py`

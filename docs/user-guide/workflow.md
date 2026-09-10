@@ -77,7 +77,8 @@ the `group_ms2.*` settings. Full detail in [MS2 annotation](ms2-annotation.md).
 parent MS1 scan (and the next MS1 on the same raster line): `purity`,
 `n_peaks_in_window`, `runner_up_rel_int` per scan, in `precursor_purity`. A
 feature-list-free chimericity signal that stays meaningful on large runs.
-Controlled by `purity.*`; set `purity.enabled: false` to skip. Full detail in
+Samples are scored one process per sample (`purity.n_workers`). Controlled by
+`purity.*`; set `purity.enabled: false` to skip. Full detail in
 [MS2 annotation](ms2-annotation.md).
 
 ## Stage 9 — Annotate MS2 against a library (→ analysis DB)

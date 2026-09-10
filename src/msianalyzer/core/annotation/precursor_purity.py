@@ -44,6 +44,11 @@ pixels, ``(x, y)`` indices plus the acquisition-time gap — never raw
 coordinates alone, so serpentine vs. flyback rastering is irrelevant. See
 :func:`infer_raster_geometry` / :func:`resolve_parent_next`.
 
+Samples are independent — each opens its own read-only raw database and
+builds its own in-memory scan index — so :func:`run_precursor_purity`
+scores them one process per sample (``purity.n_workers``), then writes the
+whole ``precursor_purity`` table once in the parent.
+
 Output table: ``precursor_purity`` (schema in
 :func:`msianalyzer.core.analysis_db.create_analysis_schema`). Written by
 :func:`run_precursor_purity`; a re-run replaces every row.
@@ -53,8 +58,10 @@ from __future__ import annotations
 
 import bisect
 import logging
+import os
 import sqlite3
 from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Sequence
@@ -1055,6 +1062,102 @@ _MS2_QUERY = (
 _PROGRESS_EVERY = 20_000
 
 
+@dataclass(frozen=True)
+class _SampleJob:
+    """One sample's scoring unit — every field a scalar, so it pickles cheaply.
+
+    Passed to :func:`_score_one_sample`, which runs either inline (serial
+    path) or in a :class:`~concurrent.futures.ProcessPoolExecutor` worker.
+    """
+
+    sample_id: int | None
+    raw_db_path: str
+    ppm: float
+    default_half: float
+    min_rel: float
+    merge_ppm: float
+    use_next: bool
+    gap_override: float | None
+    confirm_ppm: float
+    confirm_min_frac: float
+    snap_ppm: float
+
+
+def _init_purity_worker() -> None:
+    """Quiet a forked worker's inherited handlers.
+
+    Workers inherit the parent's root logger and its file/stream handlers by
+    ``fork``; left at DEBUG they would all write the same debug log
+    concurrently. The parent logs per-sample progress as futures complete, so
+    a worker only needs to surface warnings and errors.
+    """
+    logging.getLogger().setLevel(logging.WARNING)
+
+
+def _score_one_sample(
+    job: _SampleJob, *, progress: bool = False
+) -> tuple[int | None, list[PurityRow]]:
+    """Score every MS2 scan of one sample; return ``(sample_id, rows)``.
+
+    Opens the sample's raw database read-only, builds one
+    :class:`SampleScanIndex`, and never touches the analysis database — the
+    parent persists all rows once, after every sample is in. Safe to call
+    inline or as a pool worker.
+    """
+    from ..parser.mzml_parser import blob_to_array
+
+    rows: list[PurityRow] = []
+    with sqlite3.connect(str(job.raw_db_path)) as rcon:
+        geom = infer_raster_geometry(rcon, gap_override=job.gap_override)
+        index = SampleScanIndex(rcon, decode=blob_to_array)
+        ms2_rows = rcon.execute(_MS2_QUERY).fetchall()
+        n = len(ms2_rows)
+        logger.info(
+            "precursor purity: sample %s — %d MS2 scans, geometry=%s",
+            job.sample_id,
+            n,
+            geom,
+            extra={"source_file": str(job.raw_db_path)},
+        )
+        for k, r in enumerate(ms2_rows):
+            ms2_row = {
+                "sample_id": job.sample_id,
+                "scan_id": r[0],
+                "parent_scan_id": r[1],
+                "rt": r[2],
+                "polarity": r[3],
+                "precursor_mz": r[4],
+                "isolation_window_target": r[5],
+                "isolation_window_lower": r[6],
+                "isolation_window_upper": r[7],
+            }
+            resolved = resolve_parent_next(
+                index, ms2_row, geom, use_next=job.use_next
+            )
+            rows.append(
+                compute_scan_purity(
+                    ms2_row,
+                    resolved,
+                    ppm=job.ppm,
+                    default_half_width=job.default_half,
+                    min_rel_intensity=job.min_rel,
+                    merge_ppm=job.merge_ppm,
+                    confirm_ppm=job.confirm_ppm,
+                    confirm_min_frac=job.confirm_min_frac,
+                    snap_ppm=job.snap_ppm,
+                )
+            )
+            if progress and (k + 1) % _PROGRESS_EVERY == 0:
+                logger.info(
+                    "precursor purity: sample %s — %d/%d scans scored",
+                    job.sample_id,
+                    k + 1,
+                    n,
+                    extra={"source_file": str(job.raw_db_path)},
+                )
+    return job.sample_id, rows
+
+
 def _make_result(rows: list[PurityRow]) -> PurityResult:
     return PurityResult(
         rows=rows,
@@ -1067,95 +1170,106 @@ def _make_result(rows: list[PurityRow]) -> PurityResult:
     )
 
 
+def _resolve_n_workers(
+    config: "PurityConfig", override: int | None, n_samples: int
+) -> int:
+    """Clamp the requested worker count to ``[1, n_samples]``.
+
+    ``override`` wins over ``config.n_workers``; ``None`` / ``0`` / negative
+    means "one per CPU". One sample is always scored inline.
+    """
+    want = override if override is not None else getattr(config, "n_workers", None)
+    if not want or int(want) < 1:
+        want = os.cpu_count() or 1
+    return max(1, min(int(want), max(1, n_samples)))
+
+
 @log_call(source="analysis_db_path")
 def run_precursor_purity(
     analysis_db_path: Path | str,
     config: "PurityConfig",
     *,
     command_id: int | None = None,
+    n_workers: int | None = None,
 ) -> PurityResult:
     """Score every sample's MS2 scans for precursor purity and persist them.
 
-    Expects ``samples`` already populated in the analysis database. Each
-    raw database is opened read-only.
+    Samples are independent — each opens its own read-only raw database and
+    builds its own in-memory scan index — so they are scored **one process
+    per sample** (``concurrent.futures.ProcessPoolExecutor``). The analysis
+    database is written once, in the parent, after every sample is in; a
+    single sample (or ``n_workers == 1``) takes the serial path.
+
+    Expects ``samples`` already populated in the analysis database.
 
     Args:
         analysis_db_path: The analysis database.
         config: Anything exposing the :class:`~msianalyzer.core.config.config.PurityConfig`
             fields (``ppm_precursor_match``, ``default_half_window_da``,
             ``min_rel_intensity``, ``merge_ppm``, ``use_next_ms1``,
-            ``max_interpixel_gap_sec``).
+            ``max_interpixel_gap_sec``, ``n_workers``).
         command_id: Optional ``commands.id`` stamped on every row.
+        n_workers: Overrides ``config.n_workers``. ``None`` / ``0`` uses
+            ``os.cpu_count()``; ``1`` forces the serial path. Capped at the
+            sample count.
     """
-    from ..parser.mzml_parser import blob_to_array
-
     analysis_db_path = Path(analysis_db_path)
     with sqlite3.connect(analysis_db_path) as con:
         samples = con.execute(
             "SELECT sample_id, raw_db_path FROM samples"
         ).fetchall()
 
-    ppm = float(config.ppm_precursor_match)
-    default_half = float(config.default_half_window_da)
-    min_rel = float(config.min_rel_intensity)
-    merge_ppm = float(config.merge_ppm)
-    use_next = bool(config.use_next_ms1)
-    gap_override = config.max_interpixel_gap_sec
-    confirm_ppm = float(getattr(config, "precursor_confirm_ppm", 25.0))
-    confirm_min_frac = float(getattr(config, "precursor_confirm_min_frac", 0.01))
-    snap_ppm = float(getattr(config, "precursor_snap_ppm", 15.0))
+    jobs = [
+        _SampleJob(
+            sample_id=sample_id,
+            raw_db_path=str(raw_db_path),
+            ppm=float(config.ppm_precursor_match),
+            default_half=float(config.default_half_window_da),
+            min_rel=float(config.min_rel_intensity),
+            merge_ppm=float(config.merge_ppm),
+            use_next=bool(config.use_next_ms1),
+            gap_override=config.max_interpixel_gap_sec,
+            confirm_ppm=float(getattr(config, "precursor_confirm_ppm", 25.0)),
+            confirm_min_frac=float(getattr(config, "precursor_confirm_min_frac", 0.01)),
+            snap_ppm=float(getattr(config, "precursor_snap_ppm", 15.0)),
+        )
+        for sample_id, raw_db_path in samples
+    ]
 
+    workers = _resolve_n_workers(config, n_workers, len(jobs))
     rows: list[PurityRow] = []
-    for sample_id, raw_db_path in samples:
-        # opened for reading only — this stage never writes a raw database
-        with sqlite3.connect(str(raw_db_path)) as rcon:
-            geom = infer_raster_geometry(rcon, gap_override=gap_override)
-            index = SampleScanIndex(rcon, decode=blob_to_array)
-            ms2_rows = rcon.execute(_MS2_QUERY).fetchall()
-            n = len(ms2_rows)
+
+    if workers == 1 or len(jobs) <= 1:
+        for job in jobs:
+            _, sample_rows = _score_one_sample(job, progress=True)
+            rows.extend(sample_rows)
             logger.info(
-                "precursor purity: sample %s — %d MS2 scans, geometry=%s",
-                sample_id,
-                n,
-                geom,
-                extra={"source_file": str(raw_db_path)},
+                "precursor purity: sample %s done — %d scans",
+                job.sample_id,
+                len(sample_rows),
             )
-            for k, r in enumerate(ms2_rows):
-                ms2_row = {
-                    "sample_id": sample_id,
-                    "scan_id": r[0],
-                    "parent_scan_id": r[1],
-                    "rt": r[2],
-                    "polarity": r[3],
-                    "precursor_mz": r[4],
-                    "isolation_window_target": r[5],
-                    "isolation_window_lower": r[6],
-                    "isolation_window_upper": r[7],
-                }
-                resolved = resolve_parent_next(
-                    index, ms2_row, geom, use_next=use_next
+    else:
+        logger.info(
+            "precursor purity: scoring %d samples on %d worker processes",
+            len(jobs),
+            workers,
+        )
+        done = 0
+        with ProcessPoolExecutor(
+            max_workers=workers, initializer=_init_purity_worker
+        ) as executor:
+            futures = {executor.submit(_score_one_sample, job): job for job in jobs}
+            for future in as_completed(futures):
+                sample_id, sample_rows = future.result()
+                rows.extend(sample_rows)
+                done += 1
+                logger.info(
+                    "precursor purity: sample %s done — %d scans (%d/%d samples)",
+                    sample_id,
+                    len(sample_rows),
+                    done,
+                    len(jobs),
                 )
-                rows.append(
-                    compute_scan_purity(
-                        ms2_row,
-                        resolved,
-                        ppm=ppm,
-                        default_half_width=default_half,
-                        min_rel_intensity=min_rel,
-                        merge_ppm=merge_ppm,
-                        confirm_ppm=confirm_ppm,
-                        confirm_min_frac=confirm_min_frac,
-                        snap_ppm=snap_ppm,
-                    )
-                )
-                if (k + 1) % _PROGRESS_EVERY == 0:
-                    logger.info(
-                        "precursor purity: sample %s — %d/%d scans scored",
-                        sample_id,
-                        k + 1,
-                        n,
-                        extra={"source_file": str(raw_db_path)},
-                    )
 
     result = _make_result(rows)
     persist_purity(analysis_db_path, result, command_id=command_id)
