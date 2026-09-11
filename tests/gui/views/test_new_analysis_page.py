@@ -168,6 +168,68 @@ def test_library_path_field_is_read_only(new_analysis_view, project, find_visual
     assert control.property("readOnly") is True
 
 
+def test_group_tab_shows_a_description_sentence(new_analysis_view, project, find_visual_child):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    description = find_visual_child(root, "groupDescription_peak")
+    assert description is not None
+    assert description.property("text") == (
+        "Parameters for filtering detected MS1 peaks by intensity."
+    )
+
+
+def test_field_label_is_prettified_not_the_raw_python_name(
+    new_analysis_view, project, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    field_row = find_visual_child(root, "fieldRow_peak_peak_height_threshold")
+    # The label Text has no objectName; scan its direct Text children.
+    label_texts = [
+        c.property("text") for c in field_row.childItems() if c.property("text") is not None
+    ]
+    assert "Peak height threshold" in label_texts
+
+
+def test_field_help_button_tooltip_has_docstring_text(
+    new_analysis_view, project, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    help_button = find_visual_child(root, "field_peak_filter_mad_help")
+    assert help_button is not None
+    assert help_button.property("text") == "?"
+    assert "median-absolute-deviation" in help_button.property("helpText")
+
+
+def _open_peak_tab(view, root, find_visual_child, qtbot):
+    tab_button = find_visual_child(root, "tabButton_peak")
+    center = tab_button.mapToScene(tab_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+
+def test_unchecking_filter_mad_fades_dependents_and_enables_height_threshold(
+    new_analysis_view, project, find_visual_child, qtbot
+):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_peak_tab(view, root, find_visual_child, qtbot)
+
+    filter_mad_row = find_visual_child(root, "fieldRow_peak_filter_mad_log")
+    height_row = find_visual_child(root, "fieldRow_peak_peak_height_threshold")
+    assert filter_mad_row.property("enabled") is True
+    assert height_row.property("enabled") is False
+
+    filter_mad = find_visual_child(root, "field_peak_filter_mad")
+    center = filter_mad.mapToScene(filter_mad.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert filter_mad.property("checked") is False
+    assert filter_mad_row.property("enabled") is False
+    assert height_row.property("enabled") is True
+
+
 def test_run_click_emits_router_signal_with_nested_config(
     new_analysis_view, project, application, qtbot
 ):

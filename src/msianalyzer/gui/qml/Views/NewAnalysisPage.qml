@@ -149,6 +149,20 @@ Page {
         return null
     }
 
+    // Whether a field's control should be enabled, per its schema-declared
+    // `enabledWhenField`/`enabledWhenEquals` (see config_schema.py's
+    // `build_config_schema` docstring) — e.g. peak.filter_mad_log is only
+    // enabled while peak.filter_mad is checked.
+    function isFieldEnabled(groupKey, field) {
+        if (!field.enabledWhenField)
+            return true
+        var control = findByObjectName(
+            newAnalysisPage, "field_" + groupKey + "_" + field.enabledWhenField)
+        if (!control)
+            return true
+        return control.checked === field.enabledWhenEquals
+    }
+
     function parseFieldValue(kind, control) {
         var text = control.text !== undefined ? control.text.trim() : ""
         switch (kind) {
@@ -510,17 +524,55 @@ Page {
                         width: groupTab.width
                         spacing: 8
 
+                        Text {
+                            objectName: "groupDescription_" + groupTab.groupKey
+                            text: modelData.description
+                            color: "gray"
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.bottomMargin: 8
+                        }
+
                         Repeater {
                             model: groupTab.groupFields
                             delegate: RowLayout {
                                 id: fieldRow
+                                objectName: "fieldRow_" + groupTab.groupKey + "_" + modelData.name
                                 Layout.fillWidth: true
                                 property string fieldObjectName:
                                     "field_" + groupTab.groupKey + "_" + modelData.name
+                                // Fields with no `enabledWhenField` are
+                                // always enabled. Others read the
+                                // controlling field's own `checked` —
+                                // QML's automatic dependency tracking
+                                // follows that read through
+                                // `isFieldEnabled`'s `findByObjectName`
+                                // call, so this stays reactive to the
+                                // controlling checkbox without any extra
+                                // wiring, as long as that field is
+                                // declared earlier in the same group
+                                // (true for every current use: the schema
+                                // only sets `enabledWhenField` pointing at
+                                // an earlier sibling — see config_schema.py).
+                                enabled: newAnalysisPage.isFieldEnabled(groupTab.groupKey, modelData)
 
                                 Text {
-                                    text: modelData.name
+                                    text: modelData.label
                                     Layout.preferredWidth: 260
+                                }
+
+                                ToolButton {
+                                    objectName: fieldRow.fieldObjectName + "_help"
+                                    text: "?"
+                                    implicitWidth: 22
+                                    implicitHeight: 22
+                                    // Attached properties (ToolTip.*) aren't
+                                    // readable via QObject.property() from
+                                    // Python, so the text is also a plain
+                                    // property here for tests to read.
+                                    property string helpText: modelData.help
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: helpText
                                 }
 
                                 CheckBox {

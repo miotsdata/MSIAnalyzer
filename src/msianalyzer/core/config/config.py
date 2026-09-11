@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 import yaml
 
 import tomllib
@@ -152,19 +152,26 @@ class PeakConfig:
     """Parameters for filtering detected MS1 peaks by intensity.
 
     Attributes:
-        peak_height_threshold: Absolute intensity cutoff used when
-            `filter_mad` is False.
         filter_mad: If True, filter peaks with a median-absolute-deviation
             threshold instead of `peak_height_threshold`.
         filter_mad_log: Compute the MAD threshold in log10 intensity space.
+            Only used when `filter_mad` is True.
         filter_mad_nmads: Number of MADs above the median to set the
-            threshold.
+            threshold. Only used when `filter_mad` is True.
+        peak_height_threshold: Absolute intensity cutoff used when
+            `filter_mad` is False.
     """
 
-    peak_height_threshold: float = 1000.0
     filter_mad: bool = True
-    filter_mad_log: bool = True
-    filter_mad_nmads: float = 2.5
+    filter_mad_log: bool = field(
+        default=True, metadata={"enabled_when": "filter_mad"}
+    )
+    filter_mad_nmads: float = field(
+        default=2.5, metadata={"enabled_when": "filter_mad"}
+    )
+    peak_height_threshold: float = field(
+        default=1000.0, metadata={"enabled_when": "not filter_mad"}
+    )
 
 
 @dataclass

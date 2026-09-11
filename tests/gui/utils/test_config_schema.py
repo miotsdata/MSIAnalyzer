@@ -1,7 +1,12 @@
 import pytest
 
 from msianalyzer.core.config.config import GROUPS
-from msianalyzer.gui.utils.config_schema import _classify, build_config_schema
+from msianalyzer.gui.utils.config_schema import (
+    _classify,
+    _parse_docstring,
+    _prettify_label,
+    build_config_schema,
+)
 
 
 def test_schema_covers_every_group_except_io():
@@ -86,3 +91,89 @@ def test_defaults_are_carried_over():
 
     assert fields_by_name["filter_mad"]["default"] is True
     assert fields_by_name["filter_mad_nmads"]["default"] == 2.5
+
+
+@pytest.mark.parametrize(
+    "name, expected_label",
+    [
+        ("peak_height_threshold", "Peak height threshold"),
+        ("align_ppm", "Align PPM"),
+        ("mz_decimals", "M/z decimals"),
+        ("filter_mad", "Filter MAD"),
+        ("filter_mad_nmads", "Number of MADs"),
+        ("n_workers", "Number of worker processes"),
+        ("enabled", "Enabled"),
+    ],
+)
+def test_prettify_label(name, expected_label):
+    assert _prettify_label(name) == expected_label
+
+
+def test_parse_docstring_extracts_first_paragraph_only_as_summary():
+    class Dummy:
+        """First sentence of the summary.
+
+        A second explanatory paragraph that should NOT end up in the
+        summary — only the first paragraph does.
+
+        Attributes:
+            foo: Help text for foo.
+            bar: Help text for bar,
+                continued on a second line.
+        """
+
+        foo: int
+        bar: int
+
+    summary, attrs = _parse_docstring(Dummy)
+
+    assert summary == "First sentence of the summary."
+    assert attrs["foo"] == "Help text for foo."
+    assert attrs["bar"] == "Help text for bar, continued on a second line."
+
+
+def test_parse_docstring_handles_missing_attributes_section():
+    class Dummy:
+        """Just a summary, no Attributes section."""
+
+    summary, attrs = _parse_docstring(Dummy)
+
+    assert summary == "Just a summary, no Attributes section."
+    assert attrs == {}
+
+
+def test_every_group_has_a_non_empty_description():
+    schema = build_config_schema()
+    for group in schema:
+        assert group["description"] != "", group["key"]
+
+
+def test_every_field_has_help_text():
+    schema = build_config_schema()
+    for group in schema:
+        for f in group["fields"]:
+            assert f["help"] != "", f"{group['key']}.{f['name']}"
+
+
+def test_peak_group_encodes_filter_mad_dependency():
+    schema = build_config_schema()
+    peak = next(g for g in schema if g["key"] == "peak")
+    fields_by_name = {f["name"]: f for f in peak["fields"]}
+
+    assert fields_by_name["filter_mad"]["enabledWhenField"] is None
+    assert fields_by_name["filter_mad_log"]["enabledWhenField"] == "filter_mad"
+    assert fields_by_name["filter_mad_log"]["enabledWhenEquals"] is True
+    assert fields_by_name["filter_mad_nmads"]["enabledWhenField"] == "filter_mad"
+    assert fields_by_name["filter_mad_nmads"]["enabledWhenEquals"] is True
+    assert fields_by_name["peak_height_threshold"]["enabledWhenField"] == "filter_mad"
+    assert fields_by_name["peak_height_threshold"]["enabledWhenEquals"] is False
+
+
+def test_peak_group_field_order_has_filter_mad_options_before_height_threshold():
+    schema = build_config_schema()
+    peak = next(g for g in schema if g["key"] == "peak")
+    names = [f["name"] for f in peak["fields"]]
+
+    assert names.index("peak_height_threshold") == len(names) - 1
+    assert names.index("filter_mad") < names.index("filter_mad_log")
+    assert names.index("filter_mad") < names.index("filter_mad_nmads")
