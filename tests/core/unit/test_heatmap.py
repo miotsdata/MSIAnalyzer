@@ -4,14 +4,28 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 
-from msianalyzer.core.plotting.heatmap import feature_value_range, render_feature_heatmap
+from msianalyzer.core.plotting.heatmap import (
+    category_color,
+    feature_value_range,
+    list_obs_columns,
+    obs_categories,
+    obs_value_range,
+    render_feature_heatmap,
+    render_obs_categories_heatmap,
+    render_obs_heatmap,
+)
 
 
-def _make_grid_adata(values, *, xs=(0.0, 1.0), ys=(0.0, 1.0), layers=None):
+def _make_grid_adata(
+    values, *, xs=(0.0, 1.0), ys=(0.0, 1.0), layers=None, obs_columns=None
+):
     """A 2x2 spatial grid (x fastest-varying), one feature, `values` in
     (x=0,y=0), (x=1,y=0), (x=0,y=1), (x=1,y=1) order."""
     coords = [(x, y) for y in ys for x in xs]
     obs = pd.DataFrame(index=[f"px{i}" for i in range(len(coords))])
+    if obs_columns:
+        for name, column_values in obs_columns.items():
+            obs[name] = column_values
     var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
     X = csr_matrix(np.array(values, dtype=np.float32).reshape(-1, 1))
     adata = ad.AnnData(X=X, obs=obs, var=var)
@@ -131,3 +145,119 @@ def test_render_feature_heatmap_picks_nearest_mz_column():
     black = tuple(int(c * 255) for c in matplotlib.colormaps["gray"](0.0))
     assert tuple(rgba[0, 0]) == white
     assert tuple(rgba[1, 1]) == black
+
+
+def test_list_obs_columns_classifies_numeric_and_discrete():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={
+            "tic": [1.0, 2.0, 3.0, 4.0],
+            "polarity": ["positive", "positive", "negative", "negative"],
+            "flagged": [True, False, True, False],
+        },
+    )
+
+    columns = {c["name"]: c["numeric"] for c in list_obs_columns(adata)}
+
+    assert columns["tic"] is True
+    assert columns["polarity"] is False
+    # bool dtype is discrete (a legend of True/False), not a color scale.
+    assert columns["flagged"] is False
+
+
+def test_list_obs_columns_excludes_spatial_coordinates():
+    adata = _make_grid_adata([0.0, 0.0, 0.0, 0.0])
+
+    names = [c["name"] for c in list_obs_columns(adata)]
+
+    assert "x" not in names
+    assert "y" not in names
+
+
+def test_obs_value_range_returns_min_and_max():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0], obs_columns={"tic": [5.0, 20.0, 1.0, 100.0]}
+    )
+
+    assert obs_value_range(adata, "tic") == (1.0, 100.0)
+
+
+def test_obs_value_range_defaults_when_all_values_missing():
+    adata = _make_grid_adata(
+        [0.0], xs=(0.0,), ys=(0.0,), obs_columns={"tic": [np.nan]}
+    )
+
+    assert obs_value_range(adata, "tic") == (0.0, 1.0)
+
+
+def test_render_obs_heatmap_reconstructs_grid_and_applies_colormap():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0], obs_columns={"tic": [0.0, 10.0, 5.0, 15.0]}
+    )
+
+    rgba = render_obs_heatmap(adata, "tic", colormap="gray", vmin=0.0, vmax=15.0)
+
+    grid = np.array([[0.0, 10.0], [5.0, 15.0]])
+    norm = matplotlib.colors.Normalize(vmin=0.0, vmax=15.0, clip=True)
+    expected = (matplotlib.colormaps["gray"](norm(grid)) * 255).astype(np.uint8)
+    np.testing.assert_array_equal(rgba, expected)
+
+
+def test_obs_categories_returns_sorted_distinct_values():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+
+    assert obs_categories(adata, "polarity") == ["negative", "positive"]
+
+
+def test_obs_categories_excludes_null_values():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["positive", None, "positive", None]},
+    )
+
+    assert obs_categories(adata, "polarity") == ["positive"]
+
+
+def test_render_obs_categories_heatmap_colors_by_category_position():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+
+    rgba = render_obs_categories_heatmap(
+        adata, "polarity", categories=["negative", "positive"]
+    )
+
+    assert tuple(rgba[0, 0]) == _to_rgba(category_color(0))
+    assert tuple(rgba[0, 1]) == _to_rgba(category_color(1))
+    assert tuple(rgba[1, 0]) == _to_rgba(category_color(0))
+    assert tuple(rgba[1, 1]) == _to_rgba(category_color(1))
+
+
+def test_render_obs_categories_heatmap_paints_unlisted_category_black():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+
+    # "positive" isn't in the passed category list (e.g. hidden from
+    # another sample's union) -> pixels with that value render black
+    # rather than reusing a color meant for a different category.
+    rgba = render_obs_categories_heatmap(adata, "polarity", categories=["negative"])
+
+    assert tuple(rgba[0, 1]) == (0, 0, 0, 255)
+    assert tuple(rgba[1, 1]) == (0, 0, 0, 255)
+
+
+def test_category_color_is_stable_and_distinct_for_different_indices():
+    assert category_color(0) == category_color(0)
+    assert category_color(0) != category_color(1)
+
+
+def _to_rgba(hex_color):
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+    return (r, g, b, 255)

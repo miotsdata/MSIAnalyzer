@@ -9,8 +9,11 @@ from scipy.sparse import csr_matrix
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 
 
-def _write_sample_h5ad(path, values=(0.0, 10.0, 5.0, 15.0)):
+def _write_sample_h5ad(path, values=(0.0, 10.0, 5.0, 15.0), obs_columns=None):
     obs = pd.DataFrame(index=["a", "b", "c", "d"])
+    if obs_columns:
+        for name, column_values in obs_columns.items():
+            obs[name] = column_values
     var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
     X = csr_matrix(np.array(values, dtype=np.float32).reshape(-1, 1))
     adata = ad.AnnData(X=X, obs=obs, var=var)
@@ -170,3 +173,101 @@ def test_get_feature_value_range_defaults_when_no_samples_resolve(tmp_path):
     result = provider.getFeatureValueRange(["does_not_exist"], 100.0, "raw")
 
     assert result == {"vmin": 0.0, "vmax": 1.0}
+
+
+def test_get_obs_columns_reads_from_first_resolvable_sample(tmp_path):
+    _write_sample_h5ad(
+        tmp_path / "s1.h5ad",
+        obs_columns={
+            "tic": [1.0, 2.0, 3.0, 4.0],
+            "polarity": ["positive", "positive", "negative", "negative"],
+        },
+    )
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    columns = {c["name"]: c["numeric"] for c in provider.getObsColumns(["does_not_exist", "s1"])}
+
+    assert columns["tic"] is True
+    assert columns["polarity"] is False
+
+
+def test_get_obs_columns_empty_when_no_samples_resolve(tmp_path):
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    assert provider.getObsColumns(["does_not_exist"]) == []
+
+
+def test_get_obs_value_range_combines_multiple_samples(tmp_path):
+    _write_sample_h5ad(tmp_path / "s1.h5ad", obs_columns={"tic": [0.0, 10.0, 5.0, 15.0]})
+    _write_sample_h5ad(tmp_path / "s2.h5ad", obs_columns={"tic": [20.0, 30.0, 25.0, 100.0]})
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getObsValueRange(["s1", "s2"], "tic")
+
+    assert result == {"vmin": 0.0, "vmax": 100.0}
+
+
+def test_get_obs_value_range_defaults_when_no_samples_resolve(tmp_path):
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getObsValueRange(["does_not_exist"], "tic")
+
+    assert result == {"vmin": 0.0, "vmax": 1.0}
+
+
+def test_get_obs_categories_combines_and_orders_across_samples(tmp_path):
+    _write_sample_h5ad(
+        tmp_path / "s1.h5ad", obs_columns={"polarity": ["positive"] * 4}
+    )
+    _write_sample_h5ad(
+        tmp_path / "s2.h5ad", obs_columns={"polarity": ["negative"] * 4}
+    )
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getObsCategories(["s1", "s2"], "polarity")
+
+    assert [c["category"] for c in result] == ["negative", "positive"]
+    assert result[0]["color"] != result[1]["color"]
+
+
+def test_request_image_renders_numeric_obs_column(tmp_path):
+    _write_sample_h5ad(tmp_path / "s1.h5ad", obs_columns={"tic": [0.0, 10.0, 5.0, 15.0]})
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    image = provider.requestImage("s1|obs:tic|viridis|0|15", None, None)
+
+    assert not image.isNull()
+    assert image.width() == 2
+    assert image.height() == 2
+
+
+def test_request_image_renders_categorical_obs_column(tmp_path):
+    _write_sample_h5ad(
+        tmp_path / "s1.h5ad",
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    image = provider.requestImage("s1|obs:polarity|negative,positive", None, None)
+
+    assert not image.isNull()
+    assert image.width() == 2
+    assert image.height() == 2
+
+
+def test_request_image_handles_percent_encoded_obs_id(tmp_path):
+    _write_sample_h5ad(tmp_path / "s1.h5ad", obs_columns={"tic": [0.0, 10.0, 5.0, 15.0]})
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    encoded_id = "s1%7Cobs%3Atic%7Cviridis%7C0%7C15"
+    image = provider.requestImage(encoded_id, None, None)
+
+    assert not image.isNull()

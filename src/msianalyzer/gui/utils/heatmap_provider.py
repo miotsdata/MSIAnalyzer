@@ -8,7 +8,17 @@ from PySide6.QtCore import QSize
 from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickImageProvider
 
-from msianalyzer.core.plotting.heatmap import feature_value_range, render_feature_heatmap
+from msianalyzer.core.plotting.heatmap import (
+    category_color,
+    feature_value_range,
+    is_numeric_obs_column,
+    list_obs_columns,
+    obs_categories,
+    obs_value_range,
+    render_feature_heatmap,
+    render_obs_categories_heatmap,
+    render_obs_heatmap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +28,18 @@ _CACHE_SIZE = 4
 class HeatmapImageProvider(QQuickImageProvider):
     """Serves Visual Inspection's spatial heatmaps as `image://heatmap/...`.
 
-    Request ids are `sampleName|mz|layer|colormap|vmin|vmax`, `vmin`/`vmax`
-    either a float or the literal `auto` (autoscale to that sample's data).
+    Two request-id shapes, dispatched on whether the second field starts
+    with `"obs:"`:
+      - Feature: `sampleName|mz|layer|colormap|vmin|vmax`, `vmin`/`vmax`
+        either a float or the literal `auto` (autoscale to that sample's
+        data).
+      - `obs` column: `sampleName|obs:columnName|colormap|vmin|vmax` for a
+        numeric column (same `vmin`/`vmax` convention as above), or
+        `sampleName|obs:columnName|categoriesCsv` for a discrete one —
+        `categoriesCsv` is the full, comma-joined category order every
+        tile colors by (see `render_obs_categories_heatmap`), normally
+        produced once by `getObsCategories` and reused for every tile.
+
     Resolving `sampleName` to a `.h5ad` path needs the current analysis'
     database path, set once via `setAnalysisDbPath` when the Visual
     Inspection section loads (see `AnalysisBridge.setHeatmapAnalysis`) —
@@ -97,6 +117,81 @@ class HeatmapImageProvider(QQuickImageProvider):
             return {"vmin": 0.0, "vmax": 1.0}
         return {"vmin": min(mins), "vmax": max(maxes)}
 
+    def getObsColumns(self, sample_names: list[str]) -> list:
+        """`adata.obs` columns available to overlay, from the first
+        sample in `sample_names` that actually resolves to a `.h5ad` —
+        every sample in one analysis shares the same pipeline-produced
+        schema, so one sample's columns stand in for the whole set.
+
+        Returns:
+            See `list_obs_columns`; `[]` if no sample resolves.
+        """
+        for name in sample_names:
+            adata = self._load_adata(name)
+            if adata is not None:
+                return list_obs_columns(adata)
+        return []
+
+    def getObsValueRange(self, sample_names: list[str], obs_column: str) -> dict:
+        """The `obs`-column analogue of `getFeatureValueRange` — the real
+        (min, max) of one numeric `obs` column across `sample_names`.
+
+        Returns:
+            `{"vmin": ..., "vmax": ...}`, `{"vmin": 0.0, "vmax": 1.0}` if
+            no sample resolves to real data.
+        """
+        mins = []
+        maxes = []
+        for name in sample_names:
+            adata = self._load_adata(name)
+            if adata is None:
+                continue
+            try:
+                vmin, vmax = obs_value_range(adata, obs_column)
+            except Exception:
+                logger.exception(
+                    "obs value range failed for sample %r, column %r",
+                    name, obs_column,
+                )
+                continue
+            mins.append(vmin)
+            maxes.append(vmax)
+        if not mins:
+            return {"vmin": 0.0, "vmax": 1.0}
+        return {"vmin": min(mins), "vmax": max(maxes)}
+
+    def getObsCategories(self, sample_names: list[str], obs_column: str) -> list:
+        """Every distinct category of one discrete `obs` column, combined
+        across `sample_names`, in the fixed order every tile's own render
+        call colors by (`render_obs_categories_heatmap` colors a category
+        by its position in this exact list) — so the legend and every
+        tile agree on which color means which category, regardless of
+        which samples are currently hidden (callers should pass every
+        sample, not just the visible ones, so colors stay stable when
+        visibility is toggled).
+
+        Returns:
+            `[{"category": ..., "color": "#rrggbb"}, ...]`, sorted.
+        """
+        categories = set()
+        for name in sample_names:
+            adata = self._load_adata(name)
+            if adata is None:
+                continue
+            try:
+                categories.update(obs_categories(adata, obs_column))
+            except Exception:
+                logger.exception(
+                    "obs categories failed for sample %r, column %r",
+                    name, obs_column,
+                )
+                continue
+        ordered = sorted(categories)
+        return [
+            {"category": cat, "color": category_color(i)}
+            for i, cat in enumerate(ordered)
+        ]
+
     def requestImage(self, id: str, size: QSize, requestedSize: QSize) -> QImage:
         try:
             # QML's Image element treats `source` as a URL: assigning
@@ -105,18 +200,32 @@ class HeatmapImageProvider(QQuickImageProvider):
             # provider ever sees it, so `id` arrives still encoded — every
             # single request failed on this until unquoted. Sample names
             # with spaces or other reserved characters need this too.
-            sample_name, mz_str, layer, colormap, vmin_str, vmax_str = (
-                unquote(id).split("|")
-            )
-            vmin = None if vmin_str == "auto" else float(vmin_str)
-            vmax = None if vmax_str == "auto" else float(vmax_str)
+            parts = unquote(id).split("|")
+            sample_name, target = parts[0], parts[1]
             adata = self._load_adata(sample_name)
             if adata is None:
                 return QImage()
-            rgba = render_feature_heatmap(
-                adata, float(mz_str), layer=layer, colormap=colormap,
-                vmin=vmin, vmax=vmax,
-            )
+
+            if target.startswith("obs:"):
+                obs_column = target[len("obs:") :]
+                if is_numeric_obs_column(adata, obs_column):
+                    colormap, vmin_str, vmax_str = parts[2], parts[3], parts[4]
+                    vmin = None if vmin_str == "auto" else float(vmin_str)
+                    vmax = None if vmax_str == "auto" else float(vmax_str)
+                    rgba = render_obs_heatmap(
+                        adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax,
+                    )
+                else:
+                    categories = parts[2].split(",") if parts[2] else []
+                    rgba = render_obs_categories_heatmap(adata, obs_column, categories)
+            else:
+                mz_str, layer, colormap, vmin_str, vmax_str = parts[1:6]
+                vmin = None if vmin_str == "auto" else float(vmin_str)
+                vmax = None if vmax_str == "auto" else float(vmax_str)
+                rgba = render_feature_heatmap(
+                    adata, float(mz_str), layer=layer, colormap=colormap,
+                    vmin=vmin, vmax=vmax,
+                )
         except Exception:
             logger.exception("heatmap render failed for request id %r", id)
             return QImage()

@@ -12,6 +12,47 @@ Item {
     property var samples: (analysis && analysis.analysisDbPath)
                            ? AnalysisBridge.getSamples(analysis.analysisDbPath) : []
 
+    // "feature" (an m/z column, the original mode) or "obs" (a per-pixel
+    // `adata.obs` column, e.g. `tic`/`rt`/`polarity` — not tied to any one
+    // feature). Mutually exclusive with the feature selector below.
+    property string inspectionMode: "feature"
+    property var obsColumns: (analysis && analysis.analysisDbPath && visualSection.samples.length > 0)
+                              ? AnalysisBridge.getObsColumns(
+                                    visualSection.samples.map(function (s) { return s.name }))
+                              : []
+    property var obsColumnLabels: visualSection.obsColumns.map(function (c) {
+        return c.numeric ? c.name : (c.name + " (categories)")
+    })
+    property int selectedObsIndex: 0
+    property var selectedObsColumnInfo: (visualSection.obsColumns.length > visualSection.selectedObsIndex)
+                                         ? visualSection.obsColumns[visualSection.selectedObsIndex] : null
+    property string selectedObsColumn: visualSection.selectedObsColumnInfo
+                                        ? visualSection.selectedObsColumnInfo.name : ""
+    property bool isSelectedObsNumeric: visualSection.selectedObsColumnInfo
+                                         ? !!visualSection.selectedObsColumnInfo.numeric : true
+
+    // The color-scale controls (autoscale/vmin/vmax/colormap) apply to
+    // the feature mode and to a numeric obs column; a discrete obs column
+    // has no color scale, just a fixed-palette legend.
+    property bool showsColorScale: visualSection.inspectionMode === "feature"
+                                    || (visualSection.inspectionMode === "obs" && visualSection.isSelectedObsNumeric)
+
+    property var obsCategoryLegend: []
+    function refreshObsCategoryLegend() {
+        if (visualSection.inspectionMode !== "obs" || !visualSection.selectedObsColumn
+                || visualSection.isSelectedObsNumeric) {
+            visualSection.obsCategoryLegend = []
+            return
+        }
+        // Every sample, not just the visible ones — a category's color
+        // must not depend on which samples happen to be shown, or
+        // toggling visibility would reshuffle colors underneath tiles
+        // still on screen.
+        var allNames = visualSection.samples.map(function (s) { return s.name })
+        visualSection.obsCategoryLegend = AnalysisBridge.getObsCategories(
+            allNames, visualSection.selectedObsColumn)
+    }
+
     // "mz" (the bridge's own order — already ascending) or "name" (every
     // annotated feature alphabetically by compound, then every
     // unannotated feature by m/z, at the end).
@@ -87,7 +128,25 @@ Item {
     }
 
     function refreshAutoRange() {
-        if (!analysis || !analysis.analysisDbPath || !visualSection.selectedFeature) {
+        // Reads inspectionMode/isSelectedObsNumeric directly rather than
+        // the cached showsColorScale property: this function runs
+        // *synchronously* from onInspectionModeChanged/
+        // onSelectedObsColumnChanged, i.e. within the very same change
+        // notification whose dependency showsColorScale's own binding
+        // also listens on — and a derived property's binding isn't
+        // guaranteed to have re-evaluated yet by the time a sibling
+        // handler for that same underlying signal runs (confirmed by
+        // instrumenting this function: showsColorScale still read `true`
+        // here immediately after switching to a non-numeric obs column,
+        // even though inspectionMode/isSelectedObsNumeric themselves
+        // already read correctly). Everywhere else showsColorScale is
+        // used declaratively (`visible: visualSection.showsColorScale`)
+        // it's fine — Qt Quick reliably repaints once the binding
+        // catches up a moment later; it's only unsafe to read from code
+        // executing inline with the very change that invalidates it.
+        var showsColorScale = visualSection.inspectionMode === "feature"
+            || (visualSection.inspectionMode === "obs" && visualSection.isSelectedObsNumeric)
+        if (!analysis || !analysis.analysisDbPath || !showsColorScale) {
             visualSection.autoRange = {"vmin": 0, "vmax": 1}
             return
         }
@@ -96,17 +155,40 @@ Item {
             visualSection.autoRange = {"vmin": 0, "vmax": 1}
             return
         }
+        if (visualSection.inspectionMode === "obs") {
+            if (!visualSection.selectedObsColumn) {
+                visualSection.autoRange = {"vmin": 0, "vmax": 1}
+                return
+            }
+            visualSection.autoRange = AnalysisBridge.getObsValueRange(
+                names, visualSection.selectedObsColumn)
+            return
+        }
+        if (!visualSection.selectedFeature) {
+            visualSection.autoRange = {"vmin": 0, "vmax": 1}
+            return
+        }
         visualSection.autoRange = AnalysisBridge.getFeatureValueRange(
             names, visualSection.selectedFeature.mz, visualSection.dataLayer)
     }
 
-    // Switching layers changes the data's whole scale — falling back to
-    // autoscale re-renders correctly for the new layer immediately;
-    // turning autoscale back off afterward starts from that layer's own
+    // Switching layers/mode/obs-column changes the data's whole scale —
+    // falling back to autoscale re-renders correctly immediately; turning
+    // autoscale back off afterward starts from that new selection's own
     // real range (autoRange) rather than carrying over a stale one.
     onDataLayerChanged: {
         visualSection.autoScale = true
         visualSection.refreshAutoRange()
+    }
+    onInspectionModeChanged: {
+        visualSection.autoScale = true
+        visualSection.refreshAutoRange()
+        visualSection.refreshObsCategoryLegend()
+    }
+    onSelectedObsColumnChanged: {
+        visualSection.autoScale = true
+        visualSection.refreshAutoRange()
+        visualSection.refreshObsCategoryLegend()
     }
     onSelectedFeatureChanged: visualSection.refreshAutoRange()
     onHiddenSamplesChanged: visualSection.refreshAutoRange()
@@ -142,12 +224,37 @@ Item {
         if (analysis && analysis.analysisDbPath) {
             AnalysisBridge.setHeatmapAnalysis(analysis.analysisDbPath)
             visualSection.refreshAutoRange()
+            visualSection.refreshObsCategoryLegend()
         }
+    }
+
+    // A tile's image://heatmap/... source, for either mode. A function
+    // (rather than inlining the ternary into `source:` below) so QML's
+    // binding still tracks every property read inside it, same as the
+    // existing vminToken()/vmaxToken() pattern.
+    function tileSource(sampleName) {
+        if (!analysis) return ""
+        if (visualSection.inspectionMode === "obs") {
+            if (!visualSection.selectedObsColumn) return ""
+            if (visualSection.isSelectedObsNumeric) {
+                return "image://heatmap/" + sampleName + "|obs:" + visualSection.selectedObsColumn
+                       + "|" + visualSection.colormap
+                       + "|" + visualSection.vminToken()
+                       + "|" + visualSection.vmaxToken()
+            }
+            var cats = visualSection.obsCategoryLegend.map(function (c) { return c.category }).join(",")
+            return "image://heatmap/" + sampleName + "|obs:" + visualSection.selectedObsColumn
+                   + "|" + cats
+        }
+        if (!visualSection.selectedFeature) return ""
+        return "image://heatmap/" + sampleName + "|" + visualSection.selectedFeature.mz + "|"
+               + visualSection.dataLayer + "|" + visualSection.colormap + "|"
+               + visualSection.vminToken() + "|" + visualSection.vmaxToken()
     }
 
     Text {
         objectName: "visualEmptyStateLabel"
-        visible: visualSection.features.length === 0
+        visible: visualSection.features.length === 0 && visualSection.obsColumns.length === 0
         anchors.centerIn: parent
         text: "No features to display."
         color: "gray"
@@ -156,7 +263,7 @@ Item {
     RowLayout {
         anchors.fill: parent
         anchors.margins: 12
-        visible: visualSection.features.length > 0
+        visible: visualSection.features.length > 0 || visualSection.obsColumns.length > 0
         spacing: 12
 
         Flickable {
@@ -181,8 +288,59 @@ Item {
             width: controlsFlickable.width
             spacing: 10
 
-            Text { text: "Feature"; font.bold: true }
+            Text { text: "Show"; font.bold: true }
             RowLayout {
+                // Same plain-Button pattern as the Raw/TIC layer toggle
+                // below (not RadioButton+ButtonGroup) — see that block's
+                // comment for why: a checked-binding + write-back-onToggled
+                // cycle on grouped checkable controls hung the QML engine.
+                Button {
+                    id: featureModeButton
+                    objectName: "featureModeButton"
+                    text: "Feature"
+                    highlighted: visualSection.inspectionMode === "feature"
+                    onClicked: visualSection.inspectionMode = "feature"
+                    background: Rectangle {
+                        radius: 4
+                        color: featureModeButton.highlighted ? "#0078d4" : "#e6e6e6"
+                        border.color: "#a0a0a0"
+                    }
+                    contentItem: Text {
+                        text: featureModeButton.text
+                        color: featureModeButton.highlighted ? "#ffffff" : "#202020"
+                        font.bold: featureModeButton.highlighted
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+                Button {
+                    id: obsModeButton
+                    objectName: "obsModeButton"
+                    text: "Obs column"
+                    highlighted: visualSection.inspectionMode === "obs"
+                    onClicked: visualSection.inspectionMode = "obs"
+                    background: Rectangle {
+                        radius: 4
+                        color: obsModeButton.highlighted ? "#0078d4" : "#e6e6e6"
+                        border.color: "#a0a0a0"
+                    }
+                    contentItem: Text {
+                        text: obsModeButton.text
+                        color: obsModeButton.highlighted ? "#ffffff" : "#202020"
+                        font.bold: obsModeButton.highlighted
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+
+            Text {
+                text: "Feature"
+                font.bold: true
+                visible: visualSection.inspectionMode === "feature"
+            }
+            RowLayout {
+                visible: visualSection.inspectionMode === "feature"
                 Text { text: "Sort by" }
                 ComboBox {
                     id: sortModeCombo
@@ -202,13 +360,34 @@ Item {
                 id: featureCombo
                 objectName: "featureCombo"
                 Layout.fillWidth: true
+                visible: visualSection.inspectionMode === "feature"
                 model: visualSection.featureLabels
                 currentIndex: visualSection.selectedFeatureIndex
                 onActivated: (index) => visualSection.selectedFeatureIndex = index
             }
 
-            Text { text: "Layer"; font.bold: true }
+            Text {
+                text: "Obs column"
+                font.bold: true
+                visible: visualSection.inspectionMode === "obs"
+            }
+            ComboBox {
+                id: obsColumnCombo
+                objectName: "obsColumnCombo"
+                Layout.fillWidth: true
+                visible: visualSection.inspectionMode === "obs"
+                model: visualSection.obsColumnLabels
+                currentIndex: visualSection.selectedObsIndex
+                onActivated: (index) => visualSection.selectedObsIndex = index
+            }
+
+            Text {
+                text: "Layer"
+                font.bold: true
+                visible: visualSection.inspectionMode === "feature"
+            }
             RowLayout {
+                visible: visualSection.inspectionMode === "feature"
                 // Plain (non-checkable) Buttons rather than RadioButton +
                 // ButtonGroup: a `checked: expr` binding on *each* of several
                 // grouped buttons, combined with an `onToggled` handler that
@@ -264,21 +443,31 @@ Item {
                 }
             }
 
-            Text { text: "Colormap"; font.bold: true }
+            Text {
+                text: "Colormap"
+                font.bold: true
+                visible: visualSection.showsColorScale
+            }
             ComboBox {
                 id: colormapCombo
                 objectName: "colormapCombo"
                 Layout.fillWidth: true
+                visible: visualSection.showsColorScale
                 model: ["viridis", "magma", "inferno", "plasma", "cividis", "gray"]
                 currentIndex: model.indexOf(visualSection.colormap)
                 onActivated: (index) => visualSection.colormap = model[index]
             }
 
-            Text { text: "Color scale"; font.bold: true }
+            Text {
+                text: "Color scale"
+                font.bold: true
+                visible: visualSection.showsColorScale
+            }
             CheckBox {
                 id: autoScaleCheckBox
                 objectName: "autoScaleCheckBox"
                 text: "Autoscale"
+                visible: visualSection.showsColorScale
                 checked: visualSection.autoScale
                 onToggled: {
                     visualSection.autoScale = checked
@@ -296,6 +485,7 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
+                visible: visualSection.showsColorScale
                 Text {
                     objectName: "vminValueLabel"
                     // Shows what autoscale is using while it's on (so
@@ -341,6 +531,7 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
+                visible: visualSection.showsColorScale
                 Text {
                     objectName: "vmaxValueLabel"
                     text: "vmax: " + (visualSection.autoScale
@@ -376,10 +567,42 @@ Item {
                 objectName: "applyColorRangeButton"
                 text: "Apply color range"
                 Layout.fillWidth: true
+                visible: visualSection.showsColorScale
                 enabled: !visualSection.autoScale
                        && (visualSection.draftVmin !== visualSection.vmin
                            || visualSection.draftVmax !== visualSection.vmax)
                 onClicked: visualSection.applyColorRange()
+            }
+
+            // Discrete obs column (e.g. `polarity`) — no color scale, just
+            // a fixed-palette legend. Every tile colors by this same
+            // ordered category list (visualSection.obsCategoryLegend),
+            // see tileSource().
+            Text {
+                text: "Categories"
+                font.bold: true
+                visible: visualSection.inspectionMode === "obs" && !visualSection.isSelectedObsNumeric
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: visualSection.inspectionMode === "obs" && !visualSection.isSelectedObsNumeric
+                Repeater {
+                    id: obsCategoryLegendRepeater
+                    objectName: "obsCategoryLegendRepeater"
+                    model: visualSection.obsCategoryLegend
+
+                    delegate: RowLayout {
+                        objectName: "obsCategoryLegendRow_" + modelData.category
+                        Rectangle {
+                            width: 14
+                            height: 14
+                            radius: 2
+                            color: modelData.color
+                            border.color: "#a0a0a0"
+                        }
+                        Text { text: modelData.category }
+                    }
+                }
             }
 
             // Rows/cols picking is disabled for now — the grid was too
@@ -482,14 +705,7 @@ Item {
                             objectName: "heatmapImage_" + modelData.name
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            source: visualSection.selectedFeature
-                                    ? ("image://heatmap/" + modelData.name + "|"
-                                       + visualSection.selectedFeature.mz + "|"
-                                       + visualSection.dataLayer + "|"
-                                       + visualSection.colormap + "|"
-                                       + visualSection.vminToken() + "|"
-                                       + visualSection.vmaxToken())
-                                    : ""
+                            source: visualSection.tileSource(modelData.name)
                         }
                     }
                 }

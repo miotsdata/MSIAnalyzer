@@ -236,6 +236,88 @@ def test_get_feature_value_range_delegates_to_heatmap_provider(tmp_path):
     assert result == {"vmin": 5.0, "vmax": 20.0}
 
 
+def test_get_obs_columns_delegates_to_heatmap_provider(tmp_path):
+    import anndata as ad
+    import pandas as pd
+    from scipy.sparse import csr_matrix
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    obs = pd.DataFrame(
+        {"tic": [1.0, 2.0, 3.0, 4.0], "polarity": ["positive", "positive", "negative", "negative"]},
+        index=["a", "b", "c", "d"],
+    )
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array(
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
+    )
+    adata.write_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+
+    columns = {c["name"]: c["numeric"] for c in bridge.getObsColumns(["s1"])}
+
+    assert columns["tic"] is True
+    assert columns["polarity"] is False
+
+
+def test_get_obs_value_range_delegates_to_heatmap_provider(tmp_path):
+    import anndata as ad
+    import pandas as pd
+    from scipy.sparse import csr_matrix
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    obs = pd.DataFrame({"tic": [1.0, 2.0, 3.0, 40.0]}, index=["a", "b", "c", "d"])
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array(
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
+    )
+    adata.write_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+
+    result = bridge.getObsValueRange(["s1"], "tic")
+
+    assert result == {"vmin": 1.0, "vmax": 40.0}
+
+
+def test_get_obs_categories_delegates_to_heatmap_provider(tmp_path):
+    import anndata as ad
+    import pandas as pd
+    from scipy.sparse import csr_matrix
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    obs = pd.DataFrame(
+        {"polarity": ["positive", "positive", "negative", "negative"]},
+        index=["a", "b", "c", "d"],
+    )
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array(
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
+    )
+    adata.write_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+
+    result = bridge.getObsCategories(["s1"], "polarity")
+
+    assert [c["category"] for c in result] == ["negative", "positive"]
+
+
 def test_get_spectrum_url_returns_plot_for_saved_spectrum(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()

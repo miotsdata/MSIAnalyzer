@@ -9,6 +9,15 @@ from PySide6.QtCore import Qt
 from scipy.sparse import csr_matrix
 
 
+def _as_list(value):
+    """A QML `property var` list read back via `.property()` — a
+    QVariantList (e.g. assigned straight from a Python `Slot(list)`
+    result, like `obsCategoryLegend`) already comes back as a plain
+    `list`; a JS array built inside QML itself (e.g. `.map()`, like
+    `featureLabels`) comes back wrapped and needs `.toVariant()`."""
+    return value.toVariant() if hasattr(value, "toVariant") else value
+
+
 def _open_visual_tab(view, root, find_visual_child, qtbot):
     nav_button = find_visual_child(root, "navButton_3")
     center = nav_button.mapToScene(nav_button.boundingRect().center()).toPoint()
@@ -99,8 +108,11 @@ def test_visual_sample_visibility_toggle_removes_tile(
     assert find_visual_child(root, "heatmapTile_s1") is not None
 
 
-def _write_sample_h5ad(path, mz=150.0, values=(0.0, 10.0, 5.0, 15.0)):
+def _write_sample_h5ad(path, mz=150.0, values=(0.0, 10.0, 5.0, 15.0), obs_columns=None):
     obs = pd.DataFrame(index=["a", "b", "c", "d"])
+    if obs_columns:
+        for name, column_values in obs_columns.items():
+            obs[name] = column_values
     var = pd.DataFrame({"mz": [mz]}, index=[f"mz_{mz:.4f}"])
     X = csr_matrix(np.array(values, dtype=np.float32).reshape(-1, 1))
     adata = ad.AnnData(X=X, obs=obs, var=var)
@@ -599,3 +611,227 @@ def test_vmin_vmax_labels_show_auto_range_while_autoscale_is_on(
     vmax_label = find_visual_child(root, "vmaxValueLabel")
     assert vmin_label.property("text") == "vmin: 0.500"
     assert vmax_label.property("text") == "vmax: 42.750"
+
+
+def _switch_to_obs_mode(view, root, find_visual_child, qtbot):
+    obs_button = find_visual_child(root, "obsModeButton")
+    center = obs_button.mapToScene(obs_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+
+def test_show_mode_buttons_default_to_feature(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    feature_button = find_visual_child(root, "featureModeButton")
+    obs_button = find_visual_child(root, "obsModeButton")
+    assert feature_button.property("highlighted") is True
+    assert obs_button.property("highlighted") is False
+
+    feature_combo = find_visual_child(root, "featureCombo")
+    obs_combo = find_visual_child(root, "obsColumnCombo")
+    assert feature_combo.property("visible") is True
+    assert obs_combo.property("visible") is False
+
+
+def test_obs_mode_button_switches_selector_and_hides_layer_toggle(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns={"tic": [1.0, 2.0, 3.0, 4.0]})
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns={"tic": [1.0, 2.0, 3.0, 4.0]})
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("inspectionMode") == "obs"
+
+    feature_combo = find_visual_child(root, "featureCombo")
+    obs_combo = find_visual_child(root, "obsColumnCombo")
+    assert feature_combo.property("visible") is False
+    assert obs_combo.property("visible") is True
+
+    raw_button = find_visual_child(root, "rawLayerButton")
+    assert raw_button.property("visible") is False
+
+
+def test_obs_column_combo_lists_numeric_and_categorical_columns(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {
+        "tic": [1.0, 2.0, 3.0, 4.0],
+        "polarity": ["positive", "positive", "negative", "negative"],
+    }
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    obs_combo = find_visual_child(root, "obsColumnCombo")
+    labels = obs_combo.property("model")
+    assert "tic" in labels
+    assert "polarity (categories)" in labels
+
+
+def test_selecting_numeric_obs_column_shows_color_scale_controls(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {"tic": [1.0, 2.0, 3.0, 4.0]}
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("isSelectedObsNumeric") is True
+
+    colormap_combo = find_visual_child(root, "colormapCombo")
+    autoscale_checkbox = find_visual_child(root, "autoScaleCheckBox")
+    assert colormap_combo.property("visible") is True
+    assert autoscale_checkbox.property("visible") is True
+
+
+def test_selecting_categorical_obs_column_hides_color_scale_and_shows_legend(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {"polarity": ["positive", "positive", "negative", "negative"]}
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("isSelectedObsNumeric") is False
+
+    colormap_combo = find_visual_child(root, "colormapCombo")
+    autoscale_checkbox = find_visual_child(root, "autoScaleCheckBox")
+    assert colormap_combo.property("visible") is False
+    assert autoscale_checkbox.property("visible") is False
+
+    legend = _as_list(section.property("obsCategoryLegend"))
+    assert sorted(c["category"] for c in legend) == ["negative", "positive"]
+
+    legend_row_negative = find_visual_child(root, "obsCategoryLegendRow_negative")
+    assert legend_row_negative is not None
+
+
+def test_obs_category_colors_stable_when_sample_hidden(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # A category's color must not depend on which samples are currently
+    # visible — getObsCategories is always called with every sample, not
+    # visibleSampleNames(), so hiding s2 (whose only category is
+    # "negative") must not make "negative" disappear from s1's legend/colors.
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns={"polarity": ["positive"] * 4})
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns={"polarity": ["negative"] * 4})
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    legend_before = sorted(
+        c["category"] for c in _as_list(section.property("obsCategoryLegend"))
+    )
+    assert legend_before == ["negative", "positive"]
+
+    checkbox = find_visual_child(root, "sampleVisibility_s2")
+    _scroll_controls_panel_to(root, find_visual_child, checkbox)
+    center = checkbox.mapToScene(checkbox.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    legend_after = sorted(
+        c["category"] for c in _as_list(section.property("obsCategoryLegend"))
+    )
+    assert legend_after == ["negative", "positive"]
+
+
+def test_numeric_obs_tile_loads_an_image(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {"tic": [1.0, 2.0, 3.0, 4.0]}
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    tile = find_visual_child(root, "heatmapImage_s1")
+    image = find_visual_child(tile, "zoomableImageContent")
+    qtbot.waitUntil(lambda: image.property("sourceSize").width() > 0, timeout=2000)
+
+    assert image.property("sourceSize").width() == 2
+    assert image.property("sourceSize").height() == 2
+
+
+def test_categorical_obs_tile_loads_an_image(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {"polarity": ["positive", "positive", "negative", "negative"]}
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    tile = find_visual_child(root, "heatmapImage_s1")
+    image = find_visual_child(tile, "zoomableImageContent")
+    qtbot.waitUntil(lambda: image.property("sourceSize").width() > 0, timeout=2000)
+
+    assert image.property("sourceSize").width() == 2
+    assert image.property("sourceSize").height() == 2
+
+
+def test_switching_back_to_feature_mode_restores_feature_controls(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {"tic": [1.0, 2.0, 3.0, 4.0]}
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    feature_button = find_visual_child(root, "featureModeButton")
+    center = feature_button.mapToScene(feature_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("inspectionMode") == "feature"
+
+    feature_combo = find_visual_child(root, "featureCombo")
+    raw_button = find_visual_child(root, "rawLayerButton")
+    assert feature_combo.property("visible") is True
+    assert raw_button.property("visible") is True

@@ -119,6 +119,50 @@ class AnalysisBridge(QObject):
         """
         return self.heatmap_provider.getFeatureValueRange(sample_names, mz, layer)
 
+    @Slot(list, result=list)
+    def getObsColumns(self, sample_names: list) -> list:
+        """`adata.obs` columns Visual Inspection can overlay instead of a
+        feature — e.g. `tic`, `rt`, `polarity`. See
+        `HeatmapImageProvider.getObsColumns`.
+
+        Args:
+            sample_names: Samples to look for a readable `.h5ad` in —
+                normally every sample of the analysis (the schema is the
+                same across all of them), not just the visible ones.
+
+        Returns:
+            `[{"name": ..., "numeric": bool}, ...]`.
+        """
+        return self.heatmap_provider.getObsColumns(sample_names)
+
+    @Slot(list, str, result=dict)
+    def getObsValueRange(self, sample_names: list, obs_column: str) -> dict:
+        """The real (min, max) of one numeric `obs` column across
+        `sample_names` — the `obs`-column analogue of `getFeatureValueRange`.
+        See `HeatmapImageProvider.getObsValueRange`.
+
+        Returns:
+            `{"vmin": ..., "vmax": ...}`.
+        """
+        return self.heatmap_provider.getObsValueRange(sample_names, obs_column)
+
+    @Slot(list, str, result=list)
+    def getObsCategories(self, sample_names: list, obs_column: str) -> list:
+        """Every distinct category of one discrete `obs` column, combined
+        across `sample_names`, colored in the fixed order every tile's
+        render call must also use. See
+        `HeatmapImageProvider.getObsCategories`.
+
+        Args:
+            sample_names: Normally every sample of the analysis, not just
+                the visible ones, so colors stay stable as visibility is
+                toggled.
+
+        Returns:
+            `[{"category": ..., "color": "#rrggbb"}, ...]`, sorted.
+        """
+        return self.heatmap_provider.getObsCategories(sample_names, obs_column)
+
     @Slot(str, result=dict)
     def getSummary(self, analysis_db_path: str) -> dict:
         """Headline counts for the Summary section.
