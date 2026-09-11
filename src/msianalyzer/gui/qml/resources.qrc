@@ -13,5 +13,7 @@
         <file>Views/AnnotationsSection.qml</file>
         <file>Views/AnnotationCandidatesPopup.qml</file>
         <file>Views/MS1SpectraSection.qml</file>
+        <file>Views/VisualInspectionSection.qml</file>
+        <file>Views/ZoomableImage.qml</file>
     </qresource>
 </RCC>

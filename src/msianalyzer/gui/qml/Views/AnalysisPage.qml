@@ -95,14 +95,11 @@ Page {
                     source: "qrc:/Views/AnnotationsSection.qml"
                     onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
                 }
-                Item {
-                    objectName: "comingSoon_visual"
-                    Text {
-                        anchors.centerIn: parent
-                        text: "Visual Inspection — coming soon"
-                        font.pixelSize: 16
-                        color: "gray"
-                    }
+                Loader {
+                    id: visualLoader
+                    objectName: "visualSectionLoader"
+                    source: "qrc:/Views/VisualInspectionSection.qml"
+                    onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
                 }
             }
         }

@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from msianalyzer.core import analysis_db
 from msianalyzer.core.plotting.plotter import Plotter
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
+from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +64,28 @@ class AnalysisBridge(QObject):
 
     spectrumPointClicked = Signal(float)
 
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        # Owned here (rather than constructed in main.py) so Application is
+        # the single place that wires up an AnalysisBridge; main.py just
+        # registers it with the engine (`engine.addImageProvider("heatmap",
+        # application.analysis_bridge.heatmap_provider)`).
+        self.heatmap_provider = HeatmapImageProvider()
+
     @Slot(float)
     def onSpectrumPointClicked(self, mz: float) -> None:
         """Called from JS (via the `WebChannel`) when a spectrum point is
         clicked; re-emitted as `spectrumPointClicked` for QML to connect to."""
         self.spectrumPointClicked.emit(mz)
+
+    @Slot(str)
+    def setHeatmapAnalysis(self, analysis_db_path: str) -> None:
+        """Point the `image://heatmap/...` provider at this analysis.
+
+        Called once when the Visual Inspection section loads (there's only
+        ever one active analysis workspace at a time).
+        """
+        self.heatmap_provider.setAnalysisDbPath(analysis_db_path)
 
     @Slot(str, result=dict)
     def getSummary(self, analysis_db_path: str) -> dict:
@@ -265,3 +283,18 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             "n_ms2": n_ms2,
             "top_hits": top_hits,
         }
+
+    @Slot(str, result=list)
+    def getFeatureList(self, analysis_db_path: str) -> list:
+        """Every feature for the Visual Inspection section's feature selector.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+
+        Returns:
+            Records (`feature_id`, `mz`, `compound_name`) from
+            `analysis_db.load_feature_list`, ordered by `mz`.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        return _dataframe_to_records(analysis_db.load_feature_list(analysis_db_path))

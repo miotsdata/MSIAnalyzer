@@ -826,3 +826,33 @@ def load_feature_ms2_count(db_path: Path | str, feature_id: int) -> int:
         except sqlite3.OperationalError:
             return 0
     return int(row[0]) if row is not None else 0
+
+
+@log_call(source="db_path")
+def load_feature_list(db_path: Path | str) -> pd.DataFrame:
+    """Every feature, with its best (highest-score) compound name if any.
+
+    For the Visual Inspection section's feature selector: features get
+    labelled by compound name when annotated, else by bare m/z.
+
+    Returns:
+        A DataFrame with `feature_id`, `mz`, `compound_name` (`None` when
+        unannotated), ordered by `mz`. Empty when there are no features.
+    """
+    sql = """
+        SELECT f.feature_id, f.mz, best.compound_name
+        FROM features f
+        LEFT JOIN (
+            SELECT feature_id, compound_name,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY feature_id ORDER BY best_score DESC
+                   ) AS rn
+            FROM feature_compound_scores
+        ) best ON best.feature_id = f.feature_id AND best.rn = 1
+        ORDER BY f.mz
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()

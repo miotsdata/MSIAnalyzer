@@ -15,6 +15,7 @@ from msianalyzer.core.analysis_db import (
     init_analysis_db,
     is_command_already_run,
     load_feature_compound_scores,
+    load_feature_list,
     load_feature_ms2_count,
     load_features,
     load_ms2_annotations_for_feature,
@@ -530,6 +531,64 @@ def test_load_feature_ms2_count_zero_for_unknown_feature(tmp_path: Path):
     init_analysis_db(db).close()
 
     assert load_feature_ms2_count(db, 999) == 0
+
+
+# ---------------------------------------------------------------------------
+# load_feature_list
+# ---------------------------------------------------------------------------
+
+
+def test_load_feature_list_labels_annotated_and_unannotated_features(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, ?)",
+            [
+                (1, 100.0, '{"s1": 0}'),
+                (2, 200.0, '{"s1": 0}'),
+            ],
+        )
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.execute(
+            "INSERT INTO annotation_libraries (id, path, name) "
+            "VALUES (1, 'lib.db', 'my_library')"
+        )
+        con.execute(
+            "INSERT INTO ms2_associations "
+            "(sample_id, scan_id, match_key, precursor_mz, "
+            "n_features_in_window, rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 100.1, 1, 12.3, 5, 'positive')"
+        )
+        con.execute(
+            "INSERT INTO ms2_annotations "
+            "(id, feature_id, sample_id, scan_id, library_id, "
+            "library_spectrum_id, compound_name, compound_formula, inchikey, "
+            "score, dot_product_score, lib_coverage, emp_coverage, "
+            "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
+            "n_emp_peaks_filtered, rank_ms2, rank_feature) "
+            "VALUES (1, 1, 1, 42, 1, 9, 'Caffeine', 'C8H10N4O2', "
+            "'RYYVLZVUVIJVGH-UHFFFAOYSA-N', 0.87, 0.9, 0.8, 0.75, 0.77, "
+            "2, 2, 10, 3, 1, 1)"
+        )
+        con.commit()
+
+    df = load_feature_list(db)
+
+    assert list(df["feature_id"]) == [1, 2]
+    assert list(df["mz"]) == [100.0, 200.0]
+    assert df.loc[df["feature_id"] == 1, "compound_name"].iloc[0] == "Caffeine"
+    assert pd.isna(df.loc[df["feature_id"] == 2, "compound_name"].iloc[0])
+
+
+def test_load_feature_list_empty_without_features(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_feature_list(db).empty
 
 
 # ---------------------------------------------------------------------------

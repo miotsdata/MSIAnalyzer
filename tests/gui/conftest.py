@@ -259,6 +259,29 @@ def annotated_analysis_model(analysis_model):
 
 
 @pytest.fixture
+def visual_analysis_model(analysis_model):
+    """`analysis_model`, seeded with 2 samples ('s1', 's2') and 1 feature
+    (mz=150.0, unannotated) — for the Visual Inspection section's grid."""
+    import sqlite3
+
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (2, 's2', 'b.db', 'positive')"
+        )
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) "
+            "VALUES (1, 150.0, '{\"s1\": 0, \"s2\": 0}')"
+        )
+        con.commit()
+    return analysis_model
+
+
+@pytest.fixture
 def analysis_view(application):
     """Factory: build a standalone AnalysisPage view for a given AnalysisModel."""
     views = []
@@ -271,6 +294,9 @@ def analysis_view(application):
         )
         view.engine().rootContext().setContextProperty(
             "AnalysisBridge", application.analysis_bridge
+        )
+        view.engine().addImageProvider(
+            "heatmap", application.analysis_bridge.heatmap_provider
         )
         view.setInitialProperties({"analysis": analysis_model})
         view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
