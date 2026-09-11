@@ -565,6 +565,9 @@ def test_build_summary_report_writes_files(tmp_path):
     assert "href='#per-sample-counts'" in text
     assert "href='#precursor-purity'" in text
     assert "href='#mad-filter'" not in text  # filter_spectra args were empty
+    # figure titles are promoted to real HTML, not left inside the plotly
+    # layout (where they can collide with a wrapped top-anchored legend)
+    assert "<h3 class='fig-title'>Per-sample counts</h3>" in text
 
     payload = json.loads((out / "summary.json").read_text())
     assert payload["n_features"] == 3

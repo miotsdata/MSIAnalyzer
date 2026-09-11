@@ -151,6 +151,10 @@ ul.lib-list li{margin-bottom:4px}
 .stat .label{font-size:12px; color:var(--muted); margin-top:2px}
 .figure{margin-top:18px}
 .figure:first-child{margin-top:0}
+.fig-title{
+  font-size:13.5px; font-weight:600; color:var(--muted);
+  margin:0 0 4px; text-align:center;
+}
 @media (max-width:640px){
   .layout{padding:24px 14px 64px}
   section{padding:18px 18px}
@@ -1747,6 +1751,24 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
     return funnel + sentence + feat_table + lib_table
 
 
+def _fig_block(fig: go.Figure, *, include_plotlyjs: bool | str) -> str:
+    """Render one figure as an HTML block, with its title promoted to a
+    real ``<h3>`` above the plot.
+
+    Plotly's own ``title`` sits inside the figure's top margin, the same
+    region the horizontal top-anchored legend (``_LEGEND_TOP``) occupies —
+    a long title wraps to two lines and overlaps the legend. Pulling the
+    title out into HTML avoids that regardless of how many samples end up
+    in the legend.
+    """
+    title = fig.layout.title.text if fig.layout.title is not None else None
+    if title:
+        fig.update_layout(title=None)
+    body = fig.to_html(full_html=False, include_plotlyjs=include_plotlyjs)
+    heading = f"<h3 class='fig-title'>{title}</h3>" if title else ""
+    return f"<div class='figure'>{heading}{body}</div>"
+
+
 @log_call(source="analysis_db_path")
 def build_summary_report(
     analysis_db_path: Path | str,
@@ -1802,7 +1824,7 @@ def build_summary_report(
     json_path.write_text(json.dumps(stats.to_dict(), indent=2))
 
     blocks = [
-        fig.to_html(full_html=False, include_plotlyjs="cdn" if i == 0 else False)
+        _fig_block(fig, include_plotlyjs="cdn" if i == 0 else False)
         for i, fig in enumerate(core_figures + ann_figures)
     ]
     (
@@ -1810,9 +1832,6 @@ def build_summary_report(
         b_purity, b_purity_per_sample,
     ) = blocks[: len(core_figures)]
     ann_blocks = blocks[len(core_figures):]
-
-    def _fig(block: str) -> str:
-        return f"<div class='figure'>{block}</div>"
 
     # (anchor, ToC label, section body html) — skipped sections are simply
     # left out of both the ToC and the page.
@@ -1836,9 +1855,9 @@ def build_summary_report(
         (
             "per-sample-counts",
             "Per-sample counts",
-            f"{_table_html(stats.samples)}{_fig(b_per_sample)}",
+            f"{_table_html(stats.samples)}{b_per_sample}",
         ),
-        ("feature-overlap", "Feature overlap", _fig(b_overlap)),
+        ("feature-overlap", "Feature overlap", b_overlap),
     ]
     if stats.mad_filter is not None:
         sections.append(
@@ -1848,8 +1867,8 @@ def build_summary_report(
         (
             "ms2-association",
             "MS2 association",
-            _fig(b_ms2) + _fig(b_ms2_per_sample)
-            + _recheck_sentence(stats.recheck) + _fig(b_recheck),
+            b_ms2 + b_ms2_per_sample
+            + _recheck_sentence(stats.recheck) + b_recheck,
         )
     )
     sections.append(
@@ -1857,7 +1876,7 @@ def build_summary_report(
             "precursor-purity",
             "Precursor purity",
             _assoc_purity_sentence(stats.associated_purity)
-            + _fig(b_purity) + _fig(b_purity_per_sample),
+            + b_purity + b_purity_per_sample,
         )
     )
     if ann is not None:
@@ -1865,8 +1884,7 @@ def build_summary_report(
             (
                 "ms2-annotation",
                 "MS2 annotation",
-                _annotation_section_html(ann)
-                + "".join(_fig(b) for b in ann_blocks),
+                _annotation_section_html(ann) + "".join(ann_blocks),
             )
         )
 
