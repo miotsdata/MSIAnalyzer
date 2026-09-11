@@ -415,3 +415,161 @@ def test_heatmap_tile_width_is_80_percent_of_flickable_width(
     tile = find_visual_child(root, "heatmapTile_s1")
 
     assert tile.width() == pytest.approx(flickable.width() * 0.8, rel=0.02)
+
+
+def test_controls_panel_width_gives_slider_row_breathing_room(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    flickable = find_visual_child(root, "controlsFlickable")
+    assert flickable.width() == 300
+
+
+def test_long_sample_name_is_truncated_with_full_name_in_tooltip(
+    analysis_view, project, find_visual_child, qtbot, tmp_path
+):
+    import sqlite3
+
+    from msianalyzer.gui.models.analysis import AnalysisModel
+    from msianalyzer.gui.models.project import ProjectModel
+    from msianalyzer.core.analysis_db import init_analysis_db
+
+    long_name = "1_Matrice_2_DAN_25um_msms_neg_sample_acquisition"
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    db_path = out_dir / "analysis_test-run.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, ?, 'a.db', 'positive')",
+            (long_name,),
+        )
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) "
+            "VALUES (1, 150.0, '{}')"
+        )
+        con.commit()
+    run_dict = {
+        "id": "test-run",
+        "start_date": "2026-01-01 12:00:00",
+        "config": {
+            "io": {"out_dir": str(out_dir)},
+            "analysis": {"db_name": db_path.name},
+        },
+    }
+    project_model = ProjectModel(project, str(tmp_path))
+    model = AnalysisModel(project_model, "test-run", run_dict)
+
+    view = analysis_view(model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    checkbox = find_visual_child(root, "sampleVisibility_" + long_name)
+    assert checkbox is not None
+    assert checkbox.property("text") != long_name
+    assert len(checkbox.property("text")) < len(long_name)
+    assert checkbox.property("text").endswith("…")
+    assert checkbox.property("fullName") == long_name
+
+
+def test_global_scale_toggle_was_removed(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    assert find_visual_child(root, "globalScaleCheckBox") is None
+
+
+def test_vmin_vmax_controls_are_visibly_dimmed_when_autoscale_is_on(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    vmin_label = find_visual_child(root, "vminValueLabel")
+    vmin_group = vmin_label.parent()
+    assert vmin_group.property("enabled") is False
+    assert vmin_group.property("opacity") == pytest.approx(0.4)
+
+    _disable_autoscale(view, root, find_visual_child, qtbot)
+    assert vmin_group.property("enabled") is True
+    assert vmin_group.property("opacity") == pytest.approx(1.0)
+
+
+def test_raw_tic_buttons_show_distinct_selected_color(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("dataLayer") == "TIC"
+
+    raw_button = find_visual_child(root, "rawLayerButton")
+    tic_button = find_visual_child(root, "ticLayerButton")
+    assert raw_button.property("highlighted") is False
+    assert tic_button.property("highlighted") is True
+
+    center = raw_button.mapToScene(raw_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert raw_button.property("highlighted") is True
+    assert tic_button.property("highlighted") is False
+
+
+def test_switching_layer_resets_to_autoscale(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Reported: vmin/vmax "remain with the value of tic" after switching
+    # to raw — a manually-set TIC-scale range is meaningless for raw
+    # data, so the layer switch now falls back to autoscale instead of
+    # silently reusing a stale range.
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _disable_autoscale(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("autoScale") is False
+
+    raw_button = find_visual_child(root, "rawLayerButton")
+    center = raw_button.mapToScene(raw_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert section.property("dataLayer") == "raw"
+    assert section.property("autoScale") is True
+
+
+def test_typing_a_large_vmax_expands_slider_ceiling_immediately(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Reported as needing many Apply-doubling round trips ("16... 32...
+    # 64...") to reach a value far from the current one — typing directly
+    # now expands the slider's range in one step instead.
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _disable_autoscale(view, root, find_visual_child, qtbot)
+
+    vmax_field = find_visual_child(root, "vmaxField")
+    vmax_slider = find_visual_child(root, "vmaxSlider")
+    ceiling_before = vmax_slider.property("to")
+
+    vmax_field.setProperty("text", "5000")
+    vmax_field.editingFinished.emit()
+    qtbot.wait(50)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("draftVmax") == pytest.approx(5000)
+    assert vmax_slider.property("to") > ceiling_before
+    assert vmax_slider.property("to") >= 5000

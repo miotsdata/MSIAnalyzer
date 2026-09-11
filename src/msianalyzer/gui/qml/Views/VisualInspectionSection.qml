@@ -63,10 +63,29 @@ Item {
     property real vmax: 10
     property real draftVmin: vmin
     property real draftVmax: vmax
+    // The vmax slider's ceiling is normally Math.max(1, vmax * 2) — see
+    // vmaxSlider below — but that only grows by 2x per Apply click, which
+    // takes many round trips to cross the raw/TIC scale gap (reported:
+    // "16, then... 32... then... 64", many clicks to get anywhere near a
+    // useful raw-layer value). Typing a value directly in the field
+    // bumps this immediately instead, expanding the slider to match in
+    // one step rather than waiting on repeated apply-doubling.
+    property real vmaxCeilingOverride: 0
     property bool autoScale: true
-    property bool globalScale: true
     property string dataLayer: "TIC"
     property var hiddenSamples: ({})
+
+    // Switching layers changes the data's whole scale (TIC is
+    // log1p-transformed, raw isn't) — a manually-set range from one
+    // layer is essentially meaningless on the other (reported: vmin/vmax
+    // "remain with the value of tic" after switching to raw). Falling
+    // back to autoscale re-renders correctly for the new layer
+    // immediately; turning autoscale back off afterward starts fresh
+    // rather than carrying over a stale range.
+    onDataLayerChanged: {
+        visualSection.autoScale = true
+        visualSection.vmaxCeilingOverride = 0
+    }
 
     function isHidden(name) {
         return !!visualSection.hiddenSamples[name]
@@ -86,14 +105,13 @@ Item {
         visualSection.vmax = visualSection.draftVmax
     }
 
-    // Every tile shares this token pair unless "per-sample" scaling is
-    // chosen, in which case each tile autoscales independently to its own
-    // data rather than a shared range.
+    // Every tile shares this vmin/vmax unless autoscale is on, in which
+    // case each tile scales independently to its own data.
     function vminToken() {
-        return (visualSection.globalScale && !visualSection.autoScale) ? String(visualSection.vmin) : "auto"
+        return visualSection.autoScale ? "auto" : String(visualSection.vmin)
     }
     function vmaxToken() {
-        return (visualSection.globalScale && !visualSection.autoScale) ? String(visualSection.vmax) : "auto"
+        return visualSection.autoScale ? "auto" : String(visualSection.vmax)
     }
 
     onAnalysisChanged: {
@@ -119,9 +137,13 @@ Item {
         Flickable {
             id: controlsFlickable
             objectName: "controlsFlickable"
-            Layout.preferredWidth: 260
-            Layout.minimumWidth: 260
-            Layout.maximumWidth: 260
+            // Widened from 260 — the vmin/vmax slider+field rows were
+            // fitting with ~0px to spare, and reportedly clipping in
+            // practice (font-metric/rendering differences from this
+            // sandbox's offscreen-platform measurements, most likely).
+            Layout.preferredWidth: 300
+            Layout.minimumWidth: 300
+            Layout.maximumWidth: 300
             Layout.fillHeight: true
             clip: true
             contentWidth: width
@@ -172,12 +194,29 @@ Item {
                 // run in 3). `highlighted` here is a one-directional
                 // binding and `onClicked` a discrete user action, so there's
                 // no property/signal cycle to race.
+                //
+                // Selected state is drawn explicitly (background/text
+                // color) rather than relying on `highlighted`'s own
+                // rendering — reported as "not so clear which one is
+                // selected" under Fusion's fairly subtle highlighted look.
                 Button {
                     id: rawLayerButton
                     objectName: "rawLayerButton"
                     text: "Raw"
                     highlighted: visualSection.dataLayer === "raw"
                     onClicked: visualSection.dataLayer = "raw"
+                    background: Rectangle {
+                        radius: 4
+                        color: rawLayerButton.highlighted ? "#0078d4" : "#e6e6e6"
+                        border.color: "#a0a0a0"
+                    }
+                    contentItem: Text {
+                        text: rawLayerButton.text
+                        color: rawLayerButton.highlighted ? "#ffffff" : "#202020"
+                        font.bold: rawLayerButton.highlighted
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
                 Button {
                     id: ticLayerButton
@@ -185,6 +224,18 @@ Item {
                     text: "TIC"
                     highlighted: visualSection.dataLayer === "TIC"
                     onClicked: visualSection.dataLayer = "TIC"
+                    background: Rectangle {
+                        radius: 4
+                        color: ticLayerButton.highlighted ? "#0078d4" : "#e6e6e6"
+                        border.color: "#a0a0a0"
+                    }
+                    contentItem: Text {
+                        text: ticLayerButton.text
+                        color: ticLayerButton.highlighted ? "#ffffff" : "#202020"
+                        font.bold: ticLayerButton.highlighted
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
             }
 
@@ -206,16 +257,13 @@ Item {
                 checked: visualSection.autoScale
                 onToggled: visualSection.autoScale = checked
             }
-            CheckBox {
-                id: globalScaleCheckBox
-                objectName: "globalScaleCheckBox"
-                text: "Global (vs. per-sample) scale"
-                checked: visualSection.globalScale
-                enabled: !visualSection.autoScale
-                onToggled: visualSection.globalScale = checked
-            }
             ColumnLayout {
                 enabled: !visualSection.autoScale
+                // Disabled controls default to a subtle/style-dependent
+                // dimming that wasn't obviously "disabled" against the
+                // new light palette — an explicit opacity makes it
+                // unambiguous regardless of style.
+                opacity: enabled ? 1.0 : 0.4
                 Layout.fillWidth: true
                 spacing: 2
                 Text {
@@ -251,6 +299,7 @@ Item {
             }
             ColumnLayout {
                 enabled: !visualSection.autoScale
+                opacity: enabled ? 1.0 : 0.4
                 Layout.fillWidth: true
                 spacing: 2
                 Text {
@@ -263,7 +312,13 @@ Item {
                         objectName: "vmaxSlider"
                         Layout.fillWidth: true
                         from: 0
-                        to: Math.max(1, visualSection.vmax * 2)
+                        // Grows with the *applied* vmax (stable through a
+                        // drag, see vminSlider above) but also jumps ahead
+                        // immediately when a value is typed directly
+                        // (vmaxField below) — waiting for repeated
+                        // Apply-doubling to cross a big gap (e.g. TIC's
+                        // log1p scale to raw's) took many round trips.
+                        to: Math.max(1, visualSection.vmax * 2, visualSection.vmaxCeilingOverride)
                         value: visualSection.draftVmax
                         onMoved: visualSection.draftVmax = value
                     }
@@ -274,7 +329,10 @@ Item {
                         text: visualSection.draftVmax.toFixed(3)
                         onEditingFinished: {
                             var v = parseFloat(text)
-                            if (!isNaN(v)) visualSection.draftVmax = v
+                            if (!isNaN(v)) {
+                                visualSection.draftVmax = v
+                                visualSection.vmaxCeilingOverride = v * 1.2
+                            }
                         }
                     }
                 }
@@ -311,7 +369,19 @@ Item {
 
                 delegate: CheckBox {
                     objectName: "sampleVisibility_" + modelData.name
-                    text: modelData.name
+                    // Truncated — real sample names (from the mzML
+                    // filename) can be long enough to overflow the panel
+                    // on their own; CheckBox doesn't elide its own label.
+                    // Full name still available via the tooltip.
+                    text: modelData.name.length > 24
+                          ? modelData.name.substring(0, 22) + "…" : modelData.name
+                    Layout.fillWidth: true
+                    // Attached properties (ToolTip.*) aren't readable via
+                    // QObject.property() from Python, so the full name is
+                    // also a plain property here for tests to read.
+                    property string fullName: modelData.name
+                    ToolTip.visible: hovered
+                    ToolTip.text: fullName
                     // `checked` is seeded once, NOT bound to
                     // `!isHidden(name)` — toggleSample() *inverts*
                     // hiddenSamples, so a live binding here would
