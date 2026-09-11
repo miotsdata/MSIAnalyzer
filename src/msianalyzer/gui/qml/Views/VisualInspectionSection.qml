@@ -44,8 +44,18 @@ Item {
     property int gridRows: 1
     property int gridCols: Math.max(1, Math.min(4, visualSection.samples.length))
     property string colormap: "viridis"
+    // vmin/vmax as actually *applied* to rendering (what vminToken/
+    // vmaxToken below read) — separate from the slider/field's draft
+    // values so dragging the slider doesn't re-render every tile on
+    // every intermediate tick. draftVmin/Max start out tracking vmin/vmax
+    // declaratively; the first slider drag or text edit breaks that
+    // binding for the rest of the session (normal QML "last assignment
+    // wins"), which is fine here since nothing else ever changes vmin/
+    // vmax except applyColorRange() copying the draft into it.
     property real vmin: 0
     property real vmax: 1000
+    property real draftVmin: vmin
+    property real draftVmax: vmax
     property bool autoScale: true
     property bool globalScale: true
     property string dataLayer: "TIC"
@@ -59,6 +69,14 @@ Item {
         var copy = Object.assign({}, visualSection.hiddenSamples)
         copy[name] = !copy[name]
         visualSection.hiddenSamples = copy
+    }
+
+    // Commits the slider/field's draft vmin/vmax to the applied values
+    // every tile actually renders with — a deliberate action rather than
+    // every drag tick re-rendering every visible tile.
+    function applyColorRange() {
+        visualSection.vmin = visualSection.draftVmin
+        visualSection.vmax = visualSection.draftVmax
     }
 
     // Every tile shares this token pair unless "per-sample" scaling is
@@ -197,18 +215,18 @@ Item {
                     objectName: "vminSlider"
                     Layout.fillWidth: true
                     from: 0
-                    to: Math.max(1, visualSection.vmax)
-                    value: visualSection.vmin
-                    onMoved: visualSection.vmin = value
+                    to: Math.max(1, visualSection.draftVmax)
+                    value: visualSection.draftVmin
+                    onMoved: visualSection.draftVmin = value
                 }
                 TextField {
                     id: vminField
                     objectName: "vminField"
                     Layout.preferredWidth: 70
-                    text: visualSection.vmin.toFixed(2)
+                    text: visualSection.draftVmin.toFixed(2)
                     onEditingFinished: {
                         var v = parseFloat(text)
-                        if (!isNaN(v)) visualSection.vmin = v
+                        if (!isNaN(v)) visualSection.draftVmin = v
                     }
                 }
             }
@@ -220,20 +238,30 @@ Item {
                     objectName: "vmaxSlider"
                     Layout.fillWidth: true
                     from: 0
-                    to: Math.max(1, visualSection.vmax * 2)
-                    value: visualSection.vmax
-                    onMoved: visualSection.vmax = value
+                    to: Math.max(1, visualSection.draftVmax * 2)
+                    value: visualSection.draftVmax
+                    onMoved: visualSection.draftVmax = value
                 }
                 TextField {
                     id: vmaxField
                     objectName: "vmaxField"
                     Layout.preferredWidth: 70
-                    text: visualSection.vmax.toFixed(2)
+                    text: visualSection.draftVmax.toFixed(2)
                     onEditingFinished: {
                         var v = parseFloat(text)
-                        if (!isNaN(v)) visualSection.vmax = v
+                        if (!isNaN(v)) visualSection.draftVmax = v
                     }
                 }
+            }
+            Button {
+                id: applyColorRangeButton
+                objectName: "applyColorRangeButton"
+                text: "Apply color range"
+                Layout.fillWidth: true
+                enabled: !visualSection.autoScale
+                       && (visualSection.draftVmin !== visualSection.vmin
+                           || visualSection.draftVmax !== visualSection.vmax)
+                onClicked: visualSection.applyColorRange()
             }
 
             // Rows/cols picking is disabled for now — the grid was too

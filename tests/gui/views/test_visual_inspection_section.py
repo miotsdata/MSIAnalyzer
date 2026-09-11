@@ -296,3 +296,63 @@ def test_sort_mode_combo_reflects_default_mz_sort(
 
     sort_combo = find_visual_child(root, "sortModeCombo")
     assert sort_combo.property("currentIndex") == 0
+
+
+def _disable_autoscale(view, root, find_visual_child, qtbot):
+    autoscale_checkbox = find_visual_child(root, "autoScaleCheckBox")
+    center = autoscale_checkbox.mapToScene(
+        autoscale_checkbox.boundingRect().center()
+    ).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+
+def test_moving_vmin_slider_does_not_re_render_until_apply_clicked(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Dragging vmin/vmax used to re-render every visible tile on every
+    # intermediate tick (each write went straight into vminToken()/
+    # vmaxToken(), which every tile's `source` depends on) — draft values
+    # are separate from what's actually applied until "Apply" is clicked.
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _disable_autoscale(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    original_vmin = section.property("vmin")
+
+    section.setProperty("draftVmin", original_vmin + 500)
+    qtbot.wait(50)
+
+    assert section.property("vmin") == original_vmin
+    assert section.vminToken() == "auto" or "500" not in section.vminToken()
+
+    apply_button = find_visual_child(root, "applyColorRangeButton")
+    assert apply_button.property("enabled") is True
+    center = apply_button.mapToScene(apply_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert section.property("vmin") == original_vmin + 500
+
+
+def test_apply_button_disabled_when_draft_matches_applied(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _disable_autoscale(view, root, find_visual_child, qtbot)
+
+    apply_button = find_visual_child(root, "applyColorRangeButton")
+    assert apply_button.property("enabled") is False
+
+    section = find_visual_child(root, "visualSection")
+    section.setProperty("draftVmax", section.property("vmax") + 10)
+    qtbot.wait(50)
+    assert apply_button.property("enabled") is True
+
+    section.applyColorRange()
+    qtbot.wait(50)
+    assert apply_button.property("enabled") is False
