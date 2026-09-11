@@ -16,6 +16,35 @@ ApplicationWindow {
     minimumHeight: 700
     title: "MSIAnalyzer"
 
+    // Explicit light palette, not just "Fusion instead of Material" —
+    // Fusion (like Basic) still follows the host desktop's own palette
+    // via GTK platform-theme integration, so it stayed dark on a system
+    // with GNOME's dark theme on, same as the very first report. `palette`
+    // is a QQuickItem-inherited property (not style-specific — Fusion,
+    // Basic, Material, Universal all read from it), so setting it once
+    // here cascades to every control in the app regardless of the host
+    // theme, without going back to Material (whose native-FileDialog
+    // combination froze the app).
+    palette {
+        window: "#f5f5f5"
+        windowText: "#202020"
+        base: "#ffffff"
+        alternateBase: "#eeeeee"
+        text: "#202020"
+        button: "#e6e6e6"
+        buttonText: "#202020"
+        toolTipBase: "#ffffe1"
+        toolTipText: "#202020"
+        placeholderText: "#808080"
+        highlight: "#0078d4"
+        highlightedText: "#ffffff"
+        light: "#ffffff"
+        midlight: "#f0f0f0"
+        mid: "#c0c0c0"
+        dark: "#a0a0a0"
+        shadow: "#000000"
+    }
+
     StackView {
         id: stackView
         objectName: "stackView"
