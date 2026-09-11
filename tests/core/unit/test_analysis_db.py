@@ -15,6 +15,7 @@ from msianalyzer.core.analysis_db import (
     is_command_already_run,
     load_feature_compound_scores,
     load_features,
+    load_ms2_annotations_for_feature,
     load_summary_counts,
     log_command,
     register_sample,
@@ -398,6 +399,51 @@ def test_load_summary_counts_with_annotations(tmp_path: Path):
     assert counts["annotation_ran"] is True
     assert counts["n_annotated_features"] == 2  # features 7 and 9
     assert counts["n_distinct_compounds"] == 3  # AAA, BBB, CCC
+
+
+# ---------------------------------------------------------------------------
+# load_ms2_annotations_for_feature
+# ---------------------------------------------------------------------------
+
+
+def test_load_ms2_annotations_for_feature_returns_every_candidate(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (2, 's2', 'b.db', 'positive')"
+        )
+        con.commit()
+    _seed_two_feature_annotations(db)
+
+    df = load_ms2_annotations_for_feature(db, 7)
+
+    # feature 7 has 5 rows: AAA x3, BBB x1, plus one NULL-inchikey row (that
+    # feature_compound_scores excludes but this raw candidate list doesn't)
+    assert len(df) == 5
+    assert set(df["sample_name"]) == {"s1"}
+    assert set(df["library_name"]) == {"lib"}
+    assert (df["score"].iloc[0] >= df["score"].iloc[-1]) or df["rank_feature"].notna().any()
+
+
+def test_load_ms2_annotations_for_feature_empty_for_unknown_feature(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_annotations(db)
+
+    assert load_ms2_annotations_for_feature(db, 999).empty
+
+
+def test_load_ms2_annotations_for_feature_empty_db(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_ms2_annotations_for_feature(db, 1).empty
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import PySide6
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QUrl
+from PySide6.QtWebEngineQuick import QtWebEngineQuick
 from pathlib import Path
 import logging
 
@@ -45,6 +46,9 @@ def build_engine(
 
 def main() -> int:
     configure_logging(level=logging.DEBUG)
+    # Must run before the QGuiApplication is constructed — used by
+    # WebEngineView (Annotations mirror plots, MS1 spectra).
+    QtWebEngineQuick.initialize()
     app = QGuiApplication(sys.argv)
 
     # Add bindings

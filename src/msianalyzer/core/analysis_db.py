@@ -663,6 +663,45 @@ def load_feature_compound_scores(
             return pd.DataFrame()
 
 
+@log_call(source="db_path")
+def load_ms2_annotations_for_feature(
+    db_path: Path | str, feature_id: int
+) -> pd.DataFrame:
+    """Every `ms2_annotations` candidate row for one feature.
+
+    Unlike `feature_compound_scores` (best row per *distinct compound*),
+    this is every row — every (sample, scan, library candidate) — with the
+    sample and library name joined in for display. Used by the GUI
+    Annotations section's per-feature candidate popup.
+
+    Args:
+        db_path: The analysis database.
+        feature_id: The feature to fetch candidates for.
+
+    Returns:
+        A DataFrame ordered by `rank_feature`, then `score` desc. Empty
+        when the feature has no annotation rows (or annotation never ran).
+    """
+    sql = """
+        SELECT a.id, a.sample_id, s.name AS sample_name, a.scan_id,
+               a.library_id, lib.name AS library_name, a.compound_name,
+               a.compound_formula, a.inchikey, a.score, a.dot_product_score,
+               a.lib_coverage, a.emp_coverage, a.n_matched_peaks,
+               a.n_lib_peaks, a.rank_ms2, a.rank_feature,
+               a.rank_feature_sample
+        FROM ms2_annotations a
+        LEFT JOIN samples s ON s.sample_id = a.sample_id
+        LEFT JOIN annotation_libraries lib ON lib.id = a.library_id
+        WHERE a.feature_id = ?
+        ORDER BY a.rank_feature, a.score DESC
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con, params=(int(feature_id),))
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
 def _scalar_count(con: sqlite3.Connection, sql: str) -> int:
     try:
         row = con.execute(sql).fetchone()

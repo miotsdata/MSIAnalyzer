@@ -10,5 +10,7 @@
         <file>Views/RunningAnalysisPage.qml</file>
         <file>Views/AnalysisPage.qml</file>
         <file>Views/SummarySection.qml</file>
+        <file>Views/AnnotationsSection.qml</file>
+        <file>Views/AnnotationCandidatesPopup.qml</file>
     </qresource>
 </RCC>

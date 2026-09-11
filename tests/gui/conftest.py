@@ -1,6 +1,14 @@
 # tests/gui/conftest.py
 import subprocess
 import pytest
+
+# Must run before any QApplication/QGuiApplication is constructed — pytest-qt's
+# `qapp` fixture builds one lazily, but not before this module is imported, so
+# module-import time is early enough. Needed by WebEngineView-based views.
+from PySide6.QtWebEngineQuick import QtWebEngineQuick
+
+QtWebEngineQuick.initialize()
+
 from msianalyzer.core.project.project import Project
 from msianalyzer.gui.main import build_engine
 from msianalyzer.gui.utils import Router
@@ -205,6 +213,49 @@ def analysis_model(tmp_path, project):
     }
     project_model = ProjectModel(project, str(tmp_path))
     return AnalysisModel(project_model, "test-run", run_dict)
+
+
+@pytest.fixture
+def annotated_analysis_model(analysis_model):
+    """`analysis_model`, seeded with one annotated feature (id=7, scan 42,
+    sample 's1', library 'my_library', compound 'Caffeine')."""
+    import sqlite3
+
+    import numpy as np
+
+    from msianalyzer.core.parser.mzml_parser import array_to_blob
+
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.execute(
+            "INSERT INTO annotation_libraries (id, path, name) "
+            "VALUES (1, 'lib.db', 'my_library')"
+        )
+        con.execute(
+            "INSERT INTO ms2_associations "
+            "(sample_id, scan_id, match_key, precursor_mz, "
+            "n_features_in_window, rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 150.1234, 1, 12.3, 5, 'positive')"
+        )
+        blob = array_to_blob(np.array([100.0, 200.0], dtype=np.float32))
+        con.execute(
+            "INSERT INTO ms2_annotations "
+            "(id, feature_id, sample_id, scan_id, library_id, "
+            "library_spectrum_id, compound_name, compound_formula, inchikey, "
+            "score, dot_product_score, lib_coverage, emp_coverage, "
+            "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
+            "n_emp_peaks_filtered, emp_filtered_mz, emp_filtered_intensity, "
+            "lib_filtered_mz, lib_filtered_intensity, rank_ms2, rank_feature) "
+            "VALUES (1, 7, 1, 42, 1, 9, 'Caffeine', 'C8H10N4O2', "
+            "'RYYVLZVUVIJVGH-UHFFFAOYSA-N', 0.87, 0.9, 0.8, 0.75, 0.77, "
+            "2, 2, 10, 3, ?, ?, ?, ?, 1, 1)",
+            (blob, blob, blob, blob),
+        )
+        con.commit()
+    return analysis_model
 
 
 @pytest.fixture

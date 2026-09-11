@@ -29,6 +29,8 @@ Page {
                 id: navRail
                 objectName: "navRail"
                 Layout.preferredWidth: 180
+                Layout.minimumWidth: 180
+                Layout.maximumWidth: 180
                 Layout.fillHeight: true
                 Layout.margins: 8
                 spacing: 4
@@ -62,7 +64,14 @@ Page {
                     id: summaryLoader
                     objectName: "summarySectionLoader"
                     source: "qrc:/Views/SummarySection.qml"
-                    onLoaded: item.analysis = analysisPage.analysis
+                    // Qt.binding, not a one-time assignment: a plain
+                    // `item.analysis = analysisPage.analysis` only runs once,
+                    // right when this Loader finishes — for a page reached
+                    // via StackView.push({"analysis": ...}), analysisPage's
+                    // own `analysis` property can still be unset at that
+                    // exact moment, permanently leaving the section's copy
+                    // null.
+                    onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
                 }
 
                 Item {
@@ -74,14 +83,11 @@ Page {
                         color: "gray"
                     }
                 }
-                Item {
-                    objectName: "comingSoon_annotations"
-                    Text {
-                        anchors.centerIn: parent
-                        text: "Annotations — coming soon"
-                        font.pixelSize: 16
-                        color: "gray"
-                    }
+                Loader {
+                    id: annotationsLoader
+                    objectName: "annotationsSectionLoader"
+                    source: "qrc:/Views/AnnotationsSection.qml"
+                    onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
                 }
                 Item {
                     objectName: "comingSoon_visual"
