@@ -15,7 +15,7 @@ QtWebEngineQuick.initialize()
 # sync with what a real session actually renders.
 from PySide6.QtQuickControls2 import QQuickStyle
 
-QQuickStyle.setStyle("Material")
+QQuickStyle.setStyle("Fusion")
 
 from msianalyzer.core.project.project import Project
 from msianalyzer.gui.main import build_engine

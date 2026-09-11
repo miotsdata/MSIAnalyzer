@@ -1610,105 +1610,116 @@ d\xb5\x1e\xcb\xf8\xa0!\x84\xa7C\xe4?\x08]<\x90\
 B-\x22\xc69\xf0u\xc8\x22q+&`\x0a\x01\x88\
 \x87\xb9p\xdb\x1d|\x0e\x09\x9d\xf1k\x85`8\xcdA\
 yU\x97\x11Hd\x8e\x06\
-\x00\x00\x06\x0c\
+\x00\x00\x06\xc0\
 i\
 mport QtQuick\x0aim\
 port QtQuick.Con\
 trols\x0aimport QtQ\
-uick.Controls.Ma\
-terial\x0aimport Qt\
-Quick.Dialogs\x0a\x0aA\
-pplicationWindow\
- {\x0a    id: windo\
-w\x0a\x0a    visible: \
-true\x0a    width: \
-900\x0a    height: \
-650\x0a    title: \x22\
-MSIAnalyzer\x22\x0a\x0a  \
-  Material.theme\
-: Material.Light\
-\x0a    Material.pr\
-imary: Material.\
-Blue\x0a    Materia\
-l.accent: Materi\
-al.Blue\x0a\x0a    Sta\
-ckView {\x0a       \
- id: stackView\x0a \
-       objectNam\
-e: \x22stackView\x22\x0a \
-       anchors.f\
-ill: parent\x0a\x0a   \
-     initialItem\
-: \x22qrc:/Views/St\
-artPage.qml\x22\x0a   \
- }\x0a\x0a    Connecti\
-ons {\x0a        ta\
-rget: Router\x0a   \
-     function on\
-ShowProjectHomeR\
-equested(project\
-) {\x0a            \
-stackView.push(\x22\
-qrc:/Views/Proje\
-ctHomePage.qml\x22,\
- {\x22project\x22: pro\
-ject})\x0a        }\
-\x0a\x0a        functi\
-on onCreateProje\
-ctPageRequested(\
-) {\x0a            \
-stackView.push(\x22\
-qrc:/Views/Creat\
-eProjectPage.qml\
-\x22)\x0a        }\x0a\x0a  \
-      function o\
-nNewAnalysisPage\
-Requested(projec\
-t) {\x0a           \
- stackView.push(\
-\x22qrc:/Views/NewA\
-nalysisPage.qml\x22\
-, {\x22project\x22: pr\
-oject})\x0a        \
-}\x0a\x0a        funct\
-ion onShowRunnin\
-gPageRequested(p\
-roject, runId) {\
-\x0a            sta\
-ckView.push(\x22qrc\
-:/Views/RunningA\
-nalysisPage.qml\x22\
-, {\x22project\x22: pr\
-oject, \x22runId\x22: \
-runId})\x0a        \
-}\x0a\x0a        funct\
-ion onShowAnalys\
-isRequested(anal\
-ysis) {\x0a        \
+uick.Dialogs\x0a\x0aAp\
+plicationWindow \
+{\x0a    id: window\
+\x0a\x0a    visible: t\
+rue\x0a    // Bigge\
+r than the old 9\
+00x650 default \xe2\
+\x80\x94 several secti\
+ons (the 13-tab\x0a\
+    // config Fl\
+ow, Visual Inspe\
+ction's control \
+panel + heatmap \
+grid) need\x0a    /\
+/ real room; min\
+imumWidth/Height\
+ stop the window\
+ being resized b\
+elow\x0a    // wher\
+e that content s\
+tops fitting at \
+all.\x0a    width: \
+1280\x0a    height:\
+ 850\x0a    minimum\
+Width: 1000\x0a    \
+minimumHeight: 7\
+00\x0a    title: \x22M\
+SIAnalyzer\x22\x0a\x0a   \
+ StackView {\x0a   \
+     id: stackVi\
+ew\x0a        objec\
+tName: \x22stackVie\
+w\x22\x0a        ancho\
+rs.fill: parent\x0a\
+\x0a        initial\
+Item: \x22qrc:/View\
+s/StartPage.qml\x22\
+\x0a    }\x0a\x0a    Conn\
+ections {\x0a      \
+  target: Router\
+\x0a        functio\
+n onShowProjectH\
+omeRequested(pro\
+ject) {\x0a        \
     stackView.pu\
-sh(\x22qrc:/Views/A\
-nalysisPage.qml\x22\
-, {\x22analysis\x22: a\
-nalysis})\x0a      \
-  }\x0a\x0a        fun\
-ction onShowErro\
-rRequested(messa\
-ge) {\x0a          \
-  errorDialog.te\
-xt = message\x0a   \
-         errorDi\
-alog.open()\x0a    \
-    }\x0a    }\x0a\x0a   \
- MessageDialog {\
-\x0a        id: err\
-orDialog\x0a       \
- objectName: \x22er\
-rorDialog\x22\x0a     \
-   buttons: Mess\
-ageDialog.Ok\x0a   \
-     modality: Q\
-t.ApplicationMod\
-al\x0a    }\x0a}\x0a\
+sh(\x22qrc:/Views/P\
+rojectHomePage.q\
+ml\x22, {\x22project\x22:\
+ project})\x0a     \
+   }\x0a\x0a        fu\
+nction onCreateP\
+rojectPageReques\
+ted() {\x0a        \
+    stackView.pu\
+sh(\x22qrc:/Views/C\
+reateProjectPage\
+.qml\x22)\x0a        }\
+\x0a\x0a        functi\
+on onNewAnalysis\
+PageRequested(pr\
+oject) {\x0a       \
+     stackView.p\
+ush(\x22qrc:/Views/\
+NewAnalysisPage.\
+qml\x22, {\x22project\x22\
+: project})\x0a    \
+    }\x0a\x0a        f\
+unction onShowRu\
+nningPageRequest\
+ed(project, runI\
+d) {\x0a           \
+ stackView.push(\
+\x22qrc:/Views/Runn\
+ingAnalysisPage.\
+qml\x22, {\x22project\x22\
+: project, \x22runI\
+d\x22: runId})\x0a    \
+    }\x0a\x0a        f\
+unction onShowAn\
+alysisRequested(\
+analysis) {\x0a    \
+        stackVie\
+w.push(\x22qrc:/Vie\
+ws/AnalysisPage.\
+qml\x22, {\x22analysis\
+\x22: analysis})\x0a  \
+      }\x0a\x0a       \
+ function onShow\
+ErrorRequested(m\
+essage) {\x0a      \
+      errorDialo\
+g.text = message\
+\x0a            err\
+orDialog.open()\x0a\
+        }\x0a    }\x0a\
+\x0a    MessageDial\
+og {\x0a        id:\
+ errorDialog\x0a   \
+     objectName:\
+ \x22errorDialog\x22\x0a \
+       buttons: \
+MessageDialog.Ok\
+\x0a        modalit\
+y: Qt.Applicatio\
+nModal\x0a    }\x0a}\x0a\
 \x00\x00\x00\x1e\
 m\
 odule Main\x0aMain \
@@ -1825,10 +1836,10 @@ qt_resource_struct = b"\
 \x00\x00\x01\xa0\x91\xffkn\
 \x00\x00\x02<\x00\x04\x00\x00\x00\x01\x00\x00]\xe3\
 \x00\x00\x01\xa0\x92\x1e\xe0)\
-\x00\x00\x01\x8c\x00\x00\x00\x00\x00\x01\x00\x00h\xa0\
+\x00\x00\x01\x8c\x00\x00\x00\x00\x00\x01\x00\x00iT\
 \x00\x00\x01\xa0C\x10\x19\xe2\
 \x00\x00\x02b\x00\x00\x00\x00\x00\x01\x00\x00b\x90\
-\x00\x00\x01\xa0\x92\x0e\xa1\xc6\
+\x00\x00\x01\xa0\x927\x1db\
 "
 
 def qInitResources():

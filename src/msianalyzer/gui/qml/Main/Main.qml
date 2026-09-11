@@ -1,19 +1,20 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Controls.Material
 import QtQuick.Dialogs
 
 ApplicationWindow {
     id: window
 
     visible: true
-    width: 900
-    height: 650
+    // Bigger than the old 900x650 default — several sections (the 13-tab
+    // config Flow, Visual Inspection's control panel + heatmap grid) need
+    // real room; minimumWidth/Height stop the window being resized below
+    // where that content stops fitting at all.
+    width: 1280
+    height: 850
+    minimumWidth: 1000
+    minimumHeight: 700
     title: "MSIAnalyzer"
-
-    Material.theme: Material.Light
-    Material.primary: Material.Blue
-    Material.accent: Material.Blue
 
     StackView {
         id: stackView

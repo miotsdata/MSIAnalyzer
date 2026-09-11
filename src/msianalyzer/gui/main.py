@@ -52,12 +52,13 @@ def main() -> int:
     # Must run before any QtQuick.Controls-importing QML loads — the
     # platform default style pulled in a dark theme on at least one real
     # session (GNOME/GTK integration), with some text unreadable against
-    # it. Material is a light theme by default regardless of the host
-    # desktop's own theme (see Main.qml's explicit Material.theme too).
-    # Overridable (MSIANALYZER_QT_STYLE=Basic, Fusion, ...) — e.g. to test
-    # whether a given style change is implicated in an otherwise-unrelated
-    # bug report, without needing a separate build to compare against.
-    QQuickStyle.setStyle(os.environ.get("MSIANALYZER_QT_STYLE", "Material"))
+    # it. Tried Material next: readable, but its native-FileDialog
+    # combination froze the app on the same session (root cause not
+    # pinned down). Fusion is the one that's actually confirmed working
+    # end-to-end on a real session — readable AND no dialog freeze.
+    # Overridable (MSIANALYZER_QT_STYLE=Basic, Material, ...) for the same
+    # kind of style bisection that found this, without a separate build.
+    QQuickStyle.setStyle(os.environ.get("MSIANALYZER_QT_STYLE", "Fusion"))
     # Must run before the QGuiApplication is constructed — used by
     # WebEngineView (Annotations mirror plots, MS1 spectra).
     QtWebEngineQuick.initialize()
