@@ -11,11 +11,14 @@ import pytest
 from msianalyzer.core.analysis_db import (
     analysis_db_path,
     attach_raw,
+    find_nearest_feature,
     init_analysis_db,
     is_command_already_run,
     load_feature_compound_scores,
+    load_feature_ms2_count,
     load_features,
     load_ms2_annotations_for_feature,
+    load_samples,
     load_summary_counts,
     log_command,
     register_sample,
@@ -444,6 +447,89 @@ def test_load_ms2_annotations_for_feature_empty_db(tmp_path: Path):
     init_analysis_db(db).close()
 
     assert load_ms2_annotations_for_feature(db, 1).empty
+
+
+# ---------------------------------------------------------------------------
+# load_samples
+# ---------------------------------------------------------------------------
+
+
+def test_load_samples_returns_every_sample(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    register_sample(db, name="s1", raw_db_path=tmp_path / "s1.db")
+    register_sample(db, name="s2", raw_db_path=tmp_path / "s2.db")
+
+    df = load_samples(db)
+
+    assert list(df["name"]) == ["s1", "s2"]
+    assert list(df["sample_id"]) == [1, 2]
+
+
+def test_load_samples_empty_db(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_samples(db).empty
+
+
+# ---------------------------------------------------------------------------
+# find_nearest_feature
+# ---------------------------------------------------------------------------
+
+
+def test_find_nearest_feature_picks_closest_mz(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, ?)",
+            [
+                (1, 100.0, '{"s1": 0, "s2": null}'),
+                (2, 200.0, '{"s1": null, "s2": 3}'),
+            ],
+        )
+        con.commit()
+
+    found = find_nearest_feature(db, 101.0)
+
+    assert found["feature_id"] == 1
+    assert found["mz"] == 100.0
+    assert found["members"] == {"s1": 0, "s2": None}
+
+
+def test_find_nearest_feature_none_when_no_features(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert find_nearest_feature(db, 100.0) is None
+
+
+# ---------------------------------------------------------------------------
+# load_feature_ms2_count
+# ---------------------------------------------------------------------------
+
+
+def test_load_feature_ms2_count_returns_n_ms2(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
+            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_flat_fragmentation, median_n_peaks) "
+            "VALUES (1, 100.0, 7, 2, 0, 0, 0, 0, 3.0)"
+        )
+        con.commit()
+
+    assert load_feature_ms2_count(db, 1) == 7
+
+
+def test_load_feature_ms2_count_zero_for_unknown_feature(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_feature_ms2_count(db, 999) == 0
 
 
 # ---------------------------------------------------------------------------

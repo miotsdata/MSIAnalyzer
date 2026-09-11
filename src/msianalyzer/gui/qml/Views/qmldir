@@ -8,3 +8,4 @@ AnalysisPage 1.0 AnalysisPage.qml
 SummarySection 1.0 SummarySection.qml
 AnnotationsSection 1.0 AnnotationsSection.qml
 AnnotationCandidatesPopup 1.0 AnnotationCandidatesPopup.qml
+MS1SpectraSection 1.0 MS1SpectraSection.qml

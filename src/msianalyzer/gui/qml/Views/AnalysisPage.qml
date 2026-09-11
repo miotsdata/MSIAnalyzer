@@ -74,14 +74,20 @@ Page {
                     onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
                 }
 
-                Item {
-                    objectName: "comingSoon_ms1"
-                    Text {
-                        anchors.centerIn: parent
-                        text: "MS1 Spectra — coming soon"
-                        font.pixelSize: 16
-                        color: "gray"
-                    }
+                Loader {
+                    id: ms1Loader
+                    objectName: "ms1SectionLoader"
+                    // Loaded lazily (unlike the other sections' Loaders):
+                    // this section owns a WebEngineView, and StackLayout
+                    // keeps every page as a permanent sibling rather than
+                    // destroying hidden ones — an eagerly-loaded WebEngineView
+                    // would sit in the tree even while another tab is active,
+                    // and any childItems()-based search from `root` for that
+                    // *other* tab's content would recurse into it looking for
+                    // a non-match, which is unsafe (see find_visual_child).
+                    active: sectionStack.currentIndex === 1
+                    source: "qrc:/Views/MS1SpectraSection.qml"
+                    onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
                 }
                 Loader {
                     id: annotationsLoader

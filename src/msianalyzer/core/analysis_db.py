@@ -750,3 +750,68 @@ def load_summary_counts(db_path: Path | str) -> dict:
         "n_annotated_features": n_annotated_features,
         "n_distinct_compounds": n_distinct_compounds,
     }
+
+
+@log_call(source="db_path")
+def load_samples(db_path: Path | str) -> pd.DataFrame:
+    """Every row of the `samples` table, for a GUI sample selector.
+
+    Returns:
+        A DataFrame with `sample_id`, `name`, `polarity`, ordered by
+        `sample_id`. Empty when there are no samples.
+    """
+    sql = "SELECT sample_id, name, polarity FROM samples ORDER BY sample_id"
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def find_nearest_feature(db_path: Path | str, mz: float) -> dict | None:
+    """The feature whose consensus m/z is closest to `mz`.
+
+    Used by the GUI's MS1 spectra section: map a clicked spectrum point back
+    to a feature.
+
+    Args:
+        db_path: The analysis database.
+        mz: Query m/z (e.g. the x-coordinate of a spectrum click).
+
+    Returns:
+        `{"feature_id", "mz", "members"}` where `members` is
+        `{sample_name: peak_index_or_None}` (`None` = not present in that
+        sample — filtered out or never picked, no distinction made). `None`
+        when the analysis has no features at all.
+    """
+    with connect(db_path) as con:
+        try:
+            row = con.execute(
+                "SELECT feature_id, mz, members_json FROM features "
+                "ORDER BY ABS(mz - ?) LIMIT 1",
+                (float(mz),),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+
+    if row is None:
+        return None
+
+    feature_id, feature_mz, members_json = row
+    members = json.loads(members_json) if members_json else {}
+    return {"feature_id": feature_id, "mz": feature_mz, "members": members}
+
+
+@log_call(source="db_path")
+def load_feature_ms2_count(db_path: Path | str, feature_id: int) -> int:
+    """`feature_ms2_summary.n_ms2` for one feature — 0 if it has no MS2 at all."""
+    with connect(db_path) as con:
+        try:
+            row = con.execute(
+                "SELECT n_ms2 FROM feature_ms2_summary WHERE feature_id = ?",
+                (int(feature_id),),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+    return int(row[0]) if row is not None else 0
