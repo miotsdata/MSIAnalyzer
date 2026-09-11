@@ -23,6 +23,12 @@ class AnalysisModel(QObject):
     def runId(self) -> str:
         return self._run_id
 
+    @Property(QObject, constant=True)
+    def project(self) -> QObject:
+        """The owning project's model — for navigating back to it
+        (`Router.showProjectHomeRequested`)."""
+        return self._project_model
+
     @Property(str, constant=True)
     def projectName(self) -> str:
         return self._project_model.name if self._project_model else ""

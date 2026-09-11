@@ -36,19 +36,43 @@ def test_step_changed_updates_matching_row(
     assert other_status.property("text") == "pending"
 
 
-def test_run_failed_shows_error_banner_and_back_button(
+def test_back_button_is_always_available(running_analysis_view, project):
+    _, root, _ = _make_page(running_analysis_view, project)
+
+    back_button = root.findChild(QQuickItem, "backButton")
+    assert back_button is not None
+    assert back_button.property("visible") is True
+
+
+def test_back_button_navigates_without_cancelling_the_run(
+    running_analysis_view, project, application, qtbot
+):
+    view, root, model = _make_page(running_analysis_view, project)
+    back_button = root.findChild(QQuickItem, "backButton")
+
+    received = []
+    application.router.showProjectHomeRequested.connect(received.append)
+
+    from PySide6.QtCore import Qt
+
+    center = back_button.mapToScene(back_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert len(received) == 1
+    assert received[0].name == model.name
+
+
+def test_run_failed_shows_error_banner(
     running_analysis_view, project, application, qtbot
 ):
     _, root, _ = _make_page(running_analysis_view, project)
 
     error_text = root.findChild(QQuickItem, "errorText")
-    back_button = root.findChild(QQuickItem, "backButton")
     assert error_text.property("visible") is False
-    assert back_button.property("visible") is False
 
     application.core_bridge.runFailed.emit("sample processing failed")
     qtbot.wait(50)
 
     assert error_text.property("visible") is True
     assert "sample processing failed" in error_text.property("text")
-    assert back_button.property("visible") is True

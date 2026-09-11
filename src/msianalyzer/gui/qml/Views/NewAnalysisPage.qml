@@ -10,12 +10,14 @@ Page {
     property var project
     property var sampleRows: []
 
-    // Native file/folder dialogs (GTK/KDE portal on Linux) support things
-    // the QML fallback dialog doesn't — multi-select via the OS's normal
-    // ctrl/shift-click, a "Create Folder" button, familiar styling. Forced
-    // back to the QML dialog only under the `offscreen` QPA platform (the
-    // automated test suite, never a real session): a native dialog
-    // instantiated there crashed intermittently.
+    // Native *folder* dialogs (GTK/KDE portal on Linux) can create a new
+    // folder, which the QML fallback can't — worth the platform
+    // dependency for FolderDialog. Native *file* dialogs turned out not
+    // to be: on a real GNOME session, opening a native FileDialog froze
+    // the whole app (had to force-quit) — a real, reproduced regression,
+    // not the `offscreen`-only FolderDialog crash below. FileDialog stays
+    // on the QML fallback unconditionally until that's understood; it
+    // already supports multi-select, just without native OS styling.
     readonly property bool useNativeDialogs: Qt.platform.pluginName !== "offscreen"
 
     // ------------------------------------------------------------------ //
@@ -242,7 +244,7 @@ Page {
     FileDialog {
         id: mzmlDialog
         objectName: "mzmlDialog"
-        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        options: FileDialog.DontUseNativeDialog
         nameFilters: ["mzML files (*.mzML *.mzml)", "All files (*)"]
         onAccepted: newAnalysisPage.setSampleField(
             mzmlDialogTarget.rowIndex, "mzml", Router.toLocalPath(selectedFile))
@@ -250,7 +252,7 @@ Page {
     FileDialog {
         id: xmlDialog
         objectName: "xmlDialog"
-        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        options: FileDialog.DontUseNativeDialog
         nameFilters: ["Raster XML (*.xml)", "All files (*)"]
         onAccepted: newAnalysisPage.setSampleField(
             xmlDialogTarget.rowIndex, "xml", Router.toLocalPath(selectedFile))
@@ -258,7 +260,7 @@ Page {
     FileDialog {
         id: bulkMzmlDialog
         objectName: "bulkMzmlDialog"
-        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        options: FileDialog.DontUseNativeDialog
         fileMode: FileDialog.OpenFiles
         nameFilters: ["mzML files (*.mzML *.mzml)", "All files (*)"]
         onAccepted: {
@@ -271,7 +273,7 @@ Page {
     FileDialog {
         id: bulkXmlDialog
         objectName: "bulkXmlDialog"
-        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        options: FileDialog.DontUseNativeDialog
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Raster XML (*.xml)", "All files (*)"]
         onAccepted: {
@@ -296,10 +298,21 @@ Page {
         anchors.margins: 16
         spacing: 12
 
-        Text {
-            text: "New Analysis — " + (project ? project.name : "")
-            font.pixelSize: 18
-            font.bold: true
+        RowLayout {
+            Layout.fillWidth: true
+
+            Text {
+                text: "New Analysis — " + (project ? project.name : "")
+                font.pixelSize: 18
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            Button {
+                objectName: "backToProjectButton"
+                text: "Back to project"
+                onClicked: if (project) Router.showProjectHomeRequested(project)
+            }
         }
 
         // A plain TabBar is a single row: with 13 tabs it has to either
@@ -626,7 +639,7 @@ Page {
     FileDialog {
         id: libraryPathDialog
         objectName: "libraryPathDialog"
-        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        options: FileDialog.DontUseNativeDialog
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Library database (*.db)", "All files (*)"]
         onAccepted: {

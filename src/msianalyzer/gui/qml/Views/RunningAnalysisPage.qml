@@ -28,10 +28,26 @@ Page {
         anchors.margins: 24
         spacing: 16
 
-        Text {
-            text: "Running Analysis — " + (project ? project.name : "")
-            font.pixelSize: 18
-            font.bold: true
+        RowLayout {
+            Layout.fillWidth: true
+
+            Text {
+                text: "Running Analysis — " + (project ? project.name : "")
+                font.pixelSize: 18
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            Button {
+                id: backButton
+                objectName: "backButton"
+                text: "Back to project"
+                // Navigating away doesn't cancel the run — it keeps going
+                // on its worker thread regardless of which page is shown,
+                // same as it already did when this button only appeared
+                // on failure.
+                onClicked: if (project) Router.showProjectHomeRequested(project)
+            }
         }
 
         ColumnLayout {
@@ -66,14 +82,6 @@ Page {
             color: "red"
             wrapMode: Text.Wrap
             Layout.fillWidth: true
-        }
-
-        Button {
-            id: backButton
-            objectName: "backButton"
-            text: "Back to project"
-            visible: errorMessage !== ""
-            onClicked: Router.showProjectHomeRequested(project)
         }
     }
 }

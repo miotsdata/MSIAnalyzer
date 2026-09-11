@@ -12,12 +12,23 @@ Page {
         anchors.fill: parent
         spacing: 0
 
-        Text {
-            objectName: "analysisPageTitle"
-            text: "Analysis — " + (analysis ? analysis.projectName : "")
-            font.pixelSize: 18
-            font.bold: true
+        RowLayout {
+            Layout.fillWidth: true
             Layout.margins: 16
+
+            Text {
+                objectName: "analysisPageTitle"
+                text: "Analysis — " + (analysis ? analysis.projectName : "")
+                font.pixelSize: 18
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            Button {
+                objectName: "backToProjectButton"
+                text: "Back to project"
+                onClicked: if (analysis) Router.showProjectHomeRequested(analysis.project)
+            }
         }
 
         RowLayout {

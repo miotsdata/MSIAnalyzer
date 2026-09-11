@@ -14,6 +14,25 @@ def _make_page(new_analysis_view, project):
     return view, view.rootObject(), model
 
 
+def test_back_to_project_button_navigates_to_project_home(
+    new_analysis_view, project, application, qtbot
+):
+    view, root, model = _make_page(new_analysis_view, project)
+
+    back_button = root.findChild(QQuickItem, "backToProjectButton")
+    assert back_button is not None
+
+    received = []
+    application.router.showProjectHomeRequested.connect(received.append)
+
+    center = back_button.mapToScene(back_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert len(received) == 1
+    assert received[0].name == model.name
+
+
 def test_tab_bar_has_one_tab_per_group_plus_io(new_analysis_view, project, find_visual_child):
     _, root, _ = _make_page(new_analysis_view, project)
 

@@ -15,6 +15,26 @@ def test_nav_rail_has_four_sections(analysis_view, analysis_model, find_visual_c
         assert button.property("text") == label
 
 
+def test_back_to_project_button_navigates_to_project_home(
+    analysis_view, analysis_model, application, qtbot
+):
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+
+    back_button = root.findChild(QQuickItem, "backToProjectButton")
+    assert back_button is not None
+
+    received = []
+    application.router.showProjectHomeRequested.connect(received.append)
+
+    center = back_button.mapToScene(back_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert len(received) == 1
+    assert received[0].name == analysis_model.project.name
+
+
 def test_summary_section_shown_by_default(analysis_view, analysis_model):
     view = analysis_view(analysis_model)
     root = view.rootObject()
