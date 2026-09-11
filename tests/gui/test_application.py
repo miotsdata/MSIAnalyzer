@@ -157,3 +157,40 @@ def test_run_completed_reloads_project_from_folder(application):
     application.core_bridge.runCompleted.emit("run-123")
 
     application.core_bridge.load_project.assert_called_once_with("/some/proj")
+
+
+def test_analysis_selected_emits_show_analysis_requested(application, project_with_runs):
+    application.project = project_with_runs
+    application.project_model = ProjectModel(project_with_runs, "/tmp/proj")
+
+    received = []
+    application.router.showAnalysisRequested.connect(received.append)
+
+    run_id = next(iter(project_with_runs.runs.keys()))
+    application.router.analysisSelected.emit(run_id)
+
+    assert len(received) == 1
+    model = received[0]
+    assert model.runId == run_id
+    assert model.projectName == project_with_runs.name
+
+
+def test_analysis_selected_unknown_run_id_does_nothing(application, project_with_runs):
+    application.project = project_with_runs
+    application.project_model = ProjectModel(project_with_runs, "/tmp/proj")
+
+    received = []
+    application.router.showAnalysisRequested.connect(received.append)
+
+    application.router.analysisSelected.emit("does-not-exist")
+
+    assert received == []
+
+
+def test_analysis_selected_no_project_loaded_does_nothing(application):
+    received = []
+    application.router.showAnalysisRequested.connect(received.append)
+
+    application.router.analysisSelected.emit("run-1")
+
+    assert received == []

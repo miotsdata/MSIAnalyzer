@@ -27,6 +27,7 @@ def build_engine(
     context = engine.rootContext()
     context.setContextProperty("Router", application.router)
     context.setContextProperty("CoreBridge", application.core_bridge)
+    context.setContextProperty("AnalysisBridge", application.analysis_bridge)
     # Static schema metadata, not app state — see config_schema.py.
     config_schema_provider = ConfigSchemaProvider(engine)
     context.setContextProperty("ConfigSchema", config_schema_provider)

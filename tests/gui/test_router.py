@@ -119,6 +119,35 @@ def test_run_started_then_completed_shows_running_page_then_back_to_project_home
     assert current_item.objectName() == "projectHomePage"
 
 
+def test_analysis_selected_shows_analysis_page(application, engine, qtbot, tmp_path):
+    proj_path = tmp_path / "myproj"
+    create_project_folder(path=proj_path, name="myproj")
+    application.project_folder = str(proj_path)
+    application.core_bridge.load_project(str(proj_path))
+    qtbot.wait(50)
+
+    application.project.runs["run-1"] = {
+        "id": "run-1",
+        "start_date": "2026-01-01 12:00:00",
+        "config": {
+            "io": {"out_dir": str(proj_path / "output")},
+            "analysis": {"db_name": None},
+        },
+    }
+    # the ProjectModel snapshot predates this run; rebuild it, mirroring the
+    # reload Application does after a run actually completes
+    application.project_model = ProjectModel(application.project, application.project_folder)
+
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+
+    application.router.analysisSelected.emit("run-1")
+    qtbot.wait(100)
+
+    current_item = stack_view.property("currentItem")
+    assert current_item.objectName() == "analysisPage"
+
+
 def test_invalidCreateProjectPath_shows_message(application, engine, qtbot):
     window = engine.rootObjects()[0]
     stack_view = window.findChild(QQuickItem, "stackView")

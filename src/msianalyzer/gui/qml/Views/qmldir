@@ -4,3 +4,5 @@ ProjectHomePage 1.0 ProjectHomePage.qml
 CreateProjectPage 1.0 CreateProjectPage.qml
 NewAnalysisPage 1.0 NewAnalysisPage.qml
 RunningAnalysisPage 1.0 RunningAnalysisPage.qml
+AnalysisPage 1.0 AnalysisPage.qml
+SummarySection 1.0 SummarySection.qml

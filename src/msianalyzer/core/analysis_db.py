@@ -661,3 +661,53 @@ def load_feature_compound_scores(
         except (pd.errors.DatabaseError, sqlite3.OperationalError):
             # view absent (schema predates it) or ms2_annotations missing
             return pd.DataFrame()
+
+
+def _scalar_count(con: sqlite3.Connection, sql: str) -> int:
+    try:
+        row = con.execute(sql).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+@log_call(source="db_path")
+def load_summary_counts(db_path: Path | str) -> dict:
+    """Cheap, always-available headline counts for the analysis.
+
+    Every count is a plain ``COUNT(*)``/``COUNT(DISTINCT ...)``, computed
+    fresh from the current tables — unlike ``summary.json`` (the report
+    stage's own, much richer roll-up, built for the HTML report), this
+    works whether or not the report stage ran, and is a small, stable
+    contract independent of the report's internal schema. Used by the
+    GUI's Analysis-workspace Summary section.
+
+    Returns:
+        ``{"n_samples", "n_features", "n_ms2_associated_features",
+        "annotation_ran", "n_annotated_features", "n_distinct_compounds"}``.
+        ``n_annotated_features``/``n_distinct_compounds`` are ``0`` (not
+        ``None``) when ``annotation_ran`` is ``False`` — the caller decides
+        how to show "no library configured" vs. "library ran, 0 hits".
+    """
+    with connect(db_path) as con:
+        n_samples = _scalar_count(con, "SELECT COUNT(*) FROM samples")
+        n_features = _scalar_count(con, "SELECT COUNT(*) FROM features")
+        n_ms2_associated_features = _scalar_count(
+            con, "SELECT COUNT(*) FROM feature_ms2_summary WHERE n_ms2 > 0"
+        )
+        n_libraries = _scalar_count(con, "SELECT COUNT(*) FROM annotation_libraries")
+        n_annotated_features = _scalar_count(
+            con, "SELECT COUNT(DISTINCT feature_id) FROM feature_compound_scores"
+        )
+        n_distinct_compounds = _scalar_count(
+            con, "SELECT COUNT(DISTINCT inchikey) FROM feature_compound_scores"
+        )
+
+    return {
+        "n_samples": n_samples,
+        "n_features": n_features,
+        "n_ms2_associated_features": n_ms2_associated_features,
+        "annotation_ran": n_libraries > 0,
+        "n_annotated_features": n_annotated_features,
+        "n_distinct_compounds": n_distinct_compounds,
+    }

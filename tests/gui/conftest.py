@@ -184,6 +184,60 @@ def running_analysis_view(application):
 
 
 @pytest.fixture
+def analysis_model(tmp_path, project):
+    """An `AnalysisModel` pointing at a real, empty analysis DB."""
+    from msianalyzer.core.analysis_db import init_analysis_db
+    from msianalyzer.gui.models.analysis import AnalysisModel
+    from msianalyzer.gui.models.project import ProjectModel
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    db_path = out_dir / "analysis_test-run.db"
+    init_analysis_db(db_path).close()
+
+    run_dict = {
+        "id": "test-run",
+        "start_date": "2026-01-01 12:00:00",
+        "config": {
+            "io": {"out_dir": str(out_dir)},
+            "analysis": {"db_name": db_path.name},
+        },
+    }
+    project_model = ProjectModel(project, str(tmp_path))
+    return AnalysisModel(project_model, "test-run", run_dict)
+
+
+@pytest.fixture
+def analysis_view(application):
+    """Factory: build a standalone AnalysisPage view for a given AnalysisModel."""
+    views = []
+
+    def _make(analysis_model):
+        view = QQuickView()
+        view.engine().rootContext().setContextProperty("Router", application.router)
+        view.engine().rootContext().setContextProperty(
+            "CoreBridge", application.core_bridge
+        )
+        view.engine().rootContext().setContextProperty(
+            "AnalysisBridge", application.analysis_bridge
+        )
+        view.setInitialProperties({"analysis": analysis_model})
+        view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        view.setSource(QUrl("qrc:/Views/AnalysisPage.qml"))
+        view.resize(900, 700)
+        view.show()
+        QTest.qWaitForWindowExposed(view)
+        QTest.qWait(50)
+        views.append(view)
+        return view
+
+    yield _make
+
+    for view in views:
+        view.close()
+
+
+@pytest.fixture
 def create_project_view(application):
     view = QQuickView()
     view.engine().rootContext().setContextProperty("Router", application.router)

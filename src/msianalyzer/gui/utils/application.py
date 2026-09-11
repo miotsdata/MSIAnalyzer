@@ -2,7 +2,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject
 
+from msianalyzer.gui.models.analysis import AnalysisModel
 from msianalyzer.gui.models.project import ProjectModel
+from msianalyzer.gui.utils.analysis_bridge import AnalysisBridge
 from msianalyzer.gui.utils.core_bridge import CoreBridge
 from msianalyzer.gui.utils.router import Router
 from msianalyzer.core.project import Project
@@ -13,6 +15,7 @@ class Application(QObject):
         super().__init__()
         self.router = Router()
         self.core_bridge = CoreBridge()
+        self.analysis_bridge = AnalysisBridge()
         self.project: Project | None = None
         # Not stored on `Project` itself, so Application tracks it here and
         # threads it onto `ProjectModel` — the new-analysis and running pages
@@ -37,6 +40,7 @@ class Application(QObject):
         self.core_bridge.invalidConfig.connect(self.router.showErrorRequested)
         self.core_bridge.runStarted.connect(self._on_run_started)
         self.core_bridge.runCompleted.connect(self._on_run_completed)
+        self.router.analysisSelected.connect(self._on_analysis_selected)
 
     def _on_project_folder_chosen(self, path):
         self.project_folder = path
@@ -63,3 +67,10 @@ class Application(QObject):
         # reuses the same load -> projectLoaded -> showProjectHomeRequested
         # path as opening a project from the start page.
         self.core_bridge.load_project(self.project_folder)
+
+    def _on_analysis_selected(self, run_id: str):
+        if self.project is None or run_id not in self.project.runs:
+            return
+        run_dict = self.project.runs[run_id]
+        analysis_model = AnalysisModel(self.project_model, run_id, run_dict, self)
+        self.router.showAnalysisRequested.emit(analysis_model)

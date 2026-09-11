@@ -15,6 +15,7 @@ from msianalyzer.core.analysis_db import (
     is_command_already_run,
     load_feature_compound_scores,
     load_features,
+    load_summary_counts,
     log_command,
     register_sample,
     save_features,
@@ -321,6 +322,82 @@ def test_load_feature_compound_scores_empty_without_annotations(tmp_path: Path):
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
     assert load_feature_compound_scores(db).empty
+
+
+# ---------------------------------------------------------------------------
+# load_summary_counts
+# ---------------------------------------------------------------------------
+
+
+def _seed_samples_features_ms2_summary(db: Path) -> None:
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (2, 's2', 'b.db', 'positive')"
+        )
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(1, 100.0), (2, 200.0), (3, 300.0)],
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
+            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_flat_fragmentation, median_n_peaks) "
+            "VALUES (1, 100.0, 5, 2, 0, 0, 0, 0, 3.0)"
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
+            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_flat_fragmentation, median_n_peaks) "
+            "VALUES (2, 200.0, 0, 0, 0, 0, 0, 0, 0.0)"
+        )
+        con.commit()
+
+
+def test_load_summary_counts_empty_db(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_summary_counts(db) == {
+        "n_samples": 0,
+        "n_features": 0,
+        "n_ms2_associated_features": 0,
+        "annotation_ran": False,
+        "n_annotated_features": 0,
+        "n_distinct_compounds": 0,
+    }
+
+
+def test_load_summary_counts_basic(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_samples_features_ms2_summary(db)
+
+    counts = load_summary_counts(db)
+
+    assert counts["n_samples"] == 2
+    assert counts["n_features"] == 3
+    # only feature 1 has n_ms2 > 0
+    assert counts["n_ms2_associated_features"] == 1
+    assert counts["annotation_ran"] is False
+    assert counts["n_annotated_features"] == 0
+    assert counts["n_distinct_compounds"] == 0
+
+
+def test_load_summary_counts_with_annotations(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_annotations(db)
+
+    counts = load_summary_counts(db)
+
+    assert counts["annotation_ran"] is True
+    assert counts["n_annotated_features"] == 2  # features 7 and 9
+    assert counts["n_distinct_compounds"] == 3  # AAA, BBB, CCC
 
 
 # ---------------------------------------------------------------------------
