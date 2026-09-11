@@ -9,6 +9,14 @@ from PySide6.QtWebEngineQuick import QtWebEngineQuick
 
 QtWebEngineQuick.initialize()
 
+# Same style as production (see gui/main.py) — before any QtQuick.Controls
+# import loads, so before qapp too. Keeps control geometry (and therefore
+# layout-dependent tests, e.g. the new-analysis tab Flow's row wrapping) in
+# sync with what a real session actually renders.
+from PySide6.QtQuickControls2 import QQuickStyle
+
+QQuickStyle.setStyle("Material")
+
 from msianalyzer.core.project.project import Project
 from msianalyzer.gui.main import build_engine
 from msianalyzer.gui.utils import Router

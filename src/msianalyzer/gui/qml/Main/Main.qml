@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Dialogs
 
 ApplicationWindow {
@@ -9,6 +10,10 @@ ApplicationWindow {
     width: 900
     height: 650
     title: "MSIAnalyzer"
+
+    Material.theme: Material.Light
+    Material.primary: Material.Blue
+    Material.accent: Material.Blue
 
     StackView {
         id: stackView

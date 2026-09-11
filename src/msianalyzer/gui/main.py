@@ -5,6 +5,7 @@ import PySide6
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QUrl
+from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWebEngineQuick import QtWebEngineQuick
 from pathlib import Path
 import logging
@@ -47,6 +48,12 @@ def build_engine(
 
 def main() -> int:
     configure_logging(level=logging.DEBUG)
+    # Must run before any QtQuick.Controls-importing QML loads — the
+    # platform default style pulled in a dark theme on at least one real
+    # session (GNOME/GTK integration), with some text unreadable against
+    # it. Material is a light theme by default regardless of the host
+    # desktop's own theme (see Main.qml's explicit Material.theme too).
+    QQuickStyle.setStyle("Material")
     # Must run before the QGuiApplication is constructed — used by
     # WebEngineView (Annotations mirror plots, MS1 spectra).
     QtWebEngineQuick.initialize()

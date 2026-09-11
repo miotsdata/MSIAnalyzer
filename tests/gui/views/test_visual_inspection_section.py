@@ -10,6 +10,18 @@ def _open_visual_tab(view, root, find_visual_child, qtbot):
     qtbot.wait(50)
 
 
+def _scroll_controls_panel_to(root, find_visual_child, item):
+    """Scrolls `controlsFlickable` so `item` (a descendant of
+    `controlsPanel`) is on-screen — the panel can hold more controls than
+    fit a typical window, same as any other scrollable list in this app;
+    a real click needs the target actually visible, not just present in
+    the (scrolled-off) content."""
+    flickable = find_visual_child(root, "controlsFlickable")
+    panel = find_visual_child(root, "controlsPanel")
+    y_in_panel = item.mapToItem(panel, 0, 0).y()
+    flickable.setProperty("contentY", max(0, y_in_panel - 20))
+
+
 def test_visual_empty_state_without_features(
     analysis_view, analysis_model, find_visual_child, qtbot
 ):
@@ -72,6 +84,7 @@ def test_visual_sample_visibility_toggle_removes_tile(
     assert find_visual_child(root, "heatmapTile_s2") is not None
 
     checkbox = find_visual_child(root, "sampleVisibility_s2")
+    _scroll_controls_panel_to(root, find_visual_child, checkbox)
     center = checkbox.mapToScene(checkbox.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(50)

@@ -68,13 +68,22 @@ Item {
         visible: visualSection.features.length > 0
         spacing: 12
 
-        ColumnLayout {
-            id: controlsPanel
-            objectName: "controlsPanel"
+        Flickable {
+            id: controlsFlickable
+            objectName: "controlsFlickable"
             Layout.preferredWidth: 260
             Layout.minimumWidth: 260
             Layout.maximumWidth: 260
             Layout.fillHeight: true
+            clip: true
+            contentWidth: width
+            contentHeight: controlsPanel.implicitHeight
+            boundsBehavior: Flickable.StopAtBounds
+
+        ColumnLayout {
+            id: controlsPanel
+            objectName: "controlsPanel"
+            width: controlsFlickable.width
             spacing: 10
 
             Text { text: "Feature"; font.bold: true }
@@ -211,47 +220,36 @@ Item {
             }
 
             Text { text: "Samples"; font.bold: true }
-            Flickable {
-                id: samplesFlickable
-                objectName: "samplesFlickable"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: width
-                contentHeight: samplesColumn.implicitHeight
-                boundsBehavior: Flickable.StopAtBounds
+            // No nested Flickable here (unlike the equivalent samples list
+            // elsewhere in this codebase) — this whole panel already
+            // scrolls via `controlsFlickable`, and a Flickable inside
+            // another Flickable's scrolling content fights it for drag
+            // gestures.
+            Repeater {
+                id: sampleVisibilityRepeater
+                objectName: "sampleVisibilityRepeater"
+                model: visualSection.samples
 
-                ColumnLayout {
-                    id: samplesColumn
-                    width: samplesFlickable.width
-                    spacing: 2
-
-                    Repeater {
-                        id: sampleVisibilityRepeater
-                        objectName: "sampleVisibilityRepeater"
-                        model: visualSection.samples
-
-                        delegate: CheckBox {
-                            objectName: "sampleVisibility_" + modelData.name
-                            text: modelData.name
-                            // `checked` is seeded once, NOT bound to
-                            // `!isHidden(name)` — toggleSample() *inverts*
-                            // hiddenSamples, so a live binding here would
-                            // re-evaluate after every toggle, flip `checked`
-                            // again, fire onToggled again, invert again...
-                            // an unbounded oscillation (confirmed by
-                            // catching a hung run mid-`setSource`, see the
-                            // sibling comment on the layer Buttons above).
-                            // This checkbox is the sole mutator of its own
-                            // sample's hidden state, so a one-time initial
-                            // value plus forward-only click handling is
-                            // both sufficient and cycle-free.
-                            Component.onCompleted: checked = !visualSection.isHidden(modelData.name)
-                            onToggled: visualSection.toggleSample(modelData.name)
-                        }
-                    }
+                delegate: CheckBox {
+                    objectName: "sampleVisibility_" + modelData.name
+                    text: modelData.name
+                    // `checked` is seeded once, NOT bound to
+                    // `!isHidden(name)` — toggleSample() *inverts*
+                    // hiddenSamples, so a live binding here would
+                    // re-evaluate after every toggle, flip `checked`
+                    // again, fire onToggled again, invert again...
+                    // an unbounded oscillation (confirmed by
+                    // catching a hung run mid-`setSource`, see the
+                    // sibling comment on the layer Buttons above).
+                    // This checkbox is the sole mutator of its own
+                    // sample's hidden state, so a one-time initial
+                    // value plus forward-only click handling is
+                    // both sufficient and cycle-free.
+                    Component.onCompleted: checked = !visualSection.isHidden(modelData.name)
+                    onToggled: visualSection.toggleSample(modelData.name)
                 }
             }
+        }
         }
 
         Flickable {
