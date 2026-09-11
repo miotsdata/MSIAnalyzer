@@ -10,14 +10,15 @@ Page {
     property var project
     property var sampleRows: []
 
-    // Native *folder* dialogs (GTK/KDE portal on Linux) can create a new
-    // folder, which the QML fallback can't — worth the platform
-    // dependency for FolderDialog. Native *file* dialogs turned out not
-    // to be: on a real GNOME session, opening a native FileDialog froze
-    // the whole app (had to force-quit) — a real, reproduced regression,
-    // not the `offscreen`-only FolderDialog crash below. FileDialog stays
-    // on the QML fallback unconditionally until that's understood; it
-    // already supports multi-select, just without native OS styling.
+    // Native dialogs (GTK/KDE portal on Linux): FolderDialog gets
+    // create-folder support, FileDialog gets working multi-select — the
+    // QML fallback's multi-select turned out not to actually work.
+    // FileDialog was briefly reverted to the QML fallback unconditionally
+    // after a real-session freeze, but that freeze may be tied to the
+    // Material style switch rather than to native FileDialog itself
+    // (reportedly still working, with multi-select, up through commits
+    // before the theme change) — under investigation, native restored
+    // here pending that.
     readonly property bool useNativeDialogs: Qt.platform.pluginName !== "offscreen"
 
     // ------------------------------------------------------------------ //
@@ -244,7 +245,7 @@ Page {
     FileDialog {
         id: mzmlDialog
         objectName: "mzmlDialog"
-        options: FileDialog.DontUseNativeDialog
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
         nameFilters: ["mzML files (*.mzML *.mzml)", "All files (*)"]
         onAccepted: newAnalysisPage.setSampleField(
             mzmlDialogTarget.rowIndex, "mzml", Router.toLocalPath(selectedFile))
@@ -252,7 +253,7 @@ Page {
     FileDialog {
         id: xmlDialog
         objectName: "xmlDialog"
-        options: FileDialog.DontUseNativeDialog
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
         nameFilters: ["Raster XML (*.xml)", "All files (*)"]
         onAccepted: newAnalysisPage.setSampleField(
             xmlDialogTarget.rowIndex, "xml", Router.toLocalPath(selectedFile))
@@ -260,7 +261,7 @@ Page {
     FileDialog {
         id: bulkMzmlDialog
         objectName: "bulkMzmlDialog"
-        options: FileDialog.DontUseNativeDialog
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
         fileMode: FileDialog.OpenFiles
         nameFilters: ["mzML files (*.mzML *.mzml)", "All files (*)"]
         onAccepted: {
@@ -273,7 +274,7 @@ Page {
     FileDialog {
         id: bulkXmlDialog
         objectName: "bulkXmlDialog"
-        options: FileDialog.DontUseNativeDialog
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Raster XML (*.xml)", "All files (*)"]
         onAccepted: {
@@ -639,7 +640,7 @@ Page {
     FileDialog {
         id: libraryPathDialog
         objectName: "libraryPathDialog"
-        options: FileDialog.DontUseNativeDialog
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Library database (*.db)", "All files (*)"]
         onAccepted: {
