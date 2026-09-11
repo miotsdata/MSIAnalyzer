@@ -20,6 +20,7 @@ class Application(QObject):
         # completion).
         self.project_folder: str | None = None
         self.project_model: ProjectModel | None = None
+        self.current_run_id: str | None = None
         self._connect_signals()
 
     def _connect_signals(self):
@@ -32,6 +33,9 @@ class Application(QObject):
         self.core_bridge.invalidCreateProjectPath.connect(
             self.router.showErrorRequested
         )
+        self.router.runAnalysisRequested.connect(self._on_run_analysis_requested)
+        self.core_bridge.invalidConfig.connect(self.router.showErrorRequested)
+        self.core_bridge.runStarted.connect(self._on_run_started)
 
     def _on_project_folder_chosen(self, path):
         self.project_folder = path
@@ -45,3 +49,11 @@ class Application(QObject):
         self.project = project
         self.project_model = ProjectModel(project, self.project_folder, self)
         self.router.showProjectHomeRequested.emit(self.project_model)
+
+    def _on_run_analysis_requested(self, project, config_dict):
+        self.core_bridge.run_analysis(config_dict, self.project_folder)
+
+    def _on_run_started(self, run_id: str):
+        # The running-analysis page (and navigation to it) lands separately;
+        # for now Application just tracks which run is in flight.
+        self.current_run_id = run_id

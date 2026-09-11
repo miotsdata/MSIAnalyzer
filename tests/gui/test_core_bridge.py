@@ -2,6 +2,8 @@ from os import name
 import string
 from hypothesis import given, settings, HealthCheck, strategies as st
 from msianalyzer.gui.utils.application import Application
+from msianalyzer.gui.utils.core_bridge import CoreBridge
+from msianalyzer.core.run.run import Run
 import os
 
 VALID_CHARS = string.ascii_letters + string.digits + "_- "
@@ -97,3 +99,100 @@ def test_create_project_folder_no_permissions_emits_invalidCreateProjectPath(
         assert "Permission" in received[0]
     finally:
         os.chmod(tmp_path, 0o700)
+
+
+# ==============================================================================
+# TESTS FOR run_analysis
+# ==============================================================================
+
+
+def test_run_analysis_invalid_config_emits_invalidConfig(tmp_path):
+    bridge = CoreBridge()
+    received = []
+    bridge.invalidConfig.connect(received.append)
+
+    bridge.run_analysis(
+        {
+            "io": {"mzml_paths": [], "xml_paths": []},
+            "peak": {"this_field_does_not_exist": 1},
+        },
+        str(tmp_path),
+    )
+
+    assert len(received) == 1
+    assert "Invalid" in received[0] or "invalid" in received[0]
+
+
+def test_run_analysis_valid_config_writes_yaml_and_completes(tmp_path, mocker, qtbot):
+    (tmp_path / "configs").mkdir()
+    bridge = CoreBridge()
+
+    mocker.patch.object(
+        Run, "start", lambda self, **kwargs: kwargs["on_step"]("process_samples", "started")
+    )
+
+    config_dict = {
+        "io": {
+            "mzml_paths": [str(tmp_path / "a.mzML")],
+            "xml_paths": [str(tmp_path / "a.xml")],
+            "out_dir": str(tmp_path / "out"),
+            "db_paths": [],
+        }
+    }
+
+    with qtbot.waitSignal(bridge.runCompleted, timeout=2000):
+        bridge.run_analysis(config_dict, str(tmp_path))
+
+    yaml_files = list((tmp_path / "configs").glob("run_*.yaml"))
+    assert len(yaml_files) == 1
+
+
+def test_run_analysis_forwards_run_started_and_step_changed(tmp_path, mocker, qtbot):
+    (tmp_path / "configs").mkdir()
+    bridge = CoreBridge()
+
+    mocker.patch.object(
+        Run, "start", lambda self, **kwargs: kwargs["on_step"]("process_samples", "started")
+    )
+
+    config_dict = {
+        "io": {
+            "mzml_paths": [str(tmp_path / "a.mzML")],
+            "xml_paths": [str(tmp_path / "a.xml")],
+            "out_dir": str(tmp_path / "out"),
+            "db_paths": [],
+        }
+    }
+
+    with qtbot.waitSignal(bridge.runStarted, timeout=2000):
+        with qtbot.waitSignal(bridge.runStepChanged, timeout=2000) as step_spy:
+            bridge.run_analysis(config_dict, str(tmp_path))
+
+    assert step_spy.args == ["process_samples", "started"]
+
+
+def test_run_analysis_forces_project_folder_and_version(tmp_path, mocker, qtbot):
+    (tmp_path / "configs").mkdir()
+    bridge = CoreBridge()
+
+    captured = {}
+
+    def fake_start(self, **kwargs):
+        captured["config"] = kwargs["config"]
+
+    mocker.patch.object(Run, "start", fake_start)
+
+    config_dict = {
+        "io": {
+            "mzml_paths": [str(tmp_path / "a.mzML")],
+            "xml_paths": [str(tmp_path / "a.xml")],
+            "out_dir": str(tmp_path / "out"),
+            "db_paths": [],
+            "project_folder": "/some/other/untrusted/path",
+        }
+    }
+
+    with qtbot.waitSignal(bridge.runCompleted, timeout=2000):
+        bridge.run_analysis(config_dict, str(tmp_path))
+
+    assert str(captured["config"].io.project_folder) == str(tmp_path)

@@ -9,6 +9,7 @@ class Router(QObject):
     showErrorRequested = Signal(str)
     newAnalysisPageRequested = Signal(QObject)
     analysisSelected = Signal(str)
+    runAnalysisRequested = Signal(QObject, dict)
 
     @Slot(QUrl, result=str)
     def toLocalPath(self, url: QUrl) -> str:

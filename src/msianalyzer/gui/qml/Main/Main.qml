@@ -27,7 +27,11 @@ ApplicationWindow {
         function onCreateProjectPageRequested() {
             stackView.push("qrc:/Views/CreateProjectPage.qml")
         }
-        
+
+        function onNewAnalysisPageRequested(project) {
+            stackView.push("qrc:/Views/NewAnalysisPage.qml", {"project": project})
+        }
+
         function onShowErrorRequested(message) {
             errorDialog.text = message
             errorDialog.open()

@@ -10,6 +10,7 @@ import logging
 
 from msianalyzer.gui import resources_rc
 from msianalyzer.gui.utils.application import Application  # noqa: F401  (registers qrc resources on import)
+from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
 
 from msianalyzer.core.utils import configure_logging
 
@@ -26,6 +27,9 @@ def build_engine(
     context = engine.rootContext()
     context.setContextProperty("Router", application.router)
     context.setContextProperty("CoreBridge", application.core_bridge)
+    # Static schema metadata, not app state — see config_schema.py.
+    config_schema_provider = ConfigSchemaProvider(engine)
+    context.setContextProperty("ConfigSchema", config_schema_provider)
 
     errors = []
     engine.warnings.connect(lambda warnings: errors.extend(warnings))

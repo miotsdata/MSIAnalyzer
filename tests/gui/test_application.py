@@ -99,3 +99,35 @@ def test_project_loaded_builds_runs_list_from_project(application, project_with_
     runs_list = model.runsList
     assert len(runs_list) == len(project_with_runs.runs)
     assert runs_list[0]["start_date"] >= runs_list[-1]["start_date"]  # newest first
+
+
+def test_run_analysis_requested_calls_core_bridge_with_application_project_folder(
+    application, project
+):
+    application.project_folder = "/some/proj"
+    application.core_bridge.run_analysis = MagicMock()
+    config_dict = {"io": {"mzml_paths": []}}
+    project_model = ProjectModel(project, "/some/proj")
+
+    application.router.runAnalysisRequested.emit(project_model, config_dict)
+
+    application.core_bridge.run_analysis.assert_called_once_with(
+        config_dict, "/some/proj"
+    )
+
+
+def test_invalidConfig_triggers_router_showErrorRequested(application):
+    received = []
+    application.router.showErrorRequested.connect(received.append)
+
+    application.core_bridge.invalidConfig.emit("bad config")
+
+    assert received == ["bad config"]
+
+
+def test_run_started_sets_current_run_id(application):
+    assert application.current_run_id is None
+
+    application.core_bridge.runStarted.emit("run-123")
+
+    assert application.current_run_id == "run-123"

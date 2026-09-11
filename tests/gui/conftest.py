@@ -5,6 +5,7 @@ from msianalyzer.core.project.project import Project
 from msianalyzer.gui.main import build_engine
 from msianalyzer.gui.utils import Router
 from msianalyzer.gui.utils.application import Application
+from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
 
 from PySide6.QtQuick import QQuickView
 from PySide6.QtCore import QUrl
@@ -117,6 +118,35 @@ def project_home_view(application):
         view.show()
         QTest.qWaitForWindowExposed(view)
         QTest.qWait(50)  # let Repeater-created delegates finish incubating
+        views.append(view)
+        return view
+
+    yield _make
+
+    for view in views:
+        view.close()
+
+
+@pytest.fixture
+def new_analysis_view(application):
+    """Factory: build a standalone NewAnalysisPage view for a given project model."""
+    views = []
+    schema_provider = ConfigSchemaProvider()
+
+    def _make(project_model):
+        view = QQuickView()
+        view.engine().rootContext().setContextProperty("Router", application.router)
+        view.engine().rootContext().setContextProperty(
+            "CoreBridge", application.core_bridge
+        )
+        view.engine().rootContext().setContextProperty("ConfigSchema", schema_provider)
+        view.setInitialProperties({"project": project_model})
+        view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        view.setSource(QUrl("qrc:/Views/NewAnalysisPage.qml"))
+        view.resize(900, 700)
+        view.show()
+        QTest.qWaitForWindowExposed(view)
+        QTest.qWait(50)
         views.append(view)
         return view
 
