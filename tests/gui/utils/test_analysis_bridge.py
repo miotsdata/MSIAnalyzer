@@ -211,6 +211,31 @@ def test_get_samples_empty_for_missing_db(tmp_path):
     assert bridge.getSamples(str(tmp_path / "nope.db")) == []
 
 
+def test_get_feature_value_range_delegates_to_heatmap_provider(tmp_path):
+    import anndata as ad
+    import pandas as pd
+    from scipy.sparse import csr_matrix
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    obs = pd.DataFrame(index=["a", "b", "c", "d"])
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array(
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
+    )
+    adata.write_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+
+    result = bridge.getFeatureValueRange(["s1"], 100.0, "raw")
+
+    assert result == {"vmin": 5.0, "vmax": 20.0}
+
+
 def test_get_spectrum_url_returns_plot_for_saved_spectrum(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()

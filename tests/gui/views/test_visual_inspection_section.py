@@ -493,14 +493,18 @@ def test_vmin_vmax_controls_are_visibly_dimmed_when_autoscale_is_on(
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
+    # The label itself stays fully visible/enabled even while autoscale
+    # is on (it shows what autoscale is using) — only the interactive
+    # slider+field row dims.
     vmin_label = find_visual_child(root, "vminValueLabel")
-    vmin_group = vmin_label.parent()
-    assert vmin_group.property("enabled") is False
-    assert vmin_group.property("opacity") == pytest.approx(0.4)
+    vmin_controls = find_visual_child(root, "vminSlider").parent()
+    assert vmin_label.property("opacity") == pytest.approx(1.0)
+    assert vmin_controls.property("enabled") is False
+    assert vmin_controls.property("opacity") == pytest.approx(0.4)
 
     _disable_autoscale(view, root, find_visual_child, qtbot)
-    assert vmin_group.property("enabled") is True
-    assert vmin_group.property("opacity") == pytest.approx(1.0)
+    assert vmin_controls.property("enabled") is True
+    assert vmin_controls.property("opacity") == pytest.approx(1.0)
 
 
 def test_raw_tic_buttons_show_distinct_selected_color(
@@ -550,26 +554,48 @@ def test_switching_layer_resets_to_autoscale(
     assert section.property("autoScale") is True
 
 
-def test_typing_a_large_vmax_expands_slider_ceiling_immediately(
+def test_disabling_autoscale_seeds_manual_range_from_auto_range(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
-    # Reported as needing many Apply-doubling round trips ("16... 32...
-    # 64...") to reach a value far from the current one — typing directly
-    # now expands the slider's range in one step instead.
+    # The proposed/agreed fix for the raw/TIC scale mismatch: rather than
+    # a fixed guess or slowly-doubling ceiling, disabling autoscale
+    # starts the manual vmin/vmax from whatever autoscale was actually
+    # using for the current feature+layer (autoRange, backed by the real
+    # per-pixel data — see AnalysisBridge.getFeatureValueRange).
     view = analysis_view(visual_analysis_model)
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
-    _disable_autoscale(view, root, find_visual_child, qtbot)
-
-    vmax_field = find_visual_child(root, "vmaxField")
-    vmax_slider = find_visual_child(root, "vmaxSlider")
-    ceiling_before = vmax_slider.property("to")
-
-    vmax_field.setProperty("text", "5000")
-    vmax_field.editingFinished.emit()
-    qtbot.wait(50)
 
     section = find_visual_child(root, "visualSection")
-    assert section.property("draftVmax") == pytest.approx(5000)
-    assert vmax_slider.property("to") > ceiling_before
-    assert vmax_slider.property("to") >= 5000
+    # Simulate a real backend response (no h5ad files exist for this
+    # fixture, so the real autoRange call would default to {0, 1} — the
+    # bridge/provider's own real-data computation is covered by their
+    # unit tests; this test is about the QML reacting to it correctly).
+    section.setProperty("autoRange", {"vmin": 12.5, "vmax": 987654.0})
+
+    _disable_autoscale(view, root, find_visual_child, qtbot)
+
+    assert section.property("vmin") == pytest.approx(12.5)
+    assert section.property("vmax") == pytest.approx(987654.0)
+    assert section.property("draftVmin") == pytest.approx(12.5)
+    assert section.property("draftVmax") == pytest.approx(987654.0)
+
+    vmax_slider = find_visual_child(root, "vmaxSlider")
+    assert vmax_slider.property("to") == pytest.approx(987654.0)
+
+
+def test_vmin_vmax_labels_show_auto_range_while_autoscale_is_on(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    section.setProperty("autoRange", {"vmin": 0.5, "vmax": 42.75})
+    qtbot.wait(50)
+
+    vmin_label = find_visual_child(root, "vminValueLabel")
+    vmax_label = find_visual_child(root, "vmaxValueLabel")
+    assert vmin_label.property("text") == "vmin: 0.500"
+    assert vmax_label.property("text") == "vmax: 42.750"

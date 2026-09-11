@@ -22,6 +22,34 @@ def _layer_column(adata: ad.AnnData, layer: str, col_idx: int) -> np.ndarray:
     return np.asarray(column).reshape(-1).astype(float)
 
 
+def feature_value_range(
+    adata: ad.AnnData, mz: float, layer: str = "TIC"
+) -> tuple[float, float]:
+    """The (min, max) of one feature's per-pixel values — what
+    `render_feature_heatmap` uses for `vmin`/`vmax` when autoscaling.
+
+    Exposed separately so the GUI can show what autoscale actually used
+    (and seed a manual vmin/vmax from it) without duplicating the
+    column-lookup logic, and without rendering an image just to read two
+    numbers off it.
+
+    Args:
+        adata: One sample's AnnData, already loaded (`ad.read_h5ad`).
+        mz: The feature's consensus m/z — matched to the nearest `.var["mz"]`.
+        layer: `"raw"` or `"TIC"` — which `adata.layers` entry to read.
+
+    Returns:
+        `(min, max)` of the finite values in that column, or `(0.0, 1.0)`
+        if there are none.
+    """
+    col_idx = _feature_column_index(adata, mz)
+    values = _layer_column(adata, layer, col_idx)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    return float(finite.min()), float(finite.max())
+
+
 def render_feature_heatmap(
     adata: ad.AnnData,
     mz: float,

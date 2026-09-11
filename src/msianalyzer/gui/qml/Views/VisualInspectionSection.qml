@@ -63,29 +63,53 @@ Item {
     property real vmax: 10
     property real draftVmin: vmin
     property real draftVmax: vmax
-    // The vmax slider's ceiling is normally Math.max(1, vmax * 2) — see
-    // vmaxSlider below — but that only grows by 2x per Apply click, which
-    // takes many round trips to cross the raw/TIC scale gap (reported:
-    // "16, then... 32... then... 64", many clicks to get anywhere near a
-    // useful raw-layer value). Typing a value directly in the field
-    // bumps this immediately instead, expanding the slider to match in
-    // one step rather than waiting on repeated apply-doubling.
-    property real vmaxCeilingOverride: 0
     property bool autoScale: true
     property string dataLayer: "TIC"
     property var hiddenSamples: ({})
 
-    // Switching layers changes the data's whole scale (TIC is
-    // log1p-transformed, raw isn't) — a manually-set range from one
-    // layer is essentially meaningless on the other (reported: vmin/vmax
-    // "remain with the value of tic" after switching to raw). Falling
-    // back to autoscale re-renders correctly for the new layer
-    // immediately; turning autoscale back off afterward starts fresh
-    // rather than carrying over a stale range.
+    // What autoscale is *actually* using right now — the real per-pixel
+    // min/max for the selected feature+layer across the visible samples
+    // (AnalysisBridge.getFeatureValueRange, backed by the same h5ad data
+    // the tiles render from). Shown as the vmin/vmax labels whenever
+    // autoscale is on, and what turning autoscale off seeds the manual
+    // range from — TIC (log1p-transformed) and raw live on completely
+    // different scales, so a fixed guess (or a value carried over from
+    // the other layer) was either useless or, for raw, off by orders of
+    // magnitude (reported: vmin/vmax "remain with the value of tic"
+    // after switching to raw, and reaching a useful raw-scale value by
+    // hand took many Apply clicks to double its way there).
+    property var autoRange: ({"vmin": 0, "vmax": 1})
+
+    function visibleSampleNames() {
+        return visualSection.samples
+            .filter(function (s) { return !visualSection.isHidden(s.name) })
+            .map(function (s) { return s.name })
+    }
+
+    function refreshAutoRange() {
+        if (!analysis || !analysis.analysisDbPath || !visualSection.selectedFeature) {
+            visualSection.autoRange = {"vmin": 0, "vmax": 1}
+            return
+        }
+        var names = visualSection.visibleSampleNames()
+        if (names.length === 0) {
+            visualSection.autoRange = {"vmin": 0, "vmax": 1}
+            return
+        }
+        visualSection.autoRange = AnalysisBridge.getFeatureValueRange(
+            names, visualSection.selectedFeature.mz, visualSection.dataLayer)
+    }
+
+    // Switching layers changes the data's whole scale — falling back to
+    // autoscale re-renders correctly for the new layer immediately;
+    // turning autoscale back off afterward starts from that layer's own
+    // real range (autoRange) rather than carrying over a stale one.
     onDataLayerChanged: {
         visualSection.autoScale = true
-        visualSection.vmaxCeilingOverride = 0
+        visualSection.refreshAutoRange()
     }
+    onSelectedFeatureChanged: visualSection.refreshAutoRange()
+    onHiddenSamplesChanged: visualSection.refreshAutoRange()
 
     function isHidden(name) {
         return !!visualSection.hiddenSamples[name]
@@ -117,6 +141,7 @@ Item {
     onAnalysisChanged: {
         if (analysis && analysis.analysisDbPath) {
             AnalysisBridge.setHeatmapAnalysis(analysis.analysisDbPath)
+            visualSection.refreshAutoRange()
         }
     }
 
@@ -255,33 +280,49 @@ Item {
                 objectName: "autoScaleCheckBox"
                 text: "Autoscale"
                 checked: visualSection.autoScale
-                onToggled: visualSection.autoScale = checked
+                onToggled: {
+                    visualSection.autoScale = checked
+                    if (!checked) {
+                        // Just turned off — start the manual range from
+                        // what autoscale was actually using for this
+                        // feature+layer, not a stale/arbitrary default.
+                        visualSection.vmin = visualSection.autoRange.vmin
+                        visualSection.vmax = visualSection.autoRange.vmax
+                        visualSection.draftVmin = visualSection.autoRange.vmin
+                        visualSection.draftVmax = visualSection.autoRange.vmax
+                    }
+                }
             }
             ColumnLayout {
-                enabled: !visualSection.autoScale
-                // Disabled controls default to a subtle/style-dependent
-                // dimming that wasn't obviously "disabled" against the
-                // new light palette — an explicit opacity makes it
-                // unambiguous regardless of style.
-                opacity: enabled ? 1.0 : 0.4
                 Layout.fillWidth: true
                 spacing: 2
                 Text {
                     objectName: "vminValueLabel"
-                    text: "vmin: " + visualSection.draftVmin.toFixed(3)
+                    // Shows what autoscale is using while it's on (so
+                    // it's not just a mystery), the manual draft while off.
+                    text: "vmin: " + (visualSection.autoScale
+                                       ? visualSection.autoRange.vmin.toFixed(3)
+                                       : visualSection.draftVmin.toFixed(3))
                 }
                 RowLayout {
+                    enabled: !visualSection.autoScale
+                    // Disabled controls default to a subtle/style-dependent
+                    // dimming that wasn't obviously "disabled" against the
+                    // new light palette — an explicit opacity makes it
+                    // unambiguous regardless of style.
+                    opacity: enabled ? 1.0 : 0.4
                     Slider {
                         id: vminSlider
                         objectName: "vminSlider"
                         Layout.fillWidth: true
                         from: 0
-                        // Anchored to the last *applied* vmax, not the
-                        // live draft — otherwise dragging (which updates
-                        // draftVmax right away) kept moving this slider's
-                        // own ceiling under the cursor mid-drag, making it
-                        // impossible to settle on a value.
-                        to: Math.max(1, visualSection.vmax)
+                        // Autoscale's own vmax for this feature+layer —
+                        // a real, data-driven ceiling instead of a fixed
+                        // guess or a slowly-doubling one (reported: raw
+                        // intensities are orders of magnitude past TIC's
+                        // log1p scale, and doubling the old fixed default
+                        // per Apply click took many rounds to get close).
+                        to: Math.max(1, visualSection.autoRange.vmax)
                         value: visualSection.draftVmin
                         onMoved: visualSection.draftVmin = value
                     }
@@ -298,27 +339,23 @@ Item {
                 }
             }
             ColumnLayout {
-                enabled: !visualSection.autoScale
-                opacity: enabled ? 1.0 : 0.4
                 Layout.fillWidth: true
                 spacing: 2
                 Text {
                     objectName: "vmaxValueLabel"
-                    text: "vmax: " + visualSection.draftVmax.toFixed(3)
+                    text: "vmax: " + (visualSection.autoScale
+                                       ? visualSection.autoRange.vmax.toFixed(3)
+                                       : visualSection.draftVmax.toFixed(3))
                 }
                 RowLayout {
+                    enabled: !visualSection.autoScale
+                    opacity: enabled ? 1.0 : 0.4
                     Slider {
                         id: vmaxSlider
                         objectName: "vmaxSlider"
                         Layout.fillWidth: true
                         from: 0
-                        // Grows with the *applied* vmax (stable through a
-                        // drag, see vminSlider above) but also jumps ahead
-                        // immediately when a value is typed directly
-                        // (vmaxField below) — waiting for repeated
-                        // Apply-doubling to cross a big gap (e.g. TIC's
-                        // log1p scale to raw's) took many round trips.
-                        to: Math.max(1, visualSection.vmax * 2, visualSection.vmaxCeilingOverride)
+                        to: Math.max(1, visualSection.autoRange.vmax)
                         value: visualSection.draftVmax
                         onMoved: visualSection.draftVmax = value
                     }
@@ -329,10 +366,7 @@ Item {
                         text: visualSection.draftVmax.toFixed(3)
                         onEditingFinished: {
                             var v = parseFloat(text)
-                            if (!isNaN(v)) {
-                                visualSection.draftVmax = v
-                                visualSection.vmaxCeilingOverride = v * 1.2
-                            }
+                            if (!isNaN(v)) visualSection.draftVmax = v
                         }
                     }
                 }

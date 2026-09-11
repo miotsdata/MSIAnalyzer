@@ -9,10 +9,10 @@ from scipy.sparse import csr_matrix
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 
 
-def _write_sample_h5ad(path):
+def _write_sample_h5ad(path, values=(0.0, 10.0, 5.0, 15.0)):
     obs = pd.DataFrame(index=["a", "b", "c", "d"])
     var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
-    X = csr_matrix(np.array([0.0, 10.0, 5.0, 15.0], dtype=np.float32).reshape(-1, 1))
+    X = csr_matrix(np.array(values, dtype=np.float32).reshape(-1, 1))
     adata = ad.AnnData(X=X, obs=obs, var=var)
     adata.obsm["spatial"] = np.array(
         [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
@@ -129,3 +129,44 @@ def test_set_analysis_db_path_clears_cache_on_change(tmp_path):
         image = provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
         assert spy.call_count == 2
         assert not image.isNull()
+
+
+def test_get_feature_value_range_combines_multiple_samples(tmp_path):
+    _write_sample_h5ad(tmp_path / "s1.h5ad", values=(0.0, 10.0, 5.0, 15.0))
+    _write_sample_h5ad(tmp_path / "s2.h5ad", values=(20.0, 30.0, 25.0, 100.0))
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getFeatureValueRange(["s1", "s2"], 100.0, "raw")
+
+    # min of every sample's min, max of every sample's max.
+    assert result == {"vmin": 0.0, "vmax": 100.0}
+
+
+def test_get_feature_value_range_single_sample(tmp_path):
+    _write_sample_h5ad(tmp_path / "s1.h5ad", values=(2.0, 4.0, 6.0, 8.0))
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getFeatureValueRange(["s1"], 100.0, "raw")
+
+    assert result == {"vmin": 2.0, "vmax": 8.0}
+
+
+def test_get_feature_value_range_skips_missing_samples(tmp_path):
+    _write_sample_h5ad(tmp_path / "s1.h5ad", values=(2.0, 4.0, 6.0, 8.0))
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getFeatureValueRange(["s1", "does_not_exist"], 100.0, "raw")
+
+    assert result == {"vmin": 2.0, "vmax": 8.0}
+
+
+def test_get_feature_value_range_defaults_when_no_samples_resolve(tmp_path):
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getFeatureValueRange(["does_not_exist"], 100.0, "raw")
+
+    assert result == {"vmin": 0.0, "vmax": 1.0}

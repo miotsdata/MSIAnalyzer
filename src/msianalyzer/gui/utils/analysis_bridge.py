@@ -102,6 +102,23 @@ class AnalysisBridge(QObject):
         """
         self.heatmap_provider.setAnalysisDbPath(analysis_db_path)
 
+    @Slot(list, float, str, result=dict)
+    def getFeatureValueRange(self, sample_names: list, mz: float, layer: str) -> dict:
+        """The real (min, max) of one feature's values across `sample_names`
+        — what autoscale is actually using for the Visual Inspection grid.
+        See `HeatmapImageProvider.getFeatureValueRange`.
+
+        Args:
+            sample_names: Samples to combine — normally the currently
+                visible ones.
+            mz: The feature's consensus m/z.
+            layer: `"raw"` or `"TIC"`.
+
+        Returns:
+            `{"vmin": ..., "vmax": ...}`.
+        """
+        return self.heatmap_provider.getFeatureValueRange(sample_names, mz, layer)
+
     @Slot(str, result=dict)
     def getSummary(self, analysis_db_path: str) -> dict:
         """Headline counts for the Summary section.

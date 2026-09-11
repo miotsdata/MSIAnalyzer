@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 
-from msianalyzer.core.plotting.heatmap import render_feature_heatmap
+from msianalyzer.core.plotting.heatmap import feature_value_range, render_feature_heatmap
 
 
 def _make_grid_adata(values, *, xs=(0.0, 1.0), ys=(0.0, 1.0), layers=None):
@@ -86,6 +86,32 @@ def test_render_feature_heatmap_selects_requested_layer():
 
     # Same normalized position in each layer's own vmin/vmax range -> same color.
     np.testing.assert_array_equal(raw_rgba, tic_rgba)
+
+
+def test_feature_value_range_returns_min_and_max():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+
+    assert feature_value_range(adata, mz=100.0, layer="raw") == (0.0, 15.0)
+
+
+def test_feature_value_range_selects_requested_layer():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        layers={"raw": [1.0, 2.0, 3.0, 4.0], "TIC": [10.0, 20.0, 30.0, 40.0]},
+    )
+
+    assert feature_value_range(adata, mz=100.0, layer="raw") == (1.0, 4.0)
+    assert feature_value_range(adata, mz=100.0, layer="TIC") == (10.0, 40.0)
+
+
+def test_feature_value_range_defaults_when_all_values_missing():
+    obs = pd.DataFrame(index=["a"])
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.array([np.nan], dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array([(0.0, 0.0)], dtype=float)
+
+    assert feature_value_range(adata, mz=100.0, layer="raw") == (0.0, 1.0)
 
 
 def test_render_feature_heatmap_picks_nearest_mz_column():

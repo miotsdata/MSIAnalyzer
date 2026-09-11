@@ -8,7 +8,7 @@ from PySide6.QtCore import QSize
 from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickImageProvider
 
-from msianalyzer.core.plotting.heatmap import render_feature_heatmap
+from msianalyzer.core.plotting.heatmap import feature_value_range, render_feature_heatmap
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,46 @@ class HeatmapImageProvider(QQuickImageProvider):
         if len(self._cache) > _CACHE_SIZE:
             self._cache.popitem(last=False)
         return adata
+
+    def getFeatureValueRange(
+        self, sample_names: list[str], mz: float, layer: str
+    ) -> dict:
+        """The real (min, max) of one feature's values across several
+        samples — what autoscale is actually using, so a manual vmin/vmax
+        control can start from a range that means something for the
+        current layer instead of a fixed guess (TIC and raw live on
+        completely different scales).
+
+        Args:
+            sample_names: Samples to combine — normally the currently
+                visible ones, so the range covers what's actually shown.
+            mz: The feature's consensus m/z.
+            layer: `"raw"` or `"TIC"`.
+
+        Returns:
+            `{"vmin": ..., "vmax": ...}`, the min of every sample's min
+            and the max of every sample's max. `{"vmin": 0.0, "vmax":
+            1.0}` if no sample resolves to real data (matches
+            `render_feature_heatmap`'s own all-missing fallback).
+        """
+        mins = []
+        maxes = []
+        for name in sample_names:
+            adata = self._load_adata(name)
+            if adata is None:
+                continue
+            try:
+                vmin, vmax = feature_value_range(adata, mz, layer)
+            except Exception:
+                logger.exception(
+                    "feature value range failed for sample %r, mz %r", name, mz
+                )
+                continue
+            mins.append(vmin)
+            maxes.append(vmax)
+        if not mins:
+            return {"vmin": 0.0, "vmax": 1.0}
+        return {"vmin": min(mins), "vmax": max(maxes)}
 
     def requestImage(self, id: str, size: QSize, requestedSize: QSize) -> QImage:
         try:
