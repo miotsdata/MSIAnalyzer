@@ -27,7 +27,7 @@ def test_show_project_home_requested_changes_home_page(
     current_item = stack_view.property("currentItem")
     assert current_item.objectName() == "startPage"
 
-    project_model = ProjectModel(project, application)
+    project_model = ProjectModel(project, "/tmp/proj", application)
 
     application.router.showProjectHomeRequested.emit(project_model)
     qtbot.wait(100)
@@ -73,13 +73,32 @@ def test_invalidCreateProjectName_shows_message(application, engine, qtbot):
     message_dialog.setProperty("visible", False)
 
 
+def test_project_folder_chosen_loads_real_project_and_shows_home_page(
+    application, engine, qtbot, tmp_path
+):
+    proj_path = tmp_path / "myproj"
+    create_project_folder(path=proj_path, name="myproj")
+
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+    assert stack_view.property("currentItem").objectName() == "startPage"
+
+    application.router.projectFolderChosen.emit(str(proj_path))
+    qtbot.wait(100)
+
+    current_item = stack_view.property("currentItem")
+    assert current_item.objectName() == "projectHomePage"
+    label = current_item.findChild(QQuickItem, "projectNameLabel")
+    assert label.property("text") == "myproj"
+
+
 def test_run_started_then_completed_shows_running_page_then_back_to_project_home(
     application, engine, qtbot, tmp_path
 ):
     proj_path = tmp_path / "myproj"
     create_project_folder(path=proj_path, name="myproj")
     application.project_folder = str(proj_path)
-    application.core_bridge.load_project(str(proj_path / ".msianalyzer.yml"))
+    application.core_bridge.load_project(str(proj_path))
     qtbot.wait(50)
 
     window = engine.rootObjects()[0]

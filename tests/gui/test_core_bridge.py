@@ -22,14 +22,28 @@ def test_load_project_empy_path_emit_invalidProjectPath(application):
     assert "no file provided" in received[0]
 
 
-def test_load_project_wrong_path_emit_invalidProjectPath(application):
+def test_load_project_nonexistent_folder_emit_invalidProjectPath(application):
     received = []
     application.core_bridge.invalidProjectPath.connect(received.append)
 
-    application.core_bridge.load_project("notexisting.yaml")
+    application.core_bridge.load_project("notexisting_folder")
 
     assert len(received) == 1
     assert "does not exists" in received[0]
+
+
+def test_load_project_takes_project_folder_not_yaml_path(application, tmp_path):
+    from msianalyzer.core.project.project import create_project_folder
+
+    proj_path = tmp_path / "myproj"
+    create_project_folder(path=proj_path, name="myproj")
+    received = []
+    application.core_bridge.projectLoaded.connect(received.append)
+
+    application.core_bridge.load_project(str(proj_path))
+
+    assert len(received) == 1
+    assert received[0].name == "myproj"
 
 
 @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])

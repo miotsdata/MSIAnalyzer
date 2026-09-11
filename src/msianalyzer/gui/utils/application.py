@@ -61,7 +61,5 @@ class Application(QObject):
     def _on_run_completed(self, run_id: str):
         # Reload from disk so the new run shows up in ProjectModel.runsList —
         # reuses the same load -> projectLoaded -> showProjectHomeRequested
-        # path as opening a project from the start page. core_bridge.load_project
-        # takes the `.msianalyzer.yml` file itself, not the project folder.
-        project_file = str(Path(self.project_folder) / ".msianalyzer.yml")
-        self.core_bridge.load_project(project_file)
+        # path as opening a project from the start page.
+        self.core_bridge.load_project(self.project_folder)

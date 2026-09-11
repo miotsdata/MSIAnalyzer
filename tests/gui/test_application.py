@@ -156,6 +156,4 @@ def test_run_completed_reloads_project_from_folder(application):
 
     application.core_bridge.runCompleted.emit("run-123")
 
-    application.core_bridge.load_project.assert_called_once_with(
-        "/some/proj/.msianalyzer.yml"
-    )
+    application.core_bridge.load_project.assert_called_once_with("/some/proj")

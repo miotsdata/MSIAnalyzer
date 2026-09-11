@@ -32,8 +32,19 @@ class CoreBridge(QObject):
         return list(RUN_STEPS)
 
     def load_project(self, path):
+        """Load the project rooted at `path`.
+
+        Args:
+            path: The project's folder on disk (the one containing
+                `.msianalyzer.yml`), not the yaml file itself.
+        """
+        if not path:
+            self.invalidProjectPath.emit("no file provided.")
+            return
+
+        yaml_path = Path(path) / ".msianalyzer.yml"
         try:
-            project = Project.load_from_yaml(path)
+            project = Project.load_from_yaml(yaml_path)
         except ValueError as ve:
             self.invalidProjectPath.emit(str(ve))
         except FileNotFoundError:
