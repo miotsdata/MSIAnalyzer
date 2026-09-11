@@ -33,6 +33,26 @@ def test_request_image_renders_valid_heatmap(tmp_path):
     assert image.format() == QImage.Format.Format_RGBA8888
 
 
+def test_request_image_handles_percent_encoded_id(tmp_path):
+    # QML's Image element treats `source` as a URL: assigning
+    # "image://heatmap/name|mz|..." percent-encodes "|" (not valid raw in
+    # a URL path) to "%7C" before this provider ever sees the id — every
+    # real request arrives already encoded, which the "|"-only tests above
+    # never exercise (they hand requestImage a pre-decoded string
+    # directly). This is what actually reached production and broke every
+    # single heatmap tile.
+    _write_sample_h5ad(tmp_path / "s1.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    encoded_id = "s1%7C100.0%7Craw%7Cviridis%7C0%7C15"
+    image = provider.requestImage(encoded_id, None, None)
+
+    assert not image.isNull()
+    assert image.width() == 2
+    assert image.height() == 2
+
+
 def test_request_image_auto_scale_matches_render_feature_heatmap(tmp_path):
     _write_sample_h5ad(tmp_path / "s1.h5ad")
     provider = HeatmapImageProvider()

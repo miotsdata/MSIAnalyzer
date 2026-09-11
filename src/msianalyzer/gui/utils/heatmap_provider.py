@@ -1,6 +1,7 @@
 import logging
 from collections import OrderedDict
 from pathlib import Path
+from urllib.parse import unquote
 
 import anndata as ad
 from PySide6.QtCore import QSize
@@ -58,7 +59,15 @@ class HeatmapImageProvider(QQuickImageProvider):
 
     def requestImage(self, id: str, size: QSize, requestedSize: QSize) -> QImage:
         try:
-            sample_name, mz_str, layer, colormap, vmin_str, vmax_str = id.split("|")
+            # QML's Image element treats `source` as a URL: assigning
+            # "image://heatmap/name|mz|..." percent-encodes the "|" (not a
+            # valid raw character in a URL path) to "%7C" before this
+            # provider ever sees it, so `id` arrives still encoded — every
+            # single request failed on this until unquoted. Sample names
+            # with spaces or other reserved characters need this too.
+            sample_name, mz_str, layer, colormap, vmin_str, vmax_str = (
+                unquote(id).split("|")
+            )
             vmin = None if vmin_str == "auto" else float(vmin_str)
             vmax = None if vmax_str == "auto" else float(vmax_str)
             adata = self._load_adata(sample_name)
