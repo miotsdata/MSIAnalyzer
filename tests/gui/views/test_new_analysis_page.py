@@ -51,30 +51,80 @@ def test_adding_and_filling_sample_row_enables_run_button(new_analysis_view, pro
     assert run_button.property("enabled") is True
 
 
-def test_multi_select_mzml_fills_target_row_then_appends_new_rows(
-    new_analysis_view, project
-):
+def test_bulk_add_mzml_creates_one_new_row_per_path(new_analysis_view, project):
     _, root, _ = _make_page(new_analysis_view, project)
 
-    root.addSampleRow()
-    root.addSampleRowsFromMzmlPaths(0, ["/data/s1.mzML", "/data/s2.mzML", "/data/s3.mzML"])
+    root.addMzmlPathsAsNewRows(["/data/s1.mzML", "/data/s2.mzML", "/data/s3.mzML"])
 
     rows = root.property("sampleRows").toVariant()
     assert len(rows) == 3
     assert [r["mzml"] for r in rows] == ["/data/s1.mzML", "/data/s2.mzML", "/data/s3.mzML"]
-    # xml is left for the user to pair per-row, same as a single-file pick.
+    # xml is left for the user to pair afterward.
     assert all(r["xml"] == "" for r in rows)
 
 
-def test_multi_select_mzml_with_no_paths_is_a_no_op(new_analysis_view, project):
+def test_bulk_add_mzml_with_no_paths_is_a_no_op(new_analysis_view, project):
     _, root, _ = _make_page(new_analysis_view, project)
 
-    root.addSampleRow()
-    root.addSampleRowsFromMzmlPaths(0, [])
+    root.addMzmlPathsAsNewRows([])
 
     rows = root.property("sampleRows").toVariant()
-    assert len(rows) == 1
-    assert rows[0]["mzml"] == ""
+    assert len(rows) == 0
+
+
+def test_bulk_add_xml_fills_existing_rows_in_order(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addMzmlPathsAsNewRows(["/data/s1.mzML", "/data/s2.mzML"])
+    root.addXmlPathsSequentially(["/data/s1.xml", "/data/s2.xml"])
+
+    rows = root.property("sampleRows").toVariant()
+    assert len(rows) == 2
+    assert [r["xml"] for r in rows] == ["/data/s1.xml", "/data/s2.xml"]
+    assert [r["mzml"] for r in rows] == ["/data/s1.mzML", "/data/s2.mzML"]
+
+
+def test_bulk_add_xml_appends_new_rows_when_more_xml_than_mzml(
+    new_analysis_view, project
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addMzmlPathsAsNewRows(["/data/s1.mzML"])
+    root.addXmlPathsSequentially(["/data/s1.xml", "/data/extra.xml"])
+
+    rows = root.property("sampleRows").toVariant()
+    assert len(rows) == 2
+    assert rows[0]["mzml"] == "/data/s1.mzML"
+    assert rows[0]["xml"] == "/data/s1.xml"
+    assert rows[1]["mzml"] == ""
+    assert rows[1]["xml"] == "/data/extra.xml"
+
+
+def test_swap_field_exchanges_only_the_named_field_between_rows(
+    new_analysis_view, project
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addMzmlPathsAsNewRows(["/data/s1.mzML", "/data/s2.mzML"])
+    root.addXmlPathsSequentially(["/data/wrong_for_s1.xml", "/data/wrong_for_s2.xml"])
+
+    root.swapField(0, 1, "xml")
+
+    rows = root.property("sampleRows").toVariant()
+    # mzml order untouched, only xml swapped between the two rows.
+    assert [r["mzml"] for r in rows] == ["/data/s1.mzML", "/data/s2.mzML"]
+    assert [r["xml"] for r in rows] == ["/data/wrong_for_s2.xml", "/data/wrong_for_s1.xml"]
+
+
+def test_swap_field_out_of_bounds_is_a_no_op(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addMzmlPathsAsNewRows(["/data/s1.mzML"])
+    root.swapField(0, -1, "mzml")
+    root.swapField(0, 5, "mzml")
+
+    rows = root.property("sampleRows").toVariant()
+    assert rows[0]["mzml"] == "/data/s1.mzML"
 
 
 def test_remove_sample_row_disables_run_button_again(new_analysis_view, project):

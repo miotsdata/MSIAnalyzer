@@ -10,6 +10,14 @@ Page {
     property var project
     property var sampleRows: []
 
+    // Native file/folder dialogs (GTK/KDE portal on Linux) support things
+    // the QML fallback dialog doesn't — multi-select via the OS's normal
+    // ctrl/shift-click, a "Create Folder" button, familiar styling. Forced
+    // back to the QML dialog only under the `offscreen` QPA platform (the
+    // automated test suite, never a real session): a native dialog
+    // instantiated there crashed intermittently.
+    readonly property bool useNativeDialogs: Qt.platform.pluginName !== "offscreen"
+
     // ------------------------------------------------------------------ //
     // Sample-row bookkeeping (io.mzml_paths / io.xml_paths, kept paired)
     // ------------------------------------------------------------------ //
@@ -32,18 +40,47 @@ Page {
         sampleRows = rows
     }
 
-    // Multi-select mzML: the first path fills `targetIndex`'s row, every
-    // extra path gets its own new row (mzml set, xml left for the user to
-    // pair per-row as before) — picking many raw files at once shouldn't
-    // mean repeating "Add Sample" + Browse once per file.
-    function addSampleRowsFromMzmlPaths(targetIndex, paths) {
-        if (paths.length === 0)
-            return
-        setSampleField(targetIndex, "mzml", paths[0])
-        for (var i = 1; i < paths.length; i++) {
+    // Bulk mzML: every selected path becomes its own new row (mzml set,
+    // xml left blank) — the primary way to populate the table, so you
+    // don't add rows one at a time before you can even pick a file.
+    function addMzmlPathsAsNewRows(paths) {
+        for (var i = 0; i < paths.length; i++) {
             addSampleRow()
             setSampleField(sampleRows.length - 1, "mzml", paths[i])
         }
+    }
+
+    // Bulk XML: fills existing rows' xml top-to-bottom in selection order.
+    // mzML and XML files aren't necessarily picked in matching order, so
+    // this is expected to need fixing up afterward with swapField (the
+    // per-row up/down arrows) rather than getting every pairing right the
+    // first time.
+    function addXmlPathsSequentially(paths) {
+        for (var i = 0; i < paths.length; i++) {
+            if (i < sampleRows.length) {
+                setSampleField(i, "xml", paths[i])
+            } else {
+                addSampleRow()
+                setSampleField(sampleRows.length - 1, "xml", paths[i])
+            }
+        }
+    }
+
+    // Swaps just one field (mzml or xml) between two adjacent rows, e.g.
+    // to line up a row's xml with the correct mzml after a bulk add —
+    // moving only one column's cell rather than the whole row.
+    function swapField(index, otherIndex, key) {
+        if (otherIndex < 0 || otherIndex >= sampleRows.length)
+            return
+        var rows = sampleRows.slice()
+        var a = Object.assign({}, rows[index])
+        var b = Object.assign({}, rows[otherIndex])
+        var tmp = a[key]
+        a[key] = b[key]
+        b[key] = tmp
+        rows[index] = a
+        rows[otherIndex] = b
+        sampleRows = rows
     }
 
     function allSampleRowsFilled() {
@@ -150,36 +187,52 @@ Page {
     FileDialog {
         id: mzmlDialog
         objectName: "mzmlDialog"
-        options: FileDialog.DontUseNativeDialog
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        nameFilters: ["mzML files (*.mzML *.mzml)", "All files (*)"]
+        onAccepted: newAnalysisPage.setSampleField(
+            mzmlDialogTarget.rowIndex, "mzml", Router.toLocalPath(selectedFile))
+    }
+    FileDialog {
+        id: xmlDialog
+        objectName: "xmlDialog"
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        nameFilters: ["Raster XML (*.xml)", "All files (*)"]
+        onAccepted: newAnalysisPage.setSampleField(
+            xmlDialogTarget.rowIndex, "xml", Router.toLocalPath(selectedFile))
+    }
+    FileDialog {
+        id: bulkMzmlDialog
+        objectName: "bulkMzmlDialog"
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
         fileMode: FileDialog.OpenFiles
         nameFilters: ["mzML files (*.mzML *.mzml)", "All files (*)"]
         onAccepted: {
             var paths = []
             for (var i = 0; i < selectedFiles.length; i++)
                 paths.push(Router.toLocalPath(selectedFiles[i]))
-            newAnalysisPage.addSampleRowsFromMzmlPaths(mzmlDialogTarget.rowIndex, paths)
+            newAnalysisPage.addMzmlPathsAsNewRows(paths)
         }
     }
     FileDialog {
-        id: xmlDialog
-        objectName: "xmlDialog"
-        options: FileDialog.DontUseNativeDialog
+        id: bulkXmlDialog
+        objectName: "bulkXmlDialog"
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        fileMode: FileDialog.OpenFiles
         nameFilters: ["Raster XML (*.xml)", "All files (*)"]
-        onAccepted: newAnalysisPage.setSampleField(
-            xmlDialogTarget.rowIndex, "xml", Router.toLocalPath(selectedFile))
+        onAccepted: {
+            var paths = []
+            for (var i = 0; i < selectedFiles.length; i++)
+                paths.push(Router.toLocalPath(selectedFiles[i]))
+            newAnalysisPage.addXmlPathsSequentially(paths)
+        }
     }
     FolderDialog {
         id: outDirDialog
         objectName: "outDirDialog"
         // Native where available — the QML fallback dialog can't create a
         // new folder, the platform's own picker can (GTK/KDE both have a
-        // "Create Folder" action). Forced back to the QML dialog under the
-        // `offscreen` QPA platform (used by the automated test suite,
-        // never by a real session): instantiating a native folder dialog
-        // there crashed intermittently (~1 in 15 full-suite runs, reliably
-        // reproduced via bisection against this one option) — real
-        // sessions run under xcb/wayland/windows/cocoa, where this is safe.
-        options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
+        // "Create Folder" action).
+        options: newAnalysisPage.useNativeDialogs ? 0 : FolderDialog.DontUseNativeDialog
         onAccepted: outDirField.text = Router.toLocalPath(selectedFolder)
     }
 
@@ -194,42 +247,39 @@ Page {
             font.bold: true
         }
 
-        TabBar {
+        // A plain TabBar is a single row: with 13 tabs it has to either
+        // shrink each button (eliding the label, the original complaint)
+        // or scroll sideways (tabs hidden off-screen). Neither shows every
+        // label at once. A Flow of checkable Buttons instead wraps whole
+        // buttons onto as many rows as needed — each label stays on one
+        // line at its natural width, never split mid-word; short rows like
+        // "align all mzs" | "group MS2" sit together, a long one like
+        // "TIC normalization" gets its own row's worth of space.
+        Flow {
             id: tabBar
             objectName: "tabBar"
             Layout.fillWidth: true
+            spacing: 4
 
-            TabButton {
-                id: ioTabButton
+            property int currentIndex: 0
+
+            Button {
                 objectName: "tabButton_io"
                 text: "input/output"
-                contentItem: Text {
-                    text: ioTabButton.text
-                    font: ioTabButton.font
-                    wrapMode: Text.Wrap
-                    elide: Text.ElideNone
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
+                checkable: true
+                checked: tabBar.currentIndex === 0
+                highlighted: checked
+                onClicked: tabBar.currentIndex = 0
             }
             Repeater {
                 model: ConfigSchema.groups
-                delegate: TabButton {
-                    id: groupTabButton
+                delegate: Button {
                     objectName: "tabButton_" + modelData.key
                     text: modelData.title
-                    // Full label, wrapped onto multiple lines rather than
-                    // elided — the default contentItem elides at whatever
-                    // width TabBar gives each button, which cut off most of
-                    // these (13 tabs sharing one bar's width).
-                    contentItem: Text {
-                        text: groupTabButton.text
-                        font: groupTabButton.font
-                        wrapMode: Text.Wrap
-                        elide: Text.ElideNone
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
+                    checkable: true
+                    checked: tabBar.currentIndex === index + 1
+                    highlighted: checked
+                    onClicked: tabBar.currentIndex = index + 1
                 }
             }
         }
@@ -280,7 +330,28 @@ Page {
                         }
                     }
 
-                    Text { text: "Samples"; font.bold: true }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: "Samples"; font.bold: true; Layout.fillWidth: true }
+                        Button {
+                            objectName: "addMzmlFilesButton"
+                            text: "Add mzML files..."
+                            onClicked: bulkMzmlDialog.open()
+                        }
+                        Button {
+                            objectName: "addXmlFilesButton"
+                            text: "Add XML files..."
+                            onClicked: bulkXmlDialog.open()
+                        }
+                    }
+                    Text {
+                        text: "mzML and XML are picked separately and lined up by row "
+                              + "order — use the ▲/▼ arrows to fix a mismatched pairing."
+                        color: "gray"
+                        font.pixelSize: 11
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                    }
 
                     Repeater {
                         model: sampleRows
@@ -295,6 +366,25 @@ Page {
                                 Layout.fillWidth: true
                                 elide: Text.ElideMiddle
                             }
+                            ColumnLayout {
+                                spacing: 0
+                                Button {
+                                    objectName: "moveMzmlUpButton_" + index
+                                    text: "▲"
+                                    Layout.preferredWidth: 24
+                                    Layout.preferredHeight: 16
+                                    enabled: index > 0
+                                    onClicked: newAnalysisPage.swapField(index, index - 1, "mzml")
+                                }
+                                Button {
+                                    objectName: "moveMzmlDownButton_" + index
+                                    text: "▼"
+                                    Layout.preferredWidth: 24
+                                    Layout.preferredHeight: 16
+                                    enabled: index < sampleRows.length - 1
+                                    onClicked: newAnalysisPage.swapField(index, index + 1, "mzml")
+                                }
+                            }
                             Button {
                                 text: "mzML..."
                                 onClicked: {
@@ -307,6 +397,25 @@ Page {
                                 text: modelData.xml === "" ? "(no XML selected)" : modelData.xml
                                 Layout.fillWidth: true
                                 elide: Text.ElideMiddle
+                            }
+                            ColumnLayout {
+                                spacing: 0
+                                Button {
+                                    objectName: "moveXmlUpButton_" + index
+                                    text: "▲"
+                                    Layout.preferredWidth: 24
+                                    Layout.preferredHeight: 16
+                                    enabled: index > 0
+                                    onClicked: newAnalysisPage.swapField(index, index - 1, "xml")
+                                }
+                                Button {
+                                    objectName: "moveXmlDownButton_" + index
+                                    text: "▼"
+                                    Layout.preferredWidth: 24
+                                    Layout.preferredHeight: 16
+                                    enabled: index < sampleRows.length - 1
+                                    onClicked: newAnalysisPage.swapField(index, index + 1, "xml")
+                                }
                             }
                             Button {
                                 text: "XML..."
@@ -414,7 +523,7 @@ Page {
     FileDialog {
         id: libraryPathDialog
         objectName: "libraryPathDialog"
-        options: FileDialog.DontUseNativeDialog
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Library database (*.db)", "All files (*)"]
         onAccepted: {
