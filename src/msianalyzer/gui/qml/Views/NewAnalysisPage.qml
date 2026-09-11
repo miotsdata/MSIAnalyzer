@@ -87,27 +87,40 @@ Page {
     // Bulk mzML: every selected path becomes its own new row (mzml set,
     // xml left blank) — the primary way to populate the table, so you
     // don't add rows one at a time before you can even pick a file.
+    //
+    // Builds the whole new array and assigns `sampleRows` exactly once —
+    // NOT addSampleRow()+setSampleField() per path. Each of those
+    // reassigns `sampleRows` on its own, and every reassignment is a new
+    // array *reference*, which the Repeater rendering the table treats as
+    // a brand new model and rebuilds every row for — fine for one path,
+    // O(paths.length^2) row (re)construction for a real multi-file pick
+    // (visibly slow past a few dozen files, hence this).
     function addMzmlPathsAsNewRows(paths) {
+        var rows = sampleRows.slice()
         for (var i = 0; i < paths.length; i++) {
-            addSampleRow()
-            setSampleField(sampleRows.length - 1, "mzml", paths[i])
+            rows.push({ mzml: paths[i], xml: "" })
         }
+        sampleRows = rows
     }
 
     // Bulk XML: fills existing rows' xml top-to-bottom in selection order.
     // mzML and XML files aren't necessarily picked in matching order, so
     // this is expected to need fixing up afterward with swapField (the
     // per-row up/down arrows) rather than getting every pairing right the
-    // first time.
+    // first time. Single assignment at the end, same reasoning as
+    // addMzmlPathsAsNewRows above.
     function addXmlPathsSequentially(paths) {
+        var rows = sampleRows.slice()
         for (var i = 0; i < paths.length; i++) {
-            if (i < sampleRows.length) {
-                setSampleField(i, "xml", paths[i])
+            if (i < rows.length) {
+                var row = Object.assign({}, rows[i])
+                row.xml = paths[i]
+                rows[i] = row
             } else {
-                addSampleRow()
-                setSampleField(sampleRows.length - 1, "xml", paths[i])
+                rows.push({ mzml: "", xml: paths[i] })
             }
         }
+        sampleRows = rows
     }
 
     // Swaps just one field (mzml or xml) between two adjacent rows, e.g.

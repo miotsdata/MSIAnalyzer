@@ -91,6 +91,19 @@ def test_bulk_add_mzml_with_no_paths_is_a_no_op(new_analysis_view, project):
     assert len(rows) == 0
 
 
+def test_bulk_add_mzml_appends_after_existing_rows(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/existing.mzML")
+    root.addMzmlPathsAsNewRows(["/data/new1.mzML", "/data/new2.mzML"])
+
+    rows = root.property("sampleRows").toVariant()
+    assert [r["mzml"] for r in rows] == [
+        "/data/existing.mzML", "/data/new1.mzML", "/data/new2.mzML",
+    ]
+
+
 def test_bulk_add_xml_fills_existing_rows_in_order(new_analysis_view, project):
     _, root, _ = _make_page(new_analysis_view, project)
 
