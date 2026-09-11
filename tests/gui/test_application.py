@@ -159,6 +159,41 @@ def test_run_completed_reloads_project_from_folder(application):
     application.core_bridge.load_project.assert_called_once_with("/some/proj")
 
 
+def test_run_completed_then_reload_lands_on_the_finished_analysis(
+    application, project_with_runs
+):
+    application.project_folder = "/tmp/proj"
+    application.core_bridge.load_project = MagicMock()
+
+    run_id = next(iter(project_with_runs.runs.keys()))
+    application.core_bridge.runCompleted.emit(run_id)
+
+    home_received = []
+    analysis_received = []
+    application.router.showProjectHomeRequested.connect(home_received.append)
+    application.router.showAnalysisRequested.connect(analysis_received.append)
+
+    # The real load_project() would now emit projectLoaded — simulate it,
+    # since it's mocked above (this test isn't exercising the actual
+    # project-reading logic, only the post-run navigation decision).
+    application.core_bridge.projectLoaded.emit(project_with_runs)
+
+    assert home_received == []
+    assert len(analysis_received) == 1
+    assert analysis_received[0].runId == run_id
+
+
+def test_project_loaded_without_a_pending_run_goes_to_project_home(
+    application, project_with_runs
+):
+    home_received = []
+    application.router.showProjectHomeRequested.connect(home_received.append)
+
+    application.core_bridge.projectLoaded.emit(project_with_runs)
+
+    assert len(home_received) == 1
+
+
 def test_analysis_selected_emits_show_analysis_requested(application, project_with_runs):
     application.project = project_with_runs
     application.project_model = ProjectModel(project_with_runs, "/tmp/proj")

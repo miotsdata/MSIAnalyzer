@@ -19,6 +19,47 @@ Page {
     readonly property bool useNativeDialogs: Qt.platform.pluginName !== "offscreen"
 
     // ------------------------------------------------------------------ //
+    // Display helpers: show a bare filename instead of a full path when
+    // every sample's file (of that kind) lives in the same folder — the
+    // shared folder is redundant noise once you've picked more than one.
+    // ------------------------------------------------------------------ //
+
+    function dirName(path) {
+        var idx = path.lastIndexOf("/")
+        return idx >= 0 ? path.substring(0, idx) : ""
+    }
+
+    function baseName(path) {
+        var idx = path.lastIndexOf("/")
+        return idx >= 0 ? path.substring(idx + 1) : path
+    }
+
+    // The shared directory of every non-empty path in `paths`, or null if
+    // there isn't one (no paths yet, or they're spread across folders).
+    function commonDir(paths) {
+        var dir = null
+        for (var i = 0; i < paths.length; i++) {
+            if (paths[i] === "")
+                continue
+            var d = dirName(paths[i])
+            if (dir === null)
+                dir = d
+            else if (d !== dir)
+                return null
+        }
+        return dir
+    }
+
+    function displayPath(path, commonDirValue) {
+        if (path === "")
+            return ""
+        return commonDirValue !== null ? baseName(path) : path
+    }
+
+    readonly property var mzmlCommonDir: commonDir(sampleRows.map(function (r) { return r.mzml }))
+    readonly property var xmlCommonDir: commonDir(sampleRows.map(function (r) { return r.xml }))
+
+    // ------------------------------------------------------------------ //
     // Sample-row bookkeeping (io.mzml_paths / io.xml_paths, kept paired)
     // ------------------------------------------------------------------ //
 
@@ -362,9 +403,15 @@ Page {
 
                             Text {
                                 objectName: "sampleRowMzml_" + index
-                                text: modelData.mzml === "" ? "(no mzML selected)" : modelData.mzml
+                                text: modelData.mzml === "" ? "(no mzML selected)"
+                                      : newAnalysisPage.displayPath(modelData.mzml, newAnalysisPage.mzmlCommonDir)
                                 Layout.fillWidth: true
                                 elide: Text.ElideMiddle
+                                HoverHandler { id: mzmlHover_ }
+                                // Full path on hover — the label itself
+                                // drops it once every mzML shares a folder.
+                                ToolTip.visible: mzmlHover_.hovered && modelData.mzml !== ""
+                                ToolTip.text: modelData.mzml
                             }
                             ColumnLayout {
                                 spacing: 0
@@ -394,9 +441,13 @@ Page {
                             }
                             Text {
                                 objectName: "sampleRowXml_" + index
-                                text: modelData.xml === "" ? "(no XML selected)" : modelData.xml
+                                text: modelData.xml === "" ? "(no XML selected)"
+                                      : newAnalysisPage.displayPath(modelData.xml, newAnalysisPage.xmlCommonDir)
                                 Layout.fillWidth: true
                                 elide: Text.ElideMiddle
+                                HoverHandler { id: xmlHover_ }
+                                ToolTip.visible: xmlHover_.hovered && modelData.xml !== ""
+                                ToolTip.text: modelData.xml
                             }
                             ColumnLayout {
                                 spacing: 0

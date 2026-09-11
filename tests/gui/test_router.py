@@ -3,7 +3,7 @@ from PySide6.QtCore import QUrl, QObject, Qt
 from pathlib import Path
 
 from msianalyzer.gui.models.project import ProjectModel
-from msianalyzer.core.project.project import create_project_folder
+from msianalyzer.core.project.project import Project, create_project_folder
 
 
 def test_to_local_path(application, tmp_path):
@@ -92,7 +92,7 @@ def test_project_folder_chosen_loads_real_project_and_shows_home_page(
     assert label.property("text") == "myproj"
 
 
-def test_run_started_then_completed_shows_running_page_then_back_to_project_home(
+def test_run_started_then_completed_shows_running_page_then_analysis_page(
     application, engine, qtbot, tmp_path
 ):
     proj_path = tmp_path / "myproj"
@@ -112,11 +112,25 @@ def test_run_started_then_completed_shows_running_page_then_back_to_project_home
     current_item = stack_view.property("currentItem")
     assert current_item.objectName() == "runningAnalysisPage"
 
+    # The real run pipeline would have persisted "run-1" into the project
+    # file by the time runCompleted fires; write it in directly so the
+    # post-run reload (real disk I/O, same as production) finds it.
+    project = Project.load_from_yaml(proj_path / ".msianalyzer.yml")
+    project.runs["run-1"] = {
+        "id": "run-1",
+        "start_date": "2026-01-01 12:00:00",
+        "config": {
+            "io": {"out_dir": str(proj_path / "output")},
+            "analysis": {"db_name": None},
+        },
+    }
+    project.export(proj_path / ".msianalyzer.yml")
+
     application.core_bridge.runCompleted.emit("run-1")
     qtbot.wait(100)
 
     current_item = stack_view.property("currentItem")
-    assert current_item.objectName() == "projectHomePage"
+    assert current_item.objectName() == "analysisPage"
 
 
 def test_analysis_selected_shows_analysis_page(application, engine, qtbot, tmp_path):

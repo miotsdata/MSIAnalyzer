@@ -57,7 +57,7 @@ Page {
     FolderDialog {
         id: createProjectFolderDialog
         objectName: "createProjectFolderDialog"
-        options: FolderDialog.DontUseNativeDialog
+        options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
         onAccepted: {
             createProjectPathInput.text = Router.toLocalPath(selectedFolder)        
         }

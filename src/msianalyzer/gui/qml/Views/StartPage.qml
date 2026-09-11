@@ -36,7 +36,10 @@ Page {
         id: projectFolderDialog
         objectName: "projectFolderDialog"
 
-        options: FolderDialog.DontUseNativeDialog
+        // Native where available — see NewAnalysisPage.qml's
+        // `useNativeDialogs` for why this is conditional on the QPA
+        // platform rather than unconditionally native.
+        options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
         onAccepted: {
             Router.projectFolderChosen(Router.toLocalPath(selectedFolder))
         }
