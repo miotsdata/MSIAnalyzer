@@ -16,6 +16,7 @@ build-backend = "pdm.backend"
 
 [project.scripts]
 msianalyzer = "msianalyzer.cli.main:main"
+msianalyzer-gui = "msianalyzer.gui.main:main"
 
 [tool.pdm]
 distribution = true
