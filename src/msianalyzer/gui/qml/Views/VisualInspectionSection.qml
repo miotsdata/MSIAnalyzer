@@ -11,12 +11,35 @@ Item {
                             ? AnalysisBridge.getFeatureList(analysis.analysisDbPath) : []
     property var samples: (analysis && analysis.analysisDbPath)
                            ? AnalysisBridge.getSamples(analysis.analysisDbPath) : []
-    property var featureLabels: visualSection.features.map(function (f) {
-        return f.compound_name ? f.compound_name : ("m/z " + Number(f.mz).toFixed(4))
+
+    // "mz" (the bridge's own order — already ascending) or "name" (every
+    // annotated feature alphabetically by compound, then every
+    // unannotated feature by m/z, at the end).
+    property string sortMode: "mz"
+
+    property var sortedFeatures: {
+        var feats = visualSection.features.slice()
+        if (visualSection.sortMode === "name") {
+            var annotated = feats.filter(function (f) { return !!f.compound_name })
+            var unannotated = feats.filter(function (f) { return !f.compound_name })
+            annotated.sort(function (a, b) { return a.compound_name.localeCompare(b.compound_name) })
+            unannotated.sort(function (a, b) { return a.mz - b.mz })
+            return annotated.concat(unannotated)
+        }
+        feats.sort(function (a, b) { return a.mz - b.mz })
+        return feats
+    }
+
+    // Annotated: "150.1234: Caffeine". Unannotated: "m/z 150.1234" (no
+    // name to show).
+    property var featureLabels: visualSection.sortedFeatures.map(function (f) {
+        return f.compound_name
+               ? (Number(f.mz).toFixed(4) + ": " + f.compound_name)
+               : ("m/z " + Number(f.mz).toFixed(4))
     })
     property int selectedFeatureIndex: 0
-    property var selectedFeature: (visualSection.features.length > visualSection.selectedFeatureIndex)
-                                   ? visualSection.features[visualSection.selectedFeatureIndex] : null
+    property var selectedFeature: (visualSection.sortedFeatures.length > visualSection.selectedFeatureIndex)
+                                   ? visualSection.sortedFeatures[visualSection.selectedFeatureIndex] : null
 
     property int gridRows: 1
     property int gridCols: Math.max(1, Math.min(4, visualSection.samples.length))
@@ -87,6 +110,22 @@ Item {
             spacing: 10
 
             Text { text: "Feature"; font.bold: true }
+            RowLayout {
+                Text { text: "Sort by" }
+                ComboBox {
+                    id: sortModeCombo
+                    objectName: "sortModeCombo"
+                    Layout.fillWidth: true
+                    model: ["m/z", "Name"]
+                    currentIndex: visualSection.sortMode === "name" ? 1 : 0
+                    onActivated: (index) => {
+                        visualSection.sortMode = index === 1 ? "name" : "mz"
+                        // The old index likely points at a different
+                        // feature once the order changes.
+                        visualSection.selectedFeatureIndex = 0
+                    }
+                }
+            }
             ComboBox {
                 id: featureCombo
                 objectName: "featureCombo"
@@ -197,29 +236,13 @@ Item {
                 }
             }
 
-            Text { text: "Grid"; font.bold: true }
-            RowLayout {
-                Text { text: "Rows" }
-                SpinBox {
-                    id: rowsSpinBox
-                    objectName: "rowsSpinBox"
-                    editable: true
-                    from: 1
-                    to: 20
-                    value: visualSection.gridRows
-                    onValueModified: visualSection.gridRows = value
-                }
-                Text { text: "Cols" }
-                SpinBox {
-                    id: colsSpinBox
-                    objectName: "colsSpinBox"
-                    editable: true
-                    from: 1
-                    to: 20
-                    value: visualSection.gridCols
-                    onValueModified: visualSection.gridCols = value
-                }
-            }
+            // Rows/cols picking is disabled for now — the grid was too
+            // crowded with multiple columns of full-size tiles, so tiles
+            // are laid out one per row (fixed) at a smaller, fixed height
+            // instead, with the list itself scrolling for more samples.
+            // Kept (hidden, not deleted) for when a real "how many
+            // columns" control returns alongside per-tile sizing that
+            // isn't just "fill whatever space division the grid gives it".
 
             Text { text: "Samples"; font.bold: true }
             // No nested Flickable here (unlike the equivalent samples list
@@ -267,7 +290,12 @@ Item {
             GridLayout {
                 id: heatmapGrid
                 objectName: "heatmapGrid"
-                columns: visualSection.gridCols
+                // Fixed at 1 column (rows/cols picking disabled for now,
+                // see the controls panel) — one tile per row, fixed size,
+                // the Flickable above scrolls for as many samples as
+                // there are, rather than every tile stretching to fill
+                // whatever gridRows/gridCols divided the space into.
+                columns: 1
                 columnSpacing: 8
                 rowSpacing: 8
 
@@ -280,8 +308,8 @@ Item {
 
                     delegate: ColumnLayout {
                         objectName: "heatmapTile_" + modelData.name
-                        Layout.preferredWidth: gridFlickable.width / visualSection.gridCols
-                        Layout.preferredHeight: gridFlickable.height / visualSection.gridRows
+                        Layout.preferredWidth: gridFlickable.width
+                        Layout.preferredHeight: 360
 
                         Text {
                             objectName: "heatmapTileLabel_" + modelData.name
