@@ -19,3 +19,4 @@ useful).
 | [8](0008-precursor-ion-purity.md) | Precursor ion purity (Stage A′) | Accepted |
 | [9](0009-consume-purity-and-consensus.md) | Consume purity: annotation filter + per-feature consensus | Accepted |
 | [10](0010-score-weights-and-flat-fragmentation.md) | Configurable score weights + flat-fragmentation flag | Accepted |
+| [11](0011-run-progress-callback.md) | `Run` step-progress callback for GUI consumption | Accepted |

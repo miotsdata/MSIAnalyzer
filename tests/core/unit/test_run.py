@@ -224,6 +224,22 @@ def test_run_to_dict_conversions():
     yaml.safe_dump(d)  # must not raise
 
 
+def test_run_to_dict_excludes_on_step_includes_config_path():
+    run = Run("test_config.yml")
+    run.config = DummyObjectWithToDict()
+    run.config_path = "/tmp/config.yml"
+    run.on_step = lambda step, status: None  # not YAML-safe; must be dropped
+
+    d = run.to_dict()
+
+    assert "on_step" not in d
+    assert d["config_path"] == "/tmp/config.yml"
+
+    import yaml
+
+    yaml.safe_dump(d)  # must not raise
+
+
 # ==============================================================================
 # TESTS FOR is_command_already_run (raw database, project-scoped)
 # ==============================================================================
@@ -597,3 +613,253 @@ def test_start_method_orchestration(mocker, tmp_path):
 
     mock_run_core.assert_called_once()
     assert mock_proj_inst.export.call_count == 2
+
+
+def test_start_sets_config_path_default_from_config_file(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config_file = tmp_path / "config.yml"
+    config_file.touch()
+
+    mock_cfg = DummyConfig(tmp_path)
+    mock_config_cls = mocker.patch("msianalyzer.core.run.run.Config")
+    mock_config_cls.from_yaml.return_value = mock_cfg
+
+    mock_proj_inst = mocker.MagicMock()
+    mock_proj_inst.runs = {}
+    mock_project_cls = mocker.patch("msianalyzer.core.run.run.Project")
+    mock_project_cls.load.return_value = mock_proj_inst
+
+    mocker.patch.object(run, "run_core")
+
+    run.start(config_file)
+
+    assert run.config_path == str(config_file)
+
+
+def test_start_with_config_object_records_explicit_config_path_and_on_step(
+    mocker, tmp_path
+):
+    run = Run()
+    config = DummyConfig(tmp_path)
+
+    mock_proj_inst = mocker.MagicMock()
+    mock_proj_inst.runs = {}
+    mock_project_cls = mocker.patch("msianalyzer.core.run.run.Project")
+    mock_project_cls.load.return_value = mock_proj_inst
+
+    mock_run_core = mocker.patch.object(run, "run_core")
+
+    events = []
+    explicit_path = str(tmp_path / "explicit.yml")
+    run.start(
+        config=config,
+        config_path=explicit_path,
+        on_step=lambda step, status: events.append((step, status)),
+    )
+
+    assert run.config_path == explicit_path
+    assert run.on_step is not None
+    mock_run_core.assert_called_once()
+
+
+def test_start_with_config_object_and_no_config_path_leaves_it_none(mocker, tmp_path):
+    run = Run()
+    config = DummyConfig(tmp_path)
+
+    mock_proj_inst = mocker.MagicMock()
+    mock_proj_inst.runs = {}
+    mock_project_cls = mocker.patch("msianalyzer.core.run.run.Project")
+    mock_project_cls.load.return_value = mock_proj_inst
+
+    mocker.patch.object(run, "run_core")
+
+    run.start(config=config)
+
+    assert run.config_path is None
+
+
+# ==============================================================================
+# TESTS FOR on_step PROGRESS CALLBACK (USING mocker)
+# ==============================================================================
+
+_FULL_RUN_STAGES_SUCCESS = [
+    ("process_samples", "started"),
+    ("process_samples", "completed"),
+    ("align_mz", "started"),
+    ("align_mz", "completed"),
+    ("group_ms2", "started"),
+    ("group_ms2", "completed"),
+    ("precursor_purity", "started"),
+    ("precursor_purity", "completed"),
+    ("annotate_ms2", "started"),
+    ("annotate_ms2", "completed"),
+    ("ms2_consensus", "started"),
+    ("ms2_consensus", "completed"),
+    ("assemble_adata", "started"),
+    ("assemble_adata", "completed"),
+    ("summary_report", "started"),
+    ("summary_report", "completed"),
+]
+
+
+def _patch_run_core_collaborators(mocker, mzs_index=(100.0, 200.0, 300.0)):
+    mocker.patch(
+        "msianalyzer.core.run.run.run_grouper",
+        return_value=mocker.MagicMock(associations=[], feature_summary=[]),
+    )
+    mocker.patch(
+        "msianalyzer.core.run.run.run_precursor_purity",
+        return_value=mocker.MagicMock(
+            n_scans=0, n_multi_peak=0, n_precursor_missing=0, n_interpolated=0
+        ),
+    )
+    mocker.patch(
+        "msianalyzer.core.run.run.run_annotation",
+        return_value=mocker.MagicMock(
+            rows=[], n_scans_annotated=0, n_features_annotated=0
+        ),
+    )
+    mocker.patch(
+        "msianalyzer.core.run.run.run_consensus",
+        return_value=mocker.MagicMock(n_features=0, n_features_scored=0),
+    )
+    mocker.patch("msianalyzer.core.run.run.build_summary_report")
+    mocker.patch(
+        "msianalyzer.core.run.run.align_mz_across_samples",
+        return_value=pd.DataFrame(index=list(mzs_index)),
+    )
+    mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
+    )
+
+
+def test_run_core_emits_on_step_progress_for_every_stage(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    config.annotate.library_path = str(tmp_path / "lib.db")
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    events = []
+    run.on_step = lambda step, status: events.append((step, status))
+
+    res1 = SampleResult(
+        out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0, 200.0])
+    )
+    res2 = SampleResult(
+        out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0, 300.0])
+    )
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    _patch_run_core_collaborators(mocker)
+
+    mock_executor = mocker.MagicMock()
+    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
+    mocker.patch(
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
+    )
+
+    run.run_core()
+
+    assert events == _FULL_RUN_STAGES_SUCCESS
+
+
+def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    config.purity.enabled = False
+    config.annotate.library_path = None
+    config.consensus.enabled = False
+    config.report.enabled = False
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    events = []
+    run.on_step = lambda step, status: events.append((step, status))
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0]))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    mocker.patch(
+        "msianalyzer.core.run.run.run_grouper",
+        return_value=mocker.MagicMock(associations=[], feature_summary=[]),
+    )
+    mocker.patch(
+        "msianalyzer.core.run.run.align_mz_across_samples",
+        return_value=pd.DataFrame(index=[100.0]),
+    )
+    mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
+    )
+
+    mock_executor = mocker.MagicMock()
+    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
+    mocker.patch(
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
+    )
+
+    run.run_core()
+
+    assert events == [
+        ("process_samples", "started"),
+        ("process_samples", "completed"),
+        ("align_mz", "started"),
+        ("align_mz", "completed"),
+        ("group_ms2", "started"),
+        ("group_ms2", "completed"),
+        ("precursor_purity", "skipped"),
+        ("annotate_ms2", "skipped"),
+        ("ms2_consensus", "skipped"),
+        ("assemble_adata", "started"),
+        ("assemble_adata", "completed"),
+        ("summary_report", "skipped"),
+    ]
+
+
+def test_run_core_emits_failed_when_sample_processing_raises(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    events = []
+    run.on_step = lambda step, status: events.append((step, status))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+
+    mock_executor = mocker.MagicMock()
+    mock_executor.__enter__.return_value.map.side_effect = RuntimeError("boom")
+    mocker.patch(
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
+    )
+
+    with pytest.raises(RuntimeError):
+        run.run_core()
+
+    assert events == [("process_samples", "started"), ("process_samples", "failed")]

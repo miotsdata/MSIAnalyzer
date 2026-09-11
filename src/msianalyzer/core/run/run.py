@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -47,6 +47,21 @@ class RunStatus(Enum):
     COMPLETED = 0
 
 
+#: Canonical, ordered list of `run_core` stages. Consumers (e.g. the GUI) can
+#: render the full checklist up front and fill statuses in as `on_step` fires.
+#: See `Run.start`'s `on_step` parameter.
+RUN_STEPS: tuple[str, ...] = (
+    "process_samples",
+    "align_mz",
+    "group_ms2",
+    "precursor_purity",
+    "annotate_ms2",
+    "ms2_consensus",
+    "assemble_adata",
+    "summary_report",
+)
+
+
 @dataclass
 class SampleResult:
     """Per-sample output of `Run._process_one_sample`.
@@ -80,7 +95,14 @@ class Run:
         end_date: When the run finished, or None while running.
         status: Current `RunStatus`.
         config: The loaded `Config`, or None before `start`.
+        config_path: Path the config was loaded from / exported to, for
+            provenance (e.g. shown in the GUI project page). None before
+            `start`.
         project: The owning `Project`, or None before `start`.
+        on_step: Optional callback invoked as `on_step(step, status)` for
+            each stage in `RUN_STEPS`, `status` one of `"started"`,
+            `"completed"`, `"skipped"`, `"failed"`. Not persisted (excluded
+            from `to_dict`) — purely a runtime hook, e.g. for the GUI.
     """
 
     def __init__(self, config_file: str | Path | None = None):
@@ -89,7 +111,9 @@ class Run:
         self.end_date: datetime.datetime | None = None
         self.status: RunStatus = RunStatus.RUNNING
         self.config: Config | None = None
+        self.config_path: str | None = None
         self.project: Project | None = None
+        self.on_step: Callable[[str, str], None] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise the run to a plain, YAML-friendly dict.
@@ -104,7 +128,7 @@ class Run:
         """
         d: dict[str, Any] = {}
         for key, value in vars(self).items():
-            if key == "project":
+            if key in ("project", "on_step"):
                 continue
             if isinstance(value, datetime.datetime):
                 d[key] = str(value)
@@ -126,6 +150,8 @@ class Run:
         self,
         config_file: str | Path | None = None,
         config: Config | None = None,
+        config_path: str | Path | None = None,
+        on_step: Callable[[str, str], None] | None = None,
     ) -> None:
         """Load configuration, register the run, and execute the pipeline.
 
@@ -138,14 +164,25 @@ class Run:
                 not given.
             config: An already-built `Config`. Takes precedence over
                 `config_file`.
+            config_path: Path to record as this run's config provenance
+                (`self.config_path`). Defaults to `config_file` when that is
+                given and `config_path` is not; otherwise None.
+            on_step: Optional per-stage progress callback, see `RUN_STEPS`
+                and the `Run.on_step` attribute.
 
         Raises:
             ValueError: If neither `config_file` nor `config` is provided.
         """
+        self.on_step = on_step
+
         if config is not None:
             self.config = config
+            self.config_path = str(config_path) if config_path is not None else None
         elif config_file is not None:
             self.config = Config.from_yaml(config_file)
+            self.config_path = (
+                str(config_path) if config_path is not None else str(config_file)
+            )
         else:
             raise ValueError("Neither config_file nor config was provided.")
 
@@ -416,6 +453,16 @@ class Run:
 
         return SampleResult(out_db_path=out_db_path, peaks_mzs=filtered_peaks_mzs)
 
+    def _emit_step(self, step: str, status: str) -> None:
+        """Invoke `self.on_step(step, status)` when a callback is set.
+
+        Args:
+            step: One of `RUN_STEPS`.
+            status: `"started"`, `"completed"`, `"skipped"` or `"failed"`.
+        """
+        if self.on_step is not None:
+            self.on_step(step, status)
+
     @log_call
     def run_core(self) -> None:
         """Run the pipeline across all samples and assemble outputs.
@@ -483,6 +530,7 @@ class Run:
             len(config.io.mzml_paths),
             config.h5ad.n_workers or "os.cpu_count()",
         )
+        self._emit_step("process_samples", "started")
         try:
             with worker_logging() as (log_queue, initializer):
                 with ProcessPoolExecutor(
@@ -505,12 +553,15 @@ class Run:
                 "(later stages will not run)",
                 analysis_id,
             )
+            self._emit_step("process_samples", "failed")
             raise
+        self._emit_step("process_samples", "completed")
 
         out_db_paths = [r.out_db_path for r in results]
         all_peaks_mzs = [r.peaks_mzs for r in results]
 
         # --- ALIGN m/z ACROSS SAMPLES ---
+        self._emit_step("align_mz", "started")
         aligned_df_path: Path = out_dir / "aligned_mzs.csv"
         if not aligned_df_path.exists():
             sample_names = (
@@ -542,8 +593,10 @@ class Run:
         else:
             logger.debug("Already run align mz across samples")
             mzs_df = pd.read_csv(aligned_df_path, index_col=0)
+        self._emit_step("align_mz", "completed")
 
         # --- ASSOCIATE MS2 SCANS WITH FEATURES (analysis DB) ---
+        self._emit_step("group_ms2", "started")
         if not analysis_db.is_command_already_run(
             "group_ms2", analysis_id, adb_path
         ):
@@ -584,10 +637,12 @@ class Run:
             )
         else:
             logger.debug("Already run group_ms2")
+        self._emit_step("group_ms2", "completed")
 
         # --- PRECURSOR ION PURITY (analysis DB) ---
         purity_cfg = getattr(config, "purity", None)
         if purity_cfg is not None and getattr(purity_cfg, "enabled", True):
+            self._emit_step("precursor_purity", "started")
             if not analysis_db.is_command_already_run(
                 "precursor_purity", analysis_id, adb_path
             ):
@@ -610,11 +665,14 @@ class Run:
                 )
             else:
                 logger.debug("Already run precursor_purity")
+            self._emit_step("precursor_purity", "completed")
         else:
             logger.info("Precursor purity disabled; skipping")
+            self._emit_step("precursor_purity", "skipped")
 
         # --- ANNOTATE MS2 AGAINST SPECTRAL LIBRARY (analysis DB) ---
         if config.annotate.library_path:
+            self._emit_step("annotate_ms2", "started")
             if not analysis_db.is_command_already_run(
                 "annotate_ms2", analysis_id, adb_path
             ):
@@ -635,14 +693,17 @@ class Run:
                 )
             else:
                 logger.debug("Already run annotate_ms2")
+            self._emit_step("annotate_ms2", "completed")
         else:
             logger.info(
                 "No annotation library configured; skipping MS2 annotation"
             )
+            self._emit_step("annotate_ms2", "skipped")
 
         # --- PER-FEATURE MS2 CONSENSUS (analysis DB) ---
         consensus_cfg = getattr(config, "consensus", None)
         if consensus_cfg is not None and getattr(consensus_cfg, "enabled", True):
+            self._emit_step("ms2_consensus", "started")
             if not analysis_db.is_command_already_run(
                 "ms2_consensus", analysis_id, adb_path
             ):
@@ -663,10 +724,13 @@ class Run:
                 )
             else:
                 logger.debug("Already run ms2_consensus")
+            self._emit_step("ms2_consensus", "completed")
         else:
             logger.info("MS2 consensus disabled; skipping")
+            self._emit_step("ms2_consensus", "skipped")
 
         # --- SPATIAL AnnData PER SAMPLE ---
+        self._emit_step("assemble_adata", "started")
         for db_path in out_db_paths:
             out_adata_path = out_dir / f"{db_path.stem}.h5ad"
             if not out_adata_path.exists():
@@ -687,10 +751,12 @@ class Run:
                 )
             else:
                 logger.debug("%s: Already created adata object", db_path)
+        self._emit_step("assemble_adata", "completed")
 
         # --- SUMMARY REPORT ---
         report_cfg = getattr(config, "report", None)
         if report_cfg is not None and getattr(report_cfg, "enabled", True):
+            self._emit_step("summary_report", "started")
             report_path = out_dir / "summary_report.html"
             if not report_path.exists():
                 try:
@@ -710,5 +776,7 @@ class Run:
                     )
             else:
                 logger.debug("Already built summary report")
+            self._emit_step("summary_report", "completed")
         else:
             logger.info("Summary report disabled; skipping")
+            self._emit_step("summary_report", "skipped")
