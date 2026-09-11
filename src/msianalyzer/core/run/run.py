@@ -36,6 +36,7 @@ from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 from msianalyzer.core.utils.create_adata import create_spatial_adata
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
 from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
+from msianalyzer.core.utils.tic_normalization import run_tic_normalization
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ RUN_STEPS: tuple[str, ...] = (
     "annotate_ms2",
     "ms2_consensus",
     "assemble_adata",
+    "normalize_tic",
     "summary_report",
 )
 
@@ -752,6 +754,40 @@ class Run:
             else:
                 logger.debug("%s: Already created adata object", db_path)
         self._emit_step("assemble_adata", "completed")
+
+        # --- TIC NORMALIZATION (writes layers into each .h5ad + merged.h5ad) ---
+        norm_cfg = getattr(config, "normalization", None)
+        if norm_cfg is not None and getattr(norm_cfg, "enabled", True):
+            self._emit_step("normalize_tic", "started")
+            if not analysis_db.is_command_already_run(
+                "normalize_tic", analysis_id, adb_path
+            ):
+                analysis_db.log_command(
+                    adb_path,
+                    command_name="normalize_tic",
+                    arguments={**vars(norm_cfg)},
+                    run_id=analysis_id,
+                )
+                sample_h5ad_paths = {
+                    db_path.stem: out_dir / f"{db_path.stem}.h5ad"
+                    for db_path in out_db_paths
+                }
+                norm_result = run_tic_normalization(sample_h5ad_paths, out_dir=out_dir)
+                logger.info(
+                    "run %s: TIC-normalized %d sample(s), %d pixel(s), "
+                    "median TIC %.3g -> %s",
+                    analysis_id,
+                    norm_result.n_samples,
+                    norm_result.n_pixels,
+                    norm_result.median_tic,
+                    norm_result.merged_path.name,
+                )
+            else:
+                logger.debug("Already run normalize_tic")
+            self._emit_step("normalize_tic", "completed")
+        else:
+            logger.info("TIC normalization disabled; skipping")
+            self._emit_step("normalize_tic", "skipped")
 
         # --- SUMMARY REPORT ---
         report_cfg = getattr(config, "report", None)

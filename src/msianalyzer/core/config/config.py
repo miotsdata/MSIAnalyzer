@@ -455,6 +455,31 @@ class AnalysisConfig:
     db_name: str | None = None
 
 
+@dataclass
+class NormalizationConfig:
+    """Parameters for the TIC-normalization stage.
+
+    `core.utils.tic_normalization`: run after `h5ad` assembly, once all
+    per-sample `.h5ad` files exist. Computes each pixel's total ion current
+    (`obs['tic']`, already present on every `.h5ad`) relative to the
+    dataset-wide median TIC (across every pixel of every sample in the
+    analysis), uses that ratio to normalize each feature's raw intensity,
+    then log1p-compresses the result. Writes `layers['raw']` (untouched
+    copy of `.X`) and `layers['TIC']` (the normalized matrix) back into
+    every per-sample `.h5ad`, and persists the full cross-sample
+    concatenation as `merged.h5ad` in `io.out_dir` — the median needs every
+    sample anyway, and the merged object is reused by later, not-yet-built
+    cross-sample analyses.
+
+    Attributes:
+        enabled: Run the stage. When False it is skipped entirely — no
+            `raw`/`TIC` layers are added to the per-sample `.h5ad` files,
+            and no `merged.h5ad` is written.
+    """
+
+    enabled: bool = True
+
+
 # Maps group name (used as the nested key in dicts/files) -> dataclass type,
 # and doubles as the canonical group order for __str__ and CLI wiring.
 GROUPS: dict[str, type] = {
@@ -469,6 +494,7 @@ GROUPS: dict[str, type] = {
     "consensus": ConsensusConfig,
     "report": ReportConfig,
     "h5ad": H5adConfig,
+    "normalization": NormalizationConfig,
     "analysis": AnalysisConfig,
 }
 
@@ -485,6 +511,7 @@ GROUP_TITLES: dict[str, str] = {
     "consensus": "MS2 consensus",
     "report": "summary report",
     "h5ad": "create h5ad",
+    "normalization": "TIC normalization",
     "analysis": "analysis database",
 }
 
@@ -494,9 +521,9 @@ class Config:
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
     `align`, `group_ms2`, `purity`, `annotate`, `consensus`, `report`,
-    `h5ad`, `analysis`) and provides (de)serialization to and from YAML and
-    TOML. Only `io` is required; the remaining groups fall back to their
-    dataclass defaults.
+    `h5ad`, `normalization`, `analysis`) and provides (de)serialization to
+    and from YAML and TOML. Only `io` is required; the remaining groups fall
+    back to their dataclass defaults.
 
     Attributes:
         version: Config schema version; checked on load.
@@ -511,10 +538,11 @@ class Config:
         consensus: Per-feature MS2 consensus parameters.
         report: End-of-run summary report parameters.
         h5ad: Spatial `AnnData` assembly parameters.
+        normalization: TIC-normalization parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 12
+    version: int = 13
 
     def __init__(
         self,
@@ -529,6 +557,7 @@ class Config:
         consensus: ConsensusConfig | None = None,
         report: ReportConfig | None = None,
         h5ad: H5adConfig | None = None,
+        normalization: NormalizationConfig | None = None,
         analysis: AnalysisConfig | None = None,
     ) -> None:
         self.io: IOConfig = io
@@ -542,6 +571,9 @@ class Config:
         self.consensus: ConsensusConfig = consensus or ConsensusConfig()
         self.report: ReportConfig = report or ReportConfig()
         self.h5ad: H5adConfig = h5ad or H5adConfig()
+        self.normalization: NormalizationConfig = (
+            normalization or NormalizationConfig()
+        )
         self.analysis: AnalysisConfig = analysis or AnalysisConfig()
 
     # ------------------------------------------------------------------ #

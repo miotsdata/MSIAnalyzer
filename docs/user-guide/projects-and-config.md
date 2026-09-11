@@ -10,11 +10,11 @@ find that marker.
 ## The config file
 
 A run is driven by one config file (`.yaml`/`.yml` or `.toml`). It has a
-`version` key (currently **5**) and one section per pipeline stage. Only `io` is
+`version` key (currently **13**) and one section per pipeline stage. Only `io` is
 required; every other section falls back to its defaults.
 
 ```yaml
-version: 4
+version: 13
 io:
   project_folder: .
   mzml_paths: [data/s1.mzML, data/s2.mzML]
@@ -164,6 +164,12 @@ highest-scoring scan per feature wins. Runs library-free and purity-free.
 | `batch_size` | `1000` | spectra per processing chunk |
 | `scan_handling` | `"average"` | `"average"` or `"first"` MS1 scan per pixel |
 | `n_workers` | `null` | parallel workers; defaults to `os.cpu_count()` |
+
+### `normalization` — TIC normalization
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `true` | add `layers['raw']` / `layers['TIC']` to every `<sample>.h5ad` and write `merged.h5ad` |
 
 ### `analysis` — per-analysis database
 

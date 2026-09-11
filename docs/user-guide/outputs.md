@@ -11,7 +11,8 @@ Everything else lands in the analysis' `io.out_dir`.
 | `<sample>.db` | `<project>/parsed/` | sample | raw database — every scan + the pixel grid. Immutable, shared by every analysis. |
 | `analysis_<run-id>.db` | `out_dir` | run | every parameter-dependent result of the run |
 | `aligned_mzs.csv` | `out_dir` | run | the feature list: consensus m/z + contributing peak index per sample |
-| `<sample>.h5ad` | `out_dir` | sample | `AnnData` — pixels × features quantification matrix with spatial coordinates |
+| `<sample>.h5ad` | `out_dir` | sample | `AnnData` — pixels × features quantification matrix with spatial coordinates. `.X` and `layers['raw']` are the raw matched intensities; `layers['TIC']` is the TIC-normalized, log1p-compressed version (unless `normalization.enabled` is False) |
+| `merged.h5ad` | `out_dir` | run | every sample's `AnnData` concatenated, with a `sample` obs column and the same `raw`/`TIC` layers — built to compute the TIC normalization (needs every sample's pixels for the dataset-wide median) and persisted for cross-sample analyses |
 | `<sample>_filtered_ms1.html` | `out_dir` | sample | interactive figure of the filtered MS1 peak list |
 | `<sample>_peaks_data.csv` | `out_dir` | sample | the filtered MS1 peak list as `mz,intensity` |
 | `summary_report.html` | `out_dir` | run | per-sample counts, feature-overlap UpSet plot, MS2 association (overall + per sample), a recheck of the unassociated MS2 against each sample's pre-filter MS1 peaks, the `precursor_frac` distribution of the **associated** MS2 (overall + per sample), a breakdown of *why* peak-based purity is unscored, and — when a library ran — an **MS2 annotation** section: features by best-hit confidence, best-score distribution, plausible-compounds-per-feature, cross-scan agreement, and top-compound / per-library tables |
@@ -73,9 +74,11 @@ Key tables (full schema in the
 ```python
 import anndata as ad
 adata = ad.read_h5ad("results/<sample>.h5ad")
-adata.X          # pixels × features intensities
-adata.var_names  # feature m/z
-adata.obs        # pixel x / y coordinates
+adata.X                  # pixels × features intensities (raw)
+adata.layers["raw"]      # same as .X, explicitly labelled
+adata.layers["TIC"]      # TIC-normalized, log1p-compressed
+adata.var_names          # feature m/z
+adata.obs                # pixel x / y coordinates, obs["tic"] is the per-pixel TIC used for normalization
 ```
 
 ## Re-running
@@ -87,5 +90,7 @@ adata.obs        # pixel x / y coordinates
 - Re-running the purity stage replaces every `precursor_purity` row.
 - Re-running annotation replaces that library's `ms2_annotations` rows.
 - Re-running the consensus stage replaces every `feature_ms2_consensus` row.
+- Re-running TIC normalization rewrites every `<sample>.h5ad`'s `raw`/`TIC`
+  layers and `merged.h5ad`.
 - A stage whose output file or `commands` row already exists is skipped; delete
   the output to force recomputation.

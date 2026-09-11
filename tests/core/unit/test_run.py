@@ -130,6 +130,11 @@ class MockAnalysisConfig:
     db_name: str | None = None
 
 
+@dataclass
+class MockNormalizationConfig:
+    enabled: bool = True
+
+
 class DummyConfig:
     def __init__(self, tmp_path):
         self.io = MockIOConfig(
@@ -148,6 +153,7 @@ class DummyConfig:
         self.consensus = MockConsensusConfig()
         self.report = MockReportConfig()
         self.h5ad = MockH5ADConfig()
+        self.normalization = MockNormalizationConfig()
         self.analysis = MockAnalysisConfig()
 
     @classmethod
@@ -492,6 +498,15 @@ def test_run_core_executes_successfully(mocker, tmp_path):
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mock_adata
     )
 
+    mock_norm_result = mocker.MagicMock(
+        n_samples=2, n_pixels=10, median_tic=123.0
+    )
+    mock_norm_result.merged_path.name = "merged.h5ad"
+    mock_run_tic_normalization = mocker.patch(
+        "msianalyzer.core.run.run.run_tic_normalization",
+        return_value=mock_norm_result,
+    )
+
     mock_executor = mocker.MagicMock()
     mock_executor.__enter__.return_value.map.return_value = [res1, res2]
     mocker.patch(
@@ -526,6 +541,15 @@ def test_run_core_executes_successfully(mocker, tmp_path):
 
     assert mock_create_adata.call_count == 2
     assert mock_adata.write_h5ad.call_count == 2
+
+    mock_run_tic_normalization.assert_called_once()
+    norm_kwargs = mock_run_tic_normalization.call_args
+    assert norm_kwargs.kwargs["out_dir"] == out_dir
+    sample_paths = norm_kwargs.args[0]
+    assert sample_paths == {
+        "sample1": out_dir / "sample1.h5ad",
+        "sample2": out_dir / "sample2.h5ad",
+    }
 
 
 def test_run_core_skips_existing_outputs(mocker, tmp_path):
@@ -565,6 +589,9 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
         "msianalyzer.core.run.run.build_summary_report"
     )
     mock_create_adata = mocker.patch("msianalyzer.core.run.run.create_spatial_adata")
+    mock_run_tic_normalization = mocker.patch(
+        "msianalyzer.core.run.run.run_tic_normalization"
+    )
 
     mock_executor = mocker.MagicMock()
     mock_executor.__enter__.return_value.map.return_value = [res1, res2]
@@ -581,6 +608,7 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     mock_run_consensus.assert_not_called()
     mock_build_report.assert_not_called()
     mock_create_adata.assert_not_called()
+    mock_run_tic_normalization.assert_not_called()
 
 
 # ==============================================================================
@@ -697,6 +725,8 @@ _FULL_RUN_STAGES_SUCCESS = [
     ("ms2_consensus", "completed"),
     ("assemble_adata", "started"),
     ("assemble_adata", "completed"),
+    ("normalize_tic", "started"),
+    ("normalize_tic", "completed"),
     ("summary_report", "started"),
     ("summary_report", "completed"),
 ]
@@ -731,6 +761,7 @@ def _patch_run_core_collaborators(mocker, mzs_index=(100.0, 200.0, 300.0)):
     mocker.patch(
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
     )
+    mocker.patch("msianalyzer.core.run.run.run_tic_normalization")
 
 
 def test_run_core_emits_on_step_progress_for_every_stage(mocker, tmp_path):
@@ -780,6 +811,7 @@ def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
     config.annotate.library_path = None
     config.consensus.enabled = False
     config.report.enabled = False
+    config.normalization.enabled = False
     out_dir = Path(config.io.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -831,6 +863,7 @@ def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
         ("ms2_consensus", "skipped"),
         ("assemble_adata", "started"),
         ("assemble_adata", "completed"),
+        ("normalize_tic", "skipped"),
         ("summary_report", "skipped"),
     ]
 

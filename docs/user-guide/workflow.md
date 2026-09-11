@@ -104,7 +104,17 @@ known-low-purity scans. Full detail in [MS2 annotation](ms2-annotation.md).
 spectra (`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes
 `<sample>.h5ad`.
 
-## Stage 12 — Summary report (→ out_dir)
+## Stage 12 — TIC normalization
+
+`run_tic_normalization()` computes each pixel's TIC relative to the
+dataset-wide median TIC (across every pixel, every sample) and uses it to
+add `layers['raw']` (untouched) and `layers['TIC']` (normalized,
+log1p-compressed) to every `<sample>.h5ad`, plus a `merged.h5ad` — all
+samples concatenated with a `sample` obs column — needed to compute the
+median and kept for future cross-sample analyses. Controlled by
+`normalization.*`; set `normalization.enabled: false` to skip.
+
+## Stage 13 — Summary report (→ out_dir)
 
 `build_summary_report()` writes `summary_report.html` + `summary.json`:
 per-sample scan / pixel / peak / feature counts, a feature-overlap UpSet plot,
@@ -127,11 +137,12 @@ per-library tables. Controlled by `report.*`; regenerate it any time with
   parsed/
     <sample>.db               raw DB (per sample, immutable, shared by all analyses)
   <out_dir>/                   one per analysis
-    <sample>.h5ad             spatial matrix (per sample)
+    <sample>.h5ad             spatial matrix (per sample), raw + TIC-normalized layers
     <sample>_filtered_ms1.html  spectrum figure
     <sample>_peaks_data.csv   filtered peak list
     aligned_mzs.csv           the feature list
     analysis_<run-id>.db      everything parameter-dependent
+    merged.h5ad               every sample concatenated (raw + TIC layers, sample obs column)
     summary_report.html       per-sample counts, feature overlap, MS2 + purity plots
     summary.json              the same numbers, machine-readable
 ```

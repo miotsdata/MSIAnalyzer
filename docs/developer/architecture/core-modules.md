@@ -191,6 +191,17 @@ Detail in [MS2 annotation](../../user-guide/ms2-annotation.md) and
   across each pixel's MS1 spectra. Reads only the raw DB; returns an `AnnData`
   (persisted by the caller as a sidecar `.h5ad`).
 
+## `utils/tic_normalization.py`
+
+- `run_tic_normalization(sample_h5ad_paths, out_dir) -> TicNormalizationResult`
+  — reads every sample's `.h5ad`, computes the dataset-wide median
+  `obs['tic']` (across every pixel, every sample), adds `layers['raw']`
+  (untouched `.X`) and `layers['TIC']` (`log1p(X_raw / (tic / median_tic))`,
+  zero-safe) to each, concatenates them into `merged.h5ad` (a `sample` obs
+  column is added from the dict keys), and writes both the merged object and
+  every updated per-sample `.h5ad` back to disk. Called once per analysis
+  from `run.py`, after all per-sample `.h5ad` files exist.
+
 ## `utils/logging_utils.py`
 
 - `configure_logging(*, level, log_file, debug_log_dir, run_id)` — console + an
