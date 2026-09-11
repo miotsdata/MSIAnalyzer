@@ -52,15 +52,26 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     """Open the analysis database the way every caller must.
 
     WAL + a long busy timeout so the parallel per-sample workers queue on
-    the single-writer lock instead of racing or raising. WAL is already
-    persisted in the file header; re-asserting it is harmless and keeps a
-    hand-built database honest. Callers issue **no** DDL — the schema is
-    owned solely by :func:`create_analysis_schema` (see
-    :func:`init_analysis_db`) so concurrent writers never take a schema lock.
+    the single-writer lock instead of racing or raising. Callers issue
+    **no** DDL — the schema is owned solely by :func:`create_analysis_schema`
+    (see :func:`init_analysis_db`) so concurrent writers never take a
+    schema lock.
+
+    The mode is only *set* to WAL when it isn't already — re-issuing
+    `PRAGMA journal_mode = WAL` is a no-op once the file header says WAL,
+    but it isn't a *read-only* no-op: several worker processes opening
+    fresh connections to the same file at nearly the same instant (as
+    happens right after `ProcessPoolExecutor` forks them) can still race
+    on it and corrupt the WAL/shm state. Checking first avoids issuing it
+    at all in the overwhelmingly common case (the schema step already put
+    the file in WAL mode), which is what actually closes the race —
+    "harmless because it's already WAL" was true for the file header, not
+    for concurrent callers touching it at once.
     """
     con = sqlite3.connect(Path(db_path), timeout=_BUSY_TIMEOUT_MS / 1000)
     con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
-    con.execute("PRAGMA journal_mode = WAL")
+    if con.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+        con.execute("PRAGMA journal_mode = WAL")
     con.execute("PRAGMA synchronous = NORMAL")
     con.execute("PRAGMA foreign_keys = ON")
     return con
