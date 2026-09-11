@@ -32,6 +32,20 @@ Page {
         sampleRows = rows
     }
 
+    // Multi-select mzML: the first path fills `targetIndex`'s row, every
+    // extra path gets its own new row (mzml set, xml left for the user to
+    // pair per-row as before) — picking many raw files at once shouldn't
+    // mean repeating "Add Sample" + Browse once per file.
+    function addSampleRowsFromMzmlPaths(targetIndex, paths) {
+        if (paths.length === 0)
+            return
+        setSampleField(targetIndex, "mzml", paths[0])
+        for (var i = 1; i < paths.length; i++) {
+            addSampleRow()
+            setSampleField(sampleRows.length - 1, "mzml", paths[i])
+        }
+    }
+
     function allSampleRowsFilled() {
         for (var i = 0; i < sampleRows.length; i++) {
             if (!sampleRows[i].mzml || !sampleRows[i].xml)
@@ -137,9 +151,14 @@ Page {
         id: mzmlDialog
         objectName: "mzmlDialog"
         options: FileDialog.DontUseNativeDialog
+        fileMode: FileDialog.OpenFiles
         nameFilters: ["mzML files (*.mzML *.mzml)", "All files (*)"]
-        onAccepted: newAnalysisPage.setSampleField(
-            mzmlDialogTarget.rowIndex, "mzml", Router.toLocalPath(selectedFile))
+        onAccepted: {
+            var paths = []
+            for (var i = 0; i < selectedFiles.length; i++)
+                paths.push(Router.toLocalPath(selectedFiles[i]))
+            newAnalysisPage.addSampleRowsFromMzmlPaths(mzmlDialogTarget.rowIndex, paths)
+        }
     }
     FileDialog {
         id: xmlDialog
@@ -152,7 +171,15 @@ Page {
     FolderDialog {
         id: outDirDialog
         objectName: "outDirDialog"
-        options: FolderDialog.DontUseNativeDialog
+        // Native where available — the QML fallback dialog can't create a
+        // new folder, the platform's own picker can (GTK/KDE both have a
+        // "Create Folder" action). Forced back to the QML dialog under the
+        // `offscreen` QPA platform (used by the automated test suite,
+        // never by a real session): instantiating a native folder dialog
+        // there crashed intermittently (~1 in 15 full-suite runs, reliably
+        // reproduced via bisection against this one option) — real
+        // sessions run under xcb/wayland/windows/cocoa, where this is safe.
+        options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
         onAccepted: outDirField.text = Router.toLocalPath(selectedFolder)
     }
 
@@ -173,14 +200,36 @@ Page {
             Layout.fillWidth: true
 
             TabButton {
+                id: ioTabButton
                 objectName: "tabButton_io"
                 text: "input/output"
+                contentItem: Text {
+                    text: ioTabButton.text
+                    font: ioTabButton.font
+                    wrapMode: Text.Wrap
+                    elide: Text.ElideNone
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
             Repeater {
                 model: ConfigSchema.groups
                 delegate: TabButton {
+                    id: groupTabButton
                     objectName: "tabButton_" + modelData.key
                     text: modelData.title
+                    // Full label, wrapped onto multiple lines rather than
+                    // elided — the default contentItem elides at whatever
+                    // width TabBar gives each button, which cut off most of
+                    // these (13 tabs sharing one bar's width).
+                    contentItem: Text {
+                        text: groupTabButton.text
+                        font: groupTabButton.font
+                        wrapMode: Text.Wrap
+                        elide: Text.ElideNone
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
             }
         }

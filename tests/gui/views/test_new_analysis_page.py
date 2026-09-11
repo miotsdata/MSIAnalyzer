@@ -51,6 +51,32 @@ def test_adding_and_filling_sample_row_enables_run_button(new_analysis_view, pro
     assert run_button.property("enabled") is True
 
 
+def test_multi_select_mzml_fills_target_row_then_appends_new_rows(
+    new_analysis_view, project
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addSampleRow()
+    root.addSampleRowsFromMzmlPaths(0, ["/data/s1.mzML", "/data/s2.mzML", "/data/s3.mzML"])
+
+    rows = root.property("sampleRows").toVariant()
+    assert len(rows) == 3
+    assert [r["mzml"] for r in rows] == ["/data/s1.mzML", "/data/s2.mzML", "/data/s3.mzML"]
+    # xml is left for the user to pair per-row, same as a single-file pick.
+    assert all(r["xml"] == "" for r in rows)
+
+
+def test_multi_select_mzml_with_no_paths_is_a_no_op(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addSampleRow()
+    root.addSampleRowsFromMzmlPaths(0, [])
+
+    rows = root.property("sampleRows").toVariant()
+    assert len(rows) == 1
+    assert rows[0]["mzml"] == ""
+
+
 def test_remove_sample_row_disables_run_button_again(new_analysis_view, project):
     _, root, _ = _make_page(new_analysis_view, project)
     run_button = root.findChild(QQuickItem, "runButton")
