@@ -36,8 +36,11 @@ Item {
 
     onSelectedSampleIdChanged: {
         if (selectedSampleId >= 0 && analysis && analysis.analysisDbPath && analysis.runId) {
-            spectrumView.loadHtml(
-                AnalysisBridge.getSpectrumHtml(analysis.analysisDbPath, analysis.runId, selectedSampleId))
+            // A file:// url, not loadHtml() — see AnalysisBridge.getSpectrumUrl:
+            // loadHtml()/setHtml() silently fail past Qt's ~2MB limit, and a
+            // plot with Plotly.js embedded is already ~4.6MB on its own.
+            spectrumView.url =
+                AnalysisBridge.getSpectrumUrl(analysis.analysisDbPath, analysis.runId, selectedSampleId)
         }
     }
 
@@ -124,6 +127,7 @@ Item {
                     SpinBox {
                         id: topNSpin
                         objectName: "topNSpinBox"
+                        editable: true
                         from: 1
                         to: 20
                         value: ms1Section.topN

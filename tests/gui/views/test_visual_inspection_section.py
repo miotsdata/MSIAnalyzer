@@ -150,3 +150,16 @@ def test_visual_grid_cols_spinbox_updates_section_property(
     section = find_visual_child(root, "visualSection")
     cols_spin = find_visual_child(root, "colsSpinBox")
     assert cols_spin.property("value") == section.property("gridCols")
+
+
+def test_visual_grid_row_and_col_spinboxes_are_keyboard_editable(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # SpinBox defaults to editable: false — arrow-buttons-only, no way to
+    # type a number directly. Both spinboxes must opt in.
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    assert find_visual_child(root, "rowsSpinBox").property("editable") is True
+    assert find_visual_child(root, "colsSpinBox").property("editable") is True

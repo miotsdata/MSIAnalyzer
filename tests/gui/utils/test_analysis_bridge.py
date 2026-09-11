@@ -1,10 +1,21 @@
 import sqlite3
+from pathlib import Path
+
+from PySide6.QtCore import QUrl
 
 from msianalyzer.core.analysis_db import init_analysis_db, log_command, register_sample
 from msianalyzer.core.parser.mzml_parser import array_to_blob
 from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
 from msianalyzer.gui.utils.analysis_bridge import AnalysisBridge
 import numpy as np
+
+
+def _read_url(url: str) -> str:
+    """Reads back the HTML a `file://` URL (as returned by getSpectrumUrl /
+    getMirrorPlotUrl) points at — those write to disk instead of returning
+    HTML directly (WebEngineView.loadHtml()/setHtml() silently fail past
+    Qt's ~2MB limit, which a plot with Plotly.js embedded already exceeds)."""
+    return Path(QUrl(url).toLocalFile()).read_text(encoding="utf-8")
 
 _ZERO_SUMMARY = {
     "n_samples": 0,
@@ -132,39 +143,55 @@ def test_get_annotation_candidates_empty_for_unknown_feature(tmp_path):
     assert bridge.getAnnotationCandidates(str(db_path), 999) == []
 
 
-def test_get_mirror_plot_html_returns_html_for_valid_annotation(tmp_path):
+def test_get_mirror_plot_url_returns_html_for_valid_annotation(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    html = bridge.getMirrorPlotHtml(str(db_path), 1)
+    url = bridge.getMirrorPlotUrl(str(db_path), 1)
+    html = _read_url(url)
 
+    assert url.startswith("file://")
     assert "<div" in html
     assert "plotly" in html.lower()
 
 
-def test_get_mirror_plot_html_returns_error_message_for_unknown_id(tmp_path):
+def test_get_mirror_plot_url_returns_error_message_for_unknown_id(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
 
     bridge = AnalysisBridge()
-    html = bridge.getMirrorPlotHtml(str(db_path), 999)
+    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 999))
 
     assert "<p" in html
     assert "No annotation found" in html
 
 
-def test_get_mirror_plot_html_returns_error_message_without_filtered_spectra(tmp_path):
+def test_get_mirror_plot_url_returns_error_message_without_filtered_spectra(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path, with_filtered_spectra=False)
 
     bridge = AnalysisBridge()
-    html = bridge.getMirrorPlotHtml(str(db_path), 1)
+    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 1))
 
     assert "<p" in html
     assert "no stored filtered spectra" in html
+
+
+def test_get_mirror_plot_url_is_unique_per_call(tmp_path):
+    # Each render needs a distinct URL — an unchanged QML `url` binding
+    # doesn't reload, even when the underlying file's content changed.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+
+    bridge = AnalysisBridge()
+    url1 = bridge.getMirrorPlotUrl(str(db_path), 1)
+    url2 = bridge.getMirrorPlotUrl(str(db_path), 1)
+
+    assert url1 != url2
 
 
 def test_get_samples_returns_every_sample(tmp_path):
@@ -184,7 +211,7 @@ def test_get_samples_empty_for_missing_db(tmp_path):
     assert bridge.getSamples(str(tmp_path / "nope.db")) == []
 
 
-def test_get_spectrum_html_returns_plot_for_saved_spectrum(tmp_path):
+def test_get_spectrum_url_returns_plot_for_saved_spectrum(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     sample_id = register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
@@ -201,22 +228,35 @@ def test_get_spectrum_html_returns_plot_for_saved_spectrum(tmp_path):
     )
 
     bridge = AnalysisBridge()
-    html = bridge.getSpectrumHtml(str(db_path), "run-1", sample_id)
+    url = bridge.getSpectrumUrl(str(db_path), "run-1", sample_id)
+    html = _read_url(url)
 
+    assert url.startswith("file://")
     assert "plotly" in html.lower()
     assert "onSpectrumPointClicked" in html
     assert "qtwebchannel/qwebchannel.js" in html
 
 
-def test_get_spectrum_html_returns_error_message_when_missing(tmp_path):
+def test_get_spectrum_url_returns_error_message_when_missing(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
 
     bridge = AnalysisBridge()
-    html = bridge.getSpectrumHtml(str(db_path), "run-1", 1)
+    html = _read_url(bridge.getSpectrumUrl(str(db_path), "run-1", 1))
 
     assert "<p" in html
     assert "No spectrum found" in html
+
+
+def test_get_spectrum_url_is_unique_per_call(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    url1 = bridge.getSpectrumUrl(str(db_path), "run-1", 1)
+    url2 = bridge.getSpectrumUrl(str(db_path), "run-1", 1)
+
+    assert url1 != url2
 
 
 def test_on_spectrum_point_clicked_emits_signal(tmp_path):

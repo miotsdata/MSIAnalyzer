@@ -60,8 +60,11 @@ Popup {
 
     onSelectedCandidateChanged: {
         if (selectedCandidate && analysis && analysis.analysisDbPath) {
-            mirrorPlotView.loadHtml(
-                AnalysisBridge.getMirrorPlotHtml(analysis.analysisDbPath, selectedCandidate.id))
+            // A file:// url, not loadHtml() — see AnalysisBridge.getMirrorPlotUrl:
+            // loadHtml()/setHtml() silently fail past Qt's ~2MB limit, and a
+            // plot with Plotly.js embedded is already ~4.6MB on its own.
+            mirrorPlotView.url =
+                AnalysisBridge.getMirrorPlotUrl(analysis.analysisDbPath, selectedCandidate.id)
         }
     }
 

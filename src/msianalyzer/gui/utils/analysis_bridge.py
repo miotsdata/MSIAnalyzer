@@ -1,5 +1,7 @@
 import logging
+import os
 import sqlite3
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -57,7 +59,7 @@ class AnalysisBridge(QObject):
     `spectrumPointClicked` is the one exception to "QML calls in, nothing
     flows back out": the MS1 spectra section's `WebEngineView` registers
     this object on a `WebChannel`, and the JS embedded in
-    `getSpectrumHtml`'s output calls `onSpectrumPointClicked` when the user
+    `getSpectrumUrl`'s output calls `onSpectrumPointClicked` when the user
     clicks a point on the plot — QML listens for the resulting signal to
     update the feature-detail side panel.
     """
@@ -71,6 +73,19 @@ class AnalysisBridge(QObject):
         # registers it with the engine (`engine.addImageProvider("heatmap",
         # application.analysis_bridge.heatmap_provider)`).
         self.heatmap_provider = HeatmapImageProvider()
+        # Plot HTML -> temp file -> `WebEngineView.url`, not `.loadHtml()`.
+        # `loadHtml`/`setHtml` silently fail past Qt's documented ~2MB
+        # limit (it's an IPC message, capped); a plot with the full
+        # Plotly.js library inlined (`include_plotlyjs=True`) is ~4.6MB on
+        # its own before any data — every spectrum/mirror plot exceeded
+        # the limit and simply never rendered. A `file://` navigation has
+        # no such cap. Counters keep each URL unique (an unchanged QML
+        # `url` binding doesn't reload, even if the file's content
+        # changed) while bounding disk use to the current + one stale file.
+        self._spectrum_counter = 0
+        self._spectrum_prev_path: Path | None = None
+        self._mirror_plot_counter = 0
+        self._mirror_plot_prev_path: Path | None = None
 
     @Slot(float)
     def onSpectrumPointClicked(self, mz: float) -> None:
@@ -142,28 +157,56 @@ class AnalysisBridge(QObject):
         df = analysis_db.load_ms2_annotations_for_feature(analysis_db_path, feature_id)
         return _dataframe_to_records(df)
 
+    def _write_spectrum_html(self, html: str) -> str:
+        self._spectrum_counter += 1
+        path = Path(tempfile.gettempdir()) / (
+            f"msianalyzer_spectrum_{os.getpid()}_{self._spectrum_counter}.html"
+        )
+        path.write_text(html, encoding="utf-8")
+        if self._spectrum_prev_path is not None:
+            self._spectrum_prev_path.unlink(missing_ok=True)
+        self._spectrum_prev_path = path
+        return path.as_uri()
+
+    def _write_mirror_plot_html(self, html: str) -> str:
+        self._mirror_plot_counter += 1
+        path = Path(tempfile.gettempdir()) / (
+            f"msianalyzer_mirror_plot_{os.getpid()}_{self._mirror_plot_counter}.html"
+        )
+        path.write_text(html, encoding="utf-8")
+        if self._mirror_plot_prev_path is not None:
+            self._mirror_plot_prev_path.unlink(missing_ok=True)
+        self._mirror_plot_prev_path = path
+        return path.as_uri()
+
     @Slot(str, int, result=str)
-    def getMirrorPlotHtml(self, analysis_db_path: str, annotation_id: int) -> str:
-        """A self-contained HTML `<div>` with the empirical-vs-library mirror
-        plot for one `ms2_annotations` row, for a `WebEngineView` to load.
+    def getMirrorPlotUrl(self, analysis_db_path: str, annotation_id: int) -> str:
+        """The empirical-vs-library mirror plot for one `ms2_annotations`
+        row, as a `file://` URL for a `WebEngineView`'s `url` to load.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
             annotation_id: Primary key in `ms2_annotations`.
 
         Returns:
-            Full inline-Plotly.js HTML (`include_plotlyjs=True` — the popup
-            loads this via `loadHtml`, not a file/CDN, so it must be fully
-            self-contained). A short `<p>` error message instead, on any
-            failure (unknown id, no stored filtered spectra) — the popup
-            stays usable rather than showing a blank/broken view.
+            A `file://` URL to a self-contained HTML page (full inline
+            Plotly.js — `include_plotlyjs=True` — so it stays viewable
+            without network access). Written to disk rather than returned
+            as HTML for `loadHtml()`/`setHtml()` to load directly: that
+            API silently fails past Qt's ~2MB limit, and embedding
+            Plotly.js alone is already ~4.6MB. On any failure (unknown id,
+            no stored filtered spectra) the page is a short `<p>` error
+            message instead — the popup stays usable rather than showing
+            a blank/broken view.
         """
         try:
             fig = Plotter().plot_ms2_annotation(analysis_db_path, annotation_id)
         except (ValueError, OSError) as e:
             logger.warning("mirror plot for annotation %s failed: %s", annotation_id, e)
-            return f"<p style='font-family: sans-serif; color: #900;'>{e}</p>"
-        return fig.to_html(full_html=False, include_plotlyjs=True)
+            html = f"<p style='font-family: sans-serif; color: #900;'>{e}</p>"
+        else:
+            html = fig.to_html(full_html=False, include_plotlyjs=True)
+        return self._write_mirror_plot_html(html)
 
     @Slot(str, result=list)
     def getSamples(self, analysis_db_path: str) -> list:
@@ -181,8 +224,9 @@ class AnalysisBridge(QObject):
         return _dataframe_to_records(analysis_db.load_samples(analysis_db_path))
 
     @Slot(str, str, int, result=str)
-    def getSpectrumHtml(self, analysis_db_path: str, run_id: str, sample_id: int) -> str:
-        """One sample's filtered MS1 spectrum, as self-contained click-aware HTML.
+    def getSpectrumUrl(self, analysis_db_path: str, run_id: str, sample_id: int) -> str:
+        """One sample's filtered MS1 spectrum, as a `file://` URL for a
+        `WebEngineView`'s `url` to load.
 
         The returned page registers itself on the page's `QWebChannel`
         (already wired to this object as `"analysisBridge"` by the QML side)
@@ -195,9 +239,14 @@ class AnalysisBridge(QObject):
             sample_id: Row id in the analysis `samples` table.
 
         Returns:
-            Full inline-Plotly.js HTML for a `WebEngineView` to `loadHtml`.
-            A short `<p>` error message instead if no filtered spectrum was
-            ever saved for that sample.
+            A `file://` URL to a self-contained, click-aware HTML page
+            (full inline Plotly.js). Written to disk rather than returned
+            as HTML for `loadHtml()`/`setHtml()` to load directly: that
+            API silently fails past Qt's ~2MB limit, and embedding
+            Plotly.js alone is already ~4.6MB — every spectrum plot was
+            silently failing to render before this. A short `<p>` error
+            page instead if no filtered spectrum was ever saved for that
+            sample.
         """
         try:
             mz, intensity = load_aggregated_spectra(
@@ -210,7 +259,8 @@ class AnalysisBridge(QObject):
             logger.warning(
                 "spectrum for sample %s (run %s) not found: %s", sample_id, run_id, e
             )
-            return "<p style='font-family: sans-serif; color: #900;'>No spectrum found for this sample.</p>"
+            html = "<p style='font-family: sans-serif; color: #900;'>No spectrum found for this sample.</p>"
+            return self._write_spectrum_html(html)
 
         fig = Plotter.plot_spectra(mz, intensity)
         body = fig.to_html(
@@ -232,7 +282,7 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
 }});
 </script>
 """
-        return body + click_script
+        return self._write_spectrum_html(body + click_script)
 
     @Slot(str, float, int, result=dict)
     def getFeatureDetail(self, analysis_db_path: str, mz: float, top_n: int) -> dict:

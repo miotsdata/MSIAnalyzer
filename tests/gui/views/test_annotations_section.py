@@ -94,5 +94,5 @@ def test_selecting_candidate_triggers_mirror_plot_load(
     assert selected["id"] == 1
     # The WebEngineView itself is not asserted on here — searching *past* it
     # (or into it) while it's loading touches Chromium's own async
-    # compositor state and isn't safe; getMirrorPlotHtml's actual HTML
+    # compositor state and isn't safe; getMirrorPlotUrl's actual HTML
     # output is covered directly in test_analysis_bridge.py.

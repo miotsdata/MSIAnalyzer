@@ -90,7 +90,7 @@ def test_ms1_spectrum_point_click_updates_detail_panel(
     # The WebEngineView's own click handling isn't safe/useful to simulate
     # here (see AnnotationsSection tests) — instead fire the signal the
     # embedded JS would emit via QWebChannel, exactly as the real click
-    # handler in AnalysisBridge.getSpectrumHtml does downstream.
+    # handler in AnalysisBridge.getSpectrumUrl does downstream.
     application.analysis_bridge.spectrumPointClicked.emit(150.1)
     qtbot.wait(50)
 
@@ -108,3 +108,15 @@ def test_ms1_spectrum_point_click_updates_detail_panel(
 
     no_annotation_label = find_visual_child(root, "detailNoAnnotationLabel")
     assert no_annotation_label.property("visible") is False
+
+
+def test_top_n_spinbox_is_keyboard_editable(
+    analysis_view, ms1_analysis_model, find_visual_child, qtbot
+):
+    # SpinBox defaults to editable: false — arrow-buttons-only, no way to
+    # type a number directly.
+    view = analysis_view(ms1_analysis_model)
+    root = view.rootObject()
+    _open_ms1_tab(view, root, find_visual_child, qtbot)
+
+    assert find_visual_child(root, "topNSpinBox").property("editable") is True

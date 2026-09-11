@@ -203,8 +203,9 @@ Item {
                 SpinBox {
                     id: rowsSpinBox
                     objectName: "rowsSpinBox"
+                    editable: true
                     from: 1
-                    to: 8
+                    to: 20
                     value: visualSection.gridRows
                     onValueModified: visualSection.gridRows = value
                 }
@@ -212,8 +213,9 @@ Item {
                 SpinBox {
                     id: colsSpinBox
                     objectName: "colsSpinBox"
+                    editable: true
                     from: 1
-                    to: 8
+                    to: 20
                     value: visualSection.gridCols
                     onValueModified: visualSection.gridCols = value
                 }
