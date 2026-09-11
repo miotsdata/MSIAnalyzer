@@ -141,6 +141,43 @@ def test_visual_heatmap_tile_actually_loads_an_image(
     assert image.property("sourceSize").height() == 2
 
 
+def test_visual_heatmap_tile_preserves_aspect_ratio_and_is_crisp(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Regression test for "heatmaps look out of focus / super zoomed in":
+    # the tile used to stretch the image to fill the whole box
+    # (fillMode: Stretch, width/height maxed independently against the
+    # viewport), distorting non-square rasters and — combined with
+    # smooth: true — blurring a small source raster blown up to a much
+    # bigger tile. A non-square source (2 x-coords, 4 y-coords) makes a
+    # regression to that old stretching behavior visible: it would render
+    # at 1:1 instead of 1:2.
+    out_dir = Path(visual_analysis_model.outDir)
+    obs = pd.DataFrame(index=["a", "b", "c", "d", "e", "f", "g", "h"])
+    var = pd.DataFrame({"mz": [150.0]}, index=["mz_150.0000"])
+    X = csr_matrix(np.arange(8, dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array(
+        [(x, y) for y in range(4) for x in range(2)], dtype=float
+    )
+    adata.write_h5ad(out_dir / "s1.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    tile = find_visual_child(root, "heatmapImage_s1")
+    image = find_visual_child(tile, "zoomableImageContent")
+    qtbot.waitUntil(lambda: image.property("sourceSize").width() > 0, timeout=2000)
+
+    assert image.property("sourceSize").width() == 2
+    assert image.property("sourceSize").height() == 4
+    # Rendered box keeps the source's 1:2 aspect ratio (width == half of
+    # height), not squished/stretched to whatever shape the tile is.
+    assert image.width() == pytest.approx(image.height() / 2, rel=0.01)
+    assert image.property("smooth") is False
+
+
 def test_visual_grid_is_fixed_to_one_column(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):

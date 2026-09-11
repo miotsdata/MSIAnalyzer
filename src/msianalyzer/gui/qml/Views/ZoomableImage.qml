@@ -9,10 +9,21 @@ Flickable {
     readonly property real minZoom: 1.0
     readonly property real maxZoom: 8.0
 
+    // Independently maxing width and height against the viewport (the
+    // old contentWidth/Height) stretches the image to whatever box shape
+    // the tile happens to be, distorting it unless the source's aspect
+    // ratio exactly matches — this fits the *whole* image inside the
+    // viewport at zoom 1 instead, preserving its aspect ratio, and scales
+    // that uniformly as zoom increases.
+    readonly property real baseScale: (image.sourceSize.width > 0 && image.sourceSize.height > 0)
+        ? Math.min(root.width / image.sourceSize.width, root.height / image.sourceSize.height)
+        : 1.0
+    readonly property real effectiveScale: baseScale * zoom
+
     clip: true
     boundsBehavior: Flickable.StopAtBounds
-    contentWidth: Math.max(width, image.sourceSize.width * zoom)
-    contentHeight: Math.max(height, image.sourceSize.height * zoom)
+    contentWidth: Math.max(width, image.sourceSize.width * effectiveScale)
+    contentHeight: Math.max(height, image.sourceSize.height * effectiveScale)
 
     onZoomChanged: {
         if (zoom < minZoom) zoom = minZoom
@@ -22,10 +33,21 @@ Flickable {
     Image {
         id: image
         objectName: "zoomableImageContent"
-        width: root.contentWidth
-        height: root.contentHeight
-        fillMode: Image.Stretch
-        smooth: true
+        width: sourceSize.width * root.effectiveScale
+        height: sourceSize.height * root.effectiveScale
+        // Centered when smaller than the viewport (contentWidth/Height
+        // floor at the viewport size) rather than stuck in the top-left
+        // corner with blank space around it.
+        x: Math.max(0, (root.contentWidth - width) / 2)
+        y: Math.max(0, (root.contentHeight - height) / 2)
+        fillMode: Image.PreserveAspectFit
+        // Each source pixel is one spatial coordinate's worth of real
+        // data — smooth (bilinear) interpolation blurred that into soft
+        // blobs once scaled up past the tile's modest source resolution
+        // ("out of focus"/"zoomed in" — reported as such). Off keeps
+        // pixels crisp at any zoom level, which is what you actually
+        // want for reading discrete per-pixel values off a heatmap.
+        smooth: false
         cache: false
         // Deliberately synchronous: `asynchronous: true` runs
         // HeatmapImageProvider.requestImage() on Qt's background image

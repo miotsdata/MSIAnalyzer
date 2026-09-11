@@ -867,7 +867,7 @@ hosen(Router.toL\
 ocalPath(selecte\
 dFolder))\x0a      \
   }\x0a    }\x0a}\x0a\
-\x00\x00\x07O\
+\x00\x00\x0d\x18\
 i\
 mport QtQuick\x0a\x0aF\
 lickable {\x0a    i\
@@ -883,109 +883,202 @@ ty real minZoom:\
  1.0\x0a    readonl\
 y property real \
 maxZoom: 8.0\x0a\x0a  \
-  clip: true\x0a   \
- boundsBehavior:\
- Flickable.StopA\
-tBounds\x0a    cont\
-entWidth: Math.m\
-ax(width, image.\
+  // Independent\
+ly maxing width \
+and height again\
+st the viewport \
+(the\x0a    // old \
+contentWidth/Hei\
+ght) stretches t\
+he image to what\
+ever box shape\x0a \
+   // the tile h\
+appens to be, di\
+storting it unle\
+ss the source's \
+aspect\x0a    // ra\
+tio exactly matc\
+hes \xe2\x80\x94 this fit\
+s the *whole* im\
+age inside the\x0a \
+   // viewport a\
+t zoom 1 instead\
+, preserving its\
+ aspect ratio, a\
+nd scales\x0a    //\
+ that uniformly \
+as zoom increase\
+s.\x0a    readonly \
+property real ba\
+seScale: (image.\
 sourceSize.width\
- * zoom)\x0a    con\
-tentHeight: Math\
-.max(height, ima\
-ge.sourceSize.he\
-ight * zoom)\x0a\x0a  \
-  onZoomChanged:\
- {\x0a        if (z\
-oom < minZoom) z\
-oom = minZoom\x0a  \
-      else if (z\
-oom > maxZoom) z\
-oom = maxZoom\x0a  \
-  }\x0a\x0a    Image {\
-\x0a        id: ima\
-ge\x0a        objec\
-tName: \x22zoomable\
-ImageContent\x22\x0a  \
-      width: roo\
-t.contentWidth\x0a \
-       height: r\
-oot.contentHeigh\
-t\x0a        fillMo\
-de: Image.Stretc\
-h\x0a        smooth\
-: true\x0a        c\
-ache: false\x0a    \
-    // Deliberat\
-ely synchronous:\
- `asynchronous: \
-true` runs\x0a     \
-   // HeatmapIma\
-geProvider.reque\
-stImage() on Qt'\
-s background ima\
-ge\x0a        // th\
-read pool, and w\
-ith 2+ visible t\
-iles that means \
-2+ concurrent\x0a  \
-      // calls i\
-nto the same Pyt\
-hon-implemented \
-provider \xe2\x80\x94 rep\
-roduced as\x0a     \
-   // an intermi\
-ttent hang insid\
-e AnalysisPage's\
- QML constructio\
-n\x0a        // (bi\
-sected to exactl\
-y this) whenever\
- a test seeded m\
-ore than one\x0a   \
-     // sample. \
-Root cause not f\
-ully pinned down\
- (most likely ma\
-tplotlib\x0a       \
- // colormap/Nor\
-malize global st\
-ate under concur\
-rent access, or \
-a\x0a        // PyS\
-ide6 cross-threa\
-d callback edge \
-case) but synchr\
-onous loading\x0a  \
-      // reprodu\
-ced zero hangs a\
-cross 25+ full-s\
-uite stress runs\
-, vs.\x0a        //\
- ~30-50% with as\
-ync on. These ti\
-les are small ra\
-sters (one\x0a     \
-   // pixel per \
+ > 0 && image.so\
+urceSize.height \
+> 0)\x0a        ? M\
+ath.min(root.wid\
+th / image.sourc\
+eSize.width, roo\
+t.height / image\
+.sourceSize.heig\
+ht)\x0a        : 1.\
+0\x0a    readonly p\
+roperty real eff\
+ectiveScale: bas\
+eScale * zoom\x0a\x0a \
+   clip: true\x0a  \
+  boundsBehavior\
+: Flickable.Stop\
+AtBounds\x0a    con\
+tentWidth: Math.\
+max(width, image\
+.sourceSize.widt\
+h * effectiveSca\
+le)\x0a    contentH\
+eight: Math.max(\
+height, image.so\
+urceSize.height \
+* effectiveScale\
+)\x0a\x0a    onZoomCha\
+nged: {\x0a        \
+if (zoom < minZo\
+om) zoom = minZo\
+om\x0a        else \
+if (zoom > maxZo\
+om) zoom = maxZo\
+om\x0a    }\x0a\x0a    Im\
+age {\x0a        id\
+: image\x0a        \
+objectName: \x22zoo\
+mableImageConten\
+t\x22\x0a        width\
+: sourceSize.wid\
+th * root.effect\
+iveScale\x0a       \
+ height: sourceS\
+ize.height * roo\
+t.effectiveScale\
+\x0a        // Cent\
+ered when smalle\
+r than the viewp\
+ort (contentWidt\
+h/Height\x0a       \
+ // floor at the\
+ viewport size) \
+rather than stuc\
+k in the top-lef\
+t\x0a        // cor\
+ner with blank s\
+pace around it.\x0a\
+        x: Math.\
+max(0, (root.con\
+tentWidth - widt\
+h) / 2)\x0a        \
+y: Math.max(0, (\
+root.contentHeig\
+ht - height) / 2\
+)\x0a        fillMo\
+de: Image.Preser\
+veAspectFit\x0a    \
+    // Each sour\
+ce pixel is one \
 spatial coordina\
-te) so synchrono\
-us rendering doe\
-sn't\x0a        // \
-meaningfully blo\
-ck the UI.\x0a     \
-   asynchronous:\
- false\x0a    }\x0a\x0a  \
-  WheelHandler {\
-\x0a        accepte\
-dModifiers: Qt.N\
-oModifier\x0a      \
-  onWheel: (even\
-t) => {\x0a        \
-    root.zoom *=\
- event.angleDelt\
-a.y > 0 ? 1.15 :\
- (1 / 1.15)\x0a    \
-    }\x0a    }\x0a}\x0a\
+te's worth of re\
+al\x0a        // da\
+ta \xe2\x80\x94 smooth (b\
+ilinear) interpo\
+lation blurred t\
+hat into soft\x0a  \
+      // blobs o\
+nce scaled up pa\
+st the tile's mo\
+dest source reso\
+lution\x0a        /\
+/ (\x22out of focus\
+\x22/\x22zoomed in\x22 \xe2\x80\
+\x94 reported as su\
+ch). Off keeps\x0a \
+       // pixels\
+ crisp at any zo\
+om level, which \
+is what you actu\
+ally\x0a        // \
+want for reading\
+ discrete per-pi\
+xel values off a\
+ heatmap.\x0a      \
+  smooth: false\x0a\
+        cache: f\
+alse\x0a        // \
+Deliberately syn\
+chronous: `async\
+hronous: true` r\
+uns\x0a        // H\
+eatmapImageProvi\
+der.requestImage\
+() on Qt's backg\
+round image\x0a    \
+    // thread po\
+ol, and with 2+ \
+visible tiles th\
+at means 2+ conc\
+urrent\x0a        /\
+/ calls into the\
+ same Python-imp\
+lemented provide\
+r \xe2\x80\x94 reproduced\
+ as\x0a        // a\
+n intermittent h\
+ang inside Analy\
+sisPage's QML co\
+nstruction\x0a     \
+   // (bisected \
+to exactly this)\
+ whenever a test\
+ seeded more tha\
+n one\x0a        //\
+ sample. Root ca\
+use not fully pi\
+nned down (most \
+likely matplotli\
+b\x0a        // col\
+ormap/Normalize \
+global state und\
+er concurrent ac\
+cess, or a\x0a     \
+   // PySide6 cr\
+oss-thread callb\
+ack edge case) b\
+ut synchronous l\
+oading\x0a        /\
+/ reproduced zer\
+o hangs across 2\
+5+ full-suite st\
+ress runs, vs.\x0a \
+       // ~30-50\
+% with async on.\
+ These tiles are\
+ small rasters (\
+one\x0a        // p\
+ixel per spatial\
+ coordinate) so \
+synchronous rend\
+ering doesn't\x0a  \
+      // meaning\
+fully block the \
+UI.\x0a        asyn\
+chronous: false\x0a\
+    }\x0a\x0a    Wheel\
+Handler {\x0a      \
+  acceptedModifi\
+ers: Qt.NoModifi\
+er\x0a        onWhe\
+el: (event) => {\
+\x0a            roo\
+t.zoom *= event.\
+angleDelta.y > 0\
+ ? 1.15 : (1 / 1\
+.15)\x0a        }\x0a \
+   }\x0a}\x0a\
 \x00\x00\x07\x0c\
 i\
 mport QtQuick\x0aim\
@@ -1866,35 +1959,35 @@ qt_resource_struct = b"\
 \x00\x00\x00\x00\x00\x00\x00\x00\
 \x00\x00\x00\x0e\x00\x02\x00\x00\x00\x0d\x00\x00\x00\x03\
 \x00\x00\x00\x00\x00\x00\x00\x00\
-\x00\x00\x01\xda\x00\x04\x00\x00\x00\x01\x00\x00VI\
+\x00\x00\x01\xda\x00\x04\x00\x00\x00\x01\x00\x00\x5c\x12\
 \x00\x00\x01\xa0\x90\xfb\xa8B\
 \x00\x00\x00\xe8\x00\x00\x00\x00\x00\x01\x00\x000\x22\
 \x00\x00\x01\xa0\x91\xffXc\
 \x00\x00\x00\x1e\x00\x04\x00\x00\x00\x01\x00\x00\x00\x00\
 \x00\x00\x01\xa0\x92CY\xc1\
-\x00\x00\x02\x0c\x00\x04\x00\x00\x00\x01\x00\x00Z7\
+\x00\x00\x02\x0c\x00\x04\x00\x00\x00\x01\x00\x00`\x00\
 \x00\x00\x01\xa0\x92C2\x87\
-\x00\x00\x01\x8c\x00\x00\x00\x00\x00\x01\x00\x00F\xb9\
+\x00\x00\x01\x8c\x00\x00\x00\x00\x00\x01\x00\x00L\x82\
 \x00\x00\x01\xa0\x91\x94\x13\xb9\
-\x00\x00\x01`\x00\x04\x00\x00\x00\x01\x00\x00C\x86\
+\x00\x00\x01`\x00\x04\x00\x00\x00\x01\x00\x00IO\
 \x00\x00\x01\xa0\x90\x98V\xa9\
-\x00\x00\x01\x9e\x00\x04\x00\x00\x00\x01\x00\x00H\xcc\
+\x00\x00\x01\x9e\x00\x04\x00\x00\x00\x01\x00\x00N\x95\
 \x00\x00\x01\xa0\x92L4\x84\
 \x00\x00\x01\x08\x00\x00\x00\x00\x00\x01\x00\x005#\
-\x00\x00\x01\xa0\x91\xb0`\xad\
+\x00\x00\x01\xa0\x92T\xc9=\
 \x00\x00\x00\x8a\x00\x00\x00\x00\x00\x01\x00\x00\x1cX\
 \x00\x00\x01\xa0\x92\x1f>\x94\
 \x00\x00\x00^\x00\x04\x00\x00\x00\x01\x00\x00\x05\xf1\
 \x00\x00\x01\xa0\x920d\x14\
 \x00\x00\x00\xbe\x00\x00\x00\x00\x00\x01\x00\x00%\xcc\
 \x00\x00\x01\xa0\x90\xe8\x14\x93\
-\x00\x00\x010\x00\x00\x00\x00\x00\x01\x00\x00<v\
+\x00\x00\x010\x00\x00\x00\x00\x00\x01\x00\x00B?\
 \x00\x00\x01\xa0\x91\xffkn\
-\x00\x00\x02<\x00\x04\x00\x00\x00\x01\x00\x00a_\
+\x00\x00\x02<\x00\x04\x00\x00\x00\x01\x00\x00g(\
 \x00\x00\x01\xa0\x92\x1e\xe0)\
-\x00\x00\x01\x8c\x00\x00\x00\x00\x00\x01\x00\x00l\xd0\
+\x00\x00\x01\x8c\x00\x00\x00\x00\x00\x01\x00\x00r\x99\
 \x00\x00\x01\xa0C\x10\x19\xe2\
-\x00\x00\x02b\x00\x00\x00\x00\x00\x01\x00\x00f\x0c\
+\x00\x00\x02b\x00\x00\x00\x00\x00\x01\x00\x00k\xd5\
 \x00\x00\x01\xa0\x927\x1db\
 "
 
