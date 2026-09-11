@@ -1,4 +1,5 @@
 # src/msianalyzer/gui/main.py
+import os
 import sys
 
 import PySide6
@@ -53,7 +54,10 @@ def main() -> int:
     # session (GNOME/GTK integration), with some text unreadable against
     # it. Material is a light theme by default regardless of the host
     # desktop's own theme (see Main.qml's explicit Material.theme too).
-    QQuickStyle.setStyle("Material")
+    # Overridable (MSIANALYZER_QT_STYLE=Basic, Fusion, ...) — e.g. to test
+    # whether a given style change is implicated in an otherwise-unrelated
+    # bug report, without needing a separate build to compare against.
+    QQuickStyle.setStyle(os.environ.get("MSIANALYZER_QT_STYLE", "Material"))
     # Must run before the QGuiApplication is constructed — used by
     # WebEngineView (Annotations mirror plots, MS1 spectra).
     QtWebEngineQuick.initialize()
