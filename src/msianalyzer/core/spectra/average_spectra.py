@@ -325,6 +325,30 @@ def detect_ms1_centroids(
     return mz_centroid, int_centroid
 
 
+def mad_threshold(
+    intensity_array: np.ndarray, *, log: bool = True, n_mads: float = 2
+) -> float:
+    """The `median + n_mads * MAD` intensity cutoff used by :func:`filter_intensities_mad`.
+
+    Args:
+        intensity_array: Peak intensities.
+        log: Compute the median and MAD in log10 intensity space. Defaults
+            to True.
+        n_mads: Number of MADs above the median for the cutoff. Defaults
+            to 2.
+
+    Returns:
+        The intensity threshold (linear scale even when `log` is True).
+    """
+    if log:
+        values = np.log10(intensity_array)
+    else:
+        values = intensity_array
+    median = np.median(values)
+    threshold = median + n_mads * np.median(np.abs(values - median))
+    return float(10**threshold if log else threshold)
+
+
 @log_call
 def filter_intensities_mad(
     mz_array: np.ndarray,
@@ -349,22 +373,8 @@ def filter_intensities_mad(
     Returns:
         The `(mz_array, intensity_array)` subset above the threshold.
     """
-
-    if log:
-        threshold = 10 ** (
-            np.median(np.log10(intensity_array))
-            + n_mads
-            * np.median(
-                np.abs(np.log10(intensity_array) - np.median(np.log10(intensity_array)))
-            )
-        )
-    else:
-        threshold = np.median(intensity_array) + n_mads * np.median(
-            np.abs(intensity_array - np.median(intensity_array))
-        )
-
+    threshold = mad_threshold(intensity_array, log=log, n_mads=n_mads)
     mask = intensity_array > threshold
-
     return mz_array[mask], intensity_array[mask]
 
 

@@ -19,6 +19,7 @@ from msianalyzer.core.analysis_db import (
     save_features,
 )
 from msianalyzer.core.report.summary import (
+    AssocPuritySample,
     AssociatedPuritySummary,
     Ms2Summary,
     RecheckSummary,
@@ -35,6 +36,7 @@ from msianalyzer.core.report.summary import (
     figure_purity_per_sample,
     figure_purity_unscored,
     figure_unassociated_recheck,
+    mad_filter_summary,
     ms2_summary,
     overlap_combos,
     per_sample_counts,
@@ -42,6 +44,7 @@ from msianalyzer.core.report.summary import (
     purity_unscored,
     unassociated_recheck,
 )
+from msianalyzer.core.spectra.average_spectra import mad_threshold
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +300,45 @@ def test_purity_unscored_without_pixel_map_folds_off_pixel_by_confirmed(tmp_path
     assert u.n_not_confirmed == 1         # 2005
 
 
+def test_mad_filter_summary_none_when_not_used(tmp_path):
+    adb, _ = _analysis_db(tmp_path)  # filter_spectra logged with empty arguments
+    assert mad_filter_summary(adb) is None
+
+
+def test_mad_filter_summary(tmp_path):
+    adb = tmp_path / "analysis.db"
+    init_analysis_db(adb).close()
+    sid = register_sample(adb, name="s1", raw_db_path=tmp_path / "s1.db")
+
+    pre_intensities = [10.0, 20.0, 30.0, 40.0, 500.0]
+    post_intensities = [500.0]
+
+    c_cent = log_command(adb, "detect_ms1_centroids", {}, run_id="r", sample_id=sid)
+    c_filt = log_command(
+        adb, "filter_spectra",
+        {"filter_mad": True, "filter_mad_log": True, "filter_mad_nmads": 2.0},
+        run_id="r", sample_id=sid,
+    )
+    with sqlite3.connect(adb) as con:
+        con.execute("PRAGMA foreign_keys = ON")
+        _agg(con, "r", sid, c_cent, pre_intensities)
+        _agg(con, "r", sid, c_filt, post_intensities)
+        con.commit()
+
+    m = mad_filter_summary(adb)
+    assert m is not None
+    assert m.n_mads == 2.0
+    assert m.log is True
+    assert len(m.per_sample) == 1
+    s = m.per_sample[0]
+    assert s.name == "s1"
+    assert s.n_total == 5
+    assert s.n_survived == 1
+    assert s.n_removed == 4
+    expected = mad_threshold(np.array(pre_intensities), log=True, n_mads=2.0)
+    assert s.threshold == pytest.approx(expected)
+
+
 # ---------------------------------------------------------------------------
 # figures
 # ---------------------------------------------------------------------------
@@ -319,6 +361,36 @@ def test_figures_return_figures_and_tolerate_empty():
     assert isinstance(
         figure_purity_unscored(UnscoredSummary([], 0, 0, 0, 0, 0, 0)), go.Figure
     )
+
+
+def test_figure_purity_per_sample_is_overlaid_density(tmp_path):
+    adb, _ = _analysis_db(tmp_path)
+    a = associated_purity(adb, cutoff=0.8)
+    fig = figure_purity_per_sample(a)
+    # s1 has 2 associated purities (enough for a density); s2 has only 1
+    # and is skipped — a density needs at least two points.
+    assert len(fig.data) == 1
+    trace = fig.data[0]
+    assert trace.mode == "lines"
+    assert trace.name.startswith("s1")
+    assert list(fig.layout.xaxis.range) == [0, 1]
+    assert fig.layout.showlegend is not False  # legend stays on for toggling
+
+
+def test_figure_purity_per_sample_handles_zero_variance_sample():
+    assoc = AssociatedPuritySummary(
+        cutoff=0.8, n_associated=3, n_ge_cutoff=0,
+        frac_values=[0.5, 0.5, 0.5], frac_values_all=[0.5, 0.5, 0.5],
+        per_sample=[
+            AssocPuritySample(
+                sample_id=1, name="s1", n_associated=3, n_ge_cutoff=0,
+                frac_values=[0.5, 0.5, 0.5],
+            )
+        ],
+    )
+    fig = figure_purity_per_sample(assoc)
+    assert len(fig.data) == 1
+    assert np.max(fig.data[0].y) > 0  # a spike, not a crash
 
 
 def test_figure_ms2_association_per_sample_is_100_pct(tmp_path):
@@ -432,6 +504,8 @@ def test_annotation_figures_and_report_section(tmp_path):
     assert "Annotation funnel" in text
     assert "Top features by score" in text
     assert "COMPA00000" in text
+    assert "Libraries used for annotation" in text
+    assert "<ul class='lib-list'><li>lib — 100 spectra, 50 compounds</li></ul>" in text
     payload = json.loads((out / "summary.json").read_text())
     assert payload["annotation"]["n_features_annotated"] == 2
     assert payload["annotation"]["n_ge"] == {"0.5": 2, "0.75": 1}
@@ -453,6 +527,7 @@ def test_collect_stats(tmp_path):
     assert stats.recheck.n_would_associate == 1
     assert stats.unscored.n_unscored == 5
     assert stats.unscored.n_off_pixel == 1
+    assert stats.mad_filter is None  # filter_spectra logged with empty arguments
     assert stats.associated_purity.n_associated == 3
     assert stats.associated_purity.n_ge_cutoff == 1
 
@@ -479,10 +554,17 @@ def test_build_summary_report_writes_files(tmp_path):
     assert "MSIAnalyzer summary report" in text
     assert "plotly" in text.lower()
     assert "pre-filter centroid list" in text  # the recheck sentence
-    assert "unscored for" in text  # the unscored-purity sentence
-    assert "laser flyback" in text
     assert "feed the library search" in text  # the associated-purity sentence
     assert "precursor_frac" in text
+    # the unscored-purity intro and its plot were dropped from the report
+    assert "unscored for" not in text
+    assert "laser flyback" not in text
+    # table of contents links every rendered section
+    assert "<nav class='toc'>" in text
+    assert "href='#overview'" in text
+    assert "href='#per-sample-counts'" in text
+    assert "href='#precursor-purity'" in text
+    assert "href='#mad-filter'" not in text  # filter_spectra args were empty
 
     payload = json.loads((out / "summary.json").read_text())
     assert payload["n_features"] == 3
@@ -491,6 +573,24 @@ def test_build_summary_report_writes_files(tmp_path):
     assert len(payload["per_sample_ms2"]) == 2
     assert payload["unscored"]["n_unscored"] == 5
     assert payload["associated_purity"]["n_associated"] == 3
+
+
+def test_build_summary_report_includes_mad_section_when_used(tmp_path):
+    adb, raw_map = _analysis_db(tmp_path)
+    sid1 = next(iter(raw_map))
+    # re-log filter_spectra for sid1 with MAD arguments (last one wins)
+    log_command(
+        adb, "filter_spectra",
+        {"filter_mad": True, "filter_mad_log": True, "filter_mad_nmads": 2.0},
+        run_id="r2", sample_id=sid1,
+    )
+
+    out = tmp_path / "r"
+    build_summary_report(adb, raw_db_paths=raw_map, out_dir=out)
+    text = (out / "summary_report.html").read_text()
+    assert "href='#mad-filter'" in text
+    assert "MS1 peak filtering (MAD)" in text
+    assert "survived" in text and "removed" in text
 
 
 def test_build_summary_report_defaults_out_dir_to_db_parent(tmp_path):

@@ -18,9 +18,12 @@ from typing import TYPE_CHECKING, Sequence
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.colors import qualitative as _qualitative
 from plotly.subplots import make_subplots
+from scipy.stats import gaussian_kde
 
 from ..analysis_db import load_features
+from ..spectra.average_spectra import mad_threshold
 from ..utils.logging_utils import log_call
 
 if TYPE_CHECKING:  # avoid importing the config package at module load
@@ -36,6 +39,8 @@ __all__ = [
     "AssociatedPuritySummary",
     "UnscoredPurity",
     "UnscoredSummary",
+    "MadFilterSample",
+    "MadFilterSummary",
     "RecheckSummary",
     "AnnotationLibraryInfo",
     "AnnotationSummary",
@@ -47,6 +52,7 @@ __all__ = [
     "per_sample_ms2",
     "associated_purity",
     "purity_unscored",
+    "mad_filter_summary",
     "unassociated_recheck",
     "annotation_summary",
     "figure_per_sample",
@@ -79,9 +85,77 @@ _C_DARK = "#5c5c5c"
 _C_FAINT = "#d9d9d9"
 _C_GOOD = "#2ca02c"
 
+#: distinct per-sample colors for overlaid traces (cycles past 10 samples)
+_SAMPLE_PALETTE = _qualitative.Plotly
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """`"#1f2c3d"` -> `"rgba(31,44,61,alpha)"`, for a translucent fill."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
 # horizontal legend above the plot area (keeps it off the x-axis tick labels)
 _LEGEND_TOP = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 _MARGIN_TOP = dict(t=80)
+
+_REPORT_CSS = """
+:root{
+  --bg:#f5f6f8; --card:#ffffff; --text:#1c2128; --muted:#5f6673;
+  --accent:#2563eb; --border:#e3e6ea; --border-strong:#d0d5dd;
+  --head-bg:#f7f8fa;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  line-height:1.55;
+}
+.layout{max-width:1080px; margin:0 auto; padding:40px 24px 96px}
+.report-header{padding-bottom:20px; border-bottom:1px solid var(--border); margin-bottom:24px}
+.report-header h1{font-size:26px; margin:0 0 6px; letter-spacing:-.01em}
+.report-header .subtitle{margin:0; color:var(--muted); font-size:14px}
+nav.toc{
+  background:var(--card); border:1px solid var(--border); border-radius:10px;
+  padding:14px 20px; margin-bottom:28px;
+}
+nav.toc h2{
+  font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--muted); margin:0 0 10px; font-weight:600;
+}
+nav.toc ul{list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:6px 20px}
+nav.toc a{color:var(--accent); text-decoration:none; font-size:13.5px; font-weight:500}
+nav.toc a:hover{text-decoration:underline}
+section{
+  background:var(--card); border:1px solid var(--border); border-radius:10px;
+  padding:26px 30px; margin-bottom:22px; scroll-margin-top:16px;
+}
+section h2{
+  font-size:18px; margin:0 0 16px; padding-bottom:12px;
+  border-bottom:1px solid var(--border);
+}
+section h3{font-size:14px; margin:22px 0 10px}
+p{margin:0 0 12px}
+p:last-child{margin-bottom:0}
+code{background:var(--head-bg); padding:1px 6px; border-radius:4px; font-size:.9em}
+a{color:var(--accent)}
+table{border-collapse:collapse; width:100%; margin:12px 0; font-size:13px}
+th,td{padding:8px 12px; border:1px solid var(--border); text-align:left}
+th{background:var(--head-bg); font-weight:600; color:var(--muted); font-size:12px;
+   text-transform:uppercase; letter-spacing:.03em}
+tbody tr:nth-child(even){background:#fbfbfc}
+ul.lib-list{margin:8px 0 16px; padding-left:22px}
+ul.lib-list li{margin-bottom:4px}
+.stat-strip{display:flex; flex-wrap:wrap; gap:28px; margin-bottom:8px}
+.stat .value{font-size:24px; font-weight:700; line-height:1.2}
+.stat .label{font-size:12px; color:var(--muted); margin-top:2px}
+.figure{margin-top:18px}
+.figure:first-child{margin-top:0}
+@media (max-width:640px){
+  .layout{padding:24px 14px 64px}
+  section{padding:18px 18px}
+}
+"""
 
 
 def _fmt(n) -> str:
@@ -220,6 +294,33 @@ class UnscoredSummary:
 
 
 @dataclass
+class MadFilterSample:
+    """MAD peak-intensity filter outcome for one sample.
+
+    ``threshold`` is the linear-intensity cutoff (`median + n_mads * MAD`,
+    computed in log10 space when the run used ``filter_mad_log``); peaks
+    from ``detect_ms1_centroids`` above it survive into ``filter_spectra``.
+    """
+
+    sample_id: int
+    name: str
+    threshold: float
+    n_total: int
+    n_survived: int
+    n_removed: int
+
+
+@dataclass
+class MadFilterSummary:
+    """Per-sample MAD filter roll-up; only built when at least one sample
+    used the MAD filter (as opposed to a flat ``peak_height_threshold``)."""
+
+    n_mads: float
+    log: bool
+    per_sample: list[MadFilterSample]
+
+
+@dataclass
 class RecheckSummary:
     """Would the unassociated MS2 associate against the *pre-filter* MS1 peaks?
 
@@ -324,6 +425,7 @@ class SummaryStats:
     per_sample_ms2: list[PerSampleMs2]
     associated_purity: AssociatedPuritySummary
     unscored: UnscoredSummary
+    mad_filter: "MadFilterSummary | None"
     recheck: RecheckSummary
     annotation: "AnnotationSummary | None"
 
@@ -382,6 +484,53 @@ def _aggregated_mz(
     from ..parser.mzml_parser import blob_to_array
 
     return np.asarray(blob_to_array(row[0]), dtype=float)
+
+
+def _aggregated_arrays(
+    con: sqlite3.Connection, command_name: str, sample_id: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """The `(mz_array, intensity_array)` of a sample's most recent
+    ``command_name`` aggregate."""
+    try:
+        row = con.execute(
+            "SELECT a.mz_array, a.intensity_array FROM aggregated_spectra a "
+            "JOIN commands c ON a.command_id = c.id "
+            "WHERE c.command_name = ? AND a.sample_id = ? "
+            "ORDER BY a.id DESC LIMIT 1",
+            (command_name, sample_id),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return np.array([]), np.array([])
+    if row is None or row[0] is None:
+        return np.array([]), np.array([])
+    from ..parser.mzml_parser import blob_to_array
+
+    mz = np.asarray(blob_to_array(row[0]), dtype=float)
+    intensity = (
+        np.asarray(blob_to_array(row[1]), dtype=float)
+        if row[1] is not None
+        else np.array([])
+    )
+    return mz, intensity
+
+
+def _sample_command_args(
+    con: sqlite3.Connection, command_name: str, sample_id: int
+) -> dict:
+    try:
+        row = con.execute(
+            "SELECT arguments FROM commands "
+            "WHERE command_name = ? AND sample_id = ? ORDER BY id DESC LIMIT 1",
+            (command_name, sample_id),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    if not row or not row[0]:
+        return {}
+    try:
+        return json.loads(row[0])
+    except (ValueError, TypeError):
+        return {}
 
 
 def _group_ms2_args(con: sqlite3.Connection) -> dict:
@@ -681,6 +830,57 @@ def purity_unscored(
         n_unresolved_confirmed=tot["unresolved_confirmed"],
         n_not_confirmed=tot["not_confirmed"],
     )
+
+
+@log_call(source="analysis_db_path")
+def mad_filter_summary(analysis_db_path: Path | str) -> MadFilterSummary | None:
+    """Per-sample MAD threshold, and how many peaks survived it.
+
+    Compares each sample's ``detect_ms1_centroids`` output (pre-filter) to
+    its ``filter_spectra`` output (post-filter), and recomputes the
+    threshold those two would have to differ by from the ``filter_spectra``
+    command's stored arguments. Returns ``None`` when no sample's most
+    recent ``filter_spectra`` run used the MAD filter (``filter_mad=True``)
+    rather than a flat ``peak_height_threshold``.
+    """
+    analysis_db_path = Path(analysis_db_path)
+    with sqlite3.connect(analysis_db_path) as con:
+        samples = con.execute(
+            "SELECT sample_id, name FROM samples ORDER BY sample_id"
+        ).fetchall()
+
+        per_sample: list[MadFilterSample] = []
+        n_mads = 0.0
+        use_log = True
+        for sample_id, name in samples:
+            args = _sample_command_args(con, "filter_spectra", int(sample_id))
+            if not args.get("filter_mad"):
+                continue
+            n_mads = float(args.get("filter_mad_nmads", n_mads))
+            use_log = bool(args.get("filter_mad_log", use_log))
+            pre_mz, pre_intensity = _aggregated_arrays(
+                con, "detect_ms1_centroids", int(sample_id)
+            )
+            if pre_intensity.size == 0:
+                continue
+            post_mz, _ = _aggregated_arrays(con, "filter_spectra", int(sample_id))
+            threshold = mad_threshold(pre_intensity, log=use_log, n_mads=n_mads)
+            n_total = int(pre_mz.size)
+            n_survived = int(post_mz.size)
+            per_sample.append(
+                MadFilterSample(
+                    sample_id=int(sample_id),
+                    name=str(name),
+                    threshold=threshold,
+                    n_total=n_total,
+                    n_survived=n_survived,
+                    n_removed=n_total - n_survived,
+                )
+            )
+
+    if not per_sample:
+        return None
+    return MadFilterSummary(n_mads=n_mads, log=use_log, per_sample=per_sample)
 
 
 def _recheck_one(
@@ -1157,32 +1357,52 @@ def figure_purity(assoc: AssociatedPuritySummary) -> go.Figure:
     return fig
 
 
+_DENSITY_GRID = np.linspace(0.0, 1.0, 200)
+
+
 def figure_purity_per_sample(assoc: AssociatedPuritySummary) -> go.Figure:
-    """Violin of `precursor_frac` for associated MS2, per sample."""
-    ps = assoc.per_sample
-    if not any(p.frac_values for p in ps):
+    """Overlaid `precursor_frac` density per sample, on a shared [0, 1] grid.
+
+    One line per sample (own color, translucent fill); click a legend entry
+    to hide it, double-click to isolate it — surfaces bimodal per-sample
+    distributions that a violin/box plot flattens. Samples with fewer than
+    two associated MS2 are skipped (a density needs at least two points).
+    """
+    ps = [p for p in assoc.per_sample if len(p.frac_values) >= 2]
+    if not ps:
         return _empty("Precursor purity of associated MS2, by sample")
+
     fig = go.Figure()
-    for p in ps:
-        fig.add_violin(
-            y=p.frac_values or [None],
-            name=f"{p.name}<br>(n={_fmt(p.n_associated)})",
-            box_visible=True,
-            meanline_visible=True,
-            points=False,
-            spanmode="hard",
-            line_color=_C_OK,
-            fillcolor=_C_OK,
-            opacity=0.65,
+    for i, p in enumerate(ps):
+        vals = np.asarray(p.frac_values, dtype=float)
+        color = _SAMPLE_PALETTE[i % len(_SAMPLE_PALETTE)]
+        if np.ptp(vals) == 0:
+            # all associated MS2 share one purity value: KDE is undefined
+            # (zero variance) — draw a spike at that value instead.
+            density = np.zeros_like(_DENSITY_GRID)
+            density[np.argmin(np.abs(_DENSITY_GRID - vals[0]))] = 1.0
+        else:
+            density = gaussian_kde(vals)(_DENSITY_GRID)
+        fig.add_scatter(
+            x=_DENSITY_GRID, y=density, mode="lines",
+            name=f"{p.name} (n={_fmt(p.n_associated)})",
+            line=dict(color=color, width=2),
+            fill="tozeroy", fillcolor=_rgba(color, 0.15),
+            hovertemplate=f"{p.name}<br>precursor_frac %{{x:.2f}}<extra></extra>",
         )
-    fig.add_hline(
-        y=assoc.cutoff, line=dict(color=_C_BAD, dash="dash"),
+    fig.add_vline(
+        x=assoc.cutoff, line=dict(color=_C_BAD, dash="dash"),
         annotation_text=f"cutoff {assoc.cutoff:g}",
     )
     fig.update_layout(
-        title="Precursor purity (precursor_frac) of associated MS2, by sample",
-        yaxis=dict(title="precursor_frac", range=[0, 1]),
-        showlegend=False,
+        title=(
+            "Precursor purity (precursor_frac) density, by sample "
+            "— click a legend entry to toggle, double-click to isolate"
+        ),
+        xaxis=dict(title="precursor_frac", range=[0, 1]),
+        yaxis=dict(title="density"),
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
     )
     return fig
 
@@ -1366,6 +1586,7 @@ def collect_stats(
         per_sample_ms2=per_sample_ms2(analysis_db_path),
         associated_purity=associated_purity(analysis_db_path, cutoff=purity_cutoff),
         unscored=purity_unscored(analysis_db_path, raw_db_paths),
+        mad_filter=mad_filter_summary(analysis_db_path),
         recheck=unassociated_recheck(analysis_db_path),
         annotation=annotation_summary(analysis_db_path),
     )
@@ -1382,9 +1603,24 @@ def _table_html(counts: Sequence[SampleCounts]) -> str:
         f"<td>{_fmt(c.n_features)}</td></tr>"
         for c in counts
     )
+    return f"<table>{head}{rows}</table>"
+
+
+def _mad_table_html(m: MadFilterSummary) -> str:
+    space = "log10" if m.log else "linear"
+    rows = "".join(
+        f"<tr><td>{p.name}</td><td>{p.threshold:,.1f}</td>"
+        f"<td>{_fmt(p.n_survived)}</td><td>{_fmt(p.n_removed)}</td>"
+        f"<td>{_fmt(p.n_total)}</td></tr>"
+        for p in m.per_sample
+    )
     return (
-        "<table style='border-collapse:collapse' border='1' cellpadding='6'>"
-        f"{head}{rows}</table>"
+        f"<p>MS1 peaks were filtered with a MAD intensity threshold "
+        f"(median + {m.n_mads:g} &times; MAD, {space} space), computed "
+        f"independently per sample.</p>"
+        "<table><tr><th>sample</th><th>threshold</th>"
+        "<th>survived</th><th>removed</th><th>total peaks</th></tr>"
+        f"{rows}</table>"
     )
 
 
@@ -1419,52 +1655,13 @@ def _recheck_sentence(r: RecheckSummary) -> str:
     )
 
 
-def _unscored_sentence(u: UnscoredSummary) -> str:
-    if u.n_unscored == 0:
-        return "<p>Peak-based precursor purity was scored for every MS2 scan.</p>"
-    parts = []
-    if u.n_unresolved_confirmed:
-        parts.append(
-            f"{_fmt(u.n_unresolved_confirmed)} where the precursor <b>is</b> "
-            f"present in its own parent MS1 but the peak-picker could not "
-            f"resolve it (dense low-m/z window) — <code>precursor_frac</code> "
-            f"still measures its purity"
-        )
-    if u.n_not_confirmed:
-        parts.append(
-            f"{_fmt(u.n_not_confirmed)} with no real signal at the recorded "
-            f"precursor m/z in the parent MS1 (dynamic-exclusion carry-over, "
-            f"wrong pixel, or the precursor was gone)"
-        )
-    if u.n_off_pixel:
-        parts.append(
-            f"{_fmt(u.n_off_pixel)} because the parent MS1 falls outside the "
-            f"sample's imaged pixels (laser flyback / off-tissue)"
-        )
-    if u.n_no_parent:
-        parts.append(f"{_fmt(u.n_no_parent)} with no MS1 scan before them")
-    if u.n_no_precursor_mz:
-        parts.append(f"{_fmt(u.n_no_precursor_mz)} carrying no precursor m/z")
-    tail = ""
-    if u.n_unresolved_confirmed:
-        tail += (
-            " The first group is a peak-picking limitation, not a data problem "
-            "— filter on <code>precursor_confirmed</code> / <code>precursor_frac</code>."
-        )
-    if u.n_off_pixel:
-        tail += " The off-pixel scans can be treated as out-of-ROI acquisitions."
-    return (
-        f"<p>Peak-based precursor purity is unscored for {_fmt(u.n_unscored)} "
-        f"MS2 scans: " + "; ".join(parts) + "." + tail + "</p>"
-    )
-
-
 def _annotation_section_html(a: AnnotationSummary) -> str:
     lo, hi = a.cutoffs
-    libs = "; ".join(
-        f"{lib.name} ({_fmt(lib.n_spectra)} spectra, {_fmt(lib.n_compounds)} compounds)"
+    libs_html = "<ul class='lib-list'>" + "".join(
+        f"<li>{lib.name} — {_fmt(lib.n_spectra)} spectra, "
+        f"{_fmt(lib.n_compounds)} compounds</li>"
         for lib in a.libraries
-    )
+    ) + "</ul>"
     gap = (
         f" median best−runner-up score gap {a.median_gap:.2f}."
         if a.median_gap is not None
@@ -1511,7 +1708,9 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
         else ""
     )
     sentence = (
-        f"<p><b>MS2 annotation.</b> {libs}. Of {_fmt(a.n_ms2_bearing_features)} "
+        "<p><b>Libraries used for annotation:</b></p>"
+        f"{libs_html}"
+        f"<p>Of {_fmt(a.n_ms2_bearing_features)} "
         f"MS2-bearing features, {_fmt(a.n_features_annotated)} got a hit — "
         f"{_fmt(a.n_ge[lo])} with best score ≥ {lo:g}, "
         f"<b>{_fmt(a.n_ge[hi])}</b> ≥ {hi:g} — across "
@@ -1526,8 +1725,7 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
     )
     feat_table = (
         "<h3>Top features by score</h3>"
-        "<table style='border-collapse:collapse' border='1' cellpadding='6'>"
-        "<tr><th>feature m/z</th><th>compound</th><th>inchikey</th>"
+        "<table><tr><th>feature m/z</th><th>compound</th><th>inchikey</th>"
         "<th>score</th></tr>"
         f"{feat_rows}</table>"
         if a.top_features
@@ -1542,8 +1740,7 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
         )
         lib_table = (
             "<h3>Per library</h3>"
-            "<table style='border-collapse:collapse' border='1' cellpadding='6'>"
-            "<tr><th>library</th><th># spectra</th><th># compounds</th>"
+            "<table><tr><th>library</th><th># spectra</th><th># compounds</th>"
             "<th># features best-annotated</th></tr>"
             f"{lr}</table>"
         )
@@ -1580,7 +1777,7 @@ def build_summary_report(
     )
     sample_names = [c.name for c in stats.samples]
 
-    figures = [
+    core_figures = [
         figure_per_sample(stats.samples),
         figure_overlap_upset(stats.overlap_combos, sample_names),
         figure_ms2_association(stats.ms2),
@@ -1588,54 +1785,115 @@ def build_summary_report(
         figure_unassociated_recheck(stats.recheck),
         figure_purity(stats.associated_purity),
         figure_purity_per_sample(stats.associated_purity),
-        figure_purity_unscored(stats.unscored),
     ]
     ann = stats.annotation
-    if ann is not None:
-        figures += [
+    ann_figures = (
+        [
             figure_annotation_yield(ann),
             figure_annotation_score(ann),
             figure_annotation_ambiguity(ann),
             figure_annotation_agreement(ann),
         ]
+        if ann is not None
+        else []
+    )
 
     json_path = out_dir / _REPORT_JSON
     json_path.write_text(json.dumps(stats.to_dict(), indent=2))
 
     blocks = [
-        fig.to_html(
-            full_html=False, include_plotlyjs="cdn" if i == 0 else False
-        )
-        for i, fig in enumerate(figures)
+        fig.to_html(full_html=False, include_plotlyjs="cdn" if i == 0 else False)
+        for i, fig in enumerate(core_figures + ann_figures)
     ]
-    n_base = 8
-    base_blocks = "".join(f"<div>{b}</div>" for b in blocks[:n_base])
-    ann_html = ""
-    if ann is not None:
-        ann_blocks = "".join(f"<div>{b}</div>" for b in blocks[n_base:])
-        ann_html = (
-            "<h2>MS2 annotation</h2>"
-            f"{_annotation_section_html(ann)}{ann_blocks}"
+    (
+        b_per_sample, b_overlap, b_ms2, b_ms2_per_sample, b_recheck,
+        b_purity, b_purity_per_sample,
+    ) = blocks[: len(core_figures)]
+    ann_blocks = blocks[len(core_figures):]
+
+    def _fig(block: str) -> str:
+        return f"<div class='figure'>{block}</div>"
+
+    # (anchor, ToC label, section body html) — skipped sections are simply
+    # left out of both the ToC and the page.
+    sections: list[tuple[str, str, str]] = [
+        (
+            "overview",
+            "Overview",
+            "<div class='stat-strip'>"
+            + "".join(
+                f"<div class='stat'><div class='value'>{value}</div>"
+                f"<div class='label'>{label}</div></div>"
+                for value, label in (
+                    (_fmt(len(stats.samples)), "samples"),
+                    (_fmt(stats.n_features), "features"),
+                    (_fmt(stats.ms2.n_total), "MS2 scans"),
+                    (_fmt(stats.ms2.n_associated), "MS2 associated to a feature"),
+                )
+            )
+            + "</div>",
+        ),
+        (
+            "per-sample-counts",
+            "Per-sample counts",
+            f"{_table_html(stats.samples)}{_fig(b_per_sample)}",
+        ),
+        ("feature-overlap", "Feature overlap", _fig(b_overlap)),
+    ]
+    if stats.mad_filter is not None:
+        sections.append(
+            ("mad-filter", "MS1 peak filtering (MAD)", _mad_table_html(stats.mad_filter))
         )
+    sections.append(
+        (
+            "ms2-association",
+            "MS2 association",
+            _fig(b_ms2) + _fig(b_ms2_per_sample)
+            + _recheck_sentence(stats.recheck) + _fig(b_recheck),
+        )
+    )
+    sections.append(
+        (
+            "precursor-purity",
+            "Precursor purity",
+            _assoc_purity_sentence(stats.associated_purity)
+            + _fig(b_purity) + _fig(b_purity_per_sample),
+        )
+    )
+    if ann is not None:
+        sections.append(
+            (
+                "ms2-annotation",
+                "MS2 annotation",
+                _annotation_section_html(ann)
+                + "".join(_fig(b) for b in ann_blocks),
+            )
+        )
+
+    toc_html = "".join(
+        f"<li><a href='#{anchor}'>{label}</a></li>" for anchor, label, _ in sections
+    )
+    sections_html = "".join(
+        f"<section id='{anchor}'><h2>{label}</h2>{body}</section>"
+        for anchor, label, body in sections
+    )
+
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<title>MSIAnalyzer summary report</title>"
-        "<style>body{font-family:system-ui,sans-serif;margin:24px;max-width:1100px}"
-        "table{font-size:14px}h1{font-size:20px}h2{font-size:16px;margin-top:32px}"
-        "h3{font-size:14px;margin-top:20px}</style></head><body>"
+        f"<style>{_REPORT_CSS}</style>"
+        "</head><body><div class='layout'>"
+        "<header class='report-header'>"
         "<h1>MSIAnalyzer summary report</h1>"
-        f"<p>{_fmt(len(stats.samples))} sample(s) &middot; "
+        f"<p class='subtitle'>{_fmt(len(stats.samples))} sample(s) &middot; "
         f"{_fmt(stats.n_features)} features &middot; "
         f"{_fmt(stats.ms2.n_total)} MS2 scans "
         f"({_fmt(stats.ms2.n_associated)} associated to a feature)</p>"
-        f"{_assoc_purity_sentence(stats.associated_purity)}"
-        f"{_recheck_sentence(stats.recheck)}"
-        f"{_unscored_sentence(stats.unscored)}"
-        "<h2>Per-sample counts</h2>"
-        f"{_table_html(stats.samples)}"
-        + base_blocks
-        + ann_html
-        + "</body></html>"
+        "</header>"
+        f"<nav class='toc'><h2>Contents</h2><ul>{toc_html}</ul></nav>"
+        f"{sections_html}"
+        "</div></body></html>"
     )
     html_path = out_dir / _REPORT_HTML
     html_path.write_text(html)
