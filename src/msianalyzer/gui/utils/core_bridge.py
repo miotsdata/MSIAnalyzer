@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import Property, QObject, Signal
 
 from msianalyzer.core import project
 from msianalyzer.core.config import Config
 from msianalyzer.core.project.project import Project, create_project_folder
-from msianalyzer.core.run.run import Run
+from msianalyzer.core.run.run import RUN_STEPS, Run
 from msianalyzer.gui.utils.config_schema import coerce_config_values
 from msianalyzer.gui.utils.run_worker import RunWorker
 
@@ -25,6 +25,11 @@ class CoreBridge(QObject):
         super().__init__(parent)
         # Kept alive while running — nothing else holds a reference to it.
         self._run_worker: RunWorker | None = None
+
+    @Property(list, constant=True)
+    def RUN_STEPS(self) -> list[str]:
+        """Canonical, ordered `Run` stage names — see `core.run.run.RUN_STEPS`."""
+        return list(RUN_STEPS)
 
     def load_project(self, path):
         try:

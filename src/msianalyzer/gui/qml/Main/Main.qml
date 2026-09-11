@@ -32,6 +32,10 @@ ApplicationWindow {
             stackView.push("qrc:/Views/NewAnalysisPage.qml", {"project": project})
         }
 
+        function onShowRunningPageRequested(project, runId) {
+            stackView.push("qrc:/Views/RunningAnalysisPage.qml", {"project": project, "runId": runId})
+        }
+
         function onShowErrorRequested(message) {
             errorDialog.text = message
             errorDialog.open()

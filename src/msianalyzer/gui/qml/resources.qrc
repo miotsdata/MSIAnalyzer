@@ -7,5 +7,6 @@
         <file>Views/ProjectHomePage.qml</file>
         <file>Views/CreateProjectPage.qml</file>
         <file>Views/NewAnalysisPage.qml</file>
+        <file>Views/RunningAnalysisPage.qml</file>
     </qresource>
 </RCC>

@@ -36,6 +36,7 @@ class Application(QObject):
         self.router.runAnalysisRequested.connect(self._on_run_analysis_requested)
         self.core_bridge.invalidConfig.connect(self.router.showErrorRequested)
         self.core_bridge.runStarted.connect(self._on_run_started)
+        self.core_bridge.runCompleted.connect(self._on_run_completed)
 
     def _on_project_folder_chosen(self, path):
         self.project_folder = path
@@ -54,6 +55,13 @@ class Application(QObject):
         self.core_bridge.run_analysis(config_dict, self.project_folder)
 
     def _on_run_started(self, run_id: str):
-        # The running-analysis page (and navigation to it) lands separately;
-        # for now Application just tracks which run is in flight.
         self.current_run_id = run_id
+        self.router.showRunningPageRequested.emit(self.project_model, run_id)
+
+    def _on_run_completed(self, run_id: str):
+        # Reload from disk so the new run shows up in ProjectModel.runsList —
+        # reuses the same load -> projectLoaded -> showProjectHomeRequested
+        # path as opening a project from the start page. core_bridge.load_project
+        # takes the `.msianalyzer.yml` file itself, not the project folder.
+        project_file = str(Path(self.project_folder) / ".msianalyzer.yml")
+        self.core_bridge.load_project(project_file)

@@ -157,6 +157,33 @@ def new_analysis_view(application):
 
 
 @pytest.fixture
+def running_analysis_view(application):
+    """Factory: build a standalone RunningAnalysisPage view."""
+    views = []
+
+    def _make(project_model, run_id="run-1"):
+        view = QQuickView()
+        view.engine().rootContext().setContextProperty("Router", application.router)
+        view.engine().rootContext().setContextProperty(
+            "CoreBridge", application.core_bridge
+        )
+        view.setInitialProperties({"project": project_model, "runId": run_id})
+        view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        view.setSource(QUrl("qrc:/Views/RunningAnalysisPage.qml"))
+        view.resize(800, 600)
+        view.show()
+        QTest.qWaitForWindowExposed(view)
+        QTest.qWait(50)
+        views.append(view)
+        return view
+
+    yield _make
+
+    for view in views:
+        view.close()
+
+
+@pytest.fixture
 def create_project_view(application):
     view = QQuickView()
     view.engine().rootContext().setContextProperty("Router", application.router)
