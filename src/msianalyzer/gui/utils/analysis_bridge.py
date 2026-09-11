@@ -122,8 +122,7 @@ class AnalysisBridge(QObject):
     @Slot(list, result=list)
     def getObsColumns(self, sample_names: list) -> list:
         """`adata.obs` columns Visual Inspection can overlay instead of a
-        feature — e.g. `tic`, `rt`, `polarity`. See
-        `HeatmapImageProvider.getObsColumns`.
+        feature — e.g. `tic`, `rt`. See `HeatmapImageProvider.getObsColumns`.
 
         Args:
             sample_names: Samples to look for a readable `.h5ad` in —

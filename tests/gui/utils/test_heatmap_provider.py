@@ -180,7 +180,7 @@ def test_get_obs_columns_reads_from_first_resolvable_sample(tmp_path):
         tmp_path / "s1.h5ad",
         obs_columns={
             "tic": [1.0, 2.0, 3.0, 4.0],
-            "polarity": ["positive", "positive", "negative", "negative"],
+            "region": ["a", "a", "b", "b"],
         },
     )
     provider = HeatmapImageProvider()
@@ -189,7 +189,26 @@ def test_get_obs_columns_reads_from_first_resolvable_sample(tmp_path):
     columns = {c["name"]: c["numeric"] for c in provider.getObsColumns(["does_not_exist", "s1"])}
 
     assert columns["tic"] is True
-    assert columns["polarity"] is False
+    assert columns["region"] is False
+
+
+def test_get_obs_columns_excludes_scan_id_and_polarity(tmp_path):
+    _write_sample_h5ad(
+        tmp_path / "s1.h5ad",
+        obs_columns={
+            "scan_id": ["1", "2", "3", "4"],
+            "polarity": ["positive"] * 4,
+            "tic": [1.0, 2.0, 3.0, 4.0],
+        },
+    )
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    names = [c["name"] for c in provider.getObsColumns(["s1"])]
+
+    assert "scan_id" not in names
+    assert "polarity" not in names
+    assert "tic" in names
 
 
 def test_get_obs_columns_empty_when_no_samples_resolve(tmp_path):

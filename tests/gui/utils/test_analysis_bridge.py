@@ -245,7 +245,7 @@ def test_get_obs_columns_delegates_to_heatmap_provider(tmp_path):
     init_analysis_db(db_path).close()
 
     obs = pd.DataFrame(
-        {"tic": [1.0, 2.0, 3.0, 4.0], "polarity": ["positive", "positive", "negative", "negative"]},
+        {"tic": [1.0, 2.0, 3.0, 4.0], "region": ["a", "a", "b", "b"]},
         index=["a", "b", "c", "d"],
     )
     var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
@@ -262,7 +262,7 @@ def test_get_obs_columns_delegates_to_heatmap_provider(tmp_path):
     columns = {c["name"]: c["numeric"] for c in bridge.getObsColumns(["s1"])}
 
     assert columns["tic"] is True
-    assert columns["polarity"] is False
+    assert columns["region"] is False
 
 
 def test_get_obs_value_range_delegates_to_heatmap_provider(tmp_path):

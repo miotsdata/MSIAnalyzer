@@ -152,7 +152,7 @@ def test_list_obs_columns_classifies_numeric_and_discrete():
         [0.0, 0.0, 0.0, 0.0],
         obs_columns={
             "tic": [1.0, 2.0, 3.0, 4.0],
-            "polarity": ["positive", "positive", "negative", "negative"],
+            "region": ["a", "a", "b", "b"],
             "flagged": [True, False, True, False],
         },
     )
@@ -160,7 +160,7 @@ def test_list_obs_columns_classifies_numeric_and_discrete():
     columns = {c["name"]: c["numeric"] for c in list_obs_columns(adata)}
 
     assert columns["tic"] is True
-    assert columns["polarity"] is False
+    assert columns["region"] is False
     # bool dtype is discrete (a legend of True/False), not a color scale.
     assert columns["flagged"] is False
 
@@ -172,6 +172,28 @@ def test_list_obs_columns_excludes_spatial_coordinates():
 
     assert "x" not in names
     assert "y" not in names
+
+
+def test_list_obs_columns_excludes_scan_id_and_polarity():
+    # scan_id is effectively unique per pixel after scan averaging (a
+    # joined string of scan ids) — as a "discrete" column its category
+    # count is ~the pixel count, and the categorical render path is
+    # O(categories) per pixel, so exposing it froze the UI. polarity is a
+    # single constant value per sample, nothing to see spatially.
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={
+            "scan_id": ["1", "2", "3", "4"],
+            "polarity": ["positive"] * 4,
+            "tic": [1.0, 2.0, 3.0, 4.0],
+        },
+    )
+
+    names = [c["name"] for c in list_obs_columns(adata)]
+
+    assert "scan_id" not in names
+    assert "polarity" not in names
+    assert "tic" in names
 
 
 def test_obs_value_range_returns_min_and_max():

@@ -668,7 +668,7 @@ def test_obs_column_combo_lists_numeric_and_categorical_columns(
     out_dir = Path(visual_analysis_model.outDir)
     obs_columns = {
         "tic": [1.0, 2.0, 3.0, 4.0],
-        "polarity": ["positive", "positive", "negative", "negative"],
+        "region": ["positive", "positive", "negative", "negative"],
     }
     _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
     _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
@@ -681,7 +681,56 @@ def test_obs_column_combo_lists_numeric_and_categorical_columns(
     obs_combo = find_visual_child(root, "obsColumnCombo")
     labels = obs_combo.property("model")
     assert "tic" in labels
-    assert "polarity (categories)" in labels
+    assert "region (categories)" in labels
+
+
+def test_obs_column_combo_excludes_scan_id_and_polarity(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # scan_id is effectively unique per pixel (slow/freezes the discrete
+    # render path — "quite slow (and freezes)"); polarity is constant per
+    # sample. Reported as "completely useless now" — excluded from the
+    # picker entirely.
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {
+        "scan_id": ["1", "2", "3", "4"],
+        "polarity": ["positive"] * 4,
+        "tic": [1.0, 2.0, 3.0, 4.0],
+    }
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    obs_combo = find_visual_child(root, "obsColumnCombo")
+    labels = obs_combo.property("model")
+    assert "tic" in labels
+    assert not any("scan_id" in label for label in labels)
+    assert not any("polarity" in label for label in labels)
+
+
+def test_obs_mode_defaults_selection_to_tic(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # "Start with tic by default" — even though "rt" sorts first in
+    # adata.obs's own column order (rt is written before tic in
+    # create_adata.py), the selector should still land on "tic" initially,
+    # not just whatever's first.
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {"rt": [1.0, 2.0, 3.0, 4.0], "tic": [10.0, 20.0, 30.0, 40.0]}
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("selectedObsColumn") == "tic"
 
 
 def test_selecting_numeric_obs_column_shows_color_scale_controls(
@@ -710,7 +759,7 @@ def test_selecting_categorical_obs_column_hides_color_scale_and_shows_legend(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
     out_dir = Path(visual_analysis_model.outDir)
-    obs_columns = {"polarity": ["positive", "positive", "negative", "negative"]}
+    obs_columns = {"region": ["positive", "positive", "negative", "negative"]}
     _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
     _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
 
@@ -742,8 +791,8 @@ def test_obs_category_colors_stable_when_sample_hidden(
     # visibleSampleNames(), so hiding s2 (whose only category is
     # "negative") must not make "negative" disappear from s1's legend/colors.
     out_dir = Path(visual_analysis_model.outDir)
-    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns={"polarity": ["positive"] * 4})
-    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns={"polarity": ["negative"] * 4})
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns={"region": ["positive"] * 4})
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns={"region": ["negative"] * 4})
 
     view = analysis_view(visual_analysis_model)
     root = view.rootObject()
@@ -793,7 +842,7 @@ def test_categorical_obs_tile_loads_an_image(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
     out_dir = Path(visual_analysis_model.outDir)
-    obs_columns = {"polarity": ["positive", "positive", "negative", "negative"]}
+    obs_columns = {"region": ["positive", "positive", "negative", "negative"]}
     _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
     _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
 

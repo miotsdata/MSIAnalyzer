@@ -13,8 +13,8 @@ Item {
                            ? AnalysisBridge.getSamples(analysis.analysisDbPath) : []
 
     // "feature" (an m/z column, the original mode) or "obs" (a per-pixel
-    // `adata.obs` column, e.g. `tic`/`rt`/`polarity` — not tied to any one
-    // feature). Mutually exclusive with the feature selector below.
+    // `adata.obs` column, e.g. `tic`/`rt` — not tied to any one feature).
+    // Mutually exclusive with the feature selector below.
     property string inspectionMode: "feature"
     property var obsColumns: (analysis && analysis.analysisDbPath && visualSection.samples.length > 0)
                               ? AnalysisBridge.getObsColumns(
@@ -24,6 +24,19 @@ Item {
         return c.numeric ? c.name : (c.name + " (categories)")
     })
     property int selectedObsIndex: 0
+    // A fresh obsColumns list (new analysis) defaults the selection to
+    // "tic" rather than whatever happens to sort first, falling back to
+    // the first column if "tic" isn't present.
+    onObsColumnsChanged: {
+        var ticIndex = 0
+        for (var i = 0; i < visualSection.obsColumns.length; i++) {
+            if (visualSection.obsColumns[i].name === "tic") {
+                ticIndex = i
+                break
+            }
+        }
+        visualSection.selectedObsIndex = ticIndex
+    }
     property var selectedObsColumnInfo: (visualSection.obsColumns.length > visualSection.selectedObsIndex)
                                          ? visualSection.obsColumns[visualSection.selectedObsIndex] : null
     property string selectedObsColumn: visualSection.selectedObsColumnInfo

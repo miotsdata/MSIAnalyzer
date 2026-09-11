@@ -3,13 +3,18 @@ import matplotlib
 import numpy as np
 import pandas as pd
 
-# obsm["spatial"]'s own x/y — already the grid's coordinates, not a value
-# to overlay on it.
-_EXCLUDED_OBS_COLUMNS = {"x", "y"}
-# Fixed qualitative palette for discrete `obs` columns (e.g. `polarity`) —
-# categories aren't ordered, so a continuous colormap/vmin/vmax makes no
-# sense for them; every tile and the legend index into this one palette by
-# the same category order so colors agree across tiles.
+# x/y: obsm["spatial"]'s own coordinates, not a value to overlay on it.
+# scan_id: the raw per-pixel scan-id join string (one distinct value per
+# pixel after scan averaging) — as a "discrete" column its category count
+# is effectively the pixel count, and render_obs_categories_heatmap colors
+# by category position (O(categories) work per pixel), so this alone was
+# slow enough to freeze the UI ("quite slow (and freezes)"). polarity: a
+# single constant value per sample, nothing to see spatially.
+_EXCLUDED_OBS_COLUMNS = {"x", "y", "scan_id", "polarity"}
+# Fixed qualitative palette for discrete `obs` columns — categories aren't
+# ordered, so a continuous colormap/vmin/vmax makes no sense for them;
+# every tile and the legend index into this one palette by the same
+# category order so colors agree across tiles.
 _CATEGORY_PALETTE = "tab20"
 
 
@@ -149,18 +154,20 @@ def is_numeric_obs_column(adata: ad.AnnData, obs_column: str) -> bool:
 
 def list_obs_columns(adata: ad.AnnData) -> list[dict]:
     """`adata.obs` columns Visual Inspection can overlay, beyond the m/z
-    features themselves — e.g. `tic`, `rt`, `polarity`.
+    features themselves — e.g. `tic`, `rt`.
 
     Args:
         adata: One sample's AnnData, already loaded.
 
     Returns:
         `[{"name": ..., "numeric": bool}, ...]`, in `adata.obs`'s column
-        order. `x`/`y` are excluded — they're the same spatial coordinates
-        already used to build the grid, not a value to overlay on it.
-        `numeric` is `True` for numeric dtypes (int/float, excluding
-        `bool`) — rendered as a color scale; `False` (object/category/bool)
-        is the discrete case, rendered as a fixed-palette legend instead.
+        order, excluding `_EXCLUDED_OBS_COLUMNS` (`x`/`y`/`scan_id`/
+        `polarity` — not useful to overlay, and `scan_id` in particular is
+        slow: it's effectively unique per pixel, and the discrete render
+        path is O(categories) per pixel). `numeric` is `True` for numeric
+        dtypes (int/float, excluding `bool`) — rendered as a color scale;
+        `False` (object/category/bool) is the discrete case, rendered as a
+        fixed-palette legend instead.
     """
     return [
         {"name": name, "numeric": is_numeric_obs_column(adata, name)}
