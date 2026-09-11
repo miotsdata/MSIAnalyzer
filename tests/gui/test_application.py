@@ -51,3 +51,51 @@ def test_core_bridge_invalidCreateProjectName_triggers_router_showErrorRequested
 
     assert len(received) == 1
     assert received[0] == error_message
+
+
+def test_project_folder_chosen_sets_application_project_folder(application):
+    application.core_bridge.load_project = MagicMock()
+
+    application.router.projectFolderChosen.emit("/some/path")
+
+    assert application.project_folder == "/some/path"
+
+
+def test_create_project_requested_triggers_core_create_and_stores_folder(
+    application,
+):
+    application.core_bridge.create_project = MagicMock()
+
+    application.router.createProjectRequested.emit("My Project", "/some/parent")
+
+    application.core_bridge.create_project.assert_called_once_with(
+        "My Project", "/some/parent"
+    )
+    assert application.project_folder == "/some/parent/My Project"
+
+
+def test_project_loaded_builds_project_model_with_folder(application):
+    application.project_folder = "/some/parent/My Project"
+    project = MagicMock(name="proj1", uuid="sdffd")
+    received = []
+    application.router.showProjectHomeRequested.connect(received.append)
+
+    application.core_bridge.projectLoaded.emit(project)
+
+    assert len(received) == 1
+    model = received[0]
+    assert model.folder == "/some/parent/My Project"
+    assert application.project_model is model
+
+
+def test_project_loaded_builds_runs_list_from_project(application, project_with_runs):
+    application.project_folder = "/tmp/proj"
+    received = []
+    application.router.showProjectHomeRequested.connect(received.append)
+
+    application.core_bridge.projectLoaded.emit(project_with_runs)
+
+    model = received[0]
+    runs_list = model.runsList
+    assert len(runs_list) == len(project_with_runs.runs)
+    assert runs_list[0]["start_date"] >= runs_list[-1]["start_date"]  # newest first

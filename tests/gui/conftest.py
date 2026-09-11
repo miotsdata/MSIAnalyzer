@@ -8,6 +8,7 @@ from msianalyzer.gui.utils.application import Application
 
 from PySide6.QtQuick import QQuickView
 from PySide6.QtCore import QUrl
+from PySide6.QtTest import QTest
 
 import os
 
@@ -57,6 +58,72 @@ def application():
 def project():
     p = Project(name="test_proj")
     return p
+
+
+@pytest.fixture
+def project_with_runs():
+    """A project with two `Run.to_dict()`-shaped entries in `.runs`."""
+    p = Project(name="test_proj_with_runs")
+    for i in range(2):
+        run_id = f"run-{i}"
+        p.runs[run_id] = {
+            "id": run_id,
+            "start_date": f"2026-01-0{i + 1} 12:00:00",
+            "end_date": f"2026-01-0{i + 1} 12:30:00",
+            "status": "COMPLETED",
+            "config": {"io": {"out_dir": f"/tmp/proj/output_{i}"}},
+            "config_path": f"/tmp/proj/configs/run_{i}.yaml",
+        }
+    return p
+
+
+def _find_visual_child(item, object_name):
+    """Depth-first search over `QQuickItem.childItems()`.
+
+    Repeater/ListView delegates are visual children of their view but are
+    *not* reachable via `QObject.findChild` (their QObject parent is the
+    QQmlDelegateModel machinery, not the visual parent) — use this instead
+    for anything created by a `Repeater`.
+    """
+    for child in item.childItems():
+        if child.objectName() == object_name:
+            return child
+        found = _find_visual_child(child, object_name)
+        if found is not None:
+            return found
+    return None
+
+
+@pytest.fixture
+def find_visual_child():
+    return _find_visual_child
+
+
+@pytest.fixture
+def project_home_view(application):
+    """Factory: build a standalone ProjectHomePage view for a given project model."""
+    views = []
+
+    def _make(project_model):
+        view = QQuickView()
+        view.engine().rootContext().setContextProperty("Router", application.router)
+        view.engine().rootContext().setContextProperty(
+            "CoreBridge", application.core_bridge
+        )
+        view.setInitialProperties({"project": project_model})
+        view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        view.setSource(QUrl("qrc:/Views/ProjectHomePage.qml"))
+        view.resize(800, 600)
+        view.show()
+        QTest.qWaitForWindowExposed(view)
+        QTest.qWait(50)  # let Repeater-created delegates finish incubating
+        views.append(view)
+        return view
+
+    yield _make
+
+    for view in views:
+        view.close()
 
 
 @pytest.fixture

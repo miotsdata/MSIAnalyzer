@@ -7,6 +7,8 @@ class Router(QObject):
     projectFolderChosen = Signal(str)
     showProjectHomeRequested = Signal(QObject)
     showErrorRequested = Signal(str)
+    newAnalysisPageRequested = Signal(QObject)
+    analysisSelected = Signal(str)
 
     @Slot(QUrl, result=str)
     def toLocalPath(self, url: QUrl) -> str:
