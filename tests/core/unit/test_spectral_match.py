@@ -88,3 +88,50 @@ def test_all_empirical_peaks_below_threshold_keeps_library_filtered_spectrum():
     assert m.n_emp_peaks_filtered == 2
     assert set(np.round(m.lib_filtered_mz, 1)) == {900.0, 950.0}
     assert m.score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# configurable score weights
+# ---------------------------------------------------------------------------
+
+# every library peak matches (lib_coverage == 1), plus two unmatched
+# empirical peaks push emp_coverage below 1 without touching dot_product_score
+# or lib_coverage — the "high dot product, high lib coverage, low emp
+# coverage" shape the weights exist to rebalance.
+_Q_MZ = np.array([100.0, 200.0, 300.0, 400.0, 500.0])
+_Q_INT = np.array([500.0, 900.0, 100.0, 700.0, 700.0])
+_L_MZ = np.array([100.0, 200.0, 300.0])
+_L_INT = np.array([500.0, 900.0, 100.0])
+
+
+def test_default_weights_reproduce_dot_times_sqrt_coverage():
+    m = reverse_dot_product(_Q_MZ, _Q_INT, _L_MZ, _L_INT, ppm_tolerance=10.0)
+    assert m.emp_coverage < 1.0 == m.lib_coverage
+    assert m.score == pytest.approx(m.dot_product_score * m.coverage_score)
+
+
+def test_custom_weights_reweight_score_without_touching_diagnostics():
+    default = reverse_dot_product(_Q_MZ, _Q_INT, _L_MZ, _L_INT, ppm_tolerance=10.0)
+    custom = reverse_dot_product(
+        _Q_MZ, _Q_INT, _L_MZ, _L_INT, ppm_tolerance=10.0,
+        weight_dot=2.0, weight_lib_coverage=0.25, weight_emp_coverage=0.1,
+    )
+    # unweighted diagnostics never change with the weights
+    assert custom.dot_product_score == pytest.approx(default.dot_product_score)
+    assert custom.lib_coverage == pytest.approx(default.lib_coverage)
+    assert custom.emp_coverage == pytest.approx(default.emp_coverage)
+    assert custom.coverage_score == pytest.approx(default.coverage_score)
+    assert custom.score == pytest.approx(
+        custom.dot_product_score**2.0
+        * custom.lib_coverage**0.25
+        * custom.emp_coverage**0.1
+    )
+
+
+def test_zero_weight_drops_emp_coverage_from_score():
+    m = reverse_dot_product(
+        _Q_MZ, _Q_INT, _L_MZ, _L_INT, ppm_tolerance=10.0,
+        weight_dot=1.0, weight_lib_coverage=1.0, weight_emp_coverage=0.0,
+    )
+    assert m.emp_coverage < 1.0
+    assert m.score == pytest.approx(m.dot_product_score * m.lib_coverage)

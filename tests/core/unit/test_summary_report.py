@@ -388,6 +388,7 @@ def test_annotation_summary(tmp_path):
     _seed_annotations(adb)
     a = annotation_summary(adb)
     assert a is not None
+    assert a.n_features_total == 3         # features 1, 2, 3 (mz 500/600/700)
     assert a.n_ms2_bearing_features == 2   # features 1 and 2 have associated MS2
     assert a.n_features_annotated == 2
     assert sorted(a.best_score_values) == [0.72, 0.85]
@@ -399,9 +400,11 @@ def test_annotation_summary(tmp_path):
     assert (a.n_multiscan_features, a.n_multiscan_agree) == (1, 1)
     assert a.n_best_confident == 1
     assert a.n_confident_precursor_confirmed == 1
+    assert a.n_confident_not_flat_fragmentation == 1
     assert (a.n_consensus, a.n_consensus_matches_best) == (1, 1)
-    names = {c[0] for c in a.top_compounds}
+    names = {t[2] for t in a.top_features}
     assert names == {"COMPA0000000AA", "COMPC0000000CC"}
+    assert [t[4] for t in a.top_features] == [0.85, 0.72]  # best score first
     assert a.libraries[0].n_best_hits == 2
 
 
@@ -426,7 +429,8 @@ def test_annotation_figures_and_report_section(tmp_path):
     build_summary_report(adb, raw_db_paths=raw_map, out_dir=out)
     text = (out / "summary_report.html").read_text()
     assert "MS2 annotation" in text
-    assert "Top compounds by feature count" in text
+    assert "Annotation funnel" in text
+    assert "Top features by score" in text
     assert "COMPA00000" in text
     payload = json.loads((out / "summary.json").read_text())
     assert payload["annotation"]["n_features_annotated"] == 2

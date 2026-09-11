@@ -53,6 +53,7 @@ __all__ = [
     "GroupingResult",
     "ppm_between",
     "detect_precursor_only",
+    "detect_flat_fragmentation",
     "associate_scan",
     "group_ms2",
     "summarize_features",
@@ -109,6 +110,59 @@ def detect_precursor_only(
     return float(inten[near].sum()) / total >= tic_frac
 
 
+def detect_flat_fragmentation(
+    mz_array: Sequence[float] | np.ndarray | None,
+    intensity_array: Sequence[float] | np.ndarray | None,
+    *,
+    min_peaks: int = 3,
+    cv_threshold: float = 0.2,
+    min_rel_intensity: float = 0.01,
+) -> bool:
+    """True when a spectrum looks like a "comb" rather than real fragmentation.
+
+    Real CID/HCD fragmentation decays: one or a few dominant fragments, many
+    minor ones — high dispersion in peak height. Several peaks at different
+    m/z but near-identical height is more consistent with chemical/
+    electronic noise or an isobaric co-isolation smear than genuine
+    fragments. Measured as the coefficient of variation
+    (``std(intensity) / mean(intensity)``) of the peaks surviving a noise
+    floor: low CV => flat => flagged.
+
+    A soft QC signal, not a filter — flagged scans are still scored/stored
+    (mirrors :func:`detect_precursor_only`).
+
+    Args:
+        mz_array: Fragment m/z values (decoded, not a blob). Unused beyond
+            sizing/filtering alongside ``intensity_array``; kept for
+            symmetry with :func:`detect_precursor_only` and so a future
+            m/z-spread refinement can use it.
+        intensity_array: Matching intensities.
+        min_peaks: Peaks surviving ``min_rel_intensity`` must be at least
+            this many before the test applies; below it CV is too noisy a
+            signal, so the scan is left unflagged.
+        cv_threshold: Flag when CV ``<=`` this value, in ``[0, 1]``-ish
+            (unbounded above, but a flat comb sits well under 1).
+        min_rel_intensity: Peaks below this fraction of the base peak are
+            dropped before counting and computing CV.
+    """
+    if mz_array is None or intensity_array is None:
+        return False
+    inten = np.asarray(intensity_array, dtype=float)
+    if inten.size == 0:
+        return False
+    base = inten.max()
+    if base <= 0.0:
+        return False
+    kept = inten[inten >= base * min_rel_intensity]
+    if kept.size < min_peaks:
+        return False
+    mean = float(kept.mean())
+    if mean <= 0.0:
+        return False
+    cv = float(kept.std()) / mean
+    return cv <= cv_threshold
+
+
 # ---------------------------------------------------------------------------
 # result containers
 # ---------------------------------------------------------------------------
@@ -147,6 +201,7 @@ class ScanAssociation:
     n_peaks: int
     polarity: str | None
     precursor_only: bool
+    flat_fragmentation: bool
     window_features: list[WindowFeature] = field(default_factory=list)
 
 
@@ -161,6 +216,7 @@ class FeatureMs2Summary:
     n_precursor_only: int
     n_single_peak: int
     n_chimeric: int
+    n_flat_fragmentation: int
     median_n_peaks: float
 
 
@@ -195,6 +251,9 @@ def associate_scan(
     default_isolation_half_width: float = 0.5,
     precursor_only_tic_frac: float = 0.8,
     precursor_only_mz_tol_da: float = 2.0,
+    flat_fragmentation_min_peaks: int = 3,
+    flat_fragmentation_cv_threshold: float = 0.2,
+    flat_fragmentation_min_rel_intensity: float = 0.01,
     sample_id: int | None = None,
 ) -> ScanAssociation:
     """Associate one MS2 scan with a master feature.
@@ -210,6 +269,12 @@ def associate_scan(
             scan does not carry isolation offsets.
         precursor_only_tic_frac: Passed to :func:`detect_precursor_only`.
         precursor_only_mz_tol_da: Passed to :func:`detect_precursor_only`.
+        flat_fragmentation_min_peaks: Passed to
+            :func:`detect_flat_fragmentation`.
+        flat_fragmentation_cv_threshold: Passed to
+            :func:`detect_flat_fragmentation`.
+        flat_fragmentation_min_rel_intensity: Passed to
+            :func:`detect_flat_fragmentation`.
         sample_id: Overrides ``scan["sample_id"]`` when given.
 
     Returns:
@@ -289,6 +354,14 @@ def associate_scan(
         mz_tol_da=precursor_only_mz_tol_da,
     )
 
+    flat_fragmentation = detect_flat_fragmentation(
+        scan.get("mz_array"),
+        scan.get("intensity_array"),
+        min_peaks=flat_fragmentation_min_peaks,
+        cv_threshold=flat_fragmentation_cv_threshold,
+        min_rel_intensity=flat_fragmentation_min_rel_intensity,
+    )
+
     return ScanAssociation(
         scan_id=int(scan["scan_id"]),
         sample_id=sample_id if sample_id is not None else scan.get("sample_id"),
@@ -308,6 +381,7 @@ def associate_scan(
         n_peaks=int(n_peaks),
         polarity=scan.get("polarity"),
         precursor_only=precursor_only,
+        flat_fragmentation=flat_fragmentation,
         window_features=window_features,
     )
 
@@ -334,6 +408,7 @@ def summarize_features(
                 n_precursor_only=sum(r.precursor_only for r in rows),
                 n_single_peak=sum(r.n_peaks <= 1 for r in rows),
                 n_chimeric=sum(r.n_features_in_window > 1 for r in rows),
+                n_flat_fragmentation=sum(r.flat_fragmentation for r in rows),
                 median_n_peaks=float(np.median(n_peaks)) if n_peaks else 0.0,
             )
         )
@@ -352,6 +427,9 @@ def group_ms2(
     default_isolation_half_width: float = 0.5,
     precursor_only_tic_frac: float = 0.8,
     precursor_only_mz_tol_da: float = 2.0,
+    flat_fragmentation_min_peaks: int = 3,
+    flat_fragmentation_cv_threshold: float = 0.2,
+    flat_fragmentation_min_rel_intensity: float = 0.01,
 ) -> GroupingResult:
     """Associate a batch of MS2 scans and summarise per feature.
 
@@ -391,6 +469,9 @@ def group_ms2(
             default_isolation_half_width=default_isolation_half_width,
             precursor_only_tic_frac=precursor_only_tic_frac,
             precursor_only_mz_tol_da=precursor_only_mz_tol_da,
+            flat_fragmentation_min_peaks=flat_fragmentation_min_peaks,
+            flat_fragmentation_cv_threshold=flat_fragmentation_cv_threshold,
+            flat_fragmentation_min_rel_intensity=flat_fragmentation_min_rel_intensity,
         )
         if a.feature_id is None and not include_unmatched:
             continue
@@ -424,6 +505,7 @@ _ASSOC_COLS = (
     "n_peaks",
     "polarity",
     "precursor_only",
+    "flat_fragmentation",
     "command_id",
 )
 
@@ -481,6 +563,7 @@ def persist_grouping(
                     a.n_peaks,
                     a.polarity,
                     int(a.precursor_only),
+                    int(a.flat_fragmentation),
                     command_id,
                 ),
                 table="ms2_associations",
@@ -514,8 +597,8 @@ def persist_grouping(
             con,
             "INSERT INTO feature_ms2_summary "
             "(feature_id, feature_mz, n_ms2, n_samples, n_precursor_only, "
-            " n_single_peak, n_chimeric, median_n_peaks) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " n_single_peak, n_chimeric, n_flat_fragmentation, median_n_peaks) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     s.feature_id,
@@ -525,6 +608,7 @@ def persist_grouping(
                     s.n_precursor_only,
                     s.n_single_peak,
                     s.n_chimeric,
+                    s.n_flat_fragmentation,
                     s.median_n_peaks,
                 )
                 for s in result.feature_summary

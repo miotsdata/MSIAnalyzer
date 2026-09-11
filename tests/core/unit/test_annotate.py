@@ -71,6 +71,7 @@ def _row(scan_id, score, *, feature_id=1, sample_id=1):
         is_chimeric=False,
         n_features_in_window=1,
         precursor_only=False,
+        flat_fragmentation=False,
         emp_filtered_mz=empty,
         emp_filtered_intensity=empty,
         lib_filtered_mz=empty,

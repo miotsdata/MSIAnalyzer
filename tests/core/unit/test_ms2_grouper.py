@@ -13,6 +13,7 @@ import pytest
 
 from msianalyzer.core.annotation.group_ms2 import (
     associate_scan,
+    detect_flat_fragmentation,
     detect_precursor_only,
     group_ms2,
     persist_grouping,
@@ -131,6 +132,82 @@ def test_detect_precursor_only_false_for_real_fragmentation():
 
 def test_detect_precursor_only_false_when_precursor_null():
     assert detect_precursor_only(np.array([1.0]), np.array([1.0]), None) is False
+
+
+# ---------------------------------------------------------------------------
+# flat-fragmentation ("comb") flagging
+# ---------------------------------------------------------------------------
+
+
+def test_detect_flat_fragmentation_true_for_uniform_height_peaks():
+    mz = np.array([120.0, 200.0, 333.0, 480.0])
+    inten = np.array([1000.0, 950.0, 1020.0, 980.0])  # CV ~= 0.026
+    assert detect_flat_fragmentation(mz, inten) is True
+
+
+def test_detect_flat_fragmentation_false_for_decaying_real_spectrum():
+    mz = np.array([120.0, 200.0, 333.0, 480.0])
+    inten = np.array([10000.0, 3000.0, 800.0, 200.0])  # CV ~= 1.1
+    assert detect_flat_fragmentation(mz, inten) is False
+
+
+def test_detect_flat_fragmentation_false_below_min_peaks():
+    # only 2 peaks survive -> too few for the CV test to be trusted
+    mz = np.array([120.0, 200.0])
+    inten = np.array([1000.0, 1000.0])
+    assert detect_flat_fragmentation(mz, inten, min_peaks=3) is False
+
+
+def test_detect_flat_fragmentation_drops_noise_floor_before_cv():
+    # 4 near-uniform peaks + one baseline-noise peak far below 1% of base;
+    # left in, its huge relative deviation would flip the CV above threshold
+    mz = np.array([120.0, 200.0, 333.0, 480.0, 410.0])
+    inten = np.array([1000.0, 950.0, 1020.0, 980.0, 1.0])
+    assert detect_flat_fragmentation(mz, inten, min_rel_intensity=0.01) is True
+
+
+def test_detect_flat_fragmentation_false_when_arrays_missing():
+    assert detect_flat_fragmentation(None, None) is False
+
+
+def test_flat_fragmentation_propagates_onto_scan_association():
+    features = np.array([500.0])
+    flat_scan = {
+        "scan_id": 1,
+        "sample_id": 1,
+        "precursor_mz": 500.0,
+        "mz_array": np.array([120.0, 200.0, 333.0, 480.0]),
+        "intensity_array": np.array([1000.0, 950.0, 1020.0, 980.0]),
+    }
+    normal_scan = {
+        "scan_id": 2,
+        "sample_id": 1,
+        "precursor_mz": 500.0,
+        "mz_array": np.array([120.0, 200.0, 333.0, 480.0]),
+        "intensity_array": np.array([10000.0, 3000.0, 800.0, 200.0]),
+    }
+    assert associate_scan(flat_scan, features, assoc_ppm=10.0).flat_fragmentation is True
+    assert associate_scan(normal_scan, features, assoc_ppm=10.0).flat_fragmentation is False
+
+
+def test_feature_ms2_summary_counts_flat_fragmentation():
+    features = np.array([500.0])
+    scans = [
+        {
+            "scan_id": 1, "sample_id": 1, "precursor_mz": 500.0,
+            "mz_array": np.array([120.0, 200.0, 333.0, 480.0]),
+            "intensity_array": np.array([1000.0, 950.0, 1020.0, 980.0]),
+        },
+        {
+            "scan_id": 2, "sample_id": 1, "precursor_mz": 500.0,
+            "mz_array": np.array([120.0, 200.0, 333.0, 480.0]),
+            "intensity_array": np.array([10000.0, 3000.0, 800.0, 200.0]),
+        },
+    ]
+    result = group_ms2(scans, features, assoc_ppm=10.0)
+    fs = result.feature_summary[0]
+    assert fs.n_ms2 == 2
+    assert fs.n_flat_fragmentation == 1
 
 
 def test_precursor_only_scan_is_flagged_but_still_associated(ms2_grouper_mock_data):

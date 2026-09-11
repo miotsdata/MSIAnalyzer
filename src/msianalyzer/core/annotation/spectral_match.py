@@ -17,10 +17,22 @@ Scoring pipeline:
     5. ``lib_coverage``  = matched_lib_peaks / n_lib_filtered
        ``emp_coverage``  = matched_emp_peaks / n_emp_filtered
        ``coverage_score`` = sqrt(lib_coverage * emp_coverage)
-    6. ``score`` = ``dot_product_score * coverage_score`` in ``[0, 1]``.
+    6. ``score`` = ``dot_product_score**w_dot * lib_coverage**w_lib *
+       emp_coverage**w_emp``, clipped to ``[0, 1]``. The weights are
+       exponents (default ``1, 0.5, 0.5``, reproducing the original
+       ``dot_product_score * sqrt(lib_coverage * emp_coverage)``), not a
+       normalised split — raise one to lean on that term harder, or drop it
+       to ``0`` to remove it from the score entirely (``x**0 == 1``). A
+       matrix-heavy empirical spectrum with real background peaks the
+       library doesn't carry will always have a depressed ``emp_coverage``;
+       lowering ``w_emp`` stops that alone from crushing an otherwise good
+       ``dot_product_score`` / ``lib_coverage`` match.
 
 Every intermediate value is returned in :class:`MatchResult` for full
-interpretability and downstream storage.
+interpretability and downstream storage — the weights only shape the final
+``score``; ``dot_product_score``, ``lib_coverage``, ``emp_coverage`` and
+``coverage_score`` are always the unweighted, directly-comparable-across-runs
+diagnostics.
 """
 
 from __future__ import annotations
@@ -115,6 +127,9 @@ def reverse_dot_product(
     mz_power: float = 2.0,
     int_power: float = 0.5,
     noise_threshold: float = 0.01,
+    weight_dot: float = 1.0,
+    weight_lib_coverage: float = 0.5,
+    weight_emp_coverage: float = 0.5,
 ) -> MatchResult:
     """Compute the coverage-aware reverse dot product score.
 
@@ -130,6 +145,14 @@ def reverse_dot_product(
         noise_threshold: After max-normalisation, peaks with intensity below
             this fraction are dropped from both spectra. Default 0.01 = 1 %
             of the base peak.
+        weight_dot: Exponent applied to ``dot_product_score`` in the final
+            ``score``. Default ``1.0``.
+        weight_lib_coverage: Exponent applied to ``lib_coverage``. Default
+            ``0.5``.
+        weight_emp_coverage: Exponent applied to ``emp_coverage``. Default
+            ``0.5``. Lower this to stop a spectrum's own unmatched
+            background/matrix peaks (low ``emp_coverage``) from dominating
+            the score.
 
     Returns:
         A :class:`MatchResult`.
@@ -202,7 +225,12 @@ def reverse_dot_product(
     emp_coverage = n_emp_matched / n_emp_filtered if n_emp_filtered > 0 else 0.0
     coverage_score = float(np.sqrt(lib_coverage * emp_coverage))
 
-    score = float(np.clip(dot_score * coverage_score, 0.0, 1.0))
+    weighted = (
+        dot_score**weight_dot
+        * lib_coverage**weight_lib_coverage
+        * emp_coverage**weight_emp_coverage
+    )
+    score = float(np.clip(weighted, 0.0, 1.0))
 
     return MatchResult(
         score=score,

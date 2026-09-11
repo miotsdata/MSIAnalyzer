@@ -207,6 +207,24 @@ class GroupMs2Config:
             did not really occur).
         precursor_only_mz_tol_da: Half-width, in Da, of the "on the
             precursor" band used for the `precursor_only` test.
+        flat_fragmentation_min_peaks: A scan needs at least this many peaks
+            (after `flat_fragmentation_min_rel_intensity` filtering) before
+            the `flat_fragmentation` test is even applied; below it the
+            coefficient of variation is too noisy a signal to trust, so the
+            scan is left unflagged (`False`).
+        flat_fragmentation_cv_threshold: A scan is flagged
+            `flat_fragmentation` when its surviving peaks' coefficient of
+            variation (`std(intensity) / mean(intensity)`) is `<=` this
+            value — many peaks at different m/z but near-identical height,
+            more consistent with chemical/electronic noise or an isobaric
+            co-isolation smear than real CID/HCD fragmentation (which decays:
+            one or a few dominant fragments, several minor ones, high CV).
+            Soft QC flag, not a filter — flagged scans are still scored and
+            stored.
+        flat_fragmentation_min_rel_intensity: Peaks below this fraction of
+            the scan's base peak are dropped before both the peak count and
+            the CV are computed (independent of `AnnotateConfig.
+            noise_threshold` — this stage runs before annotation).
     """
 
     assoc_ppm: float = 10.0
@@ -214,6 +232,9 @@ class GroupMs2Config:
     default_isolation_half_width: float = 0.5
     precursor_only_tic_frac: float = 0.8
     precursor_only_mz_tol_da: float = 2.0
+    flat_fragmentation_min_peaks: int = 3
+    flat_fragmentation_cv_threshold: float = 0.2
+    flat_fragmentation_min_rel_intensity: float = 0.01
 
 
 @dataclass
@@ -303,6 +324,22 @@ class AnnotateConfig:
             during scoring.
         mz_power: MSDial-style m/z weighting exponent in the dot product.
         int_power: MSDial-style intensity weighting exponent.
+        score_weight_dot: Exponent applied to `dot_product_score` when
+            combining it with `lib_coverage` / `emp_coverage` into the
+            stored `score` (see `spectral_match.reverse_dot_product`).
+            Default `1.0`.
+        score_weight_lib_coverage: Exponent applied to `lib_coverage`.
+            Default `0.5`.
+        score_weight_emp_coverage: Exponent applied to `emp_coverage`.
+            Default `0.5`. The defaults reproduce the original
+            `dot_product_score * sqrt(lib_coverage * emp_coverage)`
+            formula. Lower this when real, library-absent background/matrix
+            peaks in the empirical spectrum are suppressing otherwise good
+            matches (high dot product, high library coverage, low empirical
+            coverage) — set to `0` to drop the term entirely. The unweighted
+            `dot_product_score` / `lib_coverage` / `emp_coverage` /
+            `coverage_score` columns are always stored too, so a re-run is
+            the only way to see a new weighting reflected in `score`.
         min_matched_peaks: A candidate is stored only when it shares at
             least this many fragment peaks with the filtered empirical
             spectrum.
@@ -328,6 +365,9 @@ class AnnotateConfig:
     fragment_ppm: float = 10.0
     mz_power: float = 2.0
     int_power: float = 0.5
+    score_weight_dot: float = 1.0
+    score_weight_lib_coverage: float = 0.5
+    score_weight_emp_coverage: float = 0.5
     min_matched_peaks: int = 1
     min_purity: float | None = None
     annotate_chimeric: bool = True
@@ -474,7 +514,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 11
+    version: int = 12
 
     def __init__(
         self,

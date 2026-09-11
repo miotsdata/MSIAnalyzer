@@ -150,6 +150,7 @@ class AnnotationRow:
     is_chimeric: bool
     n_features_in_window: int | None
     precursor_only: bool
+    flat_fragmentation: bool
     emp_filtered_mz: np.ndarray
     emp_filtered_intensity: np.ndarray
     lib_filtered_mz: np.ndarray
@@ -213,6 +214,9 @@ def score_scan_against_candidates(
     mz_power: float,
     int_power: float,
     min_matched_peaks: int,
+    weight_dot: float = 1.0,
+    weight_lib_coverage: float = 0.5,
+    weight_emp_coverage: float = 0.5,
 ) -> list[tuple[Candidate, MatchResult]]:
     """Score one empirical spectrum against every candidate.
 
@@ -233,6 +237,9 @@ def score_scan_against_candidates(
             mz_power=mz_power,
             int_power=int_power,
             noise_threshold=noise_threshold,
+            weight_dot=weight_dot,
+            weight_lib_coverage=weight_lib_coverage,
+            weight_emp_coverage=weight_emp_coverage,
         )
         if m.n_matched_peaks >= min_matched_peaks:
             scored.append((cand, m))
@@ -353,6 +360,7 @@ def _row_from_match(
         is_chimeric=bool(scan.get("is_chimeric")),
         n_features_in_window=scan.get("n_features_in_window"),
         precursor_only=bool(scan.get("precursor_only")),
+        flat_fragmentation=bool(scan.get("flat_fragmentation")),
         purity=scan.get("purity"),
         runner_up_rel_int=scan.get("runner_up_rel_int"),
         precursor_confirmed=scan.get("precursor_confirmed"),
@@ -375,6 +383,9 @@ def annotate_feature(
     mz_power: float,
     int_power: float,
     min_matched_peaks: int,
+    weight_dot: float = 1.0,
+    weight_lib_coverage: float = 0.5,
+    weight_emp_coverage: float = 0.5,
     annotate_chimeric: bool = True,
     min_purity: float | None = None,
 ) -> list[AnnotationRow]:
@@ -418,6 +429,9 @@ def annotate_feature(
             mz_power=mz_power,
             int_power=int_power,
             min_matched_peaks=min_matched_peaks,
+            weight_dot=weight_dot,
+            weight_lib_coverage=weight_lib_coverage,
+            weight_emp_coverage=weight_emp_coverage,
         )
         scan_rows = [_row_from_match(scan, feature_id, c, m) for c, m in scored]
         rank_scan_rows(scan_rows)
@@ -550,6 +564,9 @@ def _annotate_feature_batch(
     min_matched_peaks: int,
     annotate_chimeric: bool,
     min_purity: float | None = None,
+    weight_dot: float = 1.0,
+    weight_lib_coverage: float = 0.5,
+    weight_emp_coverage: float = 0.5,
 ) -> list[AnnotationRow]:
     """Annotate one chunk of features (a worker task).
 
@@ -566,7 +583,8 @@ def _annotate_feature_batch(
         for feature_id, feature_mz in batch:
             assoc = adb.execute(
                 "SELECT a.scan_id, a.sample_id, a.n_features_in_window, "
-                "a.precursor_only, a.polarity, p.purity, p.runner_up_rel_int, "
+                "a.precursor_only, a.flat_fragmentation, a.polarity, "
+                "p.purity, p.runner_up_rel_int, "
                 "p.precursor_confirmed, p.precursor_frac "
                 "FROM ms2_associations a "
                 "LEFT JOIN precursor_purity p "
@@ -579,7 +597,7 @@ def _annotate_feature_batch(
 
             scans_by_pol: dict[str | None, list[dict]] = defaultdict(list)
             for (
-                scan_id, sample_id, n_in_win, prec_only, pol,
+                scan_id, sample_id, n_in_win, prec_only, flat_frag, pol,
                 purity, runner_up, confirmed, frac,
             ) in assoc:
                 is_chimeric = (n_in_win or 0) > 1
@@ -599,6 +617,7 @@ def _annotate_feature_batch(
                         "n_features_in_window": n_in_win,
                         "is_chimeric": is_chimeric,
                         "precursor_only": bool(prec_only),
+                        "flat_fragmentation": bool(flat_frag),
                         "purity": purity,
                         "runner_up_rel_int": runner_up,
                         "precursor_confirmed": (
@@ -635,6 +654,9 @@ def _annotate_feature_batch(
                         mz_power=mz_power,
                         int_power=int_power,
                         min_matched_peaks=min_matched_peaks,
+                        weight_dot=weight_dot,
+                        weight_lib_coverage=weight_lib_coverage,
+                        weight_emp_coverage=weight_emp_coverage,
                         annotate_chimeric=annotate_chimeric,
                         min_purity=min_purity,
                     )
@@ -681,6 +703,7 @@ _ANN_COLS = (
     "precursor_confirmed",
     "precursor_frac",
     "precursor_only",
+    "flat_fragmentation",
     "emp_filtered_mz",
     "emp_filtered_intensity",
     "lib_filtered_mz",
@@ -775,6 +798,7 @@ def persist_annotations(
                         None if r.precursor_confirmed is None else int(r.precursor_confirmed),
                         r.precursor_frac,
                         int(r.precursor_only),
+                        int(r.flat_fragmentation),
                         _blob_or_none(r.emp_filtered_mz, store_filtered_spectra),
                         _blob_or_none(
                             r.emp_filtered_intensity, store_filtered_spectra
@@ -939,6 +963,9 @@ def run_annotation(
         mz_power=config.mz_power,
         int_power=config.int_power,
         min_matched_peaks=config.min_matched_peaks,
+        weight_dot=getattr(config, "score_weight_dot", 1.0),
+        weight_lib_coverage=getattr(config, "score_weight_lib_coverage", 0.5),
+        weight_emp_coverage=getattr(config, "score_weight_emp_coverage", 0.5),
         annotate_chimeric=config.annotate_chimeric,
         min_purity=getattr(config, "min_purity", None),
     )

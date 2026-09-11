@@ -74,6 +74,9 @@ class MockGroupMs2Config:
     default_isolation_half_width: float = 0.5
     precursor_only_tic_frac: float = 0.8
     precursor_only_mz_tol_da: float = 2.0
+    flat_fragmentation_min_peaks: int = 3
+    flat_fragmentation_cv_threshold: float = 0.2
+    flat_fragmentation_min_rel_intensity: float = 0.01
 
 
 @dataclass

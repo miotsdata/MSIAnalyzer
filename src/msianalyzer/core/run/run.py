@@ -567,6 +567,15 @@ class Run:
                 ),
                 precursor_only_tic_frac=config.group_ms2.precursor_only_tic_frac,
                 precursor_only_mz_tol_da=config.group_ms2.precursor_only_mz_tol_da,
+                flat_fragmentation_min_peaks=(
+                    config.group_ms2.flat_fragmentation_min_peaks
+                ),
+                flat_fragmentation_cv_threshold=(
+                    config.group_ms2.flat_fragmentation_cv_threshold
+                ),
+                flat_fragmentation_min_rel_intensity=(
+                    config.group_ms2.flat_fragmentation_min_rel_intensity
+                ),
             )
             logger.info(
                 "Associated %d MS2 scans across %d features with MS2 coverage",

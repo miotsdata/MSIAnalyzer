@@ -91,6 +91,9 @@ Relative paths are resolved against `project_folder`.
 | `default_isolation_half_width` | `0.5` | isolation half-width (Da) assumed when a scan carries no isolation offsets |
 | `precursor_only_tic_frac` | `0.8` | a scan is flagged `precursor_only` when at least this fraction of its fragment TIC is within `precursor_only_mz_tol_da` of the precursor |
 | `precursor_only_mz_tol_da` | `2.0` | half-width (Da) of the "on the precursor" band for the `precursor_only` test |
+| `flat_fragmentation_min_peaks` | `3` | a scan needs at least this many peaks (after `flat_fragmentation_min_rel_intensity` filtering) before the `flat_fragmentation` test applies |
+| `flat_fragmentation_cv_threshold` | `0.2` | a scan is flagged `flat_fragmentation` when its surviving peaks' coefficient of variation (`std(intensity)/mean(intensity)`) is `<=` this — many peaks at different m/z but near-identical height, more consistent with noise/co-isolation than real decaying fragmentation. A soft QC flag, not a filter. |
+| `flat_fragmentation_min_rel_intensity` | `0.01` | peaks below this fraction of the scan's base peak are dropped before the peak count and the CV are computed |
 
 ### `purity` — precursor ion purity
 
@@ -123,6 +126,9 @@ Leave `library_path` empty (`null`) and the whole stage is skipped.
 | `fragment_ppm` | `10.0` | ppm tolerance for aligning individual fragment peaks while scoring |
 | `mz_power` | `2.0` | MSDial-style m/z weighting exponent in the dot product |
 | `int_power` | `0.5` | MSDial-style intensity weighting exponent |
+| `score_weight_dot` | `1.0` | exponent on `dot_product_score` when combining it with `lib_coverage` / `emp_coverage` into `score` |
+| `score_weight_lib_coverage` | `0.5` | exponent on `lib_coverage` |
+| `score_weight_emp_coverage` | `0.5` | exponent on `emp_coverage`. Defaults reproduce `dot_product_score * sqrt(lib_coverage * emp_coverage)`. Lower this (even to `0`) when a spectrum's own real, library-absent background/matrix peaks are suppressing an otherwise good match — high dot product, high library coverage, low empirical coverage. |
 | `min_matched_peaks` | `1` | store a candidate only when it shares at least this many fragments |
 | `min_purity` | `null` | skip scans whose precursor purity (Stage A′) is known and below this; `null` scores every scan. Rows still carry `purity` / `runner_up_rel_int`. |
 | `annotate_chimeric` | `true` | score chimeric scans (against their primary feature); they are always flagged. `false` skips them |

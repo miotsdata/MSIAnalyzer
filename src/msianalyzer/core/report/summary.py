@@ -258,8 +258,16 @@ class AnnotationSummary:
 
     Attributes:
         libraries: one entry per library used.
+        n_features_total: every feature in the analysis (the funnel's
+            starting point), regardless of MS2 coverage.
         n_ms2_bearing_features / n_features_annotated: features with any
-            associated MS2, and of those how many got a hit.
+            associated MS2, and of those how many got a hit. The gap
+            between the three (`n_features_total` -> `n_ms2_bearing_features`
+            -> `n_features_annotated`) is usually library coverage — most of
+            the drop is typically features with *no* candidate compound
+            within `candidate_ppm` in any configured library, not a scoring
+            failure; a smaller further drop comes from candidates that had
+            no fragment survive `noise_threshold` filtering on both sides.
         n_ge: ``{cutoff: features whose best score >= cutoff}``.
         n_distinct_compounds: distinct InChIKeys among best hits at the low
             cutoff.
@@ -272,17 +280,19 @@ class AnnotationSummary:
         n_multiscan_features / n_multiscan_agree: features fragmented >= 2x,
             and of those how many have every scan's top hit on the same
             compound.
-        top_compounds: ``(inchikey, name, n_features, median_score)`` rows,
-            most features first.
+        top_features: ``(feature_id, feature_mz, inchikey, compound_name,
+            score)`` rows — the best-annotated features, highest score
+            first.
         n_best_confident / n_confident_*: of the best hits at the high
             cutoff, how many come from a confirmed precursor / non-chimeric
-            window / real fragmentation.
+            window / real (non-precursor-only, non-flat) fragmentation.
         n_consensus / n_consensus_matches_best: ``feature_ms2_consensus``
             rows, and how often its scan is the annotated best scan.
     """
 
     cutoffs: tuple[float, float]
     libraries: list[AnnotationLibraryInfo]
+    n_features_total: int
     n_ms2_bearing_features: int
     n_features_annotated: int
     n_ge: dict[float, int]
@@ -293,11 +303,12 @@ class AnnotationSummary:
     n_unique_call: int
     n_multiscan_features: int
     n_multiscan_agree: int
-    top_compounds: list[tuple[str, str, int, float]]
+    top_features: list[tuple[int, float, str, str, float]]
     n_best_confident: int
     n_confident_precursor_confirmed: int
     n_confident_not_chimeric: int
     n_confident_not_precursor_only: int
+    n_confident_not_flat_fragmentation: int
     n_consensus: int
     n_consensus_matches_best: int
 
@@ -789,6 +800,8 @@ def annotation_summary(
         if not libs:
             return None
 
+        n_features_total = con.execute("SELECT COUNT(*) FROM features").fetchone()[0]
+
         n_ms2_feat = con.execute(
             "SELECT COUNT(DISTINCT feature_id) FROM ms2_associations "
             "WHERE feature_id IS NOT NULL"
@@ -796,10 +809,12 @@ def annotation_summary(
 
         # one row per annotated feature: its single best (scan, candidate) hit
         best = con.execute(
-            "SELECT feature_id, sample_id, scan_id, score, inchikey, "
-            "       compound_name, precursor_confirmed, is_chimeric, "
-            "       precursor_only, library_id "
-            "FROM ms2_annotations WHERE rank_feature = 1"
+            "SELECT ms2_annotations.feature_id, sample_id, scan_id, score, "
+            "       inchikey, compound_name, precursor_confirmed, is_chimeric, "
+            "       precursor_only, library_id, flat_fragmentation, features.mz "
+            "FROM ms2_annotations "
+            "JOIN features ON features.feature_id = ms2_annotations.feature_id "
+            "WHERE rank_feature = 1"
         ).fetchall()
         # distinct plausible compounds per feature (best per compound >= cutoff)
         cand = con.execute(
@@ -821,24 +836,26 @@ def annotation_summary(
     best_by_lib: dict[int, int] = {}
     best_scores: list[float] = []
     best_scan: dict[int, tuple] = {}
+    top_features: list[tuple[int, float, str, str, float]] = []
     n_confident = n_conf_confirmed = n_conf_not_chim = n_conf_not_po = 0
-    compound_feats: dict[str, set[int]] = {}
-    compound_name: dict[str, str] = {}
-    compound_scores: dict[str, list[float]] = {}
-    for fid, sid, scid, score, ik, name, confirmed, chim, po, lib_id in best:
+    n_conf_not_flat = 0
+    for fid, sid, scid, score, ik, name, confirmed, chim, po, lib_id, flat, fmz in best:
         score = float(score or 0.0)
         best_scores.append(score)
         best_scan[fid] = (sid, scid)
         best_by_lib[lib_id] = best_by_lib.get(lib_id, 0) + 1
-        if ik is not None:
-            compound_feats.setdefault(ik, set()).add(fid)
-            compound_name.setdefault(ik, name or ik)
-            compound_scores.setdefault(ik, []).append(score)
+        top_features.append(
+            (fid, float(fmz), ik or "", name or (ik or "—"), round(score, 3))
+        )
         if score >= hi:
             n_confident += 1
             n_conf_confirmed += int(bool(confirmed))
             n_conf_not_chim += int(not chim)
             n_conf_not_po += int(not po)
+            n_conf_not_flat += int(not flat)
+
+    top_features.sort(key=lambda t: t[4], reverse=True)
+    top_features = top_features[:15]
 
     n_ge = {c: sum(1 for s in best_scores if s >= c) for c in (lo, hi)}
     # distinct compounds actually *called* (best hit per feature, score >= lo)
@@ -887,22 +904,9 @@ def annotation_summary(
         if fid in best_scan and best_scan[fid] == (csid, cscid)
     )
 
-    top_compounds = sorted(
-        (
-            (
-                ik,
-                compound_name.get(ik, ik),
-                len(feats),
-                round(_median(compound_scores.get(ik, [])) or 0.0, 3),
-            )
-            for ik, feats in compound_feats.items()
-        ),
-        key=lambda t: t[2],
-        reverse=True,
-    )[:15]
-
     return AnnotationSummary(
         cutoffs=(lo, hi),
+        n_features_total=int(n_features_total or 0),
         libraries=[
             AnnotationLibraryInfo(
                 name=str(r[1] or f"library {r[0]}"),
@@ -922,11 +926,12 @@ def annotation_summary(
         n_unique_call=n_unique,
         n_multiscan_features=n_multiscan,
         n_multiscan_agree=n_multiscan_agree,
-        top_compounds=top_compounds,
+        top_features=top_features,
         n_best_confident=n_confident,
         n_confident_precursor_confirmed=n_conf_confirmed,
         n_confident_not_chimeric=n_conf_not_chim,
         n_confident_not_precursor_only=n_conf_not_po,
+        n_confident_not_flat_fragmentation=n_conf_not_flat,
         n_consensus=n_consensus,
         n_consensus_matches_best=n_cons_match,
     )
@@ -1480,12 +1485,29 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
             f"{100.0 * a.n_confident_precursor_confirmed / c:.0f}% from a "
             f"confirmed precursor, {100.0 * a.n_confident_not_chimeric / c:.0f}% "
             f"non-chimeric, {100.0 * a.n_confident_not_precursor_only / c:.0f}% "
-            f"with real fragmentation."
+            f"with real fragmentation, "
+            f"{100.0 * a.n_confident_not_flat_fragmentation / c:.0f}% not flagged "
+            f"flat fragmentation."
         )
     cons = (
         f" The consensus scan is the annotated best scan for "
         f"{_fmt(a.n_consensus_matches_best)}/{_fmt(a.n_consensus)} features."
         if a.n_consensus
+        else ""
+    )
+    funnel = (
+        f"<p><b>Annotation funnel.</b> {_fmt(a.n_features_total)} features → "
+        f"{_fmt(a.n_ms2_bearing_features)} "
+        f"({100.0 * a.n_ms2_bearing_features / a.n_features_total:.0f}%) carry MS2 → "
+        f"{_fmt(a.n_features_annotated)} "
+        f"({100.0 * a.n_features_annotated / a.n_features_total:.0f}% of all features, "
+        f"{100.0 * a.n_features_annotated / a.n_ms2_bearing_features:.0f}% of "
+        f"MS2-bearing ones) got a library hit. The drop from MS2-bearing to "
+        f"annotated is usually library coverage — no candidate compound within "
+        f"tolerance in any configured library — with a smaller further loss from "
+        f"candidates whose fragments didn't survive noise filtering on both "
+        f"sides.</p>"
+        if a.n_features_total
         else ""
     )
     sentence = (
@@ -1497,18 +1519,18 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
         f"{trust}{cons}</p>"
     )
 
-    comp_rows = "".join(
-        f"<tr><td>{name}</td><td style='font-family:monospace'>{ik[:14]}</td>"
-        f"<td>{_fmt(nf)}</td><td>{ms:.2f}</td></tr>"
-        for ik, name, nf, ms in a.top_compounds
+    feat_rows = "".join(
+        f"<tr><td>{fmz:.4f}</td><td>{name}</td>"
+        f"<td style='font-family:monospace'>{ik[:14]}</td><td>{score:.2f}</td></tr>"
+        for fid, fmz, ik, name, score in a.top_features
     )
-    comp_table = (
-        "<h3>Top compounds by feature count</h3>"
+    feat_table = (
+        "<h3>Top features by score</h3>"
         "<table style='border-collapse:collapse' border='1' cellpadding='6'>"
-        "<tr><th>compound</th><th>inchikey</th><th># features</th>"
-        "<th>median score</th></tr>"
-        f"{comp_rows}</table>"
-        if a.top_compounds
+        "<tr><th>feature m/z</th><th>compound</th><th>inchikey</th>"
+        "<th>score</th></tr>"
+        f"{feat_rows}</table>"
+        if a.top_features
         else ""
     )
     lib_table = ""
@@ -1525,7 +1547,7 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
             "<th># features best-annotated</th></tr>"
             f"{lr}</table>"
         )
-    return sentence + comp_table + lib_table
+    return funnel + sentence + feat_table + lib_table
 
 
 @log_call(source="analysis_db_path")

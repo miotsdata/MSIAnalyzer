@@ -186,6 +186,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             n_peaks                     INTEGER,
             polarity                    TEXT,
             precursor_only              INTEGER NOT NULL DEFAULT 0,
+            flat_fragmentation          INTEGER NOT NULL DEFAULT 0,
             command_id                  INTEGER,
             UNIQUE (sample_id, scan_id),
             FOREIGN KEY (feature_id) REFERENCES features(feature_id),
@@ -220,6 +221,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             n_precursor_only  INTEGER NOT NULL,
             n_single_peak     INTEGER NOT NULL,
             n_chimeric        INTEGER NOT NULL,
+            n_flat_fragmentation INTEGER NOT NULL DEFAULT 0,
             median_n_peaks    REAL    NOT NULL,
             FOREIGN KEY (feature_id) REFERENCES features(feature_id)
         )
@@ -356,6 +358,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             precursor_confirmed    INTEGER,
             precursor_frac         REAL,
             precursor_only         INTEGER NOT NULL DEFAULT 0,
+            flat_fragmentation     INTEGER NOT NULL DEFAULT 0,
             emp_filtered_mz        BLOB,
             emp_filtered_intensity BLOB,
             lib_filtered_mz        BLOB,
