@@ -16,6 +16,14 @@ ApplicationWindow {
     minimumHeight: 700
     title: "MSIAnalyzer"
 
+    // ApplicationWindow's own background fill is `color`, a separate
+    // property from `palette` below (which only governs how *controls*
+    // render themselves) — left unset, it stayed whatever the platform's
+    // own default surface color is regardless of the palette override,
+    // which is the most likely reason the window still looked dark after
+    // that alone.
+    color: palette.window
+
     // Explicit light palette, not just "Fusion instead of Material" —
     // Fusion (like Basic) still follows the host desktop's own palette
     // via GTK platform-theme integration, so it stayed dark on a system
