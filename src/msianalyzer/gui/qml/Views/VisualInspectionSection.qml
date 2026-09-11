@@ -52,8 +52,15 @@ Item {
     // binding for the rest of the session (normal QML "last assignment
     // wins"), which is fine here since nothing else ever changes vmin/
     // vmax except applyColorRange() copying the draft into it.
+    // 10, not the raw-intensity-scale 1000 the layer toggle's other
+    // option (raw) might call for — TIC (the default dataLayer) is
+    // log1p-transformed, so even very high raw intensities land well
+    // under this. 1000 as a starting *slider range* on log1p-scale data
+    // made the whole useful range (roughly 0-15) collapse into a sliver
+    // of the slider, effectively uncontrollable ("the numbers are too
+    // big" — reported as such).
     property real vmin: 0
-    property real vmax: 1000
+    property real vmax: 10
     property real draftVmin: vmin
     property real draftVmax: vmax
     property bool autoScale: true
@@ -207,49 +214,68 @@ Item {
                 enabled: !visualSection.autoScale
                 onToggled: visualSection.globalScale = checked
             }
-            RowLayout {
+            ColumnLayout {
                 enabled: !visualSection.autoScale
-                Text { text: "vmin" }
-                Slider {
-                    id: vminSlider
-                    objectName: "vminSlider"
-                    Layout.fillWidth: true
-                    from: 0
-                    to: Math.max(1, visualSection.draftVmax)
-                    value: visualSection.draftVmin
-                    onMoved: visualSection.draftVmin = value
+                Layout.fillWidth: true
+                spacing: 2
+                Text {
+                    objectName: "vminValueLabel"
+                    text: "vmin: " + visualSection.draftVmin.toFixed(3)
                 }
-                TextField {
-                    id: vminField
-                    objectName: "vminField"
-                    Layout.preferredWidth: 70
-                    text: visualSection.draftVmin.toFixed(2)
-                    onEditingFinished: {
-                        var v = parseFloat(text)
-                        if (!isNaN(v)) visualSection.draftVmin = v
+                RowLayout {
+                    Slider {
+                        id: vminSlider
+                        objectName: "vminSlider"
+                        Layout.fillWidth: true
+                        from: 0
+                        // Anchored to the last *applied* vmax, not the
+                        // live draft — otherwise dragging (which updates
+                        // draftVmax right away) kept moving this slider's
+                        // own ceiling under the cursor mid-drag, making it
+                        // impossible to settle on a value.
+                        to: Math.max(1, visualSection.vmax)
+                        value: visualSection.draftVmin
+                        onMoved: visualSection.draftVmin = value
+                    }
+                    TextField {
+                        id: vminField
+                        objectName: "vminField"
+                        Layout.preferredWidth: 80
+                        text: visualSection.draftVmin.toFixed(3)
+                        onEditingFinished: {
+                            var v = parseFloat(text)
+                            if (!isNaN(v)) visualSection.draftVmin = v
+                        }
                     }
                 }
             }
-            RowLayout {
+            ColumnLayout {
                 enabled: !visualSection.autoScale
-                Text { text: "vmax" }
-                Slider {
-                    id: vmaxSlider
-                    objectName: "vmaxSlider"
-                    Layout.fillWidth: true
-                    from: 0
-                    to: Math.max(1, visualSection.draftVmax * 2)
-                    value: visualSection.draftVmax
-                    onMoved: visualSection.draftVmax = value
+                Layout.fillWidth: true
+                spacing: 2
+                Text {
+                    objectName: "vmaxValueLabel"
+                    text: "vmax: " + visualSection.draftVmax.toFixed(3)
                 }
-                TextField {
-                    id: vmaxField
-                    objectName: "vmaxField"
-                    Layout.preferredWidth: 70
-                    text: visualSection.draftVmax.toFixed(2)
-                    onEditingFinished: {
-                        var v = parseFloat(text)
-                        if (!isNaN(v)) visualSection.draftVmax = v
+                RowLayout {
+                    Slider {
+                        id: vmaxSlider
+                        objectName: "vmaxSlider"
+                        Layout.fillWidth: true
+                        from: 0
+                        to: Math.max(1, visualSection.vmax * 2)
+                        value: visualSection.draftVmax
+                        onMoved: visualSection.draftVmax = value
+                    }
+                    TextField {
+                        id: vmaxField
+                        objectName: "vmaxField"
+                        Layout.preferredWidth: 80
+                        text: visualSection.draftVmax.toFixed(3)
+                        onEditingFinished: {
+                            var v = parseFloat(text)
+                            if (!isNaN(v)) visualSection.draftVmax = v
+                        }
                     }
                 }
             }
@@ -336,7 +362,9 @@ Item {
 
                     delegate: ColumnLayout {
                         objectName: "heatmapTile_" + modelData.name
-                        Layout.preferredWidth: gridFlickable.width
+                        // 80% of the available width, not the full
+                        // width — tiles don't need to span edge-to-edge.
+                        Layout.preferredWidth: gridFlickable.width * 0.8
                         Layout.preferredHeight: 360
 
                         Text {

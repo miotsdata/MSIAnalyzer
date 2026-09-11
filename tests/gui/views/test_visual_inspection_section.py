@@ -356,3 +356,62 @@ def test_apply_button_disabled_when_draft_matches_applied(
     section.applyColorRange()
     qtbot.wait(50)
     assert apply_button.property("enabled") is False
+
+
+def test_vmin_vmax_value_labels_show_the_draft_value(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Reported as "values are not so clear, because the text input is so
+    # short" — the current value is now also shown as its own label,
+    # not just squeezed into a narrow TextField.
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _disable_autoscale(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    section.setProperty("draftVmin", 1.5)
+    section.setProperty("draftVmax", 7.25)
+    qtbot.wait(50)
+
+    vmin_label = find_visual_child(root, "vminValueLabel")
+    vmax_label = find_visual_child(root, "vmaxValueLabel")
+    assert vmin_label.property("text") == "vmin: 1.500"
+    assert vmax_label.property("text") == "vmax: 7.250"
+
+
+def test_vmax_slider_ceiling_does_not_move_while_dragging(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Reported as "the vmax slider doesn't work properly" — its `to`
+    # ceiling used to be draftVmax * 2, so every drag tick (which updates
+    # draftVmax right away) also moved the ceiling further away,
+    # effectively making the value impossible to settle on. The ceiling
+    # is now anchored to the *applied* vmax, which only changes when
+    # "Apply" is clicked — stable through an entire drag.
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _disable_autoscale(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "visualSection")
+    vmax_slider = find_visual_child(root, "vmaxSlider")
+    ceiling_before = vmax_slider.property("to")
+
+    section.setProperty("draftVmax", section.property("vmax") * 1.5)
+    qtbot.wait(50)
+
+    assert vmax_slider.property("to") == ceiling_before
+
+
+def test_heatmap_tile_width_is_80_percent_of_flickable_width(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    flickable = find_visual_child(root, "heatmapGridFlickable")
+    tile = find_visual_child(root, "heatmapTile_s1")
+
+    assert tile.width() == pytest.approx(flickable.width() * 0.8, rel=0.02)
