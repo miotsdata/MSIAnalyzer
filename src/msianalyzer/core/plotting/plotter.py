@@ -121,10 +121,8 @@ class Plotter:
     @log_call
     def plot_ms2_annotation(
         self,
-        annotations_db_path: Path | str,
-        ms2_db_path: Path | str,
+        analysis_db_path: Path | str,
         annotation_id: int,
-        use_filtered: bool = True,
         title: Optional[str] = None,
         fragment_ppm_tolerance: float = 10.0,
         height: int = 500,
@@ -132,43 +130,46 @@ class Plotter:
         """
         Mirror plot: empirical MS2 (top, blue) vs library match (bottom, red).
 
+        Both spectra are read straight from the analysis database's
+        ``ms2_annotations`` row — the noise-filtered, max-normalised arrays
+        stored at annotation time (``AnnotateConfig.store_filtered_spectra``,
+        on by default). No raw per-sample database or external library file
+        is touched.
+
         Matched peaks are shown in full colour; unmatched peaks are faded.
         Dashed grey lines connect matched peak pairs across the mirror axis.
 
-        Parameters
-        ----------
-        annotation_id : int
-            Primary key in the ``annotations`` table.
-        use_filtered : bool
-            True  (default) — use the noise-filtered empirical spectrum
-                              stored at annotation time (what was actually
-                              scored; cleaner plot).
-            False           — use the raw empirical spectrum from ms2_db
-                              (shows all peaks including noise).
-        title : str | None
-            Plot title. Auto-generated from annotation metadata if None.
-        height : int
-            Figure height in pixels.
+        Args:
+            analysis_db_path: The analysis database.
+            annotation_id: Primary key in ``ms2_annotations``.
+            title: Plot title. Auto-generated from annotation metadata if
+                None.
+            fragment_ppm_tolerance: ppm tolerance used only to decide which
+                peaks "match" for colouring/connector purposes — the stored
+                `score` / `n_matched_peaks` already reflect the run's own
+                annotation-time tolerance, this doesn't recompute them.
+            height: Figure height in pixels.
 
-        Returns
-        -------
-        plotly.graph_objects.Figure
+        Returns:
+            plotly.graph_objects.Figure
+
+        Raises:
+            ValueError: No such annotation, or it was stored without
+                filtered spectra (`store_filtered_spectra` was off for that
+                run).
         """
-        ann = self._fetch_annotation(annotations_db_path, annotation_id)
-        lib = self._fetch_library_spectrum(ann)
-        scan = self._fetch_ms2_scan(ms2_db_path, ann["scan_id"])
+        ann = self._fetch_annotation(analysis_db_path, annotation_id)
 
-        if use_filtered:
-            empirical_mz = ann["filtered_mz"]
-            empirical_int = ann["filtered_intensity"]  # already normalised [0,1]
-            emp_label = "Empirical filtered"
-        else:
-            empirical_mz = scan["mz"]
-            empirical_int = _normalise(scan["intensity"])
-            emp_label = "Empirical raw"
+        empirical_mz = ann["emp_filtered_mz"]
+        empirical_int = ann["emp_filtered_intensity"]  # already normalised [0,1]
+        library_mz = ann["lib_filtered_mz"]
+        library_int = ann["lib_filtered_intensity"]  # already normalised [0,1]
 
-        library_mz = lib["mz"]
-        library_int = _normalise(lib["intensity"])
+        if len(empirical_mz) == 0 or len(library_mz) == 0:
+            raise ValueError(
+                f"annotation id={annotation_id} has no stored filtered "
+                "spectra (store_filtered_spectra was off for that run)"
+            )
 
         # Match masks — each sized to its own spectrum
         _, emp_matched_mask = _align_peaks(
@@ -176,14 +177,14 @@ class Plotter:
             library_int,
             empirical_mz,
             empirical_int,
-            self.fragment_ppm_tolerance,
+            fragment_ppm_tolerance,
         )
         _, lib_matched_mask = _align_peaks(
             empirical_mz,
             empirical_int,
             library_mz,
             library_int,
-            self.fragment_ppm_tolerance,
+            fragment_ppm_tolerance,
         )
 
         fig = go.Figure()
@@ -196,8 +197,8 @@ class Plotter:
             direction=1,
             color_matched=_BLUE_MATCHED,
             color_unmatched=_BLUE_UNMATCHED,
-            legend_matched=f"{emp_label} (matched)",
-            legend_unmatched=f"{emp_label} (unmatched)",
+            legend_matched="Empirical (matched)",
+            legend_unmatched="Empirical (unmatched)",
         )
         self._add_bars(
             fig,
@@ -216,7 +217,7 @@ class Plotter:
             empirical_int=empirical_int,
             library_mz=library_mz,
             library_int=library_int,
-            ppm_tolerance=self.fragment_ppm_tolerance,
+            ppm_tolerance=fragment_ppm_tolerance,
         )
 
         fig.add_hline(y=0, line_width=1, line_color="black")
@@ -254,7 +255,11 @@ class Plotter:
         )
 
         # Metadata box
-        filtered_label = "filtered" if use_filtered else "raw"
+        precursor_text = (
+            f"precursor m/z {ann['precursor_mz']:.4f}  ·  "
+            if ann["precursor_mz"] is not None
+            else ""
+        )
         fig.add_annotation(
             xref="paper",
             yref="paper",
@@ -264,9 +269,8 @@ class Plotter:
             yanchor="top",
             text=(
                 f"scan {ann['scan_id']}  ·  "
-                f"precursor m/z {scan['precursor_mz']:.4f}  ·  "
-                f"empirical: {filtered_label}  ·  "
-                f"library: {Path(ann['library_path']).stem}  ·  "
+                f"{precursor_text}"
+                f"library: {ann['library_name'] or '?'}  ·  "
                 f"InChIKey: {ann['inchikey']}"
             ),
             showarrow=False,
@@ -383,19 +387,29 @@ class Plotter:
     # Database access
     # ------------------------------------------------------------------
 
-    def _fetch_annotation(self, annotations_db_path, annotation_id: int) -> dict:
-        con = sqlite3.connect(f"file:{annotations_db_path}?mode=ro", uri=True)
+    def _fetch_annotation(self, analysis_db_path, annotation_id: int) -> dict:
+        """One `ms2_annotations` row, joined with its library name and the
+        scan's `precursor_mz` (from `ms2_associations`), filtered-spectrum
+        blobs decoded to arrays (empty when `store_filtered_spectra` was
+        off — the caller decides whether that's fatal)."""
+        con = sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True)
         try:
             row = con.execute(
                 """
-                SELECT scan_id, library_path, library_spectrum_id,
-                       compound_id, compound_name, compound_formula, inchikey,
-                       score, dot_product_score, lib_coverage, emp_coverage,
-                       coverage_score, n_matched_peaks, n_lib_peaks,
-                       n_emp_peaks_raw, n_emp_peaks_filtered,
-                       filtered_mz_blob, filtered_intensity_blob,
-                       rank, rank_group
-                FROM annotations WHERE id = ?
+                SELECT a.sample_id, a.scan_id, a.compound_name,
+                       a.compound_formula, a.inchikey, a.score,
+                       a.dot_product_score, a.lib_coverage, a.emp_coverage,
+                       a.coverage_score, a.n_matched_peaks, a.n_lib_peaks,
+                       a.n_emp_peaks_raw, a.n_emp_peaks_filtered,
+                       a.emp_filtered_mz, a.emp_filtered_intensity,
+                       a.lib_filtered_mz, a.lib_filtered_intensity,
+                       lib.name AS library_name,
+                       assoc.precursor_mz
+                FROM ms2_annotations a
+                LEFT JOIN annotation_libraries lib ON lib.id = a.library_id
+                LEFT JOIN ms2_associations assoc
+                    ON assoc.sample_id = a.sample_id AND assoc.scan_id = a.scan_id
+                WHERE a.id = ?
                 """,
                 (annotation_id,),
             ).fetchone()
@@ -406,10 +420,8 @@ class Plotter:
             raise ValueError(f"No annotation found with id={annotation_id}")
 
         keys = (
+            "sample_id",
             "scan_id",
-            "library_path",
-            "library_spectrum_id",
-            "compound_id",
             "compound_name",
             "compound_formula",
             "inchikey",
@@ -422,67 +434,25 @@ class Plotter:
             "n_lib_peaks",
             "n_emp_peaks_raw",
             "n_emp_peaks_filtered",
-            "filtered_mz_blob",
-            "filtered_intensity_blob",
-            "rank",
-            "rank_group",
+            "emp_filtered_mz_blob",
+            "emp_filtered_intensity_blob",
+            "lib_filtered_mz_blob",
+            "lib_filtered_intensity_blob",
+            "library_name",
+            "precursor_mz",
         )
         d = dict(zip(keys, row))
 
-        # Deserialise filtered spectrum blobs
-        d["filtered_mz"] = blob_to_array(d.pop("filtered_mz_blob"))
-        d["filtered_intensity"] = blob_to_array(d.pop("filtered_intensity_blob"))
+        for arr_key, blob_key in (
+            ("emp_filtered_mz", "emp_filtered_mz_blob"),
+            ("emp_filtered_intensity", "emp_filtered_intensity_blob"),
+            ("lib_filtered_mz", "lib_filtered_mz_blob"),
+            ("lib_filtered_intensity", "lib_filtered_intensity_blob"),
+        ):
+            blob = d.pop(blob_key)
+            d[arr_key] = (
+                blob_to_array(blob, compressed=True)
+                if blob is not None
+                else np.array([], dtype=np.float32)
+            )
         return d
-
-    def _fetch_ms2_scan(self, ms2_db_path, scan_id: int) -> dict:
-        con = sqlite3.connect(f"file:{ms2_db_path}?mode=ro", uri=True)
-        try:
-            row = con.execute(
-                "SELECT mz_array, intensity_array, precursor_mz "
-                "FROM ms2_scans WHERE scan_id = ?",
-                (scan_id,),
-            ).fetchone()
-        finally:
-            con.close()
-
-        if row is None:
-            raise ValueError(f"No MS2 scan found with scan_id={scan_id}")
-
-        mz_blob, int_blob, precursor_mz = row
-        return {
-            "mz": blob_to_array(mz_blob, compressed=True),
-            "intensity": blob_to_array(int_blob, compressed=True),
-            "precursor_mz": precursor_mz,
-        }
-
-    def _fetch_library_spectrum(self, ann: dict) -> dict:
-        """Direct sqlite3 query — no libviz ORM dependency in the plotter."""
-        lib_path = Path(ann["library_path"])
-        spectrum_id = ann["library_spectrum_id"]
-
-        con = sqlite3.connect(f"file:{lib_path}?mode=ro", uri=True)
-        try:
-            row = con.execute(
-                "SELECT mz_array, intensity_array FROM spectrum WHERE id = ?",
-                (spectrum_id,),
-            ).fetchone()
-        finally:
-            con.close()
-
-        if row is None:
-            raise ValueError(f"No spectrum id={spectrum_id} in {lib_path}")
-
-        return {
-            "mz": blob_to_array(row[0], compressed=False),
-            "intensity": blob_to_array(row[1], compressed=False),
-        }
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _normalise(arr: np.ndarray) -> np.ndarray:
-    m = float(arr.max()) if len(arr) else 0.0
-    return arr / m if m > 0 else arr.copy()
