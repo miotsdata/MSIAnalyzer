@@ -68,7 +68,7 @@ Item {
                     Text {
                         objectName: "statValue_" + modelData.key
                         text: summarySection.tileText(modelData.key)
-                        font.pixelSize: 26
+                        font.pixelSize: 22
                         font.bold: true
                         Layout.alignment: Qt.AlignHCenter
                     }

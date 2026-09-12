@@ -317,7 +317,7 @@ Page {
 
             Text {
                 text: "New Analysis — " + (project ? project.name : "")
-                font.pixelSize: 18
+                font.pixelSize: 16
                 font.bold: true
                 Layout.fillWidth: true
             }
@@ -430,7 +430,7 @@ Page {
                         text: "mzML and XML are picked separately and lined up by row "
                               + "order — use the ▲/▼ arrows to fix a mismatched pairing."
                         color: "gray"
-                        font.pixelSize: 11
+                        font.pixelSize: 10
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                     }

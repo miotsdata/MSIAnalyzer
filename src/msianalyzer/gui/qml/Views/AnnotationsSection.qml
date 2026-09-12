@@ -28,7 +28,7 @@ Item {
         Text {
             text: "Annotated features (" + rows.length + ")"
             font.bold: true
-            font.pixelSize: 16
+            font.pixelSize: 14
         }
 
         Flickable {

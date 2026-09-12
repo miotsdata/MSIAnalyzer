@@ -19,7 +19,7 @@ Page {
             text: project ? project.name : ""
             color: "blue"
             font.family: "Arial"
-            font.pixelSize: 20
+            font.pixelSize: 18
         }
 
         SplitView {
@@ -62,7 +62,7 @@ Page {
 
                     Text {
                         text: "Analyses"
-                        font.pixelSize: 16
+                        font.pixelSize: 14
                         font.bold: true
                         Layout.fillWidth: true
                     }

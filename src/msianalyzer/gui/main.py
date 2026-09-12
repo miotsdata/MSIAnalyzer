@@ -18,6 +18,31 @@ from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
 from msianalyzer.core.utils import configure_logging
 
 
+def apply_font_scale(scale: float = 0.9) -> None:
+    """Scales the application's default font size ("slightly reduce the
+    size of all the text (not in plot, but of the gui)").
+
+    Scales whatever the platform's own default font size already is,
+    rather than hardcoding a pixel/point size that would look wrong on a
+    system with a different baseline. `QGuiApplication.setFont` is a
+    static call — usable (and buffered by Qt) before a `QGuiApplication`
+    instance exists, but must still run before any QML `Item` is actually
+    constructed, so every Text/Control picks it up as their default.
+
+    The default font isn't always point-sized — `pointSizeF()` returns
+    `-1` (a sentinel, not a real size) when the platform's default is
+    pixel-sized instead, and blindly scaling that gives `setPointSizeF` a
+    negative value (a no-op, with a Qt warning) rather than the intended
+    smaller font. Scale whichever of the two is actually set.
+    """
+    font = QGuiApplication.font()
+    if font.pointSizeF() > 0:
+        font.setPointSizeF(font.pointSizeF() * scale)
+    else:
+        font.setPixelSize(max(1, round(font.pixelSize() * scale)))
+    QGuiApplication.setFont(font)
+
+
 def build_engine(
     app: QGuiApplication, application: Application
 ) -> QQmlApplicationEngine:
@@ -63,6 +88,7 @@ def main() -> int:
     # WebEngineView (Annotations mirror plots, MS1 spectra).
     QtWebEngineQuick.initialize()
     app = QGuiApplication(sys.argv)
+    apply_font_scale()
 
     # Add bindings
     application = Application()

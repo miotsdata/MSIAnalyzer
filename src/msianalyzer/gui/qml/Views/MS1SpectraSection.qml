@@ -189,6 +189,16 @@ Item {
                     }
                 }
 
+                // A thin vertical divider between the 3 columns — same
+                // style as the horizontal one below the page header
+                // (AnalysisPage.qml).
+                Rectangle {
+                    objectName: "presentAbsentDivider"
+                    Layout.fillHeight: true
+                    width: 1
+                    color: palette.mid
+                }
+
                 ColumnLayout {
                     objectName: "samplesAbsentColumnContainer"
                     Layout.preferredWidth: 0
@@ -243,6 +253,13 @@ Item {
                             }
                         }
                     }
+                }
+
+                Rectangle {
+                    objectName: "absentTopHitsDivider"
+                    Layout.fillHeight: true
+                    width: 1
+                    color: palette.mid
                 }
 
                 ColumnLayout {
@@ -310,9 +327,15 @@ Item {
 
                                 delegate: Text {
                                     objectName: "topHit_" + index
+                                    // Score bolded ("so easy to see") via
+                                    // StyledText — compound_name/inchikey/
+                                    // library_name are chemistry-database
+                                    // strings (names, formulas, InChIKeys),
+                                    // never containing markup in practice.
                                     text: (index + 1) + ". " + (modelData.compound_name || modelData.inchikey || "?")
-                                          + " (score " + Number(modelData.score).toFixed(3) + ")"
+                                          + " (score <b>" + Number(modelData.score).toFixed(3) + "</b>)"
                                           + (modelData.library_name ? " · " + modelData.library_name : "")
+                                    textFormat: Text.StyledText
                                     wrapMode: Text.Wrap
                                     Layout.fillWidth: true
                                 }

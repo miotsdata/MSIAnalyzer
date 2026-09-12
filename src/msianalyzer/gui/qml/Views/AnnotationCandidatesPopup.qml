@@ -159,7 +159,7 @@ Popup {
                                 Text {
                                     objectName: "candidateRowMeta_" + modelData.id
                                     text: (modelData.sample_name || "?") + "  ·  " + (modelData.library_name || "?")
-                                    font.pixelSize: 11
+                                    font.pixelSize: 10
                                     color: "gray"
                                 }
                             }

@@ -31,19 +31,19 @@ Page {
                 Text {
                     objectName: "analysisPageTitle"
                     text: "Project: " + (analysis ? analysis.projectName : "")
-                    font.pixelSize: 16
+                    font.pixelSize: 14
                     font.bold: true
                 }
                 Text {
                     objectName: "analysisPageRunId"
                     text: "Analysis: " + (analysis ? analysis.runId : "")
-                    font.pixelSize: 12
+                    font.pixelSize: 11
                     color: "gray"
                 }
                 Text {
                     objectName: "analysisPageDate"
                     text: "Date: " + (analysis ? analysis.startDateDisplay : "")
-                    font.pixelSize: 12
+                    font.pixelSize: 11
                     color: "gray"
                 }
             }

@@ -172,6 +172,45 @@ def test_present_absent_and_top_hits_are_three_equal_columns(
     assert present_col.width() == _pytest.approx(top_hits_col.width(), rel=0.02)
 
 
+def test_bottom_columns_have_separator_lines(
+    analysis_view, ms1_analysis_model, find_visual_child, qtbot, application
+):
+    # "the three bottom sections, can they be separated by small lines?
+    # like the one that is below the top title/buttons etc"
+    view = analysis_view(ms1_analysis_model)
+    root = view.rootObject()
+    _open_ms1_tab(view, root, find_visual_child, qtbot)
+
+    application.analysis_bridge.spectrumPointClicked.emit(150.1)
+    qtbot.wait(50)
+
+    detail_panel = find_visual_child(root, "detailPanel")
+    divider1 = find_visual_child(detail_panel, "presentAbsentDivider")
+    divider2 = find_visual_child(detail_panel, "absentTopHitsDivider")
+
+    assert divider1 is not None
+    assert divider2 is not None
+    assert divider1.width() == 1
+    assert divider2.width() == 1
+
+
+def test_top_hit_score_is_bold(
+    analysis_view, ms1_analysis_model, find_visual_child, qtbot, application
+):
+    # "in top hits, score should be in bold, so easy to see"
+    view = analysis_view(ms1_analysis_model)
+    root = view.rootObject()
+    _open_ms1_tab(view, root, find_visual_child, qtbot)
+
+    application.analysis_bridge.spectrumPointClicked.emit(150.1)
+    qtbot.wait(50)
+
+    detail_panel = find_visual_child(root, "detailPanel")
+    top_hit = find_visual_child(detail_panel, "topHit_0")
+
+    assert "<b>" in top_hit.property("text")
+
+
 def test_present_and_absent_lists_get_less_space_than_top_hits(
     analysis_view, ms1_analysis_model, find_visual_child, qtbot, application
 ):

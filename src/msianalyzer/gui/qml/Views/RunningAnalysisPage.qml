@@ -33,7 +33,7 @@ Page {
 
             Text {
                 text: "Running Analysis — " + (project ? project.name : "")
-                font.pixelSize: 18
+                font.pixelSize: 16
                 font.bold: true
                 Layout.fillWidth: true
             }

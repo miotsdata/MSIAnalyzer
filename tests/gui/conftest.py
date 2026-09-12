@@ -38,6 +38,30 @@ RC_PATH = PROJECT_ROOT / "src/msianalyzer/gui/resources_rc.py"
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _apply_test_font_scale(qapp):
+    # Same default-font scale as production (see gui/main.py's
+    # apply_font_scale) — for the same reason `QQuickStyle.setStyle`
+    # above is mirrored: keeps text-dependent geometry (wrapping,
+    # implicit sizes) in sync with what a real session renders.
+    #
+    # Must depend on `qapp` (not run at module-import time, unlike the
+    # style/WebEngine setup above): `QGuiApplication.font()` returns a
+    # bogus font with neither a valid point nor pixel size before any
+    # QGuiApplication instance exists — scaling *that* and setting it as
+    # the buffered default poisoned the real one once `qapp` later
+    # constructed the actual application, leaving every test's QML
+    # rendered at an almost-invisible 1px default font (confirmed by
+    # reproducing it: `QGuiApplication.font().pixelSize()` read back as
+    # `1` after construction). `QQuickStyle.setStyle` has no such
+    # lazy-resolution problem — it's a plain string preference, not
+    # something the platform integration computes only once a real
+    # application exists.
+    from msianalyzer.gui.main import apply_font_scale
+
+    apply_font_scale()
+
+
+@pytest.fixture(scope="session", autouse=True)
 def compile_qml_resources():
     rc_path = "src/msianalyzer/gui/resources_rc.py"
     if os.path.exists(rc_path):
