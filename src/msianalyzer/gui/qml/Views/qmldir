@@ -1,6 +1,7 @@
 module Views
 StartPage 1.0 StartPage.qml
 ProjectHomePage 1.0 ProjectHomePage.qml
+FileListPanel 1.0 FileListPanel.qml
 CreateProjectPage 1.0 CreateProjectPage.qml
 NewAnalysisPage 1.0 NewAnalysisPage.qml
 RunningAnalysisPage 1.0 RunningAnalysisPage.qml

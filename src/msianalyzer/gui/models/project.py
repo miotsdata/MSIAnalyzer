@@ -1,6 +1,42 @@
+import datetime
+from pathlib import Path
+
 from PySide6.QtCore import Property, QObject, Signal
 
 from msianalyzer.core.project.project import Project
+
+_DATA_FILE_SUFFIXES = {
+    "mzml": (".mzml",),
+    "xml": (".xml",),
+}
+
+
+def _relative_to_folder(path: str, folder: str) -> str:
+    """`path` relative to `folder`, for display — e.g. an analysis' output
+    directory shown as "output_0" instead of "/home/user/project/output_0".
+    Falls back to `path` unchanged if either is empty or `path` isn't
+    actually inside `folder` (an older/foreign path shouldn't be shown as
+    a confusing/wrong relative fragment); never raises."""
+    if not path or not folder:
+        return path
+    try:
+        return str(Path(path).resolve().relative_to(Path(folder).resolve()))
+    except (ValueError, OSError):
+        return path
+
+
+def _format_minute_precision(start_date: str) -> str:
+    """`start_date` (`str(datetime.datetime)`-shaped, e.g.
+    "2026-01-01 12:00:00.123456") truncated to minute precision
+    ("2026-01-01 12:00") — seconds/microseconds are noise for a list of
+    analyses. Falls back to `start_date` unchanged if it doesn't parse."""
+    if not start_date:
+        return ""
+    try:
+        dt = datetime.datetime.fromisoformat(start_date)
+    except ValueError:
+        return start_date
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 class ProjectModel(QObject):
@@ -35,23 +71,56 @@ class ProjectModel(QObject):
     def runsList(self) -> list[dict]:
         """`self._project.runs` flattened to a list, newest first.
 
-        Each entry: `{id, start_date, end_date, status, out_dir,
-        config_path}`, read out of the `Run.to_dict()`-shaped nested dict
-        every run is stored as.
+        Each entry: `{id, start_date, start_date_display, end_date, status,
+        out_dir, out_dir_display, config_path, config_path_display}`, read
+        out of the `Run.to_dict()`-shaped nested dict every run is stored
+        as. The `_display` fields are what Project Home actually shows —
+        `out_dir`/`config_path` relative to the project folder, `start_date`
+        truncated to minute precision — while the plain fields stay the
+        full absolute path / timestamp, e.g. for a "copy full path" action.
         """
         entries = []
         for run_id, run in self._project.runs.items():
             config = run.get("config") or {}
             io = config.get("io") or {}
+            start_date = run.get("start_date") or ""
+            out_dir = io.get("out_dir") or ""
+            config_path = run.get("config_path") or ""
             entries.append(
                 {
                     "id": run_id,
-                    "start_date": run.get("start_date") or "",
+                    "start_date": start_date,
+                    "start_date_display": _format_minute_precision(start_date),
                     "end_date": run.get("end_date") or "",
                     "status": run.get("status") or "",
-                    "out_dir": io.get("out_dir") or "",
-                    "config_path": run.get("config_path") or "",
+                    "out_dir": out_dir,
+                    "out_dir_display": _relative_to_folder(out_dir, self._folder),
+                    "config_path": config_path,
+                    "config_path_display": _relative_to_folder(config_path, self._folder),
                 }
             )
         entries.sort(key=lambda e: e["start_date"], reverse=True)
         return entries
+
+    @Property(list, notify=folderChanged)
+    def mzmlFiles(self) -> list[str]:
+        """mzML filenames (no path) in the project's `data/` directory."""
+        return self._list_data_files("mzml")
+
+    @Property(list, notify=folderChanged)
+    def xmlFiles(self) -> list[str]:
+        """XML filenames (no path) in the project's `data/` directory."""
+        return self._list_data_files("xml")
+
+    def _list_data_files(self, kind: str) -> list[str]:
+        if not self._folder:
+            return []
+        data_dir = Path(self._folder) / "data"
+        if not data_dir.is_dir():
+            return []
+        suffixes = _DATA_FILE_SUFFIXES[kind]
+        return sorted(
+            p.name
+            for p in data_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in suffixes
+        )

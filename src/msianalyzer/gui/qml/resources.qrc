@@ -5,6 +5,7 @@
         <file>Views/qmldir</file>
         <file>Views/StartPage.qml</file>
         <file>Views/ProjectHomePage.qml</file>
+        <file>Views/FileListPanel.qml</file>
         <file>Views/CreateProjectPage.qml</file>
         <file>Views/NewAnalysisPage.qml</file>
         <file>Views/RunningAnalysisPage.qml</file>

@@ -22,86 +22,173 @@ Page {
             font.pixelSize: 20
         }
 
-        RowLayout {
-            Layout.fillWidth: true
-
-            Text {
-                text: "Analyses"
-                font.pixelSize: 16
-                Layout.fillWidth: true
-            }
-
-            Button {
-                id: newAnalysisButton
-                objectName: "newAnalysisButton"
-                text: "New Analysis"
-                onClicked: Router.newAnalysisPageRequested(project)
-            }
-        }
-
-        Text {
-            id: emptyStateLabel
-            objectName: "emptyStateLabel"
-            visible: !project || project.runsList.length === 0
-            text: "No analyses yet."
-            color: "gray"
-        }
-
-        Flickable {
-            id: runsListView
-            objectName: "runsListView"
-            visible: project && project.runsList.length > 0
+        SplitView {
+            id: mainSplitView
+            objectName: "mainSplitView"
+            orientation: Qt.Horizontal
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            contentWidth: width
-            contentHeight: runsColumn.implicitHeight
-            boundsBehavior: Flickable.StopAtBounds
 
+            // Left: the analyses list — the primary thing this page is
+            // for, given a sensible default width but user-resizable
+            // (SplitView, not a fixed fraction of the row's own width —
+            // the latter fed back into Qt Quick Layouts' own rearrange
+            // pass and triggered "Detected recursive rearrange").
             ColumnLayout {
-                id: runsColumn
-                width: runsListView.width
+                id: analysesColumn
+                SplitView.preferredWidth: 480
+                SplitView.minimumWidth: 320
                 spacing: 8
 
-                Repeater {
-                    id: runsRepeater
-                    objectName: "runsRepeater"
-                    model: project ? project.runsList : []
+                RowLayout {
+                    Layout.fillWidth: true
 
-                    delegate: Rectangle {
+                    Text {
+                        text: "Analyses"
+                        font.pixelSize: 16
+                        font.bold: true
                         Layout.fillWidth: true
-                        height: runRowColumn.implicitHeight + 16
-                        objectName: "runRow_" + modelData.id
-                        border.color: "#cccccc"
-                        border.width: 1
-                        radius: 4
+                    }
 
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: Router.analysisSelected(modelData.id)
-                        }
+                    Button {
+                        id: newAnalysisButton
+                        objectName: "newAnalysisButton"
+                        text: "New Analysis"
+                        onClicked: Router.newAnalysisPageRequested(project)
+                    }
+                }
 
-                        ColumnLayout {
-                            id: runRowColumn
-                            anchors.fill: parent
-                            anchors.margins: 8
-                            spacing: 2
+                Text {
+                    id: emptyStateLabel
+                    objectName: "emptyStateLabel"
+                    visible: !project || project.runsList.length === 0
+                    text: "No analyses yet."
+                    color: "gray"
+                }
 
-                            Text {
-                                objectName: "runRowDate"
-                                text: modelData.start_date
-                                font.bold: true
-                            }
-                            Text {
-                                objectName: "runRowOutDir"
-                                text: "Output: " + modelData.out_dir
-                            }
-                            Text {
-                                objectName: "runRowConfigPath"
-                                text: "Config: " + modelData.config_path
+                Flickable {
+                    id: runsListView
+                    objectName: "runsListView"
+                    visible: project && project.runsList.length > 0
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    contentWidth: width
+                    contentHeight: runsColumn.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    ColumnLayout {
+                        id: runsColumn
+                        width: runsListView.width
+                        spacing: 8
+
+                        Repeater {
+                            id: runsRepeater
+                            objectName: "runsRepeater"
+                            model: project ? project.runsList : []
+
+                            delegate: Rectangle {
+                                Layout.fillWidth: true
+                                height: runRowColumn.implicitHeight + 16
+                                objectName: "runRow_" + modelData.id
+                                color: "transparent"
+                                border.color: palette.mid
+                                border.width: 1
+                                radius: 4
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    onClicked: (mouse) => {
+                                        if (mouse.button === Qt.RightButton) {
+                                            runContextMenu.popup()
+                                        } else {
+                                            Router.analysisSelected(modelData.id)
+                                        }
+                                    }
+                                }
+
+                                // "the paths should be relative to project,
+                                // not absolute (if user wants the full
+                                // path, it can right click and use copy
+                                // path)" — the row itself shows the
+                                // project-relative display strings;
+                                // this menu is the escape hatch to the
+                                // real absolute paths.
+                                Menu {
+                                    id: runContextMenu
+                                    objectName: "runContextMenu_" + modelData.id
+
+                                    MenuItem {
+                                        objectName: "copyOutDirMenuItem_" + modelData.id
+                                        text: "Copy output path"
+                                        enabled: modelData.out_dir !== ""
+                                        onTriggered: Router.copyToClipboard(modelData.out_dir)
+                                    }
+                                    MenuItem {
+                                        objectName: "copyConfigPathMenuItem_" + modelData.id
+                                        text: "Copy config path"
+                                        enabled: modelData.config_path !== ""
+                                        onTriggered: Router.copyToClipboard(modelData.config_path)
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    id: runRowColumn
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 2
+
+                                    Text {
+                                        objectName: "runRowDate"
+                                        text: modelData.start_date_display
+                                        font.bold: true
+                                    }
+                                    Text {
+                                        objectName: "runRowOutDir"
+                                        visible: modelData.out_dir !== ""
+                                        text: "Output: " + modelData.out_dir_display
+                                    }
+                                    Text {
+                                        objectName: "runRowConfigPath"
+                                        visible: modelData.config_path !== ""
+                                        text: "Config: " + modelData.config_path_display
+                                    }
+                                }
                             }
                         }
                     }
+                }
+            }
+
+            // Right: the project's data/ directory, split into mzML (top)
+            // and XML (bottom) — filenames only, same "no absolute paths
+            // cluttering the view" spirit as the analyses list.
+            ColumnLayout {
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 240
+                spacing: 16
+
+                FileListPanel {
+                    id: mzmlFilesPanel
+                    objectName: "mzmlFilesPanel"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    kind: "mzml"
+                    title: "mzML files"
+                    files: project ? project.mzmlFiles : []
+                    emptyText: "No mzML files in data/."
+                }
+
+                FileListPanel {
+                    id: xmlFilesPanel
+                    objectName: "xmlFilesPanel"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    kind: "xml"
+                    title: "XML files"
+                    files: project ? project.xmlFiles : []
+                    emptyText: "No XML files in data/."
                 }
             }
         }

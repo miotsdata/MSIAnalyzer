@@ -1,9 +1,15 @@
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtCore import QUrl, QObject, Qt
 from pathlib import Path
 
 from msianalyzer.gui.models.project import ProjectModel
 from msianalyzer.core.project.project import Project, create_project_folder
+
+
+def test_copy_to_clipboard_sets_system_clipboard_text(application):
+    application.router.copyToClipboard("/tmp/proj/output_0")
+    assert QGuiApplication.clipboard().text() == "/tmp/proj/output_0"
 
 
 def test_to_local_path(application, tmp_path):
