@@ -134,6 +134,24 @@ def test_file_list_panels_show_empty_state_without_data_dir(
     assert xml_empty.property("visible") is True
 
 
+def test_split_view_panels_have_a_visible_gap(
+    project_home_view, project, find_visual_child
+):
+    # Reported: the two panels were flush against each other ("attached").
+    model = ProjectModel(project, "/tmp/proj")
+    view = project_home_view(model)
+    root = view.rootObject()
+
+    split_view = find_visual_child(root, "mainSplitView")
+    analyses_column = find_visual_child(root, "analysesColumn")
+    mzml_panel = find_visual_child(root, "mzmlFilesPanel")
+
+    left_panel_right_edge = analyses_column.mapToItem(split_view, analyses_column.width(), 0).x()
+    right_panel_left_edge = mzml_panel.mapToItem(split_view, 0, 0).x()
+
+    assert right_panel_left_edge - left_panel_right_edge >= 6
+
+
 def test_new_analysis_button_emits_router_signal(
     project_home_view, project, application, qtbot
 ):

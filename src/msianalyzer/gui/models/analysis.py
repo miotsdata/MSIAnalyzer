@@ -1,6 +1,7 @@
 from PySide6.QtCore import Property, QObject
 
 from msianalyzer.core import analysis_db
+from msianalyzer.gui.utils.formatting import format_minute_precision
 
 
 class AnalysisModel(QObject):
@@ -50,3 +51,9 @@ class AnalysisModel(QObject):
     @Property(str, constant=True)
     def startDate(self) -> str:
         return self._run_dict.get("start_date") or ""
+
+    @Property(str, constant=True)
+    def startDateDisplay(self) -> str:
+        """`startDate` truncated to minute precision, for the Analysis
+        workspace header — same convention as Project Home's run list."""
+        return format_minute_precision(self.startDate)

@@ -29,6 +29,22 @@ Page {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
+            // A visible gap between the two panels rather than the
+            // default hairline-thin handle they otherwise butt up
+            // against — a thin divider line centered in a wider
+            // (invisible except on hover) drag area.
+            handle: Rectangle {
+                implicitWidth: 12
+                color: "transparent"
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 1
+                    height: parent.height
+                    color: SplitHandle.hovered ? palette.dark : palette.mid
+                }
+            }
+
             // Left: the analyses list — the primary thing this page is
             // for, given a sensible default width but user-resizable
             // (SplitView, not a fixed fraction of the row's own width —
@@ -36,6 +52,7 @@ Page {
             // pass and triggered "Detected recursive rearrange").
             ColumnLayout {
                 id: analysesColumn
+                objectName: "analysesColumn"
                 SplitView.preferredWidth: 480
                 SplitView.minimumWidth: 320
                 spacing: 8

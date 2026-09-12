@@ -4,6 +4,23 @@ from PySide6.QtCore import Qt
 from PySide6.QtQuick import QQuickItem
 
 
+def test_header_shows_project_analysis_and_date(analysis_view, analysis_model):
+    # The nav rail moved up next to the title ("in one row I have title,
+    # the various sections that I can click, and back to project button")
+    # so every section gets the page's full width instead of sharing it
+    # with a fixed-width left-hand nav column.
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+
+    title = root.findChild(QQuickItem, "analysisPageTitle")
+    run_id_text = root.findChild(QQuickItem, "analysisPageRunId")
+    date_text = root.findChild(QQuickItem, "analysisPageDate")
+
+    assert title.property("text") == "Project: " + analysis_model.project.name
+    assert run_id_text.property("text") == "Analysis: " + analysis_model.runId
+    assert date_text.property("text") == "Date: " + analysis_model.startDateDisplay
+
+
 def test_nav_rail_has_four_sections(analysis_view, analysis_model, find_visual_child):
     view = analysis_view(analysis_model)
     root = view.rootObject()

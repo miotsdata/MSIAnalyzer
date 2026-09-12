@@ -20,6 +20,7 @@ def test_analysis_model_basic_properties(project):
     assert model.projectName == project.name
     assert model.outDir == "/tmp/proj/output/run1"
     assert model.startDate == "2026-01-01 12:00:00"
+    assert model.startDateDisplay == "2026-01-01 12:00"
     assert model.analysisDbPath == str(
         analysis_db.analysis_db_path("/tmp/proj/output/run1", "run-123", None)
     )

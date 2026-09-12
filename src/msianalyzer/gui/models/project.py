@@ -1,9 +1,9 @@
-import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, Signal
 
 from msianalyzer.core.project.project import Project
+from msianalyzer.gui.utils.formatting import format_minute_precision as _format_minute_precision
 
 _DATA_FILE_SUFFIXES = {
     "mzml": (".mzml",),
@@ -23,20 +23,6 @@ def _relative_to_folder(path: str, folder: str) -> str:
         return str(Path(path).resolve().relative_to(Path(folder).resolve()))
     except (ValueError, OSError):
         return path
-
-
-def _format_minute_precision(start_date: str) -> str:
-    """`start_date` (`str(datetime.datetime)`-shaped, e.g.
-    "2026-01-01 12:00:00.123456") truncated to minute precision
-    ("2026-01-01 12:00") — seconds/microseconds are noise for a list of
-    analyses. Falls back to `start_date` unchanged if it doesn't parse."""
-    if not start_date:
-        return ""
-    try:
-        dt = datetime.datetime.fromisoformat(start_date)
-    except ValueError:
-        return start_date
-    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 class ProjectModel(QObject):
