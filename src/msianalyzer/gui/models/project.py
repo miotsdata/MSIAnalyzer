@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, Signal
+from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core.project.project import Project
 from msianalyzer.gui.utils.formatting import format_minute_precision as _format_minute_precision
@@ -87,6 +87,26 @@ class ProjectModel(QObject):
             )
         entries.sort(key=lambda e: e["start_date"], reverse=True)
         return entries
+
+    @Slot(str, result=str)
+    def deleteRun(self, run_id: str) -> str:
+        """Delete one analysis — its output folder, its config file, and its
+        `runsList` entry — then re-export `.msianalyzer.yml` so the removal
+        persists. Project Home's right-click "Delete analysis" action.
+
+        Returns:
+            `""` on success (and `runsChanged` is emitted so the list
+            updates immediately); otherwise an error message to show the
+            user, with nothing on disk or in `runsList` changed.
+        """
+        try:
+            self._project.delete_run(run_id, project_folder=self._folder)
+        except (KeyError, OSError) as e:
+            return str(e) or repr(e)
+        if self._folder:
+            self._project.export(Path(self._folder) / ".msianalyzer.yml")
+        self.runsChanged.emit()
+        return ""
 
     @Property(list, notify=folderChanged)
     def mzmlFiles(self) -> list[str]:

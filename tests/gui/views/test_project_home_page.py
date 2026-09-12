@@ -6,6 +6,28 @@ from PySide6.QtTest import QSignalSpy
 from msianalyzer.gui.models.project import ProjectModel, _format_minute_precision
 
 
+def _project_with_run_on_disk(tmp_path, run_id="run-0"):
+    """A `ProjectModel` whose one run's output dir + config file are real
+    files on disk, for exercising the "Delete analysis" flow end to end."""
+    from msianalyzer.core.project.project import Project
+
+    out_dir = tmp_path / "output" / run_id
+    out_dir.mkdir(parents=True)
+    config_path = tmp_path / "configs" / f"run_{run_id}.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("io: {}")
+
+    p = Project(name="test_proj")
+    p.runs[run_id] = {
+        "id": run_id,
+        "start_date": "2026-01-01 12:00:00",
+        "config": {"io": {"out_dir": str(out_dir)}},
+        "config_path": str(config_path),
+    }
+    p.export(tmp_path / ".msianalyzer.yml")
+    return ProjectModel(p, str(tmp_path)), out_dir, config_path
+
+
 def test_empty_state_shows_only_new_analysis_button(project_home_view, project):
     model = ProjectModel(project, "/tmp/proj")
     view = project_home_view(model)
@@ -185,6 +207,47 @@ def test_clicking_run_row_emits_analysis_selected(
 
     qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
     assert spy.at(0)[0] == run_id
+
+
+def test_delete_run_menu_item_opens_confirmation_dialog(
+    project_home_view, tmp_path, find_visual_child
+):
+    model, out_dir, config_path = _project_with_run_on_disk(tmp_path)
+    view = project_home_view(model)
+    root = view.rootObject()
+
+    row = find_visual_child(root, "runRow_run-0")
+    delete_item = row.findChild(object, "deleteRunMenuItem_run-0")
+    assert delete_item is not None
+
+    delete_item.click()
+
+    dialog = row.findChild(object, "deleteRunDialog_run-0")
+    assert dialog is not None
+    assert dialog.property("visible") is True
+    # nothing deleted yet — only confirming triggers the actual deletion
+    assert out_dir.exists()
+    assert config_path.exists()
+
+
+def test_confirming_delete_run_dialog_removes_files_and_row(
+    project_home_view, tmp_path, find_visual_child
+):
+    model, out_dir, config_path = _project_with_run_on_disk(tmp_path)
+    view = project_home_view(model)
+    root = view.rootObject()
+
+    row = find_visual_child(root, "runRow_run-0")
+    row.findChild(object, "deleteRunMenuItem_run-0").click()
+    dialog = row.findChild(object, "deleteRunDialog_run-0")
+
+    dialog.accepted.emit()
+
+    assert not out_dir.exists()
+    assert not config_path.exists()
+    assert "run-0" not in model.runs
+    runs_repeater = root.findChild(QQuickItem, "runsRepeater")
+    assert runs_repeater.property("count") == 0
 
 
 def test_run_row_shows_pointing_hand_cursor_on_hover(

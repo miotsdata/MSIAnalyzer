@@ -1,5 +1,6 @@
 import datetime
 from pathlib import Path
+import shutil
 import uuid
 from typing import Any
 import yaml
@@ -139,6 +140,61 @@ class Project:
         project.runs = dict(data.get("runs") or {})
 
         return project
+
+    @log_call
+    def delete_run(
+        self, run_id: str, *, project_folder: str | Path | None = None
+    ) -> dict[str, Any]:
+        """Delete one analysis: its output folder, its config file, and its
+        `runs` entry.
+
+        Only this run's own artefacts are touched — the raw per-sample
+        databases under `<project_folder>/parsed/` are shared and immutable
+        across every analysis, so they are never removed here (see ADR 1,
+        the raw-vs-analysis-DB split). Filesystem deletion happens *before*
+        the entry is popped from `self.runs`, so a failure (e.g. permission
+        denied) leaves the run listed rather than silently losing track of
+        files that are still on disk. Does not re-export the project file —
+        call `export` afterward to persist the removal.
+
+        Args:
+            run_id: The run to delete.
+            project_folder: Used to resolve `out_dir` / `config_path` when
+                either was stored as a relative path. Left unresolved
+                (used as-is, relative to the current working directory)
+                when None.
+
+        Returns:
+            The removed run's stored dict, as it was in `self.runs`.
+
+        Raises:
+            KeyError: If `run_id` is not a known run.
+            OSError: If deleting the output folder or config file fails for
+                a reason other than it already being gone.
+        """
+        run = self.runs[run_id]
+
+        io = (run.get("config") or {}).get("io") or {}
+        out_dir = io.get("out_dir")
+        config_path = run.get("config_path")
+
+        def _resolve(p: str | None) -> Path | None:
+            if not p:
+                return None
+            path = Path(p)
+            if not path.is_absolute() and project_folder is not None:
+                path = Path(project_folder) / path
+            return path
+
+        out_path = _resolve(out_dir)
+        if out_path is not None and out_path.exists():
+            shutil.rmtree(out_path)
+
+        config_file_path = _resolve(config_path)
+        if config_file_path is not None and config_file_path.exists():
+            config_file_path.unlink()
+
+        return self.runs.pop(run_id)
 
 
 @log_call(source="path")

@@ -154,6 +154,40 @@ Page {
                                         enabled: modelData.config_path !== ""
                                         onTriggered: Router.copyToClipboard(modelData.config_path)
                                     }
+                                    MenuSeparator {}
+                                    MenuItem {
+                                        objectName: "deleteRunMenuItem_" + modelData.id
+                                        text: "Delete analysis…"
+                                        onTriggered: deleteRunDialog.open()
+                                    }
+                                }
+
+                                // Confirms before deleting — this permanently
+                                // removes the output folder and config file
+                                // from disk, not just the list entry.
+                                Dialog {
+                                    id: deleteRunDialog
+                                    objectName: "deleteRunDialog_" + modelData.id
+                                    title: "Delete analysis?"
+                                    modal: true
+                                    standardButtons: Dialog.Yes | Dialog.No
+                                    anchors.centerIn: Overlay.overlay
+
+                                    Text {
+                                        width: 320
+                                        wrapMode: Text.WordWrap
+                                        text: "This permanently deletes the output folder ("
+                                            + modelData.out_dir_display
+                                            + ") and its config file from disk, and removes "
+                                            + "this analysis from the project. This cannot be undone."
+                                    }
+
+                                    onAccepted: {
+                                        var error = project.deleteRun(modelData.id)
+                                        if (error !== "") {
+                                            Router.showErrorRequested(error)
+                                        }
+                                    }
                                 }
 
                                 ColumnLayout {

@@ -102,6 +102,96 @@ def test_project_load_missing_keys(tmp_path: Path):
         Project.load_from_yaml(file_path)
 
 
+# --- Tests for Project.delete_run ---
+
+
+def _run_entry(out_dir: Path, config_path: Path) -> dict:
+    return {
+        "id": "run-1",
+        "status": "COMPLETED",
+        "config": {"io": {"out_dir": str(out_dir)}},
+        "config_path": str(config_path),
+    }
+
+
+def test_delete_run_removes_output_dir_config_file_and_entry(tmp_path: Path):
+    out_dir = tmp_path / "output" / "run-1"
+    out_dir.mkdir(parents=True)
+    (out_dir / "analysis_run-1.db").write_bytes(b"data")
+    config_path = tmp_path / "configs" / "run_run-1.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("io: {}")
+
+    p = Project("demo")
+    p.runs["run-1"] = _run_entry(out_dir, config_path)
+
+    removed = p.delete_run("run-1")
+
+    assert removed["id"] == "run-1"
+    assert "run-1" not in p.runs
+    assert not out_dir.exists()
+    assert not config_path.exists()
+
+
+def test_delete_run_tolerates_already_missing_files(tmp_path: Path):
+    # Output folder/config already gone (moved, or never written) — the
+    # entry should still be removed cleanly, not raise.
+    out_dir = tmp_path / "output" / "run-1"
+    config_path = tmp_path / "configs" / "run_run-1.yaml"
+
+    p = Project("demo")
+    p.runs["run-1"] = _run_entry(out_dir, config_path)
+
+    p.delete_run("run-1")
+
+    assert "run-1" not in p.runs
+
+
+def test_delete_run_unknown_id_raises_and_leaves_runs_untouched():
+    p = Project("demo")
+    p.runs["run-1"] = _run_entry(Path("/tmp/x"), Path("/tmp/y"))
+
+    with pytest.raises(KeyError):
+        p.delete_run("does-not-exist")
+
+    assert "run-1" in p.runs
+
+
+def test_delete_run_resolves_relative_paths_against_project_folder(tmp_path: Path):
+    (tmp_path / "output" / "run-1").mkdir(parents=True)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "run_run-1.yaml").write_text("io: {}")
+
+    p = Project("demo")
+    p.runs["run-1"] = _run_entry(
+        Path("output/run-1"), Path("configs/run_run-1.yaml")
+    )
+
+    p.delete_run("run-1", project_folder=tmp_path)
+
+    assert not (tmp_path / "output" / "run-1").exists()
+    assert not (tmp_path / "configs" / "run_run-1.yaml").exists()
+
+
+def test_delete_run_does_not_touch_other_runs_or_parsed_raw_dbs(tmp_path: Path):
+    (tmp_path / "parsed").mkdir()
+    (tmp_path / "parsed" / "sample.db").write_bytes(b"raw")
+    out_dir_1 = tmp_path / "output" / "run-1"
+    out_dir_1.mkdir(parents=True)
+    out_dir_2 = tmp_path / "output" / "run-2"
+    out_dir_2.mkdir(parents=True)
+
+    p = Project("demo")
+    p.runs["run-1"] = _run_entry(out_dir_1, tmp_path / "c1.yaml")
+    p.runs["run-2"] = _run_entry(out_dir_2, tmp_path / "c2.yaml")
+
+    p.delete_run("run-1")
+
+    assert "run-2" in p.runs
+    assert out_dir_2.exists()
+    assert (tmp_path / "parsed" / "sample.db").exists()
+
+
 # --- Tests for create_project_folder ---
 def test_create_project_folder_success(tmp_path: Path):
     """Verify folder structure and project file creation."""

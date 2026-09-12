@@ -1,3 +1,6 @@
+import yaml
+from PySide6.QtTest import QSignalSpy
+
 from msianalyzer.core.project.project import Project
 from msianalyzer.gui.models.project import (
     ProjectModel,
@@ -110,3 +113,53 @@ def test_data_files_empty_without_folder():
 
     assert model.mzmlFiles == []
     assert model.xmlFiles == []
+
+
+def _seed_run_on_disk(project_folder, run_id="run-0"):
+    """A project with one run whose output dir + config file really exist
+    on disk (and the project file itself, exported), for `deleteRun`."""
+    out_dir = project_folder / "output" / run_id
+    out_dir.mkdir(parents=True)
+    (out_dir / f"analysis_{run_id}.db").write_bytes(b"data")
+    config_path = project_folder / "configs" / f"run_{run_id}.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("io: {}")
+
+    p = Project(name="test_proj")
+    p.runs[run_id] = {
+        "id": run_id,
+        "start_date": "2026-01-01 12:00:00",
+        "config": {"io": {"out_dir": str(out_dir)}},
+        "config_path": str(config_path),
+    }
+    p.export(project_folder / ".msianalyzer.yml")
+    return p, out_dir, config_path
+
+
+def test_delete_run_removes_files_entry_and_persists_to_yaml(tmp_path):
+    p, out_dir, config_path = _seed_run_on_disk(tmp_path)
+    model = ProjectModel(p, str(tmp_path))
+    spy = QSignalSpy(model.runsChanged)
+
+    error = model.deleteRun("run-0")
+
+    assert error == ""
+    assert "run-0" not in p.runs
+    assert not out_dir.exists()
+    assert not config_path.exists()
+    assert spy.count() == 1
+
+    reloaded = yaml.safe_load((tmp_path / ".msianalyzer.yml").read_text())
+    assert reloaded["runs"] == {}
+
+
+def test_delete_run_unknown_id_returns_error_and_emits_nothing(tmp_path):
+    p, _, _ = _seed_run_on_disk(tmp_path)
+    model = ProjectModel(p, str(tmp_path))
+    spy = QSignalSpy(model.runsChanged)
+
+    error = model.deleteRun("does-not-exist")
+
+    assert error != ""
+    assert "run-0" in p.runs
+    assert spy.count() == 0
