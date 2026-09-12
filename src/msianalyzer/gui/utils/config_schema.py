@@ -185,6 +185,15 @@ def build_config_schema() -> list[dict]:
         `bool` and always declared earlier in the same group, so a
         renderer creating controls in field order can look it up by the
         time it needs to.
+
+        A field declared with `dataclasses.field(metadata={"gui_hidden":
+        True})` is skipped entirely — it stays a normal `Config` field
+        (settable by hand-editing or scripting a config file, and still
+        round-trips through `to_dict`/`from_dict`), just not offered as a
+        control in the GUI's New Analysis wizard. Use this for a field
+        whose GUI-appropriate value is always the default, or that only
+        makes sense when set programmatically (e.g.
+        `AlignMzSamples.sample_names`).
     """
     schema: list[dict] = []
     for group_key, group_type in GROUPS.items():
@@ -195,6 +204,8 @@ def build_config_schema() -> list[dict]:
         hints = typing.get_type_hints(group_type)
         fields = []
         for f in dataclasses.fields(group_type):
+            if f.metadata.get("gui_hidden"):
+                continue
             enabled_when = f.metadata.get("enabled_when")
             enabled_when_field = enabled_when
             enabled_when_equals = True

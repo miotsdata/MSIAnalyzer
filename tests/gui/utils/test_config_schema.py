@@ -76,12 +76,15 @@ def test_annotate_group_classifies_library_path_as_path_list():
     assert fields_by_name["library_path"]["kind"] == "path_list"
 
 
-def test_align_group_classifies_sample_names_as_optional_str_list():
+def test_align_group_hides_sample_names_from_the_gui():
+    # sample_names (metadata={"gui_hidden": True}) stays a real Config
+    # field, settable by hand-editing a config file, but a GUI-started run
+    # always uses the mzML file names instead.
     schema = build_config_schema()
     align = next(g for g in schema if g["key"] == "align")
     fields_by_name = {f["name"]: f for f in align["fields"]}
 
-    assert fields_by_name["sample_names"]["kind"] == "optional_str_list"
+    assert "sample_names" not in fields_by_name
 
 
 def test_defaults_are_carried_over():

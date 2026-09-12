@@ -206,7 +206,7 @@ def test_group_tab_shows_a_description_sentence(new_analysis_view, project, find
     description = find_visual_child(root, "groupDescription_peak")
     assert description is not None
     assert description.property("text") == (
-        "Parameters for filtering detected MS1 peaks by intensity."
+        "Drop low-intensity peaks left over after centroid detection."
     )
 
 
