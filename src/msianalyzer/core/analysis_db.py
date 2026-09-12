@@ -652,7 +652,10 @@ def load_feature_compound_scores(
     Thin reader over the ``feature_compound_scores`` view: one row per
     ``(feature_id, inchikey)`` with the top ``best_score`` and the row it
     came from (``best_sample_id`` / ``best_scan_id`` / ``best_library_id``),
-    plus ``n_candidate_rows`` / ``n_scans``. Empty when annotation never ran.
+    plus ``n_candidate_rows`` / ``n_scans``. Joined with ``features`` for
+    ``mz`` — the view itself doesn't carry it (pure aggregation over
+    ``ms2_annotations``), and the GUI Annotations table sorts by it. Empty
+    when annotation never ran.
 
     Args:
         db_path: The analysis database.
@@ -661,12 +664,15 @@ def load_feature_compound_scores(
     Returns:
         A DataFrame ordered by ``feature_id`` then ``best_score`` desc.
     """
-    sql = "SELECT * FROM feature_compound_scores"
+    sql = (
+        "SELECT fcs.*, f.mz AS mz FROM feature_compound_scores fcs "
+        "LEFT JOIN features f ON f.feature_id = fcs.feature_id"
+    )
     params: tuple = ()
     if feature_id is not None:
-        sql += " WHERE feature_id = ?"
+        sql += " WHERE fcs.feature_id = ?"
         params = (int(feature_id),)
-    sql += " ORDER BY feature_id, best_score DESC"
+    sql += " ORDER BY fcs.feature_id, fcs.best_score DESC"
     with connect(db_path) as con:
         try:
             return pd.read_sql_query(sql, con, params=params)

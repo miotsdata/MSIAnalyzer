@@ -232,21 +232,34 @@ class AnalysisBridge(QObject):
         top = df.drop_duplicates(subset="feature_id", keep="first")
         return _dataframe_to_records(top)
 
-    @Slot(str, int, result=list)
-    def getAnnotationCandidates(self, analysis_db_path: str, feature_id: int) -> list:
-        """Every candidate (sample, scan, library hit) for one feature.
+    @Slot(str, int, int, result=list)
+    def getFeatureTopHits(self, analysis_db_path: str, feature_id: int, top_n: int) -> list:
+        """Top-N annotation hits for one feature — best row per distinct
+        compound, including which sample each hit came from.
+
+        Same "best per compound" selection as the MS1 spectra section's
+        `getFeatureDetail`'s `top_hits` (kept as a standalone method here
+        since the Annotations section starts from a picked feature
+        directly, not a clicked spectrum point).
 
         Args:
             analysis_db_path: The analysis' SQLite database.
-            feature_id: The feature to fetch candidates for.
+            feature_id: The feature to fetch hits for.
+            top_n: How many hits to return, user-selectable.
 
         Returns:
-            Records from `analysis_db.load_ms2_annotations_for_feature`.
+            Records from `analysis_db.load_ms2_annotations_for_feature`
+            (so each includes `id`, `sample_name`, `library_name`, `score`,
+            etc.), kept to the top-scoring row per `inchikey` and capped at
+            `top_n`. Empty when the feature has no annotation rows.
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return []
         df = analysis_db.load_ms2_annotations_for_feature(analysis_db_path, feature_id)
-        return _dataframe_to_records(df)
+        if df.empty:
+            return []
+        best_per_compound = df.drop_duplicates(subset="inchikey", keep="first")
+        return _dataframe_to_records(best_per_compound.head(max(top_n, 0)))
 
     def _write_spectrum_html(self, html: str) -> str:
         self._spectrum_counter += 1
@@ -270,14 +283,20 @@ class AnalysisBridge(QObject):
         self._mirror_plot_prev_path = path
         return path.as_uri()
 
-    @Slot(str, int, result=str)
-    def getMirrorPlotUrl(self, analysis_db_path: str, annotation_id: int) -> str:
+    @Slot(str, int, str, str, result=str)
+    def getMirrorPlotUrl(
+        self, analysis_db_path: str, annotation_id: int, emp_source: str, lib_source: str
+    ) -> str:
         """The empirical-vs-library mirror plot for one `ms2_annotations`
         row, as a `file://` URL for a `WebEngineView`'s `url` to load.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
             annotation_id: Primary key in `ms2_annotations`.
+            emp_source: `"filtered"` or `"raw"` — which empirical spectrum
+                to show (see `Plotter.plot_ms2_annotation`).
+            lib_source: `"filtered"` or `"raw"` — which library spectrum
+                to show.
 
         Returns:
             A `file://` URL to a self-contained HTML page (full inline
@@ -286,12 +305,14 @@ class AnalysisBridge(QObject):
             as HTML for `loadHtml()`/`setHtml()` to load directly: that
             API silently fails past Qt's ~2MB limit, and embedding
             Plotly.js alone is already ~4.6MB. On any failure (unknown id,
-            no stored filtered spectra) the page is a short `<p>` error
-            message instead — the popup stays usable rather than showing
+            requested source unavailable) the page is a short `<p>` error
+            message instead — the section stays usable rather than showing
             a blank/broken view.
         """
         try:
-            fig = Plotter().plot_ms2_annotation(analysis_db_path, annotation_id)
+            fig = Plotter().plot_ms2_annotation(
+                analysis_db_path, annotation_id, emp_source=emp_source, lib_source=lib_source
+            )
         except (ValueError, OSError) as e:
             logger.warning("mirror plot for annotation %s failed: %s", annotation_id, e)
             html = f"<p style='font-family: sans-serif; color: #900;'>{e}</p>"

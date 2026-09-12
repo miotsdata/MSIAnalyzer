@@ -324,6 +324,30 @@ def test_load_feature_compound_scores_helper(tmp_path: Path):
     assert one.iloc[0]["best_score"] == 0.80
 
 
+def test_load_feature_compound_scores_includes_feature_mz(tmp_path: Path):
+    # The view itself has no `mz` (pure aggregation over ms2_annotations) —
+    # the GUI Annotations table sorts by it, so the helper joins it in from
+    # `features`. NULL (not a missing column/dropped row) when a feature
+    # has annotation rows but no `features` entry (FK enforcement is off
+    # here, matching _seed_two_feature_annotations' own precedent).
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_annotations(db)
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) "
+            "VALUES (7, 123.4567, '{}')"
+        )
+        con.commit()
+
+    df = load_feature_compound_scores(db)
+    assert "mz" in df.columns
+    feature_7 = df[df["feature_id"] == 7]
+    assert (feature_7["mz"] == 123.4567).all()
+    feature_9 = df[df["feature_id"] == 9]
+    assert feature_9["mz"].isna().all()
+
+
 def test_load_feature_compound_scores_empty_without_annotations(tmp_path: Path):
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()

@@ -14,9 +14,10 @@ def _open_ms1_tab(view, root, find_visual_child, qtbot):
 
 @pytest.fixture
 def ms1_analysis_model(annotated_analysis_model):
-    """`annotated_analysis_model` (feature 7 / sample s1 / Caffeine), plus a
-    saved filtered spectrum for sample 1 (so the sample selector + spectrum
-    view have something to show) and a `features`/`feature_ms2_summary` row
+    """`annotated_analysis_model` (feature 7, mz 123.4567 / sample s1 /
+    Caffeine — the `features` row itself now comes from that fixture),
+    plus a saved filtered spectrum for sample 1 (so the sample selector +
+    spectrum view have something to show) and a `feature_ms2_summary` row
     for feature 7 (so a simulated `spectrumPointClicked` resolves to it)."""
     from msianalyzer.core.analysis_db import log_command
     from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
@@ -25,14 +26,10 @@ def ms1_analysis_model(annotated_analysis_model):
 
     with sqlite3.connect(db_path) as con:
         con.execute(
-            "INSERT INTO features (feature_id, mz, members_json) "
-            "VALUES (7, 150.0, '{\"s1\": 0}')"
-        )
-        con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
             "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (7, 150.0, 5, 1, 0, 0, 0, 0, 3.0)"
+            "VALUES (7, 123.4567, 5, 1, 0, 0, 0, 0, 3.0)"
         )
         con.commit()
 

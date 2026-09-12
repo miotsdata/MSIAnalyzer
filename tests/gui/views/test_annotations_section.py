@@ -1,4 +1,10 @@
-from PySide6.QtCore import Qt, QObject
+import sqlite3
+
+import numpy as np
+from PySide6.QtCore import Qt
+from PySide6.QtQuick import QQuickItem
+
+from msianalyzer.core.parser.mzml_parser import array_to_blob
 
 
 def _open_annotations_tab(view, root, find_visual_child, qtbot):
@@ -8,21 +14,35 @@ def _open_annotations_tab(view, root, find_visual_child, qtbot):
     qtbot.wait(50)
 
 
-def _open_candidates_popup(view, root, find_visual_child, qtbot, feature_id=7):
-    row = find_visual_child(root, "annotationRow_" + str(feature_id))
-    center = row.mapToScene(row.boundingRect().center()).toPoint()
+def _click(view, item, qtbot):
+    center = item.mapToScene(item.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
-    qtbot.wait(100)
-    return root.findChild(QObject, "candidatesPopup")
+    qtbot.wait(50)
 
 
-def _candidates_panel(popup, find_visual_child):
-    """The candidate-list side of the popup, scoped away from the
-    WebEngineView sibling — searching *past* a WebEngineView while looking
-    for something else recurses into its internal item tree, which is
-    unsafe to touch via childItems()."""
-    popup_content = popup.property("contentItem")
-    return find_visual_child(popup_content, "candidatesPanel")
+def _seed_second_feature(db_path, *, feature_id=9, mz=50.0, compound="Water"):
+    """A second, lower-mz annotated feature — for the sort tests, so
+    default (feature_id asc) and mz-sorted order actually differ."""
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            (feature_id, mz),
+        )
+        blob = array_to_blob(np.array([50.0, 60.0], dtype=np.float32))
+        con.execute(
+            "INSERT INTO ms2_annotations "
+            "(id, feature_id, sample_id, scan_id, library_id, "
+            "library_spectrum_id, compound_name, compound_formula, inchikey, "
+            "score, dot_product_score, lib_coverage, emp_coverage, "
+            "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
+            "n_emp_peaks_filtered, emp_filtered_mz, emp_filtered_intensity, "
+            "lib_filtered_mz, lib_filtered_intensity, rank_ms2, rank_feature) "
+            "VALUES (2, ?, 1, 43, 1, 11, ?, 'H2O', "
+            "'XLYOFNOQVPJJNP-UHFFFAOYSA-N', 0.5, 0.5, 0.5, 0.5, 0.5, "
+            "1, 1, 5, 2, ?, ?, ?, ?, 1, 1)",
+            (feature_id, compound, blob, blob, blob, blob),
+        )
+        con.commit()
 
 
 def test_annotations_empty_state_for_db_without_annotations(
@@ -48,51 +68,142 @@ def test_annotations_table_shows_one_row_per_feature(
     assert row is not None
 
     compound_text = find_visual_child(root, "annotationRowCompound_7")
+    mz_text = find_visual_child(root, "annotationRowMz_7")
     score_text = find_visual_child(root, "annotationRowScore_7")
     assert compound_text.property("text") == "Caffeine"
-    assert score_text.property("text") == "score 0.870"
+    assert mz_text.property("text") == "123.4567"
+    assert score_text.property("text") == "0.870"
 
 
-def test_clicking_row_opens_candidates_popup_with_one_candidate(
+def test_clicking_column_header_sorts_table(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # "User can decide to sort for any of these [feature id/number, name,
+    # mz]" — clicking a header sorts by it; clicking the same header again
+    # flips direction.
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)  # mz 50.0 < feature 7's 123.4567
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    assert section.property("sortColumn") == "feature_id"
+    assert section.property("sortAscending") is True
+
+    row_7 = find_visual_child(root, "annotationRow_7")
+    row_9 = find_visual_child(root, "annotationRow_9")
+    # Default sort (feature_id asc): 7 before 9.
+    assert row_7.property("y") < row_9.property("y")
+
+    mz_header = find_visual_child(root, "annotationSortHeader_mz")
+    _click(view, mz_header, qtbot)
+
+    assert section.property("sortColumn") == "mz"
+    assert section.property("sortAscending") is True
+    row_7 = find_visual_child(root, "annotationRow_7")
+    row_9 = find_visual_child(root, "annotationRow_9")
+    # mz asc: feature 9 (mz 50.0) before feature 7 (mz 123.4567).
+    assert row_9.property("y") < row_7.property("y")
+
+    _click(view, mz_header, qtbot)
+    assert section.property("sortAscending") is False
+    row_7 = find_visual_child(root, "annotationRow_7")
+    row_9 = find_visual_child(root, "annotationRow_9")
+    assert row_7.property("y") < row_9.property("y")
+
+
+def test_sorting_does_not_change_current_selection(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    _click(view, find_visual_child(root, "annotationRow_7"), qtbot)
+    section = find_visual_child(root, "annotationsSection")
+    assert section.property("selectedFeatureId") == 7
+
+    _click(view, find_visual_child(root, "annotationSortHeader_mz"), qtbot)
+    assert section.property("selectedFeatureId") == 7
+
+
+def test_selecting_feature_shows_top_hits_with_sample_name(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):
     view = analysis_view(annotated_analysis_model)
     root = view.rootObject()
     _open_annotations_tab(view, root, find_visual_child, qtbot)
 
-    popup = _open_candidates_popup(view, root, find_visual_child, qtbot)
-    assert popup is not None
-    assert popup.property("visible") is True
-    assert popup.property("featureId") == 7
+    _click(view, find_visual_child(root, "annotationRow_7"), qtbot)
 
-    panel = _candidates_panel(popup, find_visual_child)
-    candidate_row = find_visual_child(panel, "candidateRow_1")
-    assert candidate_row is not None
-
-    label = find_visual_child(panel, "candidateRowLabel_1")
-    assert "Caffeine" in label.property("text")
-    meta = find_visual_child(panel, "candidateRowMeta_1")
-    assert meta.property("text") == "s1  ·  my_library"
+    hit_label = find_visual_child(root, "topHitLabel_1")
+    assert hit_label is not None
+    text = hit_label.property("text")
+    assert "Caffeine" in text
+    assert "s1" in text
+    assert "my_library" in text
 
 
-def test_selecting_candidate_triggers_mirror_plot_load(
+def test_selecting_feature_auto_selects_and_loads_first_hit(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):
+    # "the second, the classic plot of matching spectra" — should already
+    # be showing something once a feature (with hits) is picked, not
+    # require a further click on the one-and-only hit.
     view = analysis_view(annotated_analysis_model)
     root = view.rootObject()
     _open_annotations_tab(view, root, find_visual_child, qtbot)
 
-    popup = _open_candidates_popup(view, root, find_visual_child, qtbot)
-    panel = _candidates_panel(popup, find_visual_child)
-    candidate_row = find_visual_child(panel, "candidateRow_1")
-    center = candidate_row.mapToScene(candidate_row.boundingRect().center()).toPoint()
-    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
-    qtbot.wait(50)
+    _click(view, find_visual_child(root, "annotationRow_7"), qtbot)
 
-    selected = popup.property("selectedCandidate")
+    section = find_visual_child(root, "annotationsSection")
+    selected = section.property("selectedHit")
     assert selected is not None
     assert selected["id"] == 1
-    # The WebEngineView itself is not asserted on here — searching *past* it
-    # (or into it) while it's loading touches Chromium's own async
-    # compositor state and isn't safe; getMirrorPlotUrl's actual HTML
-    # output is covered directly in test_analysis_bridge.py.
+
+    mirror_view = find_visual_child(root, "mirrorPlotView")
+    assert mirror_view.property("url").toString() != ""
+    assert mirror_view.property("url").toString().startswith("file://")
+
+
+def test_toggling_empirical_source_reloads_mirror_plot(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # Set `empSource` directly rather than driving the ComboBox's native
+    # popup — this codebase's tests don't simulate clicks inside a
+    # ComboBox's popup list for any control (see test_visual_inspection_
+    # section.py's sortModeCombo test); the onActivated -> empSource
+    # wiring itself is a one-line assignment, low risk without its own
+    # test.
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+    _click(view, find_visual_child(root, "annotationRow_7"), qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    mirror_view = find_visual_child(root, "mirrorPlotView")
+    initial_url = mirror_view.property("url").toString()
+
+    section.setProperty("empSource", "raw")
+    qtbot.wait(50)
+
+    assert mirror_view.property("url").toString() != initial_url
+    assert mirror_view.property("url").toString().startswith("file://")
+
+    emp_combo = find_visual_child(root, "empSourceCombo")
+    assert emp_combo is not None
+
+
+def test_no_feature_selected_shows_placeholder(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    placeholder = find_visual_child(root, "annotationsDetailEmptyLabel")
+    assert placeholder is not None
+    assert placeholder.property("visible") is True

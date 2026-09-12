@@ -104,6 +104,11 @@ def test_get_annotation_table_returns_one_row_per_feature(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path)
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 300.5, '{}')"
+        )
+        con.commit()
 
     bridge = AnalysisBridge()
     rows = bridge.getAnnotationTable(str(db_path))
@@ -112,6 +117,10 @@ def test_get_annotation_table_returns_one_row_per_feature(tmp_path):
     assert rows[0]["feature_id"] == 7
     assert rows[0]["compound_name"] == "Caffeine"
     assert isinstance(rows[0]["best_score"], float)
+    # Sorted by / displayed alongside the other columns in the redesigned
+    # table ("feature id/number, name and mz") — the view itself has no
+    # `mz`, joined in from `features`.
+    assert rows[0]["mz"] == 300.5
 
 
 def test_get_annotation_table_empty_without_annotations(tmp_path):
@@ -122,26 +131,53 @@ def test_get_annotation_table_empty_without_annotations(tmp_path):
     assert bridge.getAnnotationTable(str(db_path)) == []
 
 
-def test_get_annotation_candidates_for_feature(tmp_path):
+def test_get_feature_top_hits_for_feature(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    rows = bridge.getAnnotationCandidates(str(db_path), 7)
+    rows = bridge.getFeatureTopHits(str(db_path), 7, 5)
 
     assert len(rows) == 1
     assert rows[0]["sample_name"] == "s1"
     assert rows[0]["library_name"] == "my_library"
+    assert rows[0]["compound_name"] == "Caffeine"
+    assert rows[0]["id"] == 1  # the ms2_annotations row id, for getMirrorPlotUrl
 
 
-def test_get_annotation_candidates_empty_for_unknown_feature(tmp_path):
+def test_get_feature_top_hits_capped_at_top_n(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO ms2_annotations "
+            "(id, feature_id, sample_id, scan_id, library_id, "
+            "library_spectrum_id, compound_name, inchikey, score, "
+            "dot_product_score, lib_coverage, emp_coverage, coverage_score, "
+            "n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
+            "n_emp_peaks_filtered, rank_ms2, rank_feature) "
+            "VALUES (2, 7, 1, 42, 1, 10, 'SecondHit', "
+            "'AAAAAAAAAAAAAA-BBBBBBBBBB-N', 0.5, 0.5, 0.5, 0.5, 0.5, "
+            "1, 1, 10, 3, 2, 2)"
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    rows = bridge.getFeatureTopHits(str(db_path), 7, 1)
+
+    assert len(rows) == 1
+    assert rows[0]["compound_name"] == "Caffeine"  # the higher-scoring one
+
+
+def test_get_feature_top_hits_empty_for_unknown_feature(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    assert bridge.getAnnotationCandidates(str(db_path), 999) == []
+    assert bridge.getFeatureTopHits(str(db_path), 999, 5) == []
 
 
 def test_get_mirror_plot_url_returns_html_for_valid_annotation(tmp_path):
@@ -150,7 +186,7 @@ def test_get_mirror_plot_url_returns_html_for_valid_annotation(tmp_path):
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    url = bridge.getMirrorPlotUrl(str(db_path), 1)
+    url = bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered")
     html = _read_url(url)
 
     assert url.startswith("file://")
@@ -163,7 +199,7 @@ def test_get_mirror_plot_url_returns_error_message_for_unknown_id(tmp_path):
     init_analysis_db(db_path).close()
 
     bridge = AnalysisBridge()
-    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 999))
+    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 999, "filtered", "filtered"))
 
     assert "<p" in html
     assert "No annotation found" in html
@@ -175,10 +211,23 @@ def test_get_mirror_plot_url_returns_error_message_without_filtered_spectra(tmp_
     _seed_annotated_feature(db_path, with_filtered_spectra=False)
 
     bridge = AnalysisBridge()
-    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 1))
+    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered"))
 
     assert "<p" in html
-    assert "no stored filtered spectra" in html
+    assert "no stored filtered empirical spectrum" in html
+
+
+def test_get_mirror_plot_url_returns_error_message_for_unavailable_raw_source(tmp_path):
+    # 'a.db' (the seeded sample's raw_db_path) doesn't exist on disk.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+
+    bridge = AnalysisBridge()
+    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 1, "raw", "filtered"))
+
+    assert "<p" in html
+    assert "raw empirical spectrum not found" in html
 
 
 def test_get_mirror_plot_url_is_unique_per_call(tmp_path):
@@ -189,8 +238,8 @@ def test_get_mirror_plot_url_is_unique_per_call(tmp_path):
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    url1 = bridge.getMirrorPlotUrl(str(db_path), 1)
-    url2 = bridge.getMirrorPlotUrl(str(db_path), 1)
+    url1 = bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered")
+    url2 = bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered")
 
     assert url1 != url2
 

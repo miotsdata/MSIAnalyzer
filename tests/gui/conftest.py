@@ -261,8 +261,9 @@ def analysis_model(tmp_path, project):
 
 @pytest.fixture
 def annotated_analysis_model(analysis_model):
-    """`analysis_model`, seeded with one annotated feature (id=7, scan 42,
-    sample 's1', library 'my_library', compound 'Caffeine')."""
+    """`analysis_model`, seeded with one annotated feature (id=7, mz
+    123.4567, scan 42, sample 's1', library 'my_library', compound
+    'Caffeine')."""
     import sqlite3
 
     import numpy as np
@@ -273,6 +274,10 @@ def annotated_analysis_model(analysis_model):
         con.execute(
             "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
             "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) "
+            "VALUES (7, 123.4567, '{\"s1\": 0}')"
         )
         con.execute(
             "INSERT INTO annotation_libraries (id, path, name) "
