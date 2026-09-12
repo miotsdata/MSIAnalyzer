@@ -336,7 +336,14 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     #   rank_scan_feature_sample  - same, within one sample
     # The four *_filtered_* blobs are the noise-filtered, max-normalised
     # spectra actually scored (for mirror plots); NULL when
-    # store_filtered_spectra was off.
+    # store_filtered_spectra was off. lib_raw_* is the *untouched* library
+    # spectrum (candidate.mz/intensity, before noise-filtering) for the
+    # same candidate — gated by the same flag. Persisting it here means
+    # the GUI's "raw library spectrum" view never needs to re-open the
+    # library file itself (which can be a slow/remote mount — see ADR 16);
+    # NULL for rows written before this column existed, or when
+    # store_filtered_spectra was off, in which case the GUI falls back to
+    # a live re-read of the library file.
     con.execute("""
         CREATE TABLE IF NOT EXISTS ms2_annotations (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -375,6 +382,8 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             emp_filtered_intensity BLOB,
             lib_filtered_mz        BLOB,
             lib_filtered_intensity BLOB,
+            lib_raw_mz             BLOB,
+            lib_raw_intensity      BLOB,
             command_id             INTEGER,
             FOREIGN KEY (feature_id) REFERENCES features(feature_id),
             FOREIGN KEY (library_id) REFERENCES annotation_libraries(id),

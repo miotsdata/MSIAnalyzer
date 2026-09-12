@@ -22,6 +22,8 @@ def _insert_annotation(
     library_path: str = "lib.db",
     library_spectrum_id: int = 7,
     fragment_ppm_command: float | None = None,
+    stored_lib_raw_mz: np.ndarray | None = None,
+    stored_lib_raw_intensity: np.ndarray | None = None,
 ) -> int:
     with sqlite3.connect(db) as con:
         if sample_raw_db_path is not None:
@@ -64,6 +66,15 @@ def _insert_annotation(
         else:
             emp_mz_blob = emp_int_blob = lib_mz_blob = lib_int_blob = None
 
+        raw_lib_mz_blob = (
+            array_to_blob(np.asarray(stored_lib_raw_mz, dtype=np.float32))
+            if stored_lib_raw_mz is not None else None
+        )
+        raw_lib_int_blob = (
+            array_to_blob(np.asarray(stored_lib_raw_intensity, dtype=np.float32))
+            if stored_lib_raw_intensity is not None else None
+        )
+
         cur = con.execute(
             "INSERT INTO ms2_annotations "
             "(sample_id, scan_id, library_id, library_spectrum_id, "
@@ -71,11 +82,13 @@ def _insert_annotation(
             "dot_product_score, lib_coverage, emp_coverage, coverage_score, "
             "n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
             "n_emp_peaks_filtered, emp_filtered_mz, emp_filtered_intensity, "
-            "lib_filtered_mz, lib_filtered_intensity, rank_ms2, command_id) "
+            "lib_filtered_mz, lib_filtered_intensity, lib_raw_mz, "
+            "lib_raw_intensity, rank_ms2, command_id) "
             "VALUES (1, 42, 1, ?, 'Caffeine', 'C8H10N4O2', "
             "'RYYVLZVUVIJVGH-UHFFFAOYSA-N', 0.87, 0.9, 0.8, 0.75, 0.77, "
-            "2, 2, 10, 3, ?, ?, ?, ?, 1, ?)",
-            (library_spectrum_id, emp_mz_blob, emp_int_blob, lib_mz_blob, lib_int_blob, command_id),
+            "2, 2, 10, 3, ?, ?, ?, ?, ?, ?, 1, ?)",
+            (library_spectrum_id, emp_mz_blob, emp_int_blob, lib_mz_blob, lib_int_blob,
+             raw_lib_mz_blob, raw_lib_int_blob, command_id),
         )
         con.commit()
         return cur.lastrowid
@@ -374,6 +387,68 @@ def test_plot_ms2_annotation_raw_library_source_missing_raises(tmp_path):
 
     with pytest.raises(ValueError, match="raw library spectrum not found"):
         Plotter().plot_ms2_annotation(db, annotation_id, lib_source="raw")
+
+
+def test_plot_ms2_annotation_prefers_stored_raw_library_spectrum(tmp_path):
+    # ADR 0017: the untouched library spectrum is persisted at annotation
+    # time (annotate.persist_annotations) so this never needs to re-open
+    # the library file live. library_path here points at a file that
+    # doesn't exist at all — proving the stored copy is what's actually
+    # used, not a live re-read (which would raise, per the test above).
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    stored_mz = np.array([444.0, 555.0], dtype=np.float32)
+    stored_int = np.array([1.0, 3.0], dtype=np.float32)
+    annotation_id = _insert_annotation(
+        db,
+        library_path=str(tmp_path / "does_not_exist.db"),
+        stored_lib_raw_mz=stored_mz,
+        stored_lib_raw_intensity=stored_int,
+    )
+
+    fig = Plotter().plot_ms2_annotation(db, annotation_id, lib_source="raw")
+
+    all_x = {x for t in fig.data for x in (t.x if t.x is not None else []) if x is not None}
+    assert {444.0, 555.0} <= all_x
+    assert 100.01 not in all_x and 199.99 not in all_x
+
+
+def test_get_annotation_spectra_falls_back_to_live_read_without_stored_raw(tmp_path):
+    # A row written before the lib_raw_* columns existed (or with
+    # store_filtered_spectra off) has them NULL — falls back to the live
+    # library-file re-read, same as before this feature existed.
+    from libviz.core.library import Library
+
+    lib_path = tmp_path / "library.db"
+    lib = Library.create(lib_path, name="test-lib")
+    adduct_id = next(a["id"] for a in lib.get_adducts() if a["charge"] > 0)
+    lib.add_spectra(
+        compound_name="Caffeine",
+        compound_formula="C8H10N4O2",
+        inchikey="RYYVLZVUVIJVGH-UHFFFAOYSA-N",
+        spectra_info={
+            "precursor_mz": 195.0,
+            "polarity": "POSITIVE",
+            "collision_energy": 20.0,
+            "mz": np.array([444.0, 555.0], dtype=np.float32),
+            "intensity": np.array([1.0, 3.0], dtype=np.float32),
+        },
+        adduct_id=adduct_id,
+    )
+    with lib.session_scope() as session:
+        from libviz.core.db.models import Spectrum
+
+        spectrum_id = session.query(Spectrum).one().id
+
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    annotation_id = _insert_annotation(
+        db, library_path=lib_path, library_spectrum_id=spectrum_id
+    )  # no stored_lib_raw_mz/intensity -> NULL on the row
+
+    data = Plotter().get_annotation_spectra(db, annotation_id, lib_source="raw")
+
+    np.testing.assert_allclose(sorted(data["library_mz"]), [444.0, 555.0])
 
 
 def test_plot_ms2_annotation_title_notes_non_default_sources(tmp_path):

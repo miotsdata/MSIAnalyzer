@@ -642,9 +642,13 @@ class Plotter:
         its owning sample's raw database path, and the scan's
         `precursor_mz` (from `ms2_associations`). Filtered-spectrum blobs
         are decoded to arrays (empty when `store_filtered_spectra` was off
-        — the caller decides whether that's fatal); raw spectra are *not*
-        read here — see `_resolve_side`, which only reads them when
-        actually requested."""
+        — the caller decides whether that's fatal), as is the stored
+        untouched library spectrum (`lib_raw_mz`/`lib_raw_intensity` —
+        empty for rows written before that column existed, or when
+        `store_filtered_spectra` was off; `_resolve_side` falls back to a
+        live library-file re-read in that case). The raw *empirical*
+        spectrum is never persisted, so it's *not* read here at all — see
+        `_resolve_side`, which only reads it when actually requested."""
         con = sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True)
         try:
             row = con.execute(
@@ -656,6 +660,7 @@ class Plotter:
                        a.n_emp_peaks_raw, a.n_emp_peaks_filtered,
                        a.emp_filtered_mz, a.emp_filtered_intensity,
                        a.lib_filtered_mz, a.lib_filtered_intensity,
+                       a.lib_raw_mz, a.lib_raw_intensity,
                        a.library_spectrum_id, a.command_id,
                        lib.name AS library_name, lib.path AS library_path,
                        s.raw_db_path AS sample_raw_db_path,
@@ -694,6 +699,8 @@ class Plotter:
             "emp_filtered_intensity_blob",
             "lib_filtered_mz_blob",
             "lib_filtered_intensity_blob",
+            "lib_raw_mz_blob",
+            "lib_raw_intensity_blob",
             "library_spectrum_id",
             "command_id",
             "library_name",
@@ -708,6 +715,8 @@ class Plotter:
             ("emp_filtered_intensity", "emp_filtered_intensity_blob"),
             ("lib_filtered_mz", "lib_filtered_mz_blob"),
             ("lib_filtered_intensity", "lib_filtered_intensity_blob"),
+            ("lib_raw_mz_stored", "lib_raw_mz_blob"),
+            ("lib_raw_intensity_stored", "lib_raw_intensity_blob"),
         ):
             blob = d.pop(blob_key)
             d[arr_key] = (
@@ -723,11 +732,17 @@ class Plotter:
         """The (mz, intensity) arrays to plot for one side ("emp"/"lib").
 
         `source="filtered"` returns the arrays already decoded onto `ann`
-        by `_fetch_annotation`. `source="raw"` re-reads from the owning
-        sample's raw database (empirical) or the library file
-        (library) — never touched by `_fetch_annotation` itself, only on
-        actual demand, since most calls only ever want the (already
-        in-hand) filtered arrays.
+        by `_fetch_annotation`. `source="raw"` for the empirical side
+        re-reads from the owning sample's raw database — never touched by
+        `_fetch_annotation` itself, only on actual demand. For the
+        library side, `source="raw"` prefers the *stored* untouched
+        spectrum (`lib_raw_mz`/`lib_raw_intensity`, persisted at
+        annotation time by `annotate.persist_annotations` — see ADR 0016)
+        when present, and only falls back to re-opening the library file
+        live for rows written before that column existed (or with
+        `store_filtered_spectra` off) — that live path is the one that
+        can mean slow/remote file I/O, which is why raw-library viewing
+        used to be a real crash risk before this stored copy existed.
         """
         if source == "filtered":
             mz, intensity = ann[f"{side}_filtered_mz"], ann[f"{side}_filtered_intensity"]
@@ -750,14 +765,18 @@ class Plotter:
                 )
             return mz, intensity
 
+        if len(ann["lib_raw_mz_stored"]) > 0:
+            return ann["lib_raw_mz_stored"], ann["lib_raw_intensity_stored"]
+
         mz, intensity = _read_raw_library_spectrum(
             ann["library_path"], ann["library_spectrum_id"]
         )
         if mz is None:
             raise ValueError(
                 f"annotation id={annotation_id}: raw library spectrum not "
-                f"found (library {ann['library_path']!r}, spectrum id "
-                f"{ann['library_spectrum_id']})"
+                f"found (not stored on this row, and the library "
+                f"{ann['library_path']!r}, spectrum id "
+                f"{ann['library_spectrum_id']} couldn't be re-read live)"
             )
         return mz, intensity
 

@@ -29,7 +29,10 @@ Design (see ADR 0007):
 * **Filtered spectra** — the noise-filtered, max-normalised empirical and
   library peak lists that were actually scored — are persisted on every row
   (``store_filtered_spectra``) so downstream can draw mirror plots without
-  re-running the matcher.
+  re-running the matcher. The **untouched** library candidate spectrum
+  (before noise-filtering) is persisted alongside it, under the same flag —
+  so a "raw library spectrum" view never needs to re-open the library file
+  itself, which may be a slow or remote mount (see ADR 0016).
 * An empty ``library_path`` (``None`` or ``[]``) disables the whole stage.
 
 Outputs (schema in
@@ -155,6 +158,8 @@ class AnnotationRow:
     emp_filtered_intensity: np.ndarray
     lib_filtered_mz: np.ndarray
     lib_filtered_intensity: np.ndarray
+    lib_raw_mz: np.ndarray
+    lib_raw_intensity: np.ndarray
     rank_ms2: int = 0
     rank_feature: int | None = None
     rank_feature_sample: int | None = None
@@ -369,6 +374,12 @@ def _row_from_match(
         emp_filtered_intensity=m.filtered_intensity,
         lib_filtered_mz=m.lib_filtered_mz,
         lib_filtered_intensity=m.lib_filtered_intensity,
+        # The untouched candidate spectrum — cand.mz/intensity are never
+        # mutated by scoring (reverse_dot_product only reads them), so
+        # these are safe to persist as "raw" independent of whatever
+        # filtering produced lib_filtered_mz/intensity above.
+        lib_raw_mz=cand.mz,
+        lib_raw_intensity=cand.intensity,
     )
 
 
@@ -708,6 +719,8 @@ _ANN_COLS = (
     "emp_filtered_intensity",
     "lib_filtered_mz",
     "lib_filtered_intensity",
+    "lib_raw_mz",
+    "lib_raw_intensity",
     "command_id",
 )
 
@@ -745,7 +758,8 @@ def persist_annotations(
         replace_existing: Delete those libraries' existing
             ``ms2_annotations`` rows first.
         store_filtered_spectra: When False the four ``*_filtered_*`` blob
-            columns are written NULL.
+            columns, plus the untouched-library-spectrum ``lib_raw_*``
+            pair, are all written NULL.
     """
     if isinstance(library_ids, int):
         library_ids = [library_ids]
@@ -807,6 +821,8 @@ def persist_annotations(
                         _blob_or_none(
                             r.lib_filtered_intensity, store_filtered_spectra
                         ),
+                        _blob_or_none(r.lib_raw_mz, store_filtered_spectra),
+                        _blob_or_none(r.lib_raw_intensity, store_filtered_spectra),
                         command_id,
                     )
                     for r in rows

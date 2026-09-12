@@ -306,20 +306,23 @@ Item {
                 Layout.fillWidth: true
             }
 
-            // "Top hit should be 40% of the available height for the
-            // column... mirror plot part should take 60%" — a plain
+            // A vertical SplitView, not a plain ColumnLayout — a
             // ColumnLayout with one child's `Layout.preferredHeight` set
             // and the other's `Layout.fillHeight: true` turned out to
-            // *not* actually respect the preferred value here (measured:
-            // the fillHeight sibling got squeezed to its own minimum and
-            // the "preferred" one silently claimed the leftover space
-            // instead — the opposite of both flags' meaning). A nested
-            // vertical SplitView with two explicit `SplitView.preferredHeight`
-            // shares avoids that entirely — same mechanism already
-            // proven for the table/detail 40/60 *width* split above —
-            // and, in keeping with the "resizable SplitView over a fixed
-            // ratio" desktop-app direction, the user can still drag the
-            // divider if 40/60 isn't right for a given feature.
+            // *not* actually respect the preferred value (measured: the
+            // fillHeight sibling got squeezed to its own minimum and the
+            // "preferred" one silently claimed the leftover space
+            // instead). SplitView's own `SplitView.preferredHeight` is
+            // the correct mechanism for each pane's *default* share
+            // below — it's also what makes the divider draggable
+            // ("resizable SplitView over a fixed ratio" desktop-app
+            // direction), which a plain `height:` binding doesn't
+            // integrate with (tried that first: it happened to measure
+            // correctly under the offscreen test platform, but in the
+            // real app SplitView's own sizing pass overrides a plain
+            // `height:` binding on its own pane once it actually engages
+            // — so the *default* silently stopped matching the intended
+            // ratio there, even though dragging still worked).
             SplitView {
                 id: detailSplit
                 objectName: "detailSplit"
@@ -339,7 +342,7 @@ Item {
                 // (topHitsFlickable) if there isn't room for all of them.
                 ColumnLayout {
                     objectName: "topHitsPanel"
-                    height: detailSplit.height * 0.3
+                    SplitView.preferredHeight: detailSplit.height * 0.3
                     SplitView.minimumHeight: 80
                     spacing: 4
 
@@ -444,7 +447,7 @@ Item {
                 // primary way to read them here).
                 ColumnLayout {
                     objectName: "statsPanel"
-                    height: detailSplit.height * 0.2
+                    SplitView.preferredHeight: detailSplit.height * 0.3
                     SplitView.minimumHeight: 60
                     spacing: 4
 
@@ -504,7 +507,7 @@ Item {
                 // raw/filtered toggles) in its own window instead.
                 ColumnLayout {
                     objectName: "basicPlotPanel"
-                    height: detailSplit.height * 0.5
+                    SplitView.preferredHeight: detailSplit.height * 0.4
                     SplitView.minimumHeight: 150
                     spacing: 4
 

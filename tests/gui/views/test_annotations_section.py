@@ -196,14 +196,18 @@ def test_stats_panel_shows_match_details(
     assert "Matched peaks:" in flat
 
 
-def test_three_row_split_is_30_20_50_percent(
+def test_three_row_split_default_is_30_30_40_percent(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):
-    # "3 rows in that column, from bottom: 50% graph, 20% stats (list,
-    # clear), 30% top N hits" — i.e. top to bottom: top hits 30%, stats
-    # 20%, graph 50%. Was a fixed 190px top-hits panel that dominated a
-    # short column regardless of how many hits there actually were
-    # (reported bug: "top hits take almost all the column").
+    # Default (undragged) split: top hits 30%, stats 30%, graph 40% — via
+    # `SplitView.preferredHeight` on each pane, not a plain `height:`
+    # binding (tried first: it happened to measure correctly under this
+    # offscreen test platform, but the user found the real app's default
+    # wasn't actually proportioned — SplitView's own sizing pass overrides
+    # a plain `height:` binding once it genuinely engages, which it does
+    # in the real app; `SplitView.preferredHeight` is the mechanism that's
+    # actually respected for both the default *and* stays draggable
+    # afterward).
     view = analysis_view(annotated_analysis_model)
     root = view.rootObject()
     _select_feature_7(view, root, find_visual_child, qtbot)
@@ -215,9 +219,12 @@ def test_three_row_split_is_30_20_50_percent(
 
     split_height = split.property("height")
     assert split_height > 0
-    assert abs(top_hits.property("height") - split_height * 0.3) <= 1.0
-    assert abs(stats.property("height") - split_height * 0.2) <= 1.0
-    assert abs(basic_plot.property("height") - split_height * 0.5) <= 2.0
+    # A few px of slack — the SplitView's own drag handles (2 of them,
+    # between the 3 panes) eat into the total, so the panes' shares are a
+    # little short of their exact mathematical fraction of split_height.
+    assert abs(top_hits.property("height") - split_height * 0.3) <= 8.0
+    assert abs(stats.property("height") - split_height * 0.3) <= 8.0
+    assert abs(basic_plot.property("height") - split_height * 0.4) <= 8.0
 
 
 def test_no_feature_selected_shows_placeholder(

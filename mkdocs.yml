@@ -71,6 +71,8 @@ nav:
           - 13 — Hybrid plotting approach: developer/adr/0013-hybrid-plotting-approach.md
           - 14 — Analysis workspace lazy loading: developer/adr/0014-analysis-workspace-lazy-loading.md
           - 15 — Professional desktop theme direction: developer/adr/0015-professional-desktop-theme-direction.md
+          - 16 — Store raw library spectrum: developer/adr/0016-store-raw-library-spectrum.md
+          - 17 — Mirror plot background worker: developer/adr/0017-mirror-plot-background-worker.md
       - Testing: developer/testing.md
       - Logging: developer/logging.md
       - API reference:

@@ -360,7 +360,11 @@ class AnnotateConfig:
         store_filtered_spectra: Persist the noise-filtered, max-normalised
             m/z + intensity of both the empirical scan and the matched
             library spectrum on every annotation row, for later mirror
-            plots. Set False to keep the table small.
+            plots — plus the untouched (pre-filtering) library candidate
+            spectrum alongside it, so the GUI's "raw library spectrum"
+            view never needs to re-open the library file itself (which
+            can be a slow/remote mount). Set False to keep the table
+            small.
         batch_size: Number of features handed to each worker process.
         n_workers: Parallel worker count; defaults to `os.cpu_count()` when
             None.
