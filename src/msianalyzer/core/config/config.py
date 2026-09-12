@@ -642,23 +642,39 @@ class ConsensusConfig:
     has several MS2 scans behind it (one per sample/pixel where it was
     fragmented), of varying quality. This stage folds each scan's best
     library score (when `annotate` ran), its precursor-ion `purity`, and
-    how many fragment peaks it has into one `consensus_score`, and picks
-    the highest-scoring scan as *the* representative one for that feature.
-    Runs independently of whether annotation or purity actually ran — a
-    feature with neither still gets a consensus pick based on peak count
-    alone. Output: `feature_ms2_consensus`, one row per feature.
+    how many fragment peaks it has into one `consensus_score = best_score ×
+    purity_term × peak_term`, and picks the highest-scoring scan as *the*
+    representative one for that feature. Runs independently of whether
+    annotation or purity actually ran — a feature with neither still gets a
+    consensus pick based on peak count alone (`best_score` and
+    `purity_term` both default to neutral values in that case). Output:
+    `feature_ms2_consensus`, one row per feature — a separate table this
+    stage only *reads from* `ms2_annotations`/`precursor_purity`, never
+    writes back to: `consensus_score` has no effect whatsoever on
+    `annotate`'s own `score`, `rank_ms2` or `rank_feature`, which are
+    already final by the time this stage runs. The two answer different
+    questions — "how good is this (scan, candidate) match" (`annotate`) vs.
+    "which of this feature's several scans is the best one to show" (this
+    stage).
 
     Attributes:
         enabled: Run this stage. Default `True`; set `False` to skip it —
             `feature_ms2_consensus` is then left empty and any GUI/report
             view relying on "the best scan for this feature" has nothing
             to show.
-        target_peaks: Fragment-peak count at which the peak-richness
-            contribution to `consensus_score` saturates to its maximum
-            value (`1.0`) — a scan with this many peaks or more gets full
-            credit for peak richness; scans with fewer peaks are scaled
-            down linearly (e.g. a scan with half of `target_peaks` peaks
-            gets half credit). Default `10`.
+        target_peaks: The peak-richness term is `peak_term = min(1,
+            n_peaks / target_peaks)` — `target_peaks` is the fragment-peak
+            count at which a scan gets *full credit* (`peak_term = 1.0`);
+            more peaks than that don't earn any extra bonus (capped at
+            1.0), and fewer scale down proportionally. Worked example at
+            the default `target_peaks = 10`: a scan with 10+ peaks scores
+            `peak_term = 1.0`, one with 5 peaks scores `0.5`, one with 2
+            peaks scores `0.2`. This multiplies straight into
+            `consensus_score`, so a sparse, few-peak scan is penalized in
+            the pick even if its library score or purity looked good —
+            raise `target_peaks` to weigh peak richness more heavily in
+            the pick; lower it if your data is naturally low-peak-count and
+            you don't want that to dominate over score/purity.
         neutral_purity: Purity value substituted into the score for a scan
             the purity stage couldn't score (e.g. `purity.enabled = False`,
             or a scan where the precursor wasn't found at all). Default

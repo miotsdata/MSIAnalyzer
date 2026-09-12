@@ -192,13 +192,22 @@ setting below is then unused.
 A feature usually has several MS2 scans behind it, of varying quality. This
 stage folds each scan's best library score (when `annotate` ran), its
 precursor-ion `purity`, and its fragment-peak count into one
-`consensus_score`, and picks the highest-scoring scan to represent that
-feature. Runs regardless of whether annotation or purity ran.
+`consensus_score = best_score × purity_term × peak_term`, and picks the
+highest-scoring scan to represent that feature. Runs regardless of whether
+annotation or purity ran (missing pieces fall back to neutral values).
+
+**This is a one-way, read-only stage** — it runs *after* `annotate` and only
+*reads* the already-final `ms2_annotations.score`/`rank_ms2`; it writes its own
+result into a separate table, `feature_ms2_consensus`, and never changes
+`annotate`'s `score`, `rank_ms2` or `rank_feature`. The two answer different
+questions: `annotate`'s score/rank say "how good is *this* (scan, library
+candidate) match"; `consensus_score` says "of this feature's several scans,
+which one is the best all-around representative to show/export."
 
 | key | default | meaning |
 |---|---|---|
 | `enabled` | `true` | run the stage; `false` skips it (`feature_ms2_consensus` is left empty) |
-| `target_peaks` | `10` | fragment count at which the peak-richness term saturates to `1.0`; scans with fewer peaks are scaled down linearly (half of `target_peaks` peaks = half credit) |
+| `target_peaks` | `10` | the peak-richness term is `peak_term = min(1, n_peaks / target_peaks)` — the fragment count at which a scan earns full credit (`1.0`); more peaks don't earn extra credit past that, fewer scale down proportionally. Worked example at the default `10`: a scan with 10+ peaks scores `1.0`, 5 peaks scores `0.5`, 2 peaks scores `0.2`. Raise it to weigh peak richness more heavily in the pick; lower it if your data is naturally low-peak-count. |
 | `neutral_purity` | `0.5` | purity value substituted for a scan the purity stage couldn't score (e.g. purity disabled, or precursor not found) — a neutral value that neither rewards nor penalizes missing purity data |
 | `min_purity` | `null` | scans with a *known* purity below this are excluded from the pick (they still count toward `n_ms2`); `null` considers every scan |
 
