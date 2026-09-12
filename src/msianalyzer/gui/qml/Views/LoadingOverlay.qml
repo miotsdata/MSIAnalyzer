@@ -15,6 +15,18 @@ Item {
         color: palette.window
     }
 
+    // Blocks clicks from reaching whatever's still loading underneath —
+    // covering it visually isn't enough on its own, a click can still
+    // land on the not-yet-ready item behind a plain Item/Rectangle with
+    // no mouse handling of its own.
+    MouseArea {
+        objectName: "loadingOverlayMouseArea"
+        anchors.fill: parent
+        hoverEnabled: true
+        acceptedButtons: Qt.AllButtons
+        onWheel: (wheel) => wheel.accepted = true
+    }
+
     BusyIndicator {
         objectName: "loadingOverlaySpinner"
         anchors.centerIn: parent

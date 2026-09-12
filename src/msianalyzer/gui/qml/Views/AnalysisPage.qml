@@ -52,6 +52,15 @@ Page {
                 id: navRail
                 objectName: "navRail"
                 spacing: 4
+                // "I don't want user to run back and forth while things
+                // are loading" — also closes off a plausible trigger for
+                // the rare crash found while testing the loading overlay
+                // (see AnalysisPage.qml's own comment on it): nothing
+                // stopped a click from landing on a nav button, or "Back
+                // to project", while the *previous* tab's content
+                // (MS1's WebEngineView especially) was still mid-load.
+                enabled: analysisPage.currentSectionReady
+                opacity: enabled ? 1.0 : 0.5
 
                 Repeater {
                     id: navRepeater
@@ -83,6 +92,8 @@ Page {
             Button {
                 objectName: "backToProjectButton"
                 text: "Back to project"
+                enabled: analysisPage.currentSectionReady
+                opacity: enabled ? 1.0 : 0.5
                 onClicked: if (analysis) Router.showProjectHomeRequested(analysis.project)
 
                 HoverHandler {

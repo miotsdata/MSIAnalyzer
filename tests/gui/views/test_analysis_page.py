@@ -179,6 +179,103 @@ def test_loading_overlay_covers_ms1_tab_until_plot_finishes_loading(
     assert overlay.property("visible") is False
 
 
+def test_nav_rail_and_back_button_disabled_while_section_still_loading(
+    analysis_view, analysis_model, find_visual_child, qtbot
+):
+    # "is everything else disabled? So user cannot do more things while
+    # loading... I don't want user to run back and forth while things are
+    # loading" — while the MS1 tab's plot is still loading, the nav rail
+    # and "Back to project" must be disabled (and visibly dimmed), then
+    # re-enabled once the plot finishes.
+    import numpy as np
+
+    from msianalyzer.core.analysis_db import log_command, register_sample
+    from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
+
+    db_path = analysis_model.analysisDbPath
+    sample_id = register_sample(db_path, name="s1", raw_db_path="a.db")
+    command_id = log_command(db_path, "filter_spectra", {}, run_id="test-run", sample_id=sample_id)
+    save_aggregated_spectra(
+        np.array([100.0, 200.0]), np.array([10.0, 20.0]),
+        analysis_db_path=db_path, run_id="test-run", sample_id=sample_id, command_id=command_id,
+    )
+
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+
+    nav_rail = root.findChild(QQuickItem, "navRail")
+    back_button = root.findChild(QQuickItem, "backToProjectButton")
+    overlay = root.findChild(QQuickItem, "sectionLoadingOverlay")
+    ms1_loader = root.findChild(QQuickItem, "ms1SectionLoader")
+
+    # Both are bound straight off `currentSectionReady` — the same
+    # property the overlay's own `visible` is bound off — so every time
+    # `visible` changes, `enabled`/`opacity` must already agree with it.
+    # Recorded via the signal, deferred one event-loop tick (QML's
+    # dependent bindings for the same source property don't all
+    # re-evaluate in a guaranteed order *within* the same tick — reading
+    # nav_rail synchronously inside overlay's own changed-signal handler
+    # was observed to occasionally see a stale value) rather than a
+    # plain before/after check, since MS1's plot can finish loading fast
+    # enough in this test environment that a before/after check might
+    # never actually catch the still-loading state.
+    from PySide6.QtCore import QTimer
+
+    history = []
+
+    def record():
+        history.append((
+            overlay.property("visible"),
+            nav_rail.property("enabled"),
+            nav_rail.property("opacity"),
+            back_button.property("enabled"),
+            back_button.property("opacity"),
+        ))
+
+    overlay.visibleChanged.connect(lambda: QTimer.singleShot(0, record))
+    record()
+
+    ms1_button = find_visual_child(root, "navButton_1")
+    center = ms1_button.mapToScene(ms1_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(10)
+
+    qtbot.waitUntil(
+        lambda: ms1_loader.property("item") is not None
+                and not ms1_loader.property("item").property("plotLoading"),
+        timeout=2000,
+    )
+    qtbot.wait(10)
+    record()
+
+    assert overlay.property("visible") is False
+    assert len(history) >= 2
+    for visible, nav_enabled, nav_opacity, back_enabled, back_opacity in history:
+        ready = not visible
+        assert nav_enabled is ready
+        assert nav_opacity == (1.0 if ready else 0.5)
+        assert back_enabled is ready
+        assert back_opacity == (1.0 if ready else 0.5)
+    assert any(visible for visible, *_ in history), (
+        "test never observed the loading state — MS1's plot resolved too "
+        "fast in this run to exercise the disabled/dimmed branch"
+    )
+
+
+def test_loading_overlay_mouse_area_blocks_all_clicks(analysis_view, analysis_model, qtbot):
+    # Covering the not-yet-ready content visually isn't enough — a click
+    # could still land on it underneath. The overlay's MouseArea must
+    # accept every mouse button so nothing passes through while visible.
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+
+    overlay = root.findChild(QQuickItem, "sectionLoadingOverlay")
+    assert overlay is not None
+    mouse_area = overlay.findChild(QQuickItem, "loadingOverlayMouseArea")
+    assert mouse_area is not None
+    assert mouse_area.property("acceptedButtons") == Qt.AllButtons
+
+
 def test_summary_section_empty_state_for_empty_db(analysis_view, analysis_model, qtbot):
     view = analysis_view(analysis_model)
     root = view.rootObject()
