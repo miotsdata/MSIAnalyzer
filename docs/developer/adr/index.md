@@ -21,3 +21,6 @@ useful).
 | [10](0010-score-weights-and-flat-fragmentation.md) | Configurable score weights + flat-fragmentation flag | Accepted |
 | [11](0011-run-progress-callback.md) | `Run` step-progress callback for GUI consumption | Accepted |
 | [12](0012-tic-normalization.md) | TIC normalization + merged AnnData | Accepted |
+| [13](0013-hybrid-plotting-approach.md) | Hybrid plotting: Plotly/WebEngineView + raster heatmaps | Accepted |
+| [14](0014-analysis-workspace-lazy-loading.md) | Analysis workspace: lazy `Loader` sections + blocking loading overlay | Accepted |
+| [15](0015-professional-desktop-theme-direction.md) | Professional desktop-app theme direction | Accepted |

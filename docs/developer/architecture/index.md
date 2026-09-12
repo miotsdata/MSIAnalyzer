@@ -1,5 +1,8 @@
 # Architecture
 
+This page covers the core pipeline. See [GUI](gui.md) for the desktop app
+(PySide6/QML) that sits on top of it.
+
 ## The two-database model
 
 ```
