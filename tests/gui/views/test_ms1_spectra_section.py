@@ -123,9 +123,77 @@ def test_ms1_spectrum_point_click_updates_detail_panel(
 
     top_hit = find_visual_child(detail_panel, "topHit_0")
     assert "Caffeine" in top_hit.property("text")
+    # "top hit also should show the library in which it has been hit"
+    assert "my_library" in top_hit.property("text")
 
     no_annotation_label = find_visual_child(detail_panel, "detailNoAnnotationLabel")
     assert no_annotation_label.property("visible") is False
+
+
+def test_feature_detail_is_a_single_row(
+    analysis_view, ms1_analysis_model, find_visual_child, qtbot, application
+):
+    # "feature details should be in a single row all" — feature id/mz and
+    # MS2 count used to be stacked on separate lines.
+    view = analysis_view(ms1_analysis_model)
+    root = view.rootObject()
+    _open_ms1_tab(view, root, find_visual_child, qtbot)
+
+    application.analysis_bridge.spectrumPointClicked.emit(150.1)
+    qtbot.wait(50)
+
+    detail_panel = find_visual_child(root, "detailPanel")
+    feature_id_label = find_visual_child(detail_panel, "detailFeatureId")
+    n_ms2_label = find_visual_child(detail_panel, "detailNMs2")
+
+    assert feature_id_label.y() == n_ms2_label.y()
+
+
+def test_present_absent_and_top_hits_are_three_equal_columns(
+    analysis_view, ms1_analysis_model, find_visual_child, qtbot, application
+):
+    # "bottom row should be divided into 3 equal columns: present in,
+    # absent in, top hit"
+    view = analysis_view(ms1_analysis_model)
+    root = view.rootObject()
+    _open_ms1_tab(view, root, find_visual_child, qtbot)
+
+    application.analysis_bridge.spectrumPointClicked.emit(150.1)
+    qtbot.wait(50)
+
+    detail_panel = find_visual_child(root, "detailPanel")
+    present_col = find_visual_child(detail_panel, "samplesPresentColumnContainer")
+    absent_col = find_visual_child(detail_panel, "samplesAbsentColumnContainer")
+    top_hits_col = find_visual_child(detail_panel, "topHitsColumnContainer")
+
+    import pytest as _pytest
+
+    assert present_col.width() == _pytest.approx(absent_col.width(), rel=0.02)
+    assert present_col.width() == _pytest.approx(top_hits_col.width(), rel=0.02)
+
+
+def test_present_and_absent_lists_get_less_space_than_top_hits(
+    analysis_view, ms1_analysis_model, find_visual_child, qtbot, application
+):
+    # "present in and absent in are information that are less important
+    # than the top n hits... with less space given to them"
+    view = analysis_view(ms1_analysis_model)
+    root = view.rootObject()
+    _open_ms1_tab(view, root, find_visual_child, qtbot)
+
+    application.analysis_bridge.spectrumPointClicked.emit(150.1)
+    qtbot.wait(50)
+
+    ms1_section = find_visual_child(root, "ms1Section")
+    assert ms1_section.property("detailSecondaryListMaxHeight") == 90  # 18px * 5 rows
+    assert ms1_section.property("detailListMaxHeight") == 180  # 18px * 10 rows
+
+    detail_panel = find_visual_child(root, "detailPanel")
+    samples_present_flickable = find_visual_child(detail_panel, "samplesPresentFlickable")
+    samples_absent_flickable = find_visual_child(detail_panel, "samplesAbsentFlickable")
+
+    assert samples_present_flickable.height() <= 90
+    assert samples_absent_flickable.height() <= 90
 
 
 def test_layout_is_two_rows_not_two_columns(
@@ -149,11 +217,11 @@ def test_layout_is_two_rows_not_two_columns(
     assert detail_panel.width() > ms1_section.width() * 0.7
 
 
-def test_samples_present_and_absent_lists_cap_height_before_scrolling(
+def test_top_hits_list_caps_height_before_scrolling(
     analysis_view, ms1_analysis_model, find_visual_child, qtbot, application
 ):
-    # "present in and absent in should have list of files (scrollable, max
-    # 10 files height before scrolling)"
+    # "are they scrollable once we get high top hits?" — yes, capped at
+    # detailListMaxHeight (10 rows) same as before this round's changes.
     view = analysis_view(ms1_analysis_model)
     root = view.rootObject()
     _open_ms1_tab(view, root, find_visual_child, qtbot)
@@ -166,8 +234,8 @@ def test_samples_present_and_absent_lists_cap_height_before_scrolling(
 
     assert ms1_section.property("detailListMaxHeight") == 180  # 18px * 10 rows
 
-    samples_present_flickable = find_visual_child(detail_panel, "samplesPresentFlickable")
-    assert samples_present_flickable.height() <= 180
+    top_hits_flickable = find_visual_child(detail_panel, "topHitsFlickable")
+    assert top_hits_flickable.height() <= 180
 
 
 def test_top_n_spinbox_is_keyboard_editable(

@@ -357,10 +357,23 @@ class AnalysisBridge(QObject):
             mz, analysis_db.load_feature_categories(analysis_db_path)
         )
         fig = Plotter.plot_spectra(mz, intensity, categories=categories)
+        # Fill the WebEngineView's viewport instead of `plot_spectra`'s
+        # fixed pixel height — left as-is, the plot rendered at a height
+        # that rarely matched the actual container, showing a scrollbar
+        # ("the top row... shouldn't be scrollable. Adapt the content to
+        # the row"). `autosize` + clearing the explicit height lets
+        # Plotly.js size to its container instead; `responsive` makes it
+        # re-measure when the container itself resizes.
+        fig.update_layout(autosize=True)
+        fig.layout.height = None
         body = fig.to_html(
-            full_html=False, include_plotlyjs=True, div_id=_SPECTRUM_DIV_ID
+            full_html=False,
+            include_plotlyjs=True,
+            div_id=_SPECTRUM_DIV_ID,
+            config={"responsive": True},
         )
         click_script = f"""
+<style>html, body {{ margin: 0; padding: 0; height: 100%; overflow: hidden; }}</style>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script>
 new QWebChannel(qt.webChannelTransport, function(channel) {{

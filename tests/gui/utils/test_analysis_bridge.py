@@ -362,6 +362,34 @@ def test_get_spectrum_url_returns_plot_for_saved_spectrum(tmp_path):
     assert "qtwebchannel/qwebchannel.js" in html
 
 
+def test_get_spectrum_url_adapts_to_container_instead_of_scrolling(tmp_path):
+    # "The top row, the one with the plot, shouldn't be scrollable. Adapt
+    # the content to the row" — the plot used to render at a fixed pixel
+    # height regardless of the WebEngineView's actual size, showing a
+    # scrollbar whenever the container was shorter.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    sample_id = register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
+    command_id = log_command(
+        db_path, "filter_spectra", {}, run_id="run-1", sample_id=sample_id
+    )
+    save_aggregated_spectra(
+        np.array([100.0, 200.0]),
+        np.array([10.0, 20.0]),
+        analysis_db_path=db_path,
+        run_id="run-1",
+        sample_id=sample_id,
+        command_id=command_id,
+    )
+
+    bridge = AnalysisBridge()
+    html = _read_url(bridge.getSpectrumUrl(str(db_path), "run-1", sample_id))
+
+    assert "overflow: hidden" in html
+    assert '"responsive": true' in html
+    assert '"autosize":true' in html
+
+
 def test_get_spectrum_url_colors_peaks_by_feature_category(tmp_path):
     # "I want to distinguish between features with no ms2 (gray), annotated
     # features (blue) and non annotated features (black)."
@@ -492,6 +520,8 @@ def test_get_feature_detail_reports_presence_ms2_and_hits(tmp_path):
     assert detail["n_ms2"] == 5
     assert len(detail["top_hits"]) == 1
     assert detail["top_hits"][0]["compound_name"] == "Caffeine"
+    # "top hit also should show the library in which it has been hit"
+    assert detail["top_hits"][0]["library_name"] == "my_library"
 
 
 def test_get_feature_detail_empty_when_no_features(tmp_path):

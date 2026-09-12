@@ -22,6 +22,9 @@ Item {
     // max 10 files height before scrolling)" — one row's height times 10.
     property int detailListRowHeight: 18
     property int detailListMaxHeight: detailListRowHeight * 10
+    // Present in / absent in "are less important than the top n hits...
+    // with less space given to them" — half of the top-hits cap.
+    property int detailSecondaryListMaxHeight: detailListRowHeight * 5
 
     WebChannel {
         id: webChannel
@@ -79,14 +82,14 @@ Item {
         anchors.margins: 12
         visible: ms1Section.samples.length > 0
 
-        RowLayout {
+        ColumnLayout {
             id: detailPanel
             objectName: "detailPanel"
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            height: 260
-            spacing: 20
+            height: 220
+            spacing: 10
 
             Text {
                 objectName: "detailEmptyLabel"
@@ -97,13 +100,12 @@ Item {
                 Layout.fillWidth: true
             }
 
-            ColumnLayout {
+            // Feature id / m/z / MS2 count — one row, not stacked lines.
+            RowLayout {
+                objectName: "featureDetailRow"
                 visible: !!ms1Section.featureDetail
-                Layout.preferredWidth: 200
-                Layout.fillHeight: true
-                spacing: 6
-
-                Text { text: "Feature detail"; font.bold: true }
+                Layout.fillWidth: true
+                spacing: 20
 
                 Text {
                     objectName: "detailFeatureId"
@@ -111,177 +113,214 @@ Item {
                           ? ("Feature " + ms1Section.featureDetail.feature_id
                              + " (m/z " + Number(ms1Section.featureDetail.mz).toFixed(4) + ")")
                           : ""
+                    font.bold: true
                     wrapMode: Text.Wrap
-                    Layout.fillWidth: true
                 }
                 Text {
                     objectName: "detailNMs2"
                     text: ms1Section.featureDetail ? ("MS2 scans: " + ms1Section.featureDetail.n_ms2) : ""
                 }
-
-                RowLayout {
-                    Text { text: "Top hits:"; font.bold: true }
-                    SpinBox {
-                        id: topNSpin
-                        objectName: "topNSpinBox"
-                        editable: true
-                        from: 1
-                        to: 20
-                        value: ms1Section.topN
-                        onValueModified: {
-                            ms1Section.topN = value
-                            if (analysis && analysis.analysisDbPath && ms1Section.featureDetail) {
-                                ms1Section.featureDetail = AnalysisBridge.getFeatureDetail(
-                                    analysis.analysisDbPath, ms1Section.featureDetail.mz, value)
-                            }
-                        }
-                    }
-                }
-
-                Text {
-                    objectName: "detailNoAnnotationLabel"
-                    visible: ms1Section.featureDetail && ms1Section.featureDetail.top_hits.length === 0
-                    text: "No annotation for this feature."
-                    color: "gray"
-                    wrapMode: Text.Wrap
-                    Layout.fillWidth: true
-                }
-
-                Flickable {
-                    id: topHitsFlickable
-                    objectName: "topHitsFlickable"
-                    visible: ms1Section.featureDetail && ms1Section.featureDetail.top_hits.length > 0
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: ms1Section.detailListMaxHeight
-                    clip: true
-                    contentWidth: width
-                    contentHeight: topHitsColumn.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    ColumnLayout {
-                        id: topHitsColumn
-                        width: topHitsFlickable.width
-                        spacing: 2
-
-                        Repeater {
-                            id: topHitsRepeater
-                            objectName: "topHitsRepeater"
-                            model: ms1Section.featureDetail ? ms1Section.featureDetail.top_hits : []
-
-                            delegate: Text {
-                                objectName: "topHit_" + index
-                                text: (index + 1) + ". " + (modelData.compound_name || modelData.inchikey || "?")
-                                      + " (score " + Number(modelData.score).toFixed(3) + ")"
-                                wrapMode: Text.Wrap
-                                Layout.fillWidth: true
-                            }
-                        }
-                    }
-                }
+                Item { Layout.fillWidth: true }
             }
 
-            // "Present in" / "Absent in" — a scrollable list (one sample
-            // per row) rather than a single comma-joined string, capped
-            // at detailListMaxHeight (~10 rows) before scrolling.
-            ColumnLayout {
+            // Present in / absent in / top hits — 3 equal-width columns.
+            // Present/absent are secondary info next to the annotation
+            // hits, so their own lists get a smaller height cap
+            // (detailSecondaryListMaxHeight) than top hits'.
+            RowLayout {
                 visible: !!ms1Section.featureDetail
-                Layout.preferredWidth: 180
+                Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 4
+                spacing: 20
 
-                Text { text: "Present in:"; font.bold: true }
+                ColumnLayout {
+                    objectName: "samplesPresentColumnContainer"
+                    Layout.preferredWidth: 0
+                    Layout.minimumWidth: 0
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 4
 
-                Text {
-                    objectName: "samplesPresentEmptyLabel"
-                    visible: ms1Section.featureDetail
-                             && ms1Section.featureDetail.samples_present.length === 0
-                    text: "none"
-                    color: "gray"
+                    Text {
+                        text: "Present in:"
+                        font.bold: true
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+
+                    Text {
+                        objectName: "samplesPresentEmptyLabel"
+                        visible: ms1Section.featureDetail
+                                 && ms1Section.featureDetail.samples_present.length === 0
+                        text: "none"
+                        color: "gray"
+                    }
+
+                    Flickable {
+                        id: samplesPresentFlickable
+                        objectName: "samplesPresentFlickable"
+                        visible: ms1Section.featureDetail
+                                 && ms1Section.featureDetail.samples_present.length > 0
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: ms1Section.detailSecondaryListMaxHeight
+                        clip: true
+                        contentWidth: width
+                        contentHeight: samplesPresentColumn.implicitHeight
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        ColumnLayout {
+                            id: samplesPresentColumn
+                            width: samplesPresentFlickable.width
+                            spacing: 2
+
+                            Repeater {
+                                id: samplesPresentRepeater
+                                objectName: "samplesPresentRepeater"
+                                model: ms1Section.featureDetail ? ms1Section.featureDetail.samples_present : []
+
+                                delegate: Text {
+                                    objectName: "samplesPresentItem_" + index
+                                    text: modelData
+                                    elide: Text.ElideMiddle
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+                    }
                 }
 
-                Flickable {
-                    id: samplesPresentFlickable
-                    objectName: "samplesPresentFlickable"
-                    visible: ms1Section.featureDetail
-                             && ms1Section.featureDetail.samples_present.length > 0
+                ColumnLayout {
+                    objectName: "samplesAbsentColumnContainer"
+                    Layout.preferredWidth: 0
+                    Layout.minimumWidth: 0
                     Layout.fillWidth: true
-                    Layout.preferredHeight: ms1Section.detailListMaxHeight
-                    clip: true
-                    contentWidth: width
-                    contentHeight: samplesPresentColumn.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
+                    Layout.fillHeight: true
+                    spacing: 4
 
-                    ColumnLayout {
-                        id: samplesPresentColumn
-                        width: samplesPresentFlickable.width
-                        spacing: 2
+                    Text {
+                        text: "Absent / filtered out in:"
+                        font.bold: true
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
 
-                        Repeater {
-                            id: samplesPresentRepeater
-                            objectName: "samplesPresentRepeater"
-                            model: ms1Section.featureDetail ? ms1Section.featureDetail.samples_present : []
+                    Text {
+                        objectName: "samplesAbsentEmptyLabel"
+                        visible: ms1Section.featureDetail
+                                 && ms1Section.featureDetail.samples_absent.length === 0
+                        text: "none"
+                        color: "gray"
+                    }
 
-                            delegate: Text {
-                                objectName: "samplesPresentItem_" + index
-                                text: modelData
-                                elide: Text.ElideMiddle
-                                Layout.fillWidth: true
+                    Flickable {
+                        id: samplesAbsentFlickable
+                        objectName: "samplesAbsentFlickable"
+                        visible: ms1Section.featureDetail
+                                 && ms1Section.featureDetail.samples_absent.length > 0
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: ms1Section.detailSecondaryListMaxHeight
+                        clip: true
+                        contentWidth: width
+                        contentHeight: samplesAbsentColumn.implicitHeight
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        ColumnLayout {
+                            id: samplesAbsentColumn
+                            width: samplesAbsentFlickable.width
+                            spacing: 2
+
+                            Repeater {
+                                id: samplesAbsentRepeater
+                                objectName: "samplesAbsentRepeater"
+                                model: ms1Section.featureDetail ? ms1Section.featureDetail.samples_absent : []
+
+                                delegate: Text {
+                                    objectName: "samplesAbsentItem_" + index
+                                    text: modelData
+                                    elide: Text.ElideMiddle
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    objectName: "topHitsColumnContainer"
+                    Layout.preferredWidth: 0
+                    Layout.minimumWidth: 0
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "Top hits:"
+                            font.bold: true
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+                        SpinBox {
+                            id: topNSpin
+                            objectName: "topNSpinBox"
+                            editable: true
+                            from: 1
+                            to: 20
+                            value: ms1Section.topN
+                            onValueModified: {
+                                ms1Section.topN = value
+                                if (analysis && analysis.analysisDbPath && ms1Section.featureDetail) {
+                                    ms1Section.featureDetail = AnalysisBridge.getFeatureDetail(
+                                        analysis.analysisDbPath, ms1Section.featureDetail.mz, value)
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        objectName: "detailNoAnnotationLabel"
+                        visible: ms1Section.featureDetail && ms1Section.featureDetail.top_hits.length === 0
+                        text: "No annotation for this feature."
+                        color: "gray"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+
+                    Flickable {
+                        id: topHitsFlickable
+                        objectName: "topHitsFlickable"
+                        visible: ms1Section.featureDetail && ms1Section.featureDetail.top_hits.length > 0
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: ms1Section.detailListMaxHeight
+                        clip: true
+                        contentWidth: width
+                        contentHeight: topHitsColumn.implicitHeight
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        ColumnLayout {
+                            id: topHitsColumn
+                            width: topHitsFlickable.width
+                            spacing: 2
+
+                            Repeater {
+                                id: topHitsRepeater
+                                objectName: "topHitsRepeater"
+                                model: ms1Section.featureDetail ? ms1Section.featureDetail.top_hits : []
+
+                                delegate: Text {
+                                    objectName: "topHit_" + index
+                                    text: (index + 1) + ". " + (modelData.compound_name || modelData.inchikey || "?")
+                                          + " (score " + Number(modelData.score).toFixed(3) + ")"
+                                          + (modelData.library_name ? " · " + modelData.library_name : "")
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
                             }
                         }
                     }
                 }
             }
-
-            ColumnLayout {
-                visible: !!ms1Section.featureDetail
-                Layout.preferredWidth: 180
-                Layout.fillHeight: true
-                spacing: 4
-
-                Text { text: "Absent / filtered out in:"; font.bold: true }
-
-                Text {
-                    objectName: "samplesAbsentEmptyLabel"
-                    visible: ms1Section.featureDetail
-                             && ms1Section.featureDetail.samples_absent.length === 0
-                    text: "none"
-                    color: "gray"
-                }
-
-                Flickable {
-                    id: samplesAbsentFlickable
-                    objectName: "samplesAbsentFlickable"
-                    visible: ms1Section.featureDetail
-                             && ms1Section.featureDetail.samples_absent.length > 0
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: ms1Section.detailListMaxHeight
-                    clip: true
-                    contentWidth: width
-                    contentHeight: samplesAbsentColumn.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    ColumnLayout {
-                        id: samplesAbsentColumn
-                        width: samplesAbsentFlickable.width
-                        spacing: 2
-
-                        Repeater {
-                            id: samplesAbsentRepeater
-                            objectName: "samplesAbsentRepeater"
-                            model: ms1Section.featureDetail ? ms1Section.featureDetail.samples_absent : []
-
-                            delegate: Text {
-                                objectName: "samplesAbsentItem_" + index
-                                text: modelData
-                                elide: Text.ElideMiddle
-                                Layout.fillWidth: true
-                            }
-                        }
-                    }
-                }
-            }
-
-            Item { Layout.fillWidth: true }
         }
 
         ColumnLayout {
