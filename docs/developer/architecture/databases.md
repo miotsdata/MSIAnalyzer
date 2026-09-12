@@ -297,8 +297,8 @@ with several libraries configured the rows are interleaved and distinguished by
 | `n_features_in_window` | INTEGER | from the grouper |
 | `purity` / `runner_up_rel_int` / `precursor_confirmed` / `precursor_frac` | — | left-joined from `precursor_purity`; NULL when the scan was not purity-scored |
 | `precursor_only` | INTEGER | 0/1, from the grouper |
-| `emp_filtered_mz` / `emp_filtered_intensity` | BLOB | filtered, normalised empirical spectrum (zlib float32); NULL if `store_filtered_spectra` off |
-| `lib_filtered_mz` / `lib_filtered_intensity` | BLOB | same for the library spectrum |
+| `emp_raw_mz` / `emp_raw_intensity` | BLOB | untouched (pre-filtering) empirical spectrum (zlib float32); NULL if `store_raw_spectra` off |
+| `lib_raw_mz` / `lib_raw_intensity` | BLOB | same for the library spectrum |
 | `command_id` | INTEGER | FK → `commands` |
 
 Indexes: `idx_ann_scan (sample_id, scan_id)`, `idx_ann_feature (feature_id)`,

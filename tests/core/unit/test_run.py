@@ -100,7 +100,7 @@ class MockAnnotateConfig:
     int_power: float = 0.5
     min_matched_peaks: int = 1
     annotate_chimeric: bool = True
-    store_filtered_spectra: bool = True
+    store_raw_spectra: bool = True
     batch_size: int = 200
     n_workers: int | None = 1
 

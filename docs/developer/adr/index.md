@@ -24,5 +24,6 @@ useful).
 | [13](0013-hybrid-plotting-approach.md) | Hybrid plotting: Plotly/WebEngineView + raster heatmaps | Accepted |
 | [14](0014-analysis-workspace-lazy-loading.md) | Analysis workspace: lazy `Loader` sections + blocking loading overlay | Accepted |
 | [15](0015-professional-desktop-theme-direction.md) | Professional desktop-app theme direction | Accepted |
-| [16](0016-store-raw-library-spectrum.md) | Persist the untouched library spectrum alongside the filtered one | Accepted |
+| [16](0016-store-raw-library-spectrum.md) | Persist the untouched library spectrum alongside the filtered one | Accepted; superseded by 18 |
 | [17](0017-mirror-plot-background-worker.md) | Background thread for mirror-plot data resolution, not figure-building | Accepted |
+| [18](0018-reconstruct-filtered-spectra-on-demand.md) | Reconstruct filtered spectra on demand instead of storing them | Accepted |

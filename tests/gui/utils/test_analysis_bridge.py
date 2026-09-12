@@ -61,7 +61,7 @@ def test_get_summary_reads_real_db(tmp_path):
     assert result["annotation_ran"] is False
 
 
-def _seed_annotated_feature(db_path, *, with_filtered_spectra=True):
+def _seed_annotated_feature(db_path, *, with_raw_spectra=True):
     with sqlite3.connect(db_path) as con:
         con.execute(
             "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
@@ -78,7 +78,7 @@ def _seed_annotated_feature(db_path, *, with_filtered_spectra=True):
             "VALUES (1, 42, 'k1', 150.1234, 1, 12.3, 5, 'positive')"
         )
 
-        if with_filtered_spectra:
+        if with_raw_spectra:
             arr = np.array([100.0, 200.0], dtype=np.float32)
             blob = array_to_blob(arr)
         else:
@@ -90,8 +90,8 @@ def _seed_annotated_feature(db_path, *, with_filtered_spectra=True):
             "library_spectrum_id, compound_name, compound_formula, inchikey, "
             "score, dot_product_score, lib_coverage, emp_coverage, "
             "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
-            "n_emp_peaks_filtered, emp_filtered_mz, emp_filtered_intensity, "
-            "lib_filtered_mz, lib_filtered_intensity, rank_ms2, rank_feature) "
+            "n_emp_peaks_filtered, emp_raw_mz, emp_raw_intensity, "
+            "lib_raw_mz, lib_raw_intensity, rank_ms2, rank_feature) "
             "VALUES (1, 7, 1, 42, 1, 9, 'Caffeine', 'C8H10N4O2', "
             "'RYYVLZVUVIJVGH-UHFFFAOYSA-N', 0.87, 0.9, 0.8, 0.75, 0.77, "
             "2, 2, 10, 3, ?, ?, ?, ?, 1, 1)",
@@ -238,10 +238,10 @@ def test_request_mirror_plot_emits_error_message_for_unknown_id(tmp_path, qtbot)
     assert "No annotation found" in html
 
 
-def test_request_mirror_plot_emits_error_message_without_filtered_spectra(tmp_path, qtbot):
+def test_request_mirror_plot_emits_error_message_without_raw_spectra(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
-    _seed_annotated_feature(db_path, with_filtered_spectra=False)
+    _seed_annotated_feature(db_path, with_raw_spectra=False)
 
     bridge = AnalysisBridge()
     html = _read_url(
@@ -249,14 +249,15 @@ def test_request_mirror_plot_emits_error_message_without_filtered_spectra(tmp_pa
     )
 
     assert "<p" in html
-    assert "no stored filtered empirical spectrum" in html
+    assert "raw empirical spectrum not found" in html
 
 
 def test_request_mirror_plot_emits_error_message_for_unavailable_raw_source(tmp_path, qtbot):
-    # 'a.db' (the seeded sample's raw_db_path) doesn't exist on disk.
+    # No stored emp_raw_*, and 'a.db' (the seeded sample's raw_db_path)
+    # doesn't exist on disk either -> both resolution paths fail.
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
-    _seed_annotated_feature(db_path)
+    _seed_annotated_feature(db_path, with_raw_spectra=False)
 
     bridge = AnalysisBridge()
     html = _read_url(

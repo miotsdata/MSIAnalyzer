@@ -132,7 +132,7 @@ Leave `library_path` empty (`null`) and the whole stage is skipped.
 | `min_matched_peaks` | `1` | store a candidate only when it shares at least this many fragments |
 | `min_purity` | `null` | skip scans whose precursor purity (Stage A′) is known and below this; `null` scores every scan. Rows still carry `purity` / `runner_up_rel_int`. |
 | `annotate_chimeric` | `true` | score chimeric scans (against their primary feature); they are always flagged. `false` skips them |
-| `store_filtered_spectra` | `true` | persist the filtered empirical + library spectra on every row (for mirror plots). `false` writes them NULL |
+| `store_raw_spectra` | `true` | persist the untouched empirical + library spectra on every row (for mirror plots — the noise-filtered view is reconstructed from these on demand). `false` writes them NULL |
 | `batch_size` | `200` | features handed to each worker process |
 | `n_workers` | `null` | parallel workers; defaults to `os.cpu_count()` |
 

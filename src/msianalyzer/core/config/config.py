@@ -357,14 +357,17 @@ class AnnotateConfig:
         annotate_chimeric: Score scans whose isolation window held more than
             one feature (against their primary feature). They are always
             flagged `is_chimeric`; set False to skip them entirely.
-        store_filtered_spectra: Persist the noise-filtered, max-normalised
-            m/z + intensity of both the empirical scan and the matched
-            library spectrum on every annotation row, for later mirror
-            plots — plus the untouched (pre-filtering) library candidate
-            spectrum alongside it, so the GUI's "raw library spectrum"
-            view never needs to re-open the library file itself (which
-            can be a slow/remote mount). Set False to keep the table
-            small.
+        store_raw_spectra: Persist the untouched (pre-noise-filtering) m/z +
+            intensity of both the empirical scan and the matched library
+            candidate on every annotation row, for later mirror plots — so
+            the GUI never needs to re-open the raw per-sample database or
+            the library file itself (either of which can be a slow/remote
+            mount). The noise-filtered, max-normalised view shown in a
+            mirror plot is reconstructed on demand from these raw arrays
+            plus this run's own `noise_threshold` (see ADR 0018), rather
+            than also stored — it's a pure, deterministic function of the
+            two, so storing both would be redundant. Set False to keep the
+            table small.
         batch_size: Number of features handed to each worker process.
         n_workers: Parallel worker count; defaults to `os.cpu_count()` when
             None.
@@ -382,7 +385,7 @@ class AnnotateConfig:
     min_matched_peaks: int = 1
     min_purity: float | None = None
     annotate_chimeric: bool = True
-    store_filtered_spectra: bool = True
+    store_raw_spectra: bool = True
     batch_size: int = 200
     n_workers: int | None = None
 
@@ -553,7 +556,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 13
+    version: int = 14
 
     def __init__(
         self,

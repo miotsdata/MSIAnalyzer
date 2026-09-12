@@ -9,6 +9,7 @@ import pytest
 
 from msianalyzer.core.annotation.spectral_match import (
     MatchResult,
+    normalize_and_filter_spectrum,
     reverse_dot_product,
 )
 
@@ -135,3 +136,55 @@ def test_zero_weight_drops_emp_coverage_from_score():
     )
     assert m.emp_coverage < 1.0
     assert m.score == pytest.approx(m.dot_product_score * m.lib_coverage)
+
+
+# ---------------------------------------------------------------------------
+# normalize_and_filter_spectrum — public, reused to reconstruct a
+# "filtered" view from a stored *raw* spectrum (ADR 0018).
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_and_filter_spectrum_normalises_and_drops_below_threshold():
+    mz = np.array([100.0, 150.0, 200.0])
+    intensity = np.array([10.0, 100.0, 5.0])  # normalised: [0.1, 1.0, 0.05]
+
+    f_mz, f_int = normalize_and_filter_spectrum(mz, intensity, noise_threshold=0.08)
+
+    # 200.0 (normalised 0.05) drops below the 0.08 threshold; the rest survive.
+    np.testing.assert_allclose(f_mz, [100.0, 150.0])
+    np.testing.assert_allclose(f_int, [0.1, 1.0])
+
+
+def test_normalize_and_filter_spectrum_matches_reverse_dot_products_own_filtering():
+    # Same code path now (reverse_dot_product calls this function directly),
+    # but assert it explicitly: whatever a mirror plot reconstructs via this
+    # function for "filtered" must equal what was actually scored.
+    m = reverse_dot_product(_Q_MZ, _Q_INT, _L_MZ, _L_INT, ppm_tolerance=10.0)
+
+    f_mz, f_int = normalize_and_filter_spectrum(_Q_MZ, _Q_INT, noise_threshold=0.01)
+    np.testing.assert_allclose(f_mz, m.filtered_mz)
+    np.testing.assert_allclose(f_int, m.filtered_intensity)
+
+    l_f_mz, l_f_int = normalize_and_filter_spectrum(_L_MZ, _L_INT, noise_threshold=0.01)
+    np.testing.assert_allclose(l_f_mz, m.lib_filtered_mz)
+    np.testing.assert_allclose(l_f_int, m.lib_filtered_intensity)
+
+
+def test_normalize_and_filter_spectrum_empty_input():
+    mz, intensity = normalize_and_filter_spectrum(
+        np.array([]), np.array([]), noise_threshold=0.01
+    )
+    assert mz.size == 0
+    assert intensity.size == 0
+
+
+def test_normalize_and_filter_spectrum_all_zero_intensity_returns_unfiltered():
+    # No positive max to normalise against — matches _filter_noise's own
+    # pre-existing "leave it as-is" behaviour for this degenerate case.
+    mz = np.array([100.0, 200.0])
+    intensity = np.array([0.0, 0.0])
+
+    f_mz, f_int = normalize_and_filter_spectrum(mz, intensity, noise_threshold=0.01)
+
+    np.testing.assert_allclose(f_mz, mz)
+    np.testing.assert_allclose(f_int, intensity)

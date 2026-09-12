@@ -41,7 +41,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-__all__ = ["MatchResult", "reverse_dot_product"]
+__all__ = ["MatchResult", "reverse_dot_product", "normalize_and_filter_spectrum"]
 
 
 # ---------------------------------------------------------------------------
@@ -168,24 +168,13 @@ def reverse_dot_product(
     if n_lib == 0:
         return _empty_result(n_emp_raw=n_emp_raw, n_lib=0)
 
-    # --- 1. max-normalise both spectra ---
-    query_intensity = (
-        query_intensity / query_intensity.max()
-        if query_intensity.size and query_intensity.max() > 0
-        else query_intensity.copy()
-    )
-    library_intensity = (
-        library_intensity / library_intensity.max()
-        if library_intensity.size and library_intensity.max() > 0
-        else library_intensity.copy()
-    )
-
-    # --- 2. noise-filter the empirical spectrum ---
-    f_mz, f_int = _filter_noise(query_mz, query_intensity, noise_threshold)
+    # --- 1 & 2. max-normalise, then noise-filter, each spectrum ---
+    f_mz, f_int = normalize_and_filter_spectrum(query_mz, query_intensity, noise_threshold)
     n_emp_filtered = len(f_mz)
 
-    # --- 2. noise-filter the library spectrum ---
-    l_f_mz, l_f_int = _filter_noise(library_mz, library_intensity, noise_threshold)
+    l_f_mz, l_f_int = normalize_and_filter_spectrum(
+        library_mz, library_intensity, noise_threshold
+    )
     n_lib_filtered = len(l_f_mz)
 
     if n_emp_filtered == 0 or n_lib_filtered == 0:
@@ -250,6 +239,50 @@ def reverse_dot_product(
 
 
 # ---------------------------------------------------------------------------
+# Public: shared with anything that needs to reconstruct a filtered
+# spectrum from a stored *raw* one (see ADR 0018) — not just an internal
+# scoring step.
+# ---------------------------------------------------------------------------
+
+
+def normalize_and_filter_spectrum(
+    mz: np.ndarray,
+    intensity: np.ndarray,
+    noise_threshold: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Max-normalise, then drop peaks below ``noise_threshold`` — the exact
+    per-spectrum preprocessing `reverse_dot_product` scores against.
+
+    A pure, deterministic function of `(mz, intensity, noise_threshold)`
+    alone: no reordering, merging, or interpolation, only normalising the
+    intensity axis and then a positional boolean subset. That's what makes
+    it safe to reconstruct the "filtered" view of a spectrum on demand
+    from a stored *raw* copy plus the run's own `noise_threshold` (see
+    `Plotter.get_annotation_spectra`) instead of persisting the filtered
+    arrays themselves — ``ms2_annotations`` no longer does (ADR 0018).
+
+    Args:
+        mz: Peak m/z values.
+        intensity: Peak intensities, parallel to `mz`. Not required to
+            already be normalised — normalisation happens here.
+        noise_threshold: Fraction in `[0, 1]` of the (post-normalisation)
+            base-peak intensity a peak must reach to survive.
+
+    Returns:
+        `(filtered_mz, filtered_intensity)` — `filtered_intensity` is on
+        the max-normalised [0, 1] scale.
+    """
+    mz = np.asarray(mz, dtype=np.float64)
+    intensity = np.asarray(intensity, dtype=np.float64)
+    normalized = (
+        intensity / intensity.max()
+        if intensity.size and intensity.max() > 0
+        else intensity.copy()
+    )
+    return _filter_noise(mz, normalized, noise_threshold)
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -259,7 +292,8 @@ def _filter_noise(
     intensity: np.ndarray,
     threshold: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Keep only peaks at or above ``threshold * base-peak intensity``."""
+    """Keep only peaks at or above ``threshold * base-peak intensity`` of
+    the (already max-normalised, by the caller) `intensity` array."""
     if len(intensity) == 0:
         return mz.copy(), intensity.copy()
     cutoff = intensity.max() * threshold

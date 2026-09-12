@@ -1,6 +1,13 @@
 # 16 — Persist the untouched library spectrum alongside the filtered one
 
-**Status:** Accepted
+**Status:** Accepted; storage design superseded by
+[ADR 18](0018-reconstruct-filtered-spectra-on-demand.md), which stops
+persisting the filtered/normalised copies at all (reconstructing them from
+the raw arrays instead) and extends the same "persist the untouched
+spectrum" idea this ADR established for the library side to the empirical
+side too. The core argument below — a live re-read of a possibly slow or
+unreachable file is a real crash risk, so persist the raw material once and
+avoid re-deriving anything — still holds and motivated ADR 18 directly.
 
 ## Context
 

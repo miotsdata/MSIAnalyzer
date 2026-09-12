@@ -334,16 +334,20 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     #   rank_scan_feature         - the feature's scans by their best hit
     #                              (all samples), broadcast onto the scan's rows
     #   rank_scan_feature_sample  - same, within one sample
-    # The four *_filtered_* blobs are the noise-filtered, max-normalised
-    # spectra actually scored (for mirror plots); NULL when
-    # store_filtered_spectra was off. lib_raw_* is the *untouched* library
-    # spectrum (candidate.mz/intensity, before noise-filtering) for the
-    # same candidate — gated by the same flag. Persisting it here means
-    # the GUI's "raw library spectrum" view never needs to re-open the
-    # library file itself (which can be a slow/remote mount — see ADR 16);
-    # NULL for rows written before this column existed, or when
-    # store_filtered_spectra was off, in which case the GUI falls back to
-    # a live re-read of the library file.
+    # emp_raw_*/lib_raw_* are the *untouched* (pre-noise-filtering) spectra
+    # on both sides: emp_raw_* is the scan's own raw fragment arrays
+    # (identical across every candidate row of that scan), lib_raw_* is the
+    # matched candidate's raw spectrum (candidate.mz/intensity, before
+    # noise-filtering) — gated by store_raw_spectra, NULL when it was off
+    # or for rows written before these columns existed. The noise-filtered,
+    # max-normalised view actually scored is NOT stored — it's a pure,
+    # deterministic function of the raw arrays plus this run's
+    # noise_threshold (recovered from commands.arguments), reconstructed on
+    # demand by spectral_match.normalize_and_filter_spectrum (see ADR 18).
+    # Persisting the raw arrays here means the GUI's mirror plot never
+    # needs to re-open the raw per-sample database or the library file
+    # itself (either of which can be a slow/remote mount — see ADR 16),
+    # falling back to a live re-read only when the columns are NULL.
     con.execute("""
         CREATE TABLE IF NOT EXISTS ms2_annotations (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -378,10 +382,8 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             precursor_frac         REAL,
             precursor_only         INTEGER NOT NULL DEFAULT 0,
             flat_fragmentation     INTEGER NOT NULL DEFAULT 0,
-            emp_filtered_mz        BLOB,
-            emp_filtered_intensity BLOB,
-            lib_filtered_mz        BLOB,
-            lib_filtered_intensity BLOB,
+            emp_raw_mz             BLOB,
+            emp_raw_intensity      BLOB,
             lib_raw_mz             BLOB,
             lib_raw_intensity      BLOB,
             command_id             INTEGER,

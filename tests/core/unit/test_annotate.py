@@ -72,10 +72,8 @@ def _row(scan_id, score, *, feature_id=1, sample_id=1):
         n_features_in_window=1,
         precursor_only=False,
         flat_fragmentation=False,
-        emp_filtered_mz=empty,
-        emp_filtered_intensity=empty,
-        lib_filtered_mz=empty,
-        lib_filtered_intensity=empty,
+        emp_raw_mz=empty,
+        emp_raw_intensity=empty,
         lib_raw_mz=empty,
         lib_raw_intensity=empty,
     )
@@ -246,7 +244,7 @@ def test_assign_feature_ranks_sample_scoping():
 # ---------------------------------------------------------------------------
 
 
-def test_annotate_feature_true_compound_outranks_decoys_and_carries_filtered_arrays():
+def test_annotate_feature_true_compound_outranks_decoys_and_carries_raw_arrays():
     emp_mz = np.array([90.0, 130.0, 170.0, 210.0, 260.0])
     emp_int = np.array([200.0, 900.0, 400.0, 750.0, 120.0])
     scan = {
@@ -279,11 +277,13 @@ def test_annotate_feature_true_compound_outranks_decoys_and_carries_filtered_arr
     assert top.rank_ms2 == 1
     assert top.compound_name == "true"
     assert top.feature_id == 5
-    assert top.emp_filtered_mz.size > 0
-    assert top.lib_filtered_mz.size > 0
-    assert top.emp_filtered_intensity.max() == pytest.approx(1.0)
-    # lib_raw_* is the untouched candidate spectrum (true_c's own mz/int,
-    # unfiltered) — not the same array as lib_filtered_mz.
+    # emp_raw_*/lib_raw_* are the untouched spectra — this scan's own
+    # emp_mz/emp_int, and true_c's own mz/intensity, neither noise-filtered
+    # nor normalised.
+    assert top.emp_raw_mz.size > 0
+    assert top.lib_raw_mz.size > 0
+    np.testing.assert_allclose(top.emp_raw_mz, emp_mz)
+    np.testing.assert_allclose(top.emp_raw_intensity, emp_int)
     np.testing.assert_allclose(top.lib_raw_mz, true_c.mz)
     np.testing.assert_allclose(top.lib_raw_intensity, true_c.intensity)
 
@@ -378,7 +378,7 @@ def _fresh_analysis_db(tmp_path):
     return db
 
 
-def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
+def test_persist_annotations_round_trip_keeps_raw_spectra(tmp_path):
     db = _fresh_analysis_db(tmp_path)
 
     r = _row(3, 0.87, feature_id=None)
@@ -387,13 +387,11 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
     r.rank_feature_sample = 1
     r.rank_scan_feature = 1
     r.rank_scan_feature_sample = 1
-    r.emp_filtered_mz = np.array([100.1234, 150.5678])
-    r.emp_filtered_intensity = np.array([1.0, 0.4])
-    r.lib_filtered_mz = np.array([100.1230, 150.5680, 200.9999])
-    r.lib_filtered_intensity = np.array([1.0, 0.5, 0.2])
+    r.emp_raw_mz = np.array([100.1234, 150.5678])
+    r.emp_raw_intensity = np.array([0.6, 0.4])
     # The untouched library candidate spectrum — a different array than
-    # lib_filtered_mz/intensity above, so the round trip can't accidentally
-    # pass by mixing the two up.
+    # emp_raw_mz/intensity above, so the round trip can't accidentally pass
+    # by mixing the two up.
     r.lib_raw_mz = np.array([90.0, 100.1230, 150.5680, 200.9999, 250.0])
     r.lib_raw_intensity = np.array([0.1, 1.0, 0.5, 0.2, 0.05])
 
@@ -403,18 +401,16 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
         row = con.execute(
             "SELECT score, rank_ms2, rank_feature, rank_feature_sample, "
             "rank_scan_feature, rank_scan_feature_sample, "
-            "emp_filtered_mz, emp_filtered_intensity, "
-            "lib_filtered_mz, lib_filtered_intensity, "
+            "emp_raw_mz, emp_raw_intensity, "
             "lib_raw_mz, lib_raw_intensity FROM ms2_annotations"
         ).fetchone()
     assert row[0] == pytest.approx(0.87)
     assert (row[1], row[2], row[3], row[4], row[5]) == (1, 1, 1, 1, 1)
     np.testing.assert_allclose(blob_to_array(row[6]), [100.1234, 150.5678], atol=1e-3)
-    np.testing.assert_allclose(blob_to_array(row[7]), [1.0, 0.4], atol=1e-3)
-    assert blob_to_array(row[8]).size == 3
-    assert blob_to_array(row[10]).size == 5
+    np.testing.assert_allclose(blob_to_array(row[7]), [0.6, 0.4], atol=1e-3)
+    assert blob_to_array(row[8]).size == 5
     np.testing.assert_allclose(
-        blob_to_array(row[10]), [90.0, 100.1230, 150.5680, 200.9999, 250.0], atol=1e-3
+        blob_to_array(row[8]), [90.0, 100.1230, 150.5680, 200.9999, 250.0], atol=1e-3
     )
 
     # a second call replaces rather than appends
@@ -424,28 +420,24 @@ def test_persist_annotations_round_trip_keeps_filtered_spectra(tmp_path):
     assert n == 1
 
 
-def test_persist_annotations_can_drop_filtered_spectra(tmp_path):
+def test_persist_annotations_can_drop_raw_spectra(tmp_path):
     db = _fresh_analysis_db(tmp_path)
     r = _row(3, 0.5, feature_id=None)
-    r.emp_filtered_mz = np.array([1.0, 2.0])
-    r.lib_filtered_mz = np.array([1.0, 2.0])
-    r.emp_filtered_intensity = np.array([1.0, 1.0])
-    r.lib_filtered_intensity = np.array([1.0, 1.0])
+    r.emp_raw_mz = np.array([1.0, 2.0])
+    r.emp_raw_intensity = np.array([1.0, 1.0])
     r.lib_raw_mz = np.array([1.0, 2.0])
     r.lib_raw_intensity = np.array([1.0, 1.0])
 
-    persist_annotations(db, [r], 1, store_filtered_spectra=False)
+    persist_annotations(db, [r], 1, store_raw_spectra=False)
 
     with sqlite3.connect(db) as con:
         row = con.execute(
-            "SELECT score, emp_filtered_mz, emp_filtered_intensity, "
-            "lib_filtered_mz, lib_filtered_intensity, "
+            "SELECT score, emp_raw_mz, emp_raw_intensity, "
             "lib_raw_mz, lib_raw_intensity FROM ms2_annotations"
         ).fetchone()
     assert row[0] == pytest.approx(0.5)
     assert row[1] is None and row[2] is None
     assert row[3] is None and row[4] is None
-    assert row[5] is None and row[6] is None
 
 
 # ---------------------------------------------------------------------------
@@ -534,7 +526,7 @@ def test_run_annotation_end_to_end_ranks_true_compound(
         top = con.execute(
             "SELECT compound_name, rank_ms2, rank_feature, rank_feature_sample, "
             "rank_scan_feature, rank_scan_feature_sample, "
-            "emp_filtered_mz, lib_filtered_mz "
+            "emp_raw_mz, lib_raw_mz "
             "FROM ms2_annotations WHERE scan_id = ? AND rank_ms2 = 1",
             (single_scan_id,),
         ).fetchone()

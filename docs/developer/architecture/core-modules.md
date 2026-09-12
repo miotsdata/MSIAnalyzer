@@ -161,8 +161,11 @@ in [Outputs](../../user-guide/outputs.md).
 - `reverse_dot_product(...) -> MatchResult` — MSDial-style coverage-aware reverse
   dot product with ppm-tolerant peak alignment. `MatchResult` carries the
   noise-filtered, normalised spectra of **both** sides (`filtered_mz` /
-  `lib_filtered_mz` …) so the annotator can persist them for mirror plots. Also
-  used by `plotting/plotter.py` (`_align_peaks`).
+  `lib_filtered_mz` …) for scoring's own internal use, but the annotator persists
+  the *untouched* spectra instead (`emp_raw_*`/`lib_raw_*`) — the filtered view
+  is reconstructed on demand via `normalize_and_filter_spectrum` (see
+  [ADR 18](../adr/0018-reconstruct-filtered-spectra-on-demand.md)). Also used by
+  `plotting/plotter.py` (`_align_peaks`, `normalize_and_filter_spectrum`).
 
 ## `annotation/annotate.py`
 

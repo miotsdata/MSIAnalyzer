@@ -240,14 +240,18 @@ points back via `library_id`.
 | `is_chimeric`, `n_features_in_window` | carried through from the grouper |
 | `purity`, `runner_up_rel_int`, `precursor_confirmed`, `precursor_frac` | carried through from the purity stage (NULL when the scan was not purity-scored) |
 | `precursor_only` | carried through — fragmentation looked to have failed |
-| `emp_filtered_mz` / `emp_filtered_intensity` | the noise-filtered, normalised **empirical** spectrum that was scored |
-| `lib_filtered_mz` / `lib_filtered_intensity` | the same for the **library** spectrum |
+| `emp_raw_mz` / `emp_raw_intensity` | the untouched (pre-filtering) **empirical** spectrum |
+| `lib_raw_mz` / `lib_raw_intensity` | the untouched (pre-filtering) **library** spectrum |
 
-The four `*_filtered_*` columns are zlib-compressed float32 blobs (decode with
+The four `*_raw_*` columns are zlib-compressed float32 blobs (decode with
 `msianalyzer.core.parser.mzml_parser.blob_to_array`). They exist so a mirror plot
-can be drawn straight from a result row without re-running the matcher. Set
-`annotate.store_filtered_spectra = false` to write them NULL and keep the table
-small.
+can be drawn straight from a result row without re-opening the raw per-sample
+database or the library file. The noise-filtered, normalised view actually
+scored is not stored — it's reconstructed on demand from these raw arrays plus
+this run's own `noise_threshold`
+(`msianalyzer.core.annotation.spectral_match.normalize_and_filter_spectrum`).
+Set `annotate.store_raw_spectra = false` to write the raw columns NULL and keep
+the table small.
 
 ### `feature_compound_scores` — view: best score per (feature, compound)
 

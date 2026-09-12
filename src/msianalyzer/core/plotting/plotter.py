@@ -18,7 +18,10 @@ import numpy as np
 import plotly.graph_objects as go
 
 from msianalyzer.core.parser.mzml_parser import blob_to_array
-from msianalyzer.core.annotation.spectral_match import _align_peaks
+from msianalyzer.core.annotation.spectral_match import (
+    _align_peaks,
+    normalize_and_filter_spectrum,
+)
 from msianalyzer.core.utils.logging_utils import log_call
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,10 @@ _CONNECTOR = "#888888"
 _MIRROR_MATCHED = "#000000"
 _MIRROR_UNMATCHED = "#b0b0b0"
 _DEFAULT_FRAGMENT_PPM_TOLERANCE = 10.0
+# AnnotateConfig.noise_threshold's own default — used when a row's owning
+# command can't be found or its `arguments` don't carry the key (an older
+# database, or a hand-built test row).
+_DEFAULT_NOISE_THRESHOLD = 0.01
 
 # MS1 spectrum peak coloring by feature category (Plotter.plot_spectra) —
 # order here is also legend order.
@@ -264,7 +271,8 @@ class Plotter:
         Returns:
             `{"empirical_mz", "empirical_intensity", "library_mz",
             "library_intensity"}` (already max-normalised — a no-op for
-            the filtered spectra, which are stored pre-normalised),
+            the filtered spectra, which `normalize_and_filter_spectrum`
+            already max-normalises as part of reconstructing them),
             `"fragment_ppm_tolerance"` (resolved), plus the annotation's
             own metadata fields (`compound_name`, `compound_formula`,
             `inchikey`, `score`, `dot_product_score`, `lib_coverage`,
@@ -279,19 +287,22 @@ class Plotter:
 
         ann = self._fetch_annotation(analysis_db_path, annotation_id)
 
+        resolved_ppm, noise_threshold = self._resolve_annotate_args(
+            analysis_db_path, ann["command_id"]
+        )
+        if fragment_ppm_tolerance is None:
+            fragment_ppm_tolerance = resolved_ppm
+
         empirical_mz, empirical_int = self._resolve_side(
-            ann, side="emp", source=emp_source, annotation_id=annotation_id
+            ann, side="emp", source=emp_source, annotation_id=annotation_id,
+            noise_threshold=noise_threshold,
         )
         library_mz, library_int = self._resolve_side(
-            ann, side="lib", source=lib_source, annotation_id=annotation_id
+            ann, side="lib", source=lib_source, annotation_id=annotation_id,
+            noise_threshold=noise_threshold,
         )
         empirical_int = _normalize_to_max(empirical_int)
         library_int = _normalize_to_max(library_int)
-
-        if fragment_ppm_tolerance is None:
-            fragment_ppm_tolerance = self._resolve_fragment_ppm_tolerance(
-                analysis_db_path, ann["command_id"]
-            )
 
         return {
             "empirical_mz": empirical_mz,
@@ -326,18 +337,22 @@ class Plotter:
         """
         Mirror plot: empirical MS2 (top) vs library match (bottom).
 
-        By default both spectra are read straight from the analysis
-        database's ``ms2_annotations`` row — the noise-filtered,
-        max-normalised arrays stored at annotation time
-        (``AnnotateConfig.store_filtered_spectra``, on by default).
+        By default both spectra are shown noise-filtered and
+        max-normalised — reconstructed from the *untouched* arrays stored
+        at annotation time (``AnnotateConfig.store_raw_spectra``, on by
+        default) plus this run's own ``noise_threshold``, via
+        :func:`~msianalyzer.core.annotation.spectral_match.normalize_and_filter_spectrum`
+        (see ADR 0018); this is a pure, deterministic reconstruction of
+        exactly what was scored, not a second persisted copy.
         ``emp_source``/``lib_source`` can each independently ask for the
-        *raw* spectrum instead: the empirical one from the owning sample's
-        raw per-sample database (``ms2_scans``, by ``scan_id``), the
-        library one re-read from the library file itself (by
-        ``library_spectrum_id``). Whichever pair is shown is re-normalised
-        to its own max intensity for display (filtered spectra are already
-        max-normalised, so this is a no-op for them) — raw and filtered
-        views are visually comparable this way.
+        *raw* spectrum instead. Either source prefers the stored raw
+        arrays and falls back to a live re-read only when they're missing:
+        the empirical one from the owning sample's raw per-sample database
+        (``ms2_scans``, by ``scan_id``), the library one from the library
+        file itself (by ``library_spectrum_id``). Whichever pair is shown
+        is re-normalised to its own max intensity for display (a no-op for
+        the filtered view, already max-normalised by reconstruction) — raw
+        and filtered views are visually comparable this way.
 
         Matched fragments (within ``fragment_ppm_tolerance`` of a peak on
         the other side) are black; unmatched ones are gray. Dashed gray
@@ -367,8 +382,8 @@ class Plotter:
             plotly.graph_objects.Figure
 
         Raises:
-            ValueError: No such annotation; the requested source has no
-                data available for it (filtered spectra were never stored,
+            ValueError: No such annotation; no raw spectrum is available to
+                resolve or reconstruct from (not stored on this row, and
                 the raw per-sample database or library file can't be
                 found, or the scan/spectrum id no longer exists in it); or
                 `emp_source`/`lib_source` isn't `"filtered"`/`"raw"`.
@@ -640,15 +655,15 @@ class Plotter:
     def _fetch_annotation(self, analysis_db_path, annotation_id: int) -> dict:
         """One `ms2_annotations` row, joined with its library's name/path,
         its owning sample's raw database path, and the scan's
-        `precursor_mz` (from `ms2_associations`). Filtered-spectrum blobs
-        are decoded to arrays (empty when `store_filtered_spectra` was off
-        — the caller decides whether that's fatal), as is the stored
-        untouched library spectrum (`lib_raw_mz`/`lib_raw_intensity` —
-        empty for rows written before that column existed, or when
-        `store_filtered_spectra` was off; `_resolve_side` falls back to a
-        live library-file re-read in that case). The raw *empirical*
-        spectrum is never persisted, so it's *not* read here at all — see
-        `_resolve_side`, which only reads it when actually requested."""
+        `precursor_mz` (from `ms2_associations`). The stored *untouched*
+        spectra (`emp_raw_mz`/`emp_raw_intensity`, `lib_raw_mz`/
+        `lib_raw_intensity`) are decoded to arrays here — empty when
+        `store_raw_spectra` was off, or (for `emp_raw_*`) for rows written
+        before that column existed; `_resolve_raw` falls back to a live
+        re-read (the raw per-sample database for `emp`, the library file
+        for `lib`) in either case. The noise-filtered view is never fetched
+        or stored — `_resolve_side` reconstructs it on demand from these
+        raw arrays plus the run's `noise_threshold` (see ADR 0018)."""
         con = sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True)
         try:
             row = con.execute(
@@ -658,8 +673,7 @@ class Plotter:
                        a.dot_product_score, a.lib_coverage, a.emp_coverage,
                        a.coverage_score, a.n_matched_peaks, a.n_lib_peaks,
                        a.n_emp_peaks_raw, a.n_emp_peaks_filtered,
-                       a.emp_filtered_mz, a.emp_filtered_intensity,
-                       a.lib_filtered_mz, a.lib_filtered_intensity,
+                       a.emp_raw_mz, a.emp_raw_intensity,
                        a.lib_raw_mz, a.lib_raw_intensity,
                        a.library_spectrum_id, a.command_id,
                        lib.name AS library_name, lib.path AS library_path,
@@ -695,10 +709,8 @@ class Plotter:
             "n_lib_peaks",
             "n_emp_peaks_raw",
             "n_emp_peaks_filtered",
-            "emp_filtered_mz_blob",
-            "emp_filtered_intensity_blob",
-            "lib_filtered_mz_blob",
-            "lib_filtered_intensity_blob",
+            "emp_raw_mz_blob",
+            "emp_raw_intensity_blob",
             "lib_raw_mz_blob",
             "lib_raw_intensity_blob",
             "library_spectrum_id",
@@ -711,10 +723,8 @@ class Plotter:
         d = dict(zip(keys, row))
 
         for arr_key, blob_key in (
-            ("emp_filtered_mz", "emp_filtered_mz_blob"),
-            ("emp_filtered_intensity", "emp_filtered_intensity_blob"),
-            ("lib_filtered_mz", "lib_filtered_mz_blob"),
-            ("lib_filtered_intensity", "lib_filtered_intensity_blob"),
+            ("emp_raw_mz_stored", "emp_raw_mz_blob"),
+            ("emp_raw_intensity_stored", "emp_raw_intensity_blob"),
             ("lib_raw_mz_stored", "lib_raw_mz_blob"),
             ("lib_raw_intensity_stored", "lib_raw_intensity_blob"),
         ):
@@ -726,47 +736,33 @@ class Plotter:
             )
         return d
 
-    def _resolve_side(
-        self, ann: dict, side: str, source: str, annotation_id: int
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """The (mz, intensity) arrays to plot for one side ("emp"/"lib").
+    def _resolve_raw(self, ann: dict, side: str, annotation_id: int) -> tuple[np.ndarray, np.ndarray]:
+        """The untouched (mz, intensity) arrays for one side ("emp"/"lib").
 
-        `source="filtered"` returns the arrays already decoded onto `ann`
-        by `_fetch_annotation`. `source="raw"` for the empirical side
-        re-reads from the owning sample's raw database — never touched by
-        `_fetch_annotation` itself, only on actual demand. For the
-        library side, `source="raw"` prefers the *stored* untouched
-        spectrum (`lib_raw_mz`/`lib_raw_intensity`, persisted at
-        annotation time by `annotate.persist_annotations` — see ADR 0016)
-        when present, and only falls back to re-opening the library file
-        live for rows written before that column existed (or with
-        `store_filtered_spectra` off) — that live path is the one that
-        can mean slow/remote file I/O, which is why raw-library viewing
-        used to be a real crash risk before this stored copy existed.
+        Both sides prefer the *stored* copy persisted at annotation time
+        by `annotate.persist_annotations` (`emp_raw_mz`/`emp_raw_intensity`
+        for "emp", `lib_raw_mz`/`lib_raw_intensity` for "lib" — see ADR
+        0016/0018) when present, and only fall back to a live re-read —
+        the owning sample's raw database for "emp", the library file
+        itself for "lib" — for rows written before those columns existed,
+        or with `store_raw_spectra` off. The live path is the one that can
+        mean slow/remote file I/O, which is why raw-spectrum viewing used
+        to be a real crash risk before these stored copies existed.
         """
-        if source == "filtered":
-            mz, intensity = ann[f"{side}_filtered_mz"], ann[f"{side}_filtered_intensity"]
-            if len(mz) == 0:
-                label = "empirical" if side == "emp" else "library"
-                raise ValueError(
-                    f"annotation id={annotation_id} has no stored filtered "
-                    f"{label} spectrum (store_filtered_spectra was off for "
-                    "that run)"
-                )
-            return mz, intensity
+        stored_mz, stored_int = ann[f"{side}_raw_mz_stored"], ann[f"{side}_raw_intensity_stored"]
+        if len(stored_mz) > 0:
+            return stored_mz, stored_int
 
         if side == "emp":
             mz, intensity = _read_raw_ms2_scan(ann["sample_raw_db_path"], ann["scan_id"])
             if mz is None:
                 raise ValueError(
                     f"annotation id={annotation_id}: raw empirical spectrum "
-                    f"not found (sample raw database "
-                    f"{ann['sample_raw_db_path']!r}, scan {ann['scan_id']})"
+                    f"not found (not stored on this row, and the sample raw "
+                    f"database {ann['sample_raw_db_path']!r}, scan "
+                    f"{ann['scan_id']} couldn't be re-read live)"
                 )
             return mz, intensity
-
-        if len(ann["lib_raw_mz_stored"]) > 0:
-            return ann["lib_raw_mz_stored"], ann["lib_raw_intensity_stored"]
 
         mz, intensity = _read_raw_library_spectrum(
             ann["library_path"], ann["library_spectrum_id"]
@@ -780,13 +776,35 @@ class Plotter:
             )
         return mz, intensity
 
+    def _resolve_side(
+        self, ann: dict, side: str, source: str, annotation_id: int, noise_threshold: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The (mz, intensity) arrays to plot for one side ("emp"/"lib").
+
+        Both `source="raw"` and `source="filtered"` start from the same
+        untouched spectrum (`_resolve_raw`); `"filtered"` additionally
+        noise-filters and max-normalises it via
+        `spectral_match.normalize_and_filter_spectrum` using this run's own
+        `noise_threshold` — a pure, deterministic reconstruction of exactly
+        what was scored, rather than a second persisted copy (see ADR
+        0018).
+        """
+        mz, intensity = self._resolve_raw(ann, side, annotation_id)
+        if source == "raw":
+            return mz, intensity
+        return normalize_and_filter_spectrum(mz, intensity, noise_threshold)
+
     @staticmethod
-    def _resolve_fragment_ppm_tolerance(analysis_db_path, command_id: int | None) -> float:
-        """The `fragment_ppm` the `annotate_ms2` run that produced this row
-        actually used, from that command's stored `arguments` JSON — falls
-        back to the config default when `command_id` is unset or the
-        lookup fails (an older database, a hand-built test row, or a
-        stored value that isn't valid JSON/lacks the key)."""
+    def _resolve_annotate_args(analysis_db_path, command_id: int | None) -> tuple[float, float]:
+        """`(fragment_ppm, noise_threshold)` the `annotate_ms2` run that
+        produced this row actually used, from that command's stored
+        `arguments` JSON (one parse serves both — they're the same JSON
+        blob) — each falls back to its own `AnnotateConfig` default when
+        `command_id` is unset or the lookup fails (an older database, a
+        hand-built test row, or a stored value that isn't valid JSON/lacks
+        the key)."""
+        fragment_ppm = _DEFAULT_FRAGMENT_PPM_TOLERANCE
+        noise_threshold = _DEFAULT_NOISE_THRESHOLD
         if command_id is not None:
             try:
                 con = sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True)
@@ -797,9 +815,11 @@ class Plotter:
                 finally:
                     con.close()
                 if row is not None:
-                    value = json.loads(row[0]).get("fragment_ppm")
-                    if value is not None:
-                        return float(value)
+                    args = json.loads(row[0])
+                    if args.get("fragment_ppm") is not None:
+                        fragment_ppm = float(args["fragment_ppm"])
+                    if args.get("noise_threshold") is not None:
+                        noise_threshold = float(args["noise_threshold"])
             except (sqlite3.OperationalError, ValueError, TypeError, json.JSONDecodeError):
                 pass
-        return _DEFAULT_FRAGMENT_PPM_TOLERANCE
+        return fragment_ppm, noise_threshold

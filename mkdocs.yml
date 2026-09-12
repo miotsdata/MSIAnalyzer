@@ -73,6 +73,7 @@ nav:
           - 15 — Professional desktop theme direction: developer/adr/0015-professional-desktop-theme-direction.md
           - 16 — Store raw library spectrum: developer/adr/0016-store-raw-library-spectrum.md
           - 17 — Mirror plot background worker: developer/adr/0017-mirror-plot-background-worker.md
+          - 18 — Reconstruct filtered spectra on demand: developer/adr/0018-reconstruct-filtered-spectra-on-demand.md
       - Testing: developer/testing.md
       - Logging: developer/logging.md
       - API reference:

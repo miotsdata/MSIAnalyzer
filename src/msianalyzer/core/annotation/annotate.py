@@ -26,13 +26,17 @@ Design (see ADR 0007):
 * **Chimeric scans** (isolation window held >1 feature) are scored against
   their primary feature and flagged ``is_chimeric``; ``annotate_chimeric``
   can drop them entirely.
-* **Filtered spectra** — the noise-filtered, max-normalised empirical and
-  library peak lists that were actually scored — are persisted on every row
-  (``store_filtered_spectra``) so downstream can draw mirror plots without
-  re-running the matcher. The **untouched** library candidate spectrum
-  (before noise-filtering) is persisted alongside it, under the same flag —
-  so a "raw library spectrum" view never needs to re-open the library file
-  itself, which may be a slow or remote mount (see ADR 0016).
+* **Raw spectra, not filtered ones.** The *untouched* empirical and
+  library peak lists — not the noise-filtered/max-normalised copies
+  actually scored — are persisted on every row (``store_raw_spectra``),
+  so a mirror plot never needs to re-open a raw per-sample database or
+  the library file itself (either of which may be a slow or remote
+  mount — see ADR 0016). The filtered view is reconstructed on demand
+  from the raw one plus the run's own ``noise_threshold`` — a pure,
+  deterministic function
+  (:func:`~msianalyzer.core.annotation.spectral_match.normalize_and_filter_spectrum`)
+  — rather than also persisted, since it's fully recoverable and storing
+  both would just be redundant (see ADR 0018).
 * An empty ``library_path`` (``None`` or ``[]``) disables the whole stage.
 
 Outputs (schema in
@@ -154,10 +158,16 @@ class AnnotationRow:
     n_features_in_window: int | None
     precursor_only: bool
     flat_fragmentation: bool
-    emp_filtered_mz: np.ndarray
-    emp_filtered_intensity: np.ndarray
-    lib_filtered_mz: np.ndarray
-    lib_filtered_intensity: np.ndarray
+    # The untouched (pre-noise-filtering) spectra on both sides — not the
+    # filtered/normalised copies. `spectral_match.normalize_and_filter_spectrum`
+    # reconstructs the filtered view on demand from these plus the run's
+    # own `noise_threshold`, so that no longer needs to be persisted too
+    # (see ADR 0018). emp_raw_* are `scan["emp_mz"]`/`scan["emp_int"]` —
+    # identical across every candidate row for one scan (same scan, many
+    # candidates); lib_raw_* is `Candidate.mz`/`.intensity`, unmutated by
+    # scoring.
+    emp_raw_mz: np.ndarray
+    emp_raw_intensity: np.ndarray
     lib_raw_mz: np.ndarray
     lib_raw_intensity: np.ndarray
     rank_ms2: int = 0
@@ -370,14 +380,15 @@ def _row_from_match(
         runner_up_rel_int=scan.get("runner_up_rel_int"),
         precursor_confirmed=scan.get("precursor_confirmed"),
         precursor_frac=scan.get("precursor_frac"),
-        emp_filtered_mz=m.filtered_mz,
-        emp_filtered_intensity=m.filtered_intensity,
-        lib_filtered_mz=m.lib_filtered_mz,
-        lib_filtered_intensity=m.lib_filtered_intensity,
-        # The untouched candidate spectrum — cand.mz/intensity are never
-        # mutated by scoring (reverse_dot_product only reads them), so
-        # these are safe to persist as "raw" independent of whatever
-        # filtering produced lib_filtered_mz/intensity above.
+        # The untouched spectra — `scan["emp_mz"]`/`["emp_int"]` (this
+        # scan's own raw arrays, already read once by `_read_fragments`
+        # and reused for every candidate) and `cand.mz`/`.intensity`
+        # (never mutated by scoring, `reverse_dot_product` only reads
+        # them) — neither is the filtered/normalised copy `m.filtered_*`/
+        # `m.lib_filtered_*` carry; those exist for scoring's own
+        # internal use and are no longer threaded into persisted storage.
+        emp_raw_mz=scan["emp_mz"],
+        emp_raw_intensity=scan["emp_int"],
         lib_raw_mz=cand.mz,
         lib_raw_intensity=cand.intensity,
     )
@@ -715,10 +726,8 @@ _ANN_COLS = (
     "precursor_frac",
     "precursor_only",
     "flat_fragmentation",
-    "emp_filtered_mz",
-    "emp_filtered_intensity",
-    "lib_filtered_mz",
-    "lib_filtered_intensity",
+    "emp_raw_mz",
+    "emp_raw_intensity",
     "lib_raw_mz",
     "lib_raw_intensity",
     "command_id",
@@ -742,7 +751,7 @@ def persist_annotations(
     *,
     command_id: int | None = None,
     replace_existing: bool = True,
-    store_filtered_spectra: bool = True,
+    store_raw_spectra: bool = True,
 ) -> None:
     """Write annotation rows into the analysis database.
 
@@ -757,9 +766,10 @@ def persist_annotations(
         command_id: Optional ``commands.id`` stamped on every row.
         replace_existing: Delete those libraries' existing
             ``ms2_annotations`` rows first.
-        store_filtered_spectra: When False the four ``*_filtered_*`` blob
-            columns, plus the untouched-library-spectrum ``lib_raw_*``
-            pair, are all written NULL.
+        store_raw_spectra: When False the ``emp_raw_*``/``lib_raw_*`` blob
+            columns are all written NULL — the GUI mirror plot then has
+            nothing to reconstruct a filtered or raw view from at all for
+            these rows (see ADR 0018).
     """
     if isinstance(library_ids, int):
         library_ids = [library_ids]
@@ -813,16 +823,10 @@ def persist_annotations(
                         r.precursor_frac,
                         int(r.precursor_only),
                         int(r.flat_fragmentation),
-                        _blob_or_none(r.emp_filtered_mz, store_filtered_spectra),
-                        _blob_or_none(
-                            r.emp_filtered_intensity, store_filtered_spectra
-                        ),
-                        _blob_or_none(r.lib_filtered_mz, store_filtered_spectra),
-                        _blob_or_none(
-                            r.lib_filtered_intensity, store_filtered_spectra
-                        ),
-                        _blob_or_none(r.lib_raw_mz, store_filtered_spectra),
-                        _blob_or_none(r.lib_raw_intensity, store_filtered_spectra),
+                        _blob_or_none(r.emp_raw_mz, store_raw_spectra),
+                        _blob_or_none(r.emp_raw_intensity, store_raw_spectra),
+                        _blob_or_none(r.lib_raw_mz, store_raw_spectra),
+                        _blob_or_none(r.lib_raw_intensity, store_raw_spectra),
                         command_id,
                     )
                     for r in rows
@@ -949,7 +953,7 @@ def run_annotation(
             [],
             library_ids,
             command_id=command_id,
-            store_filtered_spectra=config.store_filtered_spectra,
+            store_raw_spectra=config.store_raw_spectra,
         )
         logger.info("No MS2-associated features to annotate")
         return AnnotationResult(
@@ -1019,7 +1023,7 @@ def run_annotation(
         rows,
         library_ids,
         command_id=command_id,
-        store_filtered_spectra=config.store_filtered_spectra,
+        store_raw_spectra=config.store_raw_spectra,
     )
 
     scans_done = {(r.sample_id, r.scan_id) for r in rows}

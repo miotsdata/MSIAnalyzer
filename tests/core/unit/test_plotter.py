@@ -16,15 +16,29 @@ from msianalyzer.core.plotting.plotter import Plotter
 def _insert_annotation(
     db: Path,
     *,
-    with_filtered_spectra: bool = True,
+    with_emp_raw: bool = True,
+    with_lib_raw: bool = True,
     with_precursor: bool = True,
     sample_raw_db_path: str | None = None,
     library_path: str = "lib.db",
     library_spectrum_id: int = 7,
     fragment_ppm_command: float | None = None,
+    noise_threshold_command: float | None = None,
     stored_lib_raw_mz: np.ndarray | None = None,
     stored_lib_raw_intensity: np.ndarray | None = None,
 ) -> int:
+    """Insert one `ms2_annotations` row for the mirror-plot tests.
+
+    `with_emp_raw`/`with_lib_raw` control whether the untouched
+    `emp_raw_*`/`lib_raw_*` blobs are stored at all (the ADR 0018 "was
+    `store_raw_spectra` on for this run" gate). The default raw arrays
+    below survive `normalize_and_filter_spectrum` unchanged at the class's
+    default `noise_threshold` (0.01) — nothing in them is small enough to
+    drop — so they double as what "filtered" reconstructs to. Pass
+    `stored_lib_raw_mz`/`stored_lib_raw_intensity` to store a *different*
+    raw library spectrum than the default (e.g. to prove a stored copy,
+    not a live re-read, is what gets used).
+    """
     with sqlite3.connect(db) as con:
         if sample_raw_db_path is not None:
             con.execute(
@@ -45,12 +59,17 @@ def _insert_annotation(
                 "VALUES (1, 42, 'k1', 150.1234, 1, 12.3, 5, 'positive')"
             )
 
-        command_id = None
+        args = {}
         if fragment_ppm_command is not None:
+            args["fragment_ppm"] = fragment_ppm_command
+        if noise_threshold_command is not None:
+            args["noise_threshold"] = noise_threshold_command
+        command_id = None
+        if args:
             command_id = con.execute(
                 "INSERT INTO commands (run_id, command_name, datetime, arguments) "
                 "VALUES ('run-1', 'annotate_ms2', '2026-01-01', ?)",
-                (json.dumps({"fragment_ppm": fragment_ppm_command}),),
+                (json.dumps(args),),
             ).lastrowid
 
         emp_mz = np.array([100.0, 150.0, 200.0], dtype=np.float32)
@@ -58,22 +77,17 @@ def _insert_annotation(
         lib_mz = np.array([100.01, 199.99], dtype=np.float32)
         lib_int = np.array([0.8, 1.0], dtype=np.float32)
 
-        if with_filtered_spectra:
-            emp_mz_blob = array_to_blob(emp_mz)
-            emp_int_blob = array_to_blob(emp_int)
+        emp_mz_blob = array_to_blob(emp_mz) if with_emp_raw else None
+        emp_int_blob = array_to_blob(emp_int) if with_emp_raw else None
+
+        if stored_lib_raw_mz is not None:
+            lib_mz_blob = array_to_blob(np.asarray(stored_lib_raw_mz, dtype=np.float32))
+            lib_int_blob = array_to_blob(np.asarray(stored_lib_raw_intensity, dtype=np.float32))
+        elif with_lib_raw:
             lib_mz_blob = array_to_blob(lib_mz)
             lib_int_blob = array_to_blob(lib_int)
         else:
-            emp_mz_blob = emp_int_blob = lib_mz_blob = lib_int_blob = None
-
-        raw_lib_mz_blob = (
-            array_to_blob(np.asarray(stored_lib_raw_mz, dtype=np.float32))
-            if stored_lib_raw_mz is not None else None
-        )
-        raw_lib_int_blob = (
-            array_to_blob(np.asarray(stored_lib_raw_intensity, dtype=np.float32))
-            if stored_lib_raw_intensity is not None else None
-        )
+            lib_mz_blob = lib_int_blob = None
 
         cur = con.execute(
             "INSERT INTO ms2_annotations "
@@ -81,14 +95,13 @@ def _insert_annotation(
             "compound_name, compound_formula, inchikey, score, "
             "dot_product_score, lib_coverage, emp_coverage, coverage_score, "
             "n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
-            "n_emp_peaks_filtered, emp_filtered_mz, emp_filtered_intensity, "
-            "lib_filtered_mz, lib_filtered_intensity, lib_raw_mz, "
-            "lib_raw_intensity, rank_ms2, command_id) "
+            "n_emp_peaks_filtered, emp_raw_mz, emp_raw_intensity, "
+            "lib_raw_mz, lib_raw_intensity, rank_ms2, command_id) "
             "VALUES (1, 42, 1, ?, 'Caffeine', 'C8H10N4O2', "
             "'RYYVLZVUVIJVGH-UHFFFAOYSA-N', 0.87, 0.9, 0.8, 0.75, 0.77, "
-            "2, 2, 10, 3, ?, ?, ?, ?, ?, ?, 1, ?)",
+            "2, 2, 10, 3, ?, ?, ?, ?, 1, ?)",
             (library_spectrum_id, emp_mz_blob, emp_int_blob, lib_mz_blob, lib_int_blob,
-             raw_lib_mz_blob, raw_lib_int_blob, command_id),
+             command_id),
         )
         con.commit()
         return cur.lastrowid
@@ -190,9 +203,9 @@ def test_plot_ms2_annotation_missing_precursor_omits_it_gracefully(tmp_path):
 def test_plot_ms2_annotation_raises_without_stored_spectra(tmp_path):
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
-    annotation_id = _insert_annotation(db, with_filtered_spectra=False)
+    annotation_id = _insert_annotation(db, with_emp_raw=False, with_lib_raw=False)
 
-    with pytest.raises(ValueError, match="no stored filtered empirical spectrum"):
+    with pytest.raises(ValueError, match="raw empirical spectrum not found"):
         Plotter().plot_ms2_annotation(db, annotation_id)
 
 
@@ -225,7 +238,9 @@ def test_get_annotation_spectra_returns_arrays_and_metadata(tmp_path):
     data = Plotter().get_annotation_spectra(db, annotation_id)
 
     assert list(data["empirical_mz"]) == [100.0, 150.0, 200.0]
-    assert list(data["library_mz"]) == [100.01, 199.99]
+    # library_mz round-trips through float32 storage then a float64 cast in
+    # normalize_and_filter_spectrum, so it's only float32-precision exact.
+    np.testing.assert_allclose(data["library_mz"], [100.01, 199.99], rtol=1e-6)
     assert data["compound_name"] == "Caffeine"
     assert data["fragment_ppm_tolerance"] == 10.0  # class default, no commands row
 
@@ -319,12 +334,13 @@ def test_plot_ms2_annotation_raw_empirical_source_reads_from_sample_raw_db(tmp_p
 
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
-    annotation_id = _insert_annotation(db, sample_raw_db_path=raw_db)
+    # No stored emp_raw_* on this row -> forces the live re-read path.
+    annotation_id = _insert_annotation(db, sample_raw_db_path=raw_db, with_emp_raw=False)
 
     fig = Plotter().plot_ms2_annotation(db, annotation_id, emp_source="raw")
 
-    # The raw scan's own m/z values appear (not the filtered ones baked
-    # into ms2_annotations: 100.0/150.0/200.0).
+    # The raw scan's own m/z values appear (not the default emp_raw_*
+    # fixture values, 100.0/150.0/200.0, which weren't stored here).
     all_x = {x for t in fig.data for x in (t.x if t.x is not None else []) if x is not None}
     assert {111.0, 222.0, 333.0} <= all_x
     assert 100.0 not in all_x and 150.0 not in all_x
@@ -333,8 +349,9 @@ def test_plot_ms2_annotation_raw_empirical_source_reads_from_sample_raw_db(tmp_p
 def test_plot_ms2_annotation_raw_empirical_source_missing_raises(tmp_path):
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
-    # No sample_raw_db_path -> `samples` has no row for sample_id=1.
-    annotation_id = _insert_annotation(db)
+    # No stored emp_raw_*, and no sample_raw_db_path -> `samples` has no
+    # row for sample_id=1 either, so the live fallback also fails.
+    annotation_id = _insert_annotation(db, with_emp_raw=False)
 
     with pytest.raises(ValueError, match="raw empirical spectrum not found"):
         Plotter().plot_ms2_annotation(db, annotation_id, emp_source="raw")
@@ -368,8 +385,10 @@ def test_plot_ms2_annotation_raw_library_source_reads_from_library_file(tmp_path
 
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
+    # No stored lib_raw_* on this row -> forces the live library-file
+    # re-read path.
     annotation_id = _insert_annotation(
-        db, library_path=lib_path, library_spectrum_id=spectrum_id
+        db, library_path=lib_path, library_spectrum_id=spectrum_id, with_lib_raw=False
     )
 
     fig = Plotter().plot_ms2_annotation(db, annotation_id, lib_source="raw")
@@ -382,8 +401,9 @@ def test_plot_ms2_annotation_raw_library_source_reads_from_library_file(tmp_path
 def test_plot_ms2_annotation_raw_library_source_missing_raises(tmp_path):
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
-    # Default library_path ("lib.db") doesn't exist on disk.
-    annotation_id = _insert_annotation(db)
+    # Default library_path ("lib.db") doesn't exist on disk, and no
+    # stored lib_raw_* either -> both resolution paths fail.
+    annotation_id = _insert_annotation(db, with_lib_raw=False)
 
     with pytest.raises(ValueError, match="raw library spectrum not found"):
         Plotter().plot_ms2_annotation(db, annotation_id, lib_source="raw")
@@ -415,7 +435,7 @@ def test_plot_ms2_annotation_prefers_stored_raw_library_spectrum(tmp_path):
 
 def test_get_annotation_spectra_falls_back_to_live_read_without_stored_raw(tmp_path):
     # A row written before the lib_raw_* columns existed (or with
-    # store_filtered_spectra off) has them NULL — falls back to the live
+    # store_raw_spectra off) has them NULL — falls back to the live
     # library-file re-read, same as before this feature existed.
     from libviz.core.library import Library
 
@@ -443,8 +463,8 @@ def test_get_annotation_spectra_falls_back_to_live_read_without_stored_raw(tmp_p
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
     annotation_id = _insert_annotation(
-        db, library_path=lib_path, library_spectrum_id=spectrum_id
-    )  # no stored_lib_raw_mz/intensity -> NULL on the row
+        db, library_path=lib_path, library_spectrum_id=spectrum_id, with_lib_raw=False
+    )  # no stored lib_raw_mz/intensity -> NULL on the row
 
     data = Plotter().get_annotation_spectra(db, annotation_id, lib_source="raw")
 

@@ -35,8 +35,8 @@ def _seed_second_feature(db_path, *, feature_id=9, mz=50.0, compound="Water"):
             "library_spectrum_id, compound_name, compound_formula, inchikey, "
             "score, dot_product_score, lib_coverage, emp_coverage, "
             "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
-            "n_emp_peaks_filtered, emp_filtered_mz, emp_filtered_intensity, "
-            "lib_filtered_mz, lib_filtered_intensity, rank_ms2, rank_feature) "
+            "n_emp_peaks_filtered, emp_raw_mz, emp_raw_intensity, "
+            "lib_raw_mz, lib_raw_intensity, rank_ms2, rank_feature) "
             "VALUES (2, ?, 1, 43, 1, 11, ?, 'H2O', "
             "'XLYOFNOQVPJJNP-UHFFFAOYSA-N', 0.5, 0.5, 0.5, 0.5, 0.5, "
             "1, 1, 5, 2, ?, ?, ?, ?, 1, 1)",
