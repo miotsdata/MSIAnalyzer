@@ -244,153 +244,171 @@ Item {
                 Layout.fillWidth: true
             }
 
-            // Row 1: top-N hits for the selected feature — "like in ms1",
-            // but each hit also states which sample it came from, since a
-            // feature's best hit for one compound can come from any of
-            // its samples.
-            ColumnLayout {
-                objectName: "topHitsPanel"
+            // "Top hit should be 40% of the available height for the
+            // column... mirror plot part should take 60%" — a plain
+            // ColumnLayout with one child's `Layout.preferredHeight` set
+            // and the other's `Layout.fillHeight: true` turned out to
+            // *not* actually respect the preferred value here (measured:
+            // the fillHeight sibling got squeezed to its own minimum and
+            // the "preferred" one silently claimed the leftover space
+            // instead — the opposite of both flags' meaning). A nested
+            // vertical SplitView with two explicit `SplitView.preferredHeight`
+            // shares avoids that entirely — same mechanism already
+            // proven for the table/detail 40/60 *width* split above —
+            // and, in keeping with the "resizable SplitView over a fixed
+            // ratio" desktop-app direction, the user can still drag the
+            // divider if 40/60 isn't right for a given feature.
+            SplitView {
+                id: detailSplit
+                objectName: "detailSplit"
+                orientation: Qt.Vertical
                 visible: annotationsSection.selectedFeatureId >= 0
                 Layout.fillWidth: true
-                Layout.preferredHeight: 190
-                spacing: 4
+                Layout.fillHeight: true
 
-                RowLayout {
-                    Layout.fillWidth: true
+                // Row 1: top-N hits for the selected feature — "like in
+                // ms1", but each hit also states which sample it came
+                // from, since a feature's best hit for one compound can
+                // come from any of its samples. Scrolls internally
+                // (topHitsFlickable) if there isn't room for all of them.
+                ColumnLayout {
+                    objectName: "topHitsPanel"
+                    SplitView.preferredHeight: detailSplit.height * 0.4
+                    SplitView.minimumHeight: 80
+                    spacing: 4
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "Top hits:"
+                            font.bold: true
+                            Layout.fillWidth: true
+                        }
+                        SpinBox {
+                            id: topNSpin
+                            objectName: "topNSpinBox"
+                            editable: true
+                            from: 1
+                            to: 20
+                            value: annotationsSection.topN
+                            onValueModified: annotationsSection.topN = value
+                        }
+                    }
+
                     Text {
-                        text: "Top hits:"
-                        font.bold: true
+                        objectName: "topHitsEmptyLabel"
+                        visible: annotationsSection.topHits.length === 0
+                        text: "No annotation hits for this feature."
+                        color: "gray"
+                        wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
-                    SpinBox {
-                        id: topNSpin
-                        objectName: "topNSpinBox"
-                        editable: true
-                        from: 1
-                        to: 20
-                        value: annotationsSection.topN
-                        onValueModified: annotationsSection.topN = value
-                    }
-                }
 
-                Text {
-                    objectName: "topHitsEmptyLabel"
-                    visible: annotationsSection.topHits.length === 0
-                    text: "No annotation hits for this feature."
-                    color: "gray"
-                    wrapMode: Text.Wrap
-                    Layout.fillWidth: true
-                }
+                    Flickable {
+                        id: topHitsFlickable
+                        objectName: "topHitsFlickable"
+                        visible: annotationsSection.topHits.length > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        contentWidth: width
+                        contentHeight: topHitsColumn.implicitHeight
+                        boundsBehavior: Flickable.StopAtBounds
 
-                Flickable {
-                    id: topHitsFlickable
-                    objectName: "topHitsFlickable"
-                    visible: annotationsSection.topHits.length > 0
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    contentWidth: width
-                    contentHeight: topHitsColumn.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
+                        ColumnLayout {
+                            id: topHitsColumn
+                            width: topHitsFlickable.width
+                            spacing: 2
 
-                    ColumnLayout {
-                        id: topHitsColumn
-                        width: topHitsFlickable.width
-                        spacing: 2
+                            Repeater {
+                                id: topHitsRepeater
+                                objectName: "topHitsRepeater"
+                                model: annotationsSection.topHits
 
-                        Repeater {
-                            id: topHitsRepeater
-                            objectName: "topHitsRepeater"
-                            model: annotationsSection.topHits
-
-                            delegate: Rectangle {
-                                objectName: "topHit_" + modelData.id
-                                Layout.fillWidth: true
-                                height: 30
-                                radius: 4
-                                color: annotationsSection.selectedHit
-                                       && annotationsSection.selectedHit.id === modelData.id
-                                       ? palette.highlight : "transparent"
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: annotationsSection.selectedHit = modelData
-                                }
-
-                                Text {
-                                    objectName: "topHitLabel_" + modelData.id
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 4
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                    textFormat: Text.StyledText
+                                delegate: Rectangle {
+                                    objectName: "topHit_" + modelData.id
+                                    Layout.fillWidth: true
+                                    height: 30
+                                    radius: 4
                                     color: annotationsSection.selectedHit
                                            && annotationsSection.selectedHit.id === modelData.id
-                                           ? palette.highlightedText : palette.text
-                                    text: (index + 1) + ". "
-                                          + (modelData.compound_name || modelData.inchikey || "?")
-                                          + " (score <b>" + Number(modelData.score).toFixed(3) + "</b>)"
-                                          + "  ·  " + (modelData.sample_name || "?")
-                                          + (modelData.library_name ? "  ·  " + modelData.library_name : "")
+                                           ? palette.highlight : "transparent"
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: annotationsSection.selectedHit = modelData
+                                    }
+
+                                    Text {
+                                        objectName: "topHitLabel_" + modelData.id
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 4
+                                        verticalAlignment: Text.AlignVCenter
+                                        elide: Text.ElideRight
+                                        textFormat: Text.StyledText
+                                        color: annotationsSection.selectedHit
+                                               && annotationsSection.selectedHit.id === modelData.id
+                                               ? palette.highlightedText : palette.text
+                                        text: (index + 1) + ". "
+                                              + (modelData.compound_name || modelData.inchikey || "?")
+                                              + " (score <b>" + Number(modelData.score).toFixed(3) + "</b>)"
+                                              + "  ·  " + (modelData.sample_name || "?")
+                                              + (modelData.library_name ? "  ·  " + modelData.library_name : "")
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            Rectangle {
-                Layout.fillWidth: true
-                height: 1
-                color: palette.mid
-            }
+                // Row 2: empirical (top) vs library (bottom) mirror plot
+                // for the selected hit, with an independent raw/filtered
+                // toggle for each side. "cannot scroll, so plot adapts to
+                // it" is handled on the plot's own side too, see
+                // AnalysisBridge.getMirrorPlotUrl.
+                ColumnLayout {
+                    objectName: "mirrorPlotPanel"
+                    SplitView.preferredHeight: detailSplit.height * 0.6
+                    SplitView.minimumHeight: 120
+                    spacing: 4
 
-            // Row 2: empirical (top) vs library (bottom) mirror plot for
-            // the selected hit, with an independent raw/filtered toggle
-            // for each side.
-            ColumnLayout {
-                objectName: "mirrorPlotPanel"
-                visible: annotationsSection.selectedFeatureId >= 0
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                spacing: 4
+                    RowLayout {
+                        Layout.fillWidth: true
 
-                RowLayout {
-                    Layout.fillWidth: true
-
-                    Text { text: "Empirical:" }
-                    ComboBox {
-                        id: empSourceCombo
-                        objectName: "empSourceCombo"
-                        model: ["filtered", "raw"]
-                        currentIndex: 0
-                        onActivated: (index) => annotationsSection.empSource = model[index]
+                        Text { text: "Empirical:" }
+                        ComboBox {
+                            id: empSourceCombo
+                            objectName: "empSourceCombo"
+                            model: ["filtered", "raw"]
+                            currentIndex: 0
+                            onActivated: (index) => annotationsSection.empSource = model[index]
+                        }
+                        Text { text: "Library:" }
+                        ComboBox {
+                            id: libSourceCombo
+                            objectName: "libSourceCombo"
+                            model: ["filtered", "raw"]
+                            currentIndex: 0
+                            onActivated: (index) => annotationsSection.libSource = model[index]
+                        }
+                        Item { Layout.fillWidth: true }
                     }
-                    Text { text: "Library:" }
-                    ComboBox {
-                        id: libSourceCombo
-                        objectName: "libSourceCombo"
-                        model: ["filtered", "raw"]
-                        currentIndex: 0
-                        onActivated: (index) => annotationsSection.libSource = model[index]
+
+                    Text {
+                        objectName: "mirrorPlotEmptyLabel"
+                        visible: !annotationsSection.selectedHit
+                        text: "No hit selected."
+                        color: "gray"
                     }
-                    Item { Layout.fillWidth: true }
-                }
 
-                Text {
-                    objectName: "mirrorPlotEmptyLabel"
-                    visible: !annotationsSection.selectedHit
-                    text: "No hit selected."
-                    color: "gray"
-                }
-
-                WebEngineView {
-                    id: mirrorPlotView
-                    objectName: "mirrorPlotView"
-                    visible: !!annotationsSection.selectedHit
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    WebEngineView {
+                        id: mirrorPlotView
+                        objectName: "mirrorPlotView"
+                        visible: !!annotationsSection.selectedHit
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                    }
                 }
             }
         }

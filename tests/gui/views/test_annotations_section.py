@@ -169,6 +169,44 @@ def test_selecting_feature_auto_selects_and_loads_first_hit(
     assert mirror_view.property("url").toString().startswith("file://")
 
 
+def test_top_hits_panel_is_40_percent_of_detail_panel_height(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # "Top hit should be 40% of the available height for the column"
+    # — was a fixed 190px, which dominated a short column regardless of
+    # how many hits there actually were (reported bug: "top hits take
+    # almost all the column, even with one hit only").
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+    _click(view, find_visual_child(root, "annotationRow_7"), qtbot)
+
+    detail_panel = find_visual_child(root, "annotationsDetailPanel")
+    top_hits_panel = find_visual_child(root, "topHitsPanel")
+
+    detail_height = detail_panel.property("height")
+    top_hits_height = top_hits_panel.property("height")
+    assert detail_height > 0
+    assert abs(top_hits_height - detail_height * 0.4) <= 1.0
+
+
+def test_mirror_plot_panel_fills_remaining_height_and_does_not_scroll(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+    _click(view, find_visual_child(root, "annotationRow_7"), qtbot)
+
+    detail_panel = find_visual_child(root, "annotationsDetailPanel")
+    mirror_plot_panel = find_visual_child(root, "mirrorPlotPanel")
+
+    # ~60% of detailPanel's height (the remainder after topHitsPanel's
+    # explicit 40% and a thin divider) — not a scrolling Flickable, just
+    # a plain fillHeight ColumnLayout so the WebEngineView itself resizes.
+    assert mirror_plot_panel.property("height") > detail_panel.property("height") * 0.5
+
+
 def test_toggling_empirical_source_reloads_mirror_plot(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):

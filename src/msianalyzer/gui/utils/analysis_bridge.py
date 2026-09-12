@@ -317,7 +317,22 @@ class AnalysisBridge(QObject):
             logger.warning("mirror plot for annotation %s failed: %s", annotation_id, e)
             html = f"<p style='font-family: sans-serif; color: #900;'>{e}</p>"
         else:
-            html = fig.to_html(full_html=False, include_plotlyjs=True)
+            # Fill the WebEngineView's viewport instead of the figure's own
+            # fixed pixel height — same fix as MS1's spectrum plot
+            # (getSpectrumUrl below): left as the figure's own `height`,
+            # a mismatch between it and the panel QML actually gives the
+            # plot ("mirror plot part should take 60% [...] and cannot
+            # scroll, so plot adapts to it") showed up as a scrollbar
+            # inside the WebEngineView instead of the plot resizing.
+            fig.update_layout(autosize=True)
+            fig.layout.height = None
+            html = fig.to_html(
+                full_html=False, include_plotlyjs=True, config={"responsive": True}
+            )
+            html += (
+                "<style>html, body { margin: 0; padding: 0; "
+                "height: 100%; overflow: hidden; }</style>"
+            )
         return self._write_mirror_plot_html(html)
 
     @Slot(str, result=list)

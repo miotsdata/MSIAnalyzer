@@ -194,6 +194,25 @@ def test_get_mirror_plot_url_returns_html_for_valid_annotation(tmp_path):
     assert "plotly" in html.lower()
 
 
+def test_get_mirror_plot_url_fills_container_instead_of_fixed_height(tmp_path):
+    # "mirror plot part should take 60% [of the panel] and cannot scroll,
+    # so plot adapts to it" — same fix as MS1's getSpectrumUrl: autosize,
+    # no fixed pixel height baked into the figure, and CSS clearing the
+    # default body margin/overflow so nothing forces a scrollbar.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+
+    bridge = AnalysisBridge()
+    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered"))
+
+    assert '"autosize": true' in html or '"autosize":true' in html
+    assert "overflow: hidden" in html
+    # The figure's own fixed height (default 500) must not survive into
+    # the emitted layout JSON.
+    assert '"height": 500' not in html and '"height":500' not in html
+
+
 def test_get_mirror_plot_url_returns_error_message_for_unknown_id(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
