@@ -31,6 +31,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 import logging
@@ -856,3 +857,47 @@ def load_feature_list(db_path: Path | str) -> pd.DataFrame:
             return pd.read_sql_query(sql, con)
         except (pd.errors.DatabaseError, sqlite3.OperationalError):
             return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def load_feature_categories(db_path: Path | str) -> pd.DataFrame:
+    """Every feature's MS1-spectrum coloring category, for the GUI's MS1
+    Spectra section: `"no_ms2"` (never got an MS2 scan at all),
+    `"annotated"` (has a library match), or `"non_annotated"` (has MS2 but
+    no library match).
+
+    Returns:
+        A DataFrame with `feature_id`, `mz`, `category`, ordered by `mz`
+        (ascending — callers that nearest-match spectrum peaks against
+        this rely on that order). Empty when there are no features.
+    """
+    sql = """
+        SELECT f.feature_id, f.mz,
+               COALESCE(ms2.n_ms2, 0) AS n_ms2,
+               best.compound_name
+        FROM features f
+        LEFT JOIN feature_ms2_summary ms2 ON ms2.feature_id = f.feature_id
+        LEFT JOIN (
+            SELECT feature_id, compound_name,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY feature_id ORDER BY best_score DESC
+                   ) AS rn
+            FROM feature_compound_scores
+        ) best ON best.feature_id = f.feature_id AND best.rn = 1
+        ORDER BY f.mz
+    """
+    with connect(db_path) as con:
+        try:
+            df = pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame(columns=["feature_id", "mz", "category"])
+
+    if df.empty:
+        return pd.DataFrame(columns=["feature_id", "mz", "category"])
+
+    no_ms2 = df["n_ms2"] == 0
+    annotated = df["compound_name"].notna()
+    df["category"] = np.select(
+        [no_ms2, annotated], ["no_ms2", "annotated"], default="non_annotated"
+    )
+    return df[["feature_id", "mz", "category"]]

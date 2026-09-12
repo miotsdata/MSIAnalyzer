@@ -1,12 +1,13 @@
 import sqlite3
 from pathlib import Path
 
+import pandas as pd
 from PySide6.QtCore import QUrl
 
 from msianalyzer.core.analysis_db import init_analysis_db, log_command, register_sample
 from msianalyzer.core.parser.mzml_parser import array_to_blob
 from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
-from msianalyzer.gui.utils.analysis_bridge import AnalysisBridge
+from msianalyzer.gui.utils.analysis_bridge import AnalysisBridge, _categorize_peaks
 import numpy as np
 
 
@@ -318,6 +319,23 @@ def test_get_obs_categories_delegates_to_heatmap_provider(tmp_path):
     assert [c["category"] for c in result] == ["negative", "positive"]
 
 
+def test_categorize_peaks_matches_nearest_feature():
+    feature_categories = pd.DataFrame(
+        {"feature_id": [1, 2, 3], "mz": [100.0, 200.0, 300.0],
+         "category": ["no_ms2", "non_annotated", "annotated"]}
+    )
+
+    result = _categorize_peaks(np.array([100.1, 199.0, 350.0]), feature_categories)
+
+    assert list(result) == ["no_ms2", "non_annotated", "annotated"]
+
+
+def test_categorize_peaks_defaults_to_non_annotated_without_features():
+    result = _categorize_peaks(np.array([100.0, 200.0]), pd.DataFrame())
+
+    assert list(result) == ["non_annotated", "non_annotated"]
+
+
 def test_get_spectrum_url_returns_plot_for_saved_spectrum(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
@@ -342,6 +360,78 @@ def test_get_spectrum_url_returns_plot_for_saved_spectrum(tmp_path):
     assert "plotly" in html.lower()
     assert "onSpectrumPointClicked" in html
     assert "qtwebchannel/qwebchannel.js" in html
+
+
+def test_get_spectrum_url_colors_peaks_by_feature_category(tmp_path):
+    # "I want to distinguish between features with no ms2 (gray), annotated
+    # features (blue) and non annotated features (black)."
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    sample_id = register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
+    command_id = log_command(
+        db_path, "filter_spectra", {}, run_id="run-1", sample_id=sample_id
+    )
+    save_aggregated_spectra(
+        np.array([100.0, 200.0, 300.0]),
+        np.array([10.0, 20.0, 30.0]),
+        analysis_db_path=db_path,
+        run_id="run-1",
+        sample_id=sample_id,
+        command_id=command_id,
+    )
+    with sqlite3.connect(db_path) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, ?)",
+            [
+                (1, 100.0, '{"s1": 0}'),  # no MS2 -> gray
+                (2, 200.0, '{"s1": 0}'),  # MS2, no annotation -> black
+                (3, 300.0, '{"s1": 0}'),  # MS2 + annotation -> blue
+            ],
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
+            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_flat_fragmentation, median_n_peaks) "
+            "VALUES (2, 200.0, 3, 1, 0, 0, 0, 0, 3.0)"
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
+            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_flat_fragmentation, median_n_peaks) "
+            "VALUES (3, 300.0, 2, 1, 0, 0, 0, 0, 3.0)"
+        )
+        con.execute(
+            "INSERT INTO annotation_libraries (id, path, name) "
+            "VALUES (1, 'lib.db', 'my_library')"
+        )
+        con.execute(
+            "INSERT INTO ms2_associations "
+            "(sample_id, scan_id, match_key, precursor_mz, "
+            "n_features_in_window, rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 300.1, 1, 12.3, 5, 'positive')"
+        )
+        con.execute(
+            "INSERT INTO ms2_annotations "
+            "(id, feature_id, sample_id, scan_id, library_id, "
+            "library_spectrum_id, compound_name, compound_formula, inchikey, "
+            "score, dot_product_score, lib_coverage, emp_coverage, "
+            "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
+            "n_emp_peaks_filtered, rank_ms2, rank_feature) "
+            "VALUES (1, 3, 1, 42, 1, 9, 'Caffeine', 'C8H10N4O2', "
+            "'RYYVLZVUVIJVGH-UHFFFAOYSA-N', 0.87, 0.9, 0.8, 0.75, 0.77, "
+            "2, 2, 10, 3, 1, 1)"
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    html = _read_url(bridge.getSpectrumUrl(str(db_path), "run-1", sample_id))
+
+    assert "No MS2" in html
+    assert "Annotated" in html
+    assert "Non-annotated" in html
+    assert "#999999" in html  # no_ms2 gray
+    assert "#1f77b4" in html  # annotated blue
+    assert "#000000" in html  # non_annotated black
 
 
 def test_get_spectrum_url_returns_error_message_when_missing(tmp_path):

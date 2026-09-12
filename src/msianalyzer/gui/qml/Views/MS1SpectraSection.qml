@@ -18,6 +18,11 @@ Item {
     property int topN: 5
     property var featureDetail: null
 
+    // "present in and absent in should have list of files (scrollable,
+    // max 10 files height before scrolling)" — one row's height times 10.
+    property int detailListRowHeight: 18
+    property int detailListMaxHeight: detailListRowHeight * 10
+
     WebChannel {
         id: webChannel
     }
@@ -53,26 +58,35 @@ Item {
         color: "gray"
     }
 
-    RowLayout {
+    // A 2-row layout, not 2 columns — MS1 spectra want to be wide, so the
+    // plot gets the section's full width up top, with the feature-detail
+    // panel (itself laid out horizontally, since it now has that same
+    // full width to spread into) as a shorter strip underneath.
+    //
+    // Plain Item + anchors here, not a ColumnLayout: `detailPanel` is
+    // declared *before* the spectrum column even though it renders
+    // *below* it (anchored to the bottom) — a childItems()-based search
+    // (find_visual_child) for anything inside detailPanel must never have
+    // to walk through the WebEngineView's own internal item tree first to
+    // get there (matches every other section with a WebEngineView; see
+    // the sibling comment on AnnotationsSection.qml/that pattern's
+    // original introduction). A ColumnLayout lays out children in
+    // declaration order, so achieving "detail panel visually last" would
+    // otherwise force "detail panel declared last" too — anchors decouple
+    // the two.
+    Item {
         anchors.fill: parent
         anchors.margins: 12
         visible: ms1Section.samples.length > 0
-        spacing: 12
 
-        // Declared BEFORE the spectrum/WebEngineView column: a
-        // childItems()-based search (find_visual_child) that doesn't match
-        // this branch would otherwise have to recurse fully into the
-        // WebEngineView's internal item tree before reaching this sibling —
-        // unsafe. Keeping this first means every name this panel contains
-        // resolves without ever touching the WebEngineView.
-        ColumnLayout {
+        RowLayout {
             id: detailPanel
             objectName: "detailPanel"
-            Layout.preferredWidth: 260
-            Layout.fillHeight: true
-            spacing: 6
-
-            Text { text: "Feature detail"; font.bold: true }
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 260
+            spacing: 20
 
             Text {
                 objectName: "detailEmptyLabel"
@@ -85,8 +99,11 @@ Item {
 
             ColumnLayout {
                 visible: !!ms1Section.featureDetail
-                Layout.fillWidth: true
+                Layout.preferredWidth: 200
+                Layout.fillHeight: true
                 spacing: 6
+
+                Text { text: "Feature detail"; font.bold: true }
 
                 Text {
                     objectName: "detailFeatureId"
@@ -94,7 +111,6 @@ Item {
                           ? ("Feature " + ms1Section.featureDetail.feature_id
                              + " (m/z " + Number(ms1Section.featureDetail.mz).toFixed(4) + ")")
                           : ""
-                    font.bold: true
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
@@ -102,27 +118,8 @@ Item {
                     objectName: "detailNMs2"
                     text: ms1Section.featureDetail ? ("MS2 scans: " + ms1Section.featureDetail.n_ms2) : ""
                 }
-                Text { text: "Present in:"; font.bold: true }
-                Text {
-                    objectName: "detailSamplesPresent"
-                    text: ms1Section.featureDetail
-                          ? (ms1Section.featureDetail.samples_present.join(", ") || "none")
-                          : ""
-                    wrapMode: Text.Wrap
-                    Layout.fillWidth: true
-                }
-                Text { text: "Absent / filtered out in:"; font.bold: true }
-                Text {
-                    objectName: "detailSamplesAbsent"
-                    text: ms1Section.featureDetail
-                          ? (ms1Section.featureDetail.samples_absent.join(", ") || "none")
-                          : ""
-                    wrapMode: Text.Wrap
-                    Layout.fillWidth: true
-                }
 
                 RowLayout {
-                    Layout.fillWidth: true
                     Text { text: "Top hits:"; font.bold: true }
                     SpinBox {
                         id: topNSpin
@@ -146,27 +143,153 @@ Item {
                     visible: ms1Section.featureDetail && ms1Section.featureDetail.top_hits.length === 0
                     text: "No annotation for this feature."
                     color: "gray"
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
                 }
 
-                Repeater {
-                    id: topHitsRepeater
-                    objectName: "topHitsRepeater"
-                    model: ms1Section.featureDetail ? ms1Section.featureDetail.top_hits : []
+                Flickable {
+                    id: topHitsFlickable
+                    objectName: "topHitsFlickable"
+                    visible: ms1Section.featureDetail && ms1Section.featureDetail.top_hits.length > 0
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: ms1Section.detailListMaxHeight
+                    clip: true
+                    contentWidth: width
+                    contentHeight: topHitsColumn.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
 
-                    delegate: Text {
-                        objectName: "topHit_" + index
-                        text: (index + 1) + ". " + (modelData.compound_name || modelData.inchikey || "?")
-                              + " (score " + Number(modelData.score).toFixed(3) + ")"
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
+                    ColumnLayout {
+                        id: topHitsColumn
+                        width: topHitsFlickable.width
+                        spacing: 2
+
+                        Repeater {
+                            id: topHitsRepeater
+                            objectName: "topHitsRepeater"
+                            model: ms1Section.featureDetail ? ms1Section.featureDetail.top_hits : []
+
+                            delegate: Text {
+                                objectName: "topHit_" + index
+                                text: (index + 1) + ". " + (modelData.compound_name || modelData.inchikey || "?")
+                                      + " (score " + Number(modelData.score).toFixed(3) + ")"
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                        }
                     }
                 }
             }
+
+            // "Present in" / "Absent in" — a scrollable list (one sample
+            // per row) rather than a single comma-joined string, capped
+            // at detailListMaxHeight (~10 rows) before scrolling.
+            ColumnLayout {
+                visible: !!ms1Section.featureDetail
+                Layout.preferredWidth: 180
+                Layout.fillHeight: true
+                spacing: 4
+
+                Text { text: "Present in:"; font.bold: true }
+
+                Text {
+                    objectName: "samplesPresentEmptyLabel"
+                    visible: ms1Section.featureDetail
+                             && ms1Section.featureDetail.samples_present.length === 0
+                    text: "none"
+                    color: "gray"
+                }
+
+                Flickable {
+                    id: samplesPresentFlickable
+                    objectName: "samplesPresentFlickable"
+                    visible: ms1Section.featureDetail
+                             && ms1Section.featureDetail.samples_present.length > 0
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: ms1Section.detailListMaxHeight
+                    clip: true
+                    contentWidth: width
+                    contentHeight: samplesPresentColumn.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    ColumnLayout {
+                        id: samplesPresentColumn
+                        width: samplesPresentFlickable.width
+                        spacing: 2
+
+                        Repeater {
+                            id: samplesPresentRepeater
+                            objectName: "samplesPresentRepeater"
+                            model: ms1Section.featureDetail ? ms1Section.featureDetail.samples_present : []
+
+                            delegate: Text {
+                                objectName: "samplesPresentItem_" + index
+                                text: modelData
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                }
+            }
+
+            ColumnLayout {
+                visible: !!ms1Section.featureDetail
+                Layout.preferredWidth: 180
+                Layout.fillHeight: true
+                spacing: 4
+
+                Text { text: "Absent / filtered out in:"; font.bold: true }
+
+                Text {
+                    objectName: "samplesAbsentEmptyLabel"
+                    visible: ms1Section.featureDetail
+                             && ms1Section.featureDetail.samples_absent.length === 0
+                    text: "none"
+                    color: "gray"
+                }
+
+                Flickable {
+                    id: samplesAbsentFlickable
+                    objectName: "samplesAbsentFlickable"
+                    visible: ms1Section.featureDetail
+                             && ms1Section.featureDetail.samples_absent.length > 0
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: ms1Section.detailListMaxHeight
+                    clip: true
+                    contentWidth: width
+                    contentHeight: samplesAbsentColumn.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    ColumnLayout {
+                        id: samplesAbsentColumn
+                        width: samplesAbsentFlickable.width
+                        spacing: 2
+
+                        Repeater {
+                            id: samplesAbsentRepeater
+                            objectName: "samplesAbsentRepeater"
+                            model: ms1Section.featureDetail ? ms1Section.featureDetail.samples_absent : []
+
+                            delegate: Text {
+                                objectName: "samplesAbsentItem_" + index
+                                text: modelData
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { Layout.fillWidth: true }
         }
 
         ColumnLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: detailPanel.top
+            anchors.bottomMargin: 12
             spacing: 8
 
             RowLayout {

@@ -61,6 +61,67 @@ def _insert_annotation(
         return cur.lastrowid
 
 
+def test_plot_spectra_default_single_uncategorized_trace():
+    mz = np.array([100.0, 200.0, 300.0])
+    intensity = np.array([1.0, 2.0, 3.0])
+
+    fig = Plotter.plot_spectra(mz, intensity)
+
+    # One stick trace + its ghost-marker trace, neither with a legend name
+    # (the pre-categories behavior) — and only the stick trace opts into
+    # the legend.
+    assert len(fig.data) == 2
+    line_trace, marker_trace = fig.data
+    assert line_trace.mode == "lines"
+    assert line_trace.showlegend is True
+    assert line_trace.name is None
+    assert marker_trace.mode == "markers"
+    assert marker_trace.showlegend is False
+
+
+def test_plot_spectra_categorized_splits_into_three_traces_with_one_legend_entry_each():
+    mz = np.array([100.0, 200.0, 300.0, 400.0])
+    intensity = np.array([1.0, 2.0, 3.0, 4.0])
+    categories = np.array(["no_ms2", "annotated", "non_annotated", "annotated"])
+
+    fig = Plotter.plot_spectra(mz, intensity, categories=categories)
+
+    # 3 categories present -> 3 stick traces + 3 marker traces = 6.
+    assert len(fig.data) == 6
+
+    line_traces = [t for t in fig.data if t.mode == "lines"]
+    marker_traces = [t for t in fig.data if t.mode == "markers"]
+    assert len(line_traces) == 3
+    assert len(marker_traces) == 3
+
+    # Every line trace has a legend entry; no marker trace does — "I don't
+    # want both the stick and the dot as legend, I want just 3 color lines".
+    assert all(t.showlegend for t in line_traces)
+    assert not any(t.showlegend for t in marker_traces)
+    assert {t.name for t in line_traces} == {"No MS2", "Annotated", "Non-annotated"}
+
+    colors = {t.name: t.line.color for t in line_traces}
+    assert colors["No MS2"] == "#999999"
+    assert colors["Annotated"] == "#1f77b4"
+    assert colors["Non-annotated"] == "#000000"
+
+    # The 2 "annotated" peaks (200, 400) land in the same trace.
+    annotated_trace = next(t for t in line_traces if t.name == "Annotated")
+    assert list(annotated_trace.x) == [200.0, 200.0, None, 400.0, 400.0, None]
+
+
+def test_plot_spectra_categorized_omits_empty_categories():
+    mz = np.array([100.0, 200.0])
+    intensity = np.array([1.0, 2.0])
+    categories = np.array(["annotated", "annotated"])
+
+    fig = Plotter.plot_spectra(mz, intensity, categories=categories)
+
+    line_traces = [t for t in fig.data if t.mode == "lines"]
+    assert len(line_traces) == 1
+    assert line_traces[0].name == "Annotated"
+
+
 def test_plot_ms2_annotation_builds_mirror_plot(tmp_path):
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()

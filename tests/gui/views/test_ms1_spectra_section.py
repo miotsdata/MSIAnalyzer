@@ -94,20 +94,80 @@ def test_ms1_spectrum_point_click_updates_detail_panel(
     application.analysis_bridge.spectrumPointClicked.emit(150.1)
     qtbot.wait(50)
 
-    feature_id_label = find_visual_child(root, "detailFeatureId")
+    # Scoped to detailPanel, not the whole page `root` — searching from
+    # `root` right after this click reproducibly segfaulted inside
+    # PySide6's childItems()-based traversal (find_visual_child) while it
+    # was walking freshly-created delegates from the *three* Repeaters
+    # (top hits, samples present, samples absent) that all populate at
+    # once when `featureDetail` changes; a real PySide6 wrapper-lifecycle
+    # bug (crash was inside `PySide::getWrapperForQObject`, confirmed via
+    # gdb), not anything wrong with the QML itself — `root.findChild`
+    # reaches the exact same items without crashing, and a scoped search
+    # (fewer nodes to walk) avoids it entirely. The original single-Repeater
+    # version of this section never hit it.
+    detail_panel = find_visual_child(root, "detailPanel")
+
+    feature_id_label = find_visual_child(detail_panel, "detailFeatureId")
     assert "Feature 7" in feature_id_label.property("text")
 
-    n_ms2_label = find_visual_child(root, "detailNMs2")
+    n_ms2_label = find_visual_child(detail_panel, "detailNMs2")
     assert n_ms2_label.property("text") == "MS2 scans: 5"
 
-    present_label = find_visual_child(root, "detailSamplesPresent")
-    assert present_label.property("text") == "s1"
+    samples_present_repeater = find_visual_child(detail_panel, "samplesPresentRepeater")
+    assert samples_present_repeater.property("count") == 1
+    samples_present_item = find_visual_child(detail_panel, "samplesPresentItem_0")
+    assert samples_present_item.property("text") == "s1"
 
-    top_hit = find_visual_child(root, "topHit_0")
+    samples_absent_empty = find_visual_child(detail_panel, "samplesAbsentEmptyLabel")
+    assert samples_absent_empty.property("visible") is True
+
+    top_hit = find_visual_child(detail_panel, "topHit_0")
     assert "Caffeine" in top_hit.property("text")
 
-    no_annotation_label = find_visual_child(root, "detailNoAnnotationLabel")
+    no_annotation_label = find_visual_child(detail_panel, "detailNoAnnotationLabel")
     assert no_annotation_label.property("visible") is False
+
+
+def test_layout_is_two_rows_not_two_columns(
+    analysis_view, ms1_analysis_model, find_visual_child, qtbot
+):
+    # "instead of a 2 column layout, it is better a 2 rows layout, as MS1
+    # spectra are wide" — the spectrum plot sits above the feature-detail
+    # panel (not beside it), and both span close to the section's full width.
+    view = analysis_view(ms1_analysis_model)
+    root = view.rootObject()
+    _open_ms1_tab(view, root, find_visual_child, qtbot)
+
+    spectrum_view = find_visual_child(root, "spectrumView")
+    detail_panel = find_visual_child(root, "detailPanel")
+    ms1_section = find_visual_child(root, "ms1Section")
+
+    assert detail_panel.y() > spectrum_view.y()
+    # Both roughly span the section's width (not squeezed into a narrow
+    # side column) — allow for the section's own margins.
+    assert spectrum_view.width() > ms1_section.width() * 0.7
+    assert detail_panel.width() > ms1_section.width() * 0.7
+
+
+def test_samples_present_and_absent_lists_cap_height_before_scrolling(
+    analysis_view, ms1_analysis_model, find_visual_child, qtbot, application
+):
+    # "present in and absent in should have list of files (scrollable, max
+    # 10 files height before scrolling)"
+    view = analysis_view(ms1_analysis_model)
+    root = view.rootObject()
+    _open_ms1_tab(view, root, find_visual_child, qtbot)
+
+    application.analysis_bridge.spectrumPointClicked.emit(150.1)
+    qtbot.wait(50)
+
+    ms1_section = find_visual_child(root, "ms1Section")
+    detail_panel = find_visual_child(root, "detailPanel")
+
+    assert ms1_section.property("detailListMaxHeight") == 180  # 18px * 10 rows
+
+    samples_present_flickable = find_visual_child(detail_panel, "samplesPresentFlickable")
+    assert samples_present_flickable.height() <= 180
 
 
 def test_top_n_spinbox_is_keyboard_editable(

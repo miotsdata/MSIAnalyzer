@@ -101,6 +101,18 @@ def _find_visual_child(item, object_name):
     *not* reachable via `QObject.findChild` (their QObject parent is the
     QQmlDelegateModel machinery, not the visual parent) — use this instead
     for anything created by a `Repeater`.
+
+    Prefer `root.findChild(QQuickItem, name)` for anything NOT inside a
+    Repeater (it's the same standard Qt lookup used elsewhere in these
+    tests) — this function has a real, confirmed fragility: searching from
+    a large subtree (e.g. the whole page `root`) immediately after several
+    Repeaters populate at once (many delegates created in one property
+    change) has reproducibly segfaulted inside PySide6's own
+    `getWrapperForQObject` (confirmed via gdb — a wrapper-lifecycle bug in
+    PySide6 itself, not a logic error in the QML being searched). Passing
+    the smallest sensible starting item (e.g. the specific panel containing
+    what you're looking for, not `root`) avoids it by cutting down how much
+    of the tree gets walked. See `test_ms1_spectrum_point_click_updates_detail_panel`.
     """
     for child in item.childItems():
         if child.objectName() == object_name:

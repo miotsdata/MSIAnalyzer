@@ -33,6 +33,19 @@ _RED_MATCHED = "#d62728"
 _RED_UNMATCHED = "#f7b6b6"
 _CONNECTOR = "#888888"
 
+# MS1 spectrum peak coloring by feature category (Plotter.plot_spectra) —
+# order here is also legend order.
+_MS1_CATEGORY_COLORS = {
+    "no_ms2": "#999999",
+    "non_annotated": "#000000",
+    "annotated": _BLUE_MATCHED,
+}
+_MS1_CATEGORY_LABELS = {
+    "no_ms2": "No MS2",
+    "non_annotated": "Non-annotated",
+    "annotated": "Annotated",
+}
+
 
 class Plotter:
     """Builds interactive Plotly figures from msianalyzer outputs.
@@ -51,6 +64,7 @@ class Plotter:
     def plot_spectra(
         mz_array: np.ndarray,
         intensity_array: np.ndarray,
+        categories: np.ndarray | None = None,
         color: str = "black",
         height: int = 500,
     ) -> go.Figure:
@@ -62,44 +76,45 @@ class Plotter:
         Args:
             mz_array: Peak m/z values.
             intensity_array: Peak intensities, parallel to `mz_array`.
-            color: Line and marker colour. Defaults to `"black"`.
+            categories: Optional, parallel to `mz_array` — each peak's
+                `"no_ms2"` / `"annotated"` / `"non_annotated"` feature
+                category (see `analysis_db.load_feature_categories`). When
+                given, peaks are split into one trace per category
+                (`_MS1_CATEGORY_COLORS`), each with a single legend entry
+                (its stick color, not a separate marker entry) — the GUI's
+                MS1 Spectra section uses this to distinguish features with
+                no MS2 (gray), annotated (blue) and non-annotated (black).
+                `None` (the default) draws every peak as one plain,
+                unlabeled trace in `color`, same as before this parameter
+                existed.
+            color: Line/marker colour when `categories` is `None`.
+                Defaults to `"black"`.
             height: Figure height in pixels. Defaults to 500.
 
         Returns:
             A Plotly `Figure` containing the spectrum.
         """
+        mz_array = np.asarray(mz_array)
+        intensity_array = np.asarray(intensity_array)
 
         fig = go.Figure()
-        xs, ys = [], []
-        for m, i in zip(mz_array, intensity_array):
-            xs += [m, m, None]
-            ys += [0, i, None]
 
-        fig.add_trace(
-            go.Scatter(
-                x=xs,
-                y=ys,
-                mode="lines",
-                line=dict(color=color, width=2),
-                showlegend=True,
-                hoverinfo="skip",
-            )
-        )
-        # Ghost markers for hover tooltips
-        fig.add_trace(
-            go.Scatter(
-                x=mz_array,
-                y=intensity_array,
-                mode="markers",
-                marker=dict(color=color, size=6),
-                customdata=np.abs(intensity_array).reshape(-1, 1),
-                hovertemplate=(
-                    "<b>m/z</b>: %{x:.4f}<br>"
-                    "<b>intensity</b>: %{customdata[0]:.3f}"
-                    "<extra></extra>"
-                ),
-            )
-        )
+        if categories is None:
+            Plotter._add_spectrum_trace(fig, mz_array, intensity_array, color)
+        else:
+            categories = np.asarray(categories)
+            for category, label in _MS1_CATEGORY_LABELS.items():
+                mask = categories == category
+                if not mask.any():
+                    continue
+                Plotter._add_spectrum_trace(
+                    fig,
+                    mz_array[mask],
+                    intensity_array[mask],
+                    _MS1_CATEGORY_COLORS[category],
+                    name=label,
+                    legendgroup=category,
+                )
 
         fig.update_layout(
             height=height,
@@ -117,6 +132,53 @@ class Plotter:
         )
 
         return fig
+
+    @staticmethod
+    def _add_spectrum_trace(
+        fig: go.Figure,
+        mz_array: np.ndarray,
+        intensity_array: np.ndarray,
+        color: str,
+        name: str | None = None,
+        legendgroup: str | None = None,
+    ) -> None:
+        """One category's sticks (a single legend entry, `name`) plus its
+        ghost hover markers (`showlegend=False` — a category should only
+        ever contribute one legend entry, not one per trace)."""
+        xs, ys = [], []
+        for m, i in zip(mz_array, intensity_array):
+            xs += [m, m, None]
+            ys += [0, i, None]
+
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=color, width=2),
+                name=name,
+                legendgroup=legendgroup,
+                showlegend=True,
+                hoverinfo="skip",
+            )
+        )
+        # Ghost markers for hover tooltips — not their own legend entry.
+        fig.add_trace(
+            go.Scatter(
+                x=mz_array,
+                y=intensity_array,
+                mode="markers",
+                marker=dict(color=color, size=6),
+                legendgroup=legendgroup,
+                showlegend=False,
+                customdata=np.abs(intensity_array).reshape(-1, 1),
+                hovertemplate=(
+                    "<b>m/z</b>: %{x:.4f}<br>"
+                    "<b>intensity</b>: %{customdata[0]:.3f}"
+                    "<extra></extra>"
+                ),
+            )
+        )
 
     @log_call
     def plot_ms2_annotation(

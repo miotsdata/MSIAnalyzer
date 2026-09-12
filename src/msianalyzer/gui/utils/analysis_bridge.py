@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -43,6 +44,36 @@ def _dataframe_to_records(df: pd.DataFrame) -> list:
                 clean[key] = value
         records.append(clean)
     return records
+
+
+def _categorize_peaks(mz_array: np.ndarray, feature_categories: pd.DataFrame) -> np.ndarray:
+    """Nearest-feature category (`"no_ms2"`/`"annotated"`/`"non_annotated"`)
+    for each peak in `mz_array` — which of `feature_categories`'s `mz`
+    values each peak is closest to, then that feature's `category`. Feeds
+    `Plotter.plot_spectra`'s coloring of the MS1 Spectra section's plot.
+
+    Args:
+        mz_array: The spectrum's peak m/z values.
+        feature_categories: `analysis_db.load_feature_categories`'s result
+            — must be sorted by `mz` ascending (as that function returns
+            it), since matching is a sorted-array binary search.
+
+    Returns:
+        An array parallel to `mz_array`. `"non_annotated"` for every peak
+        when there are no features at all (nothing to match against).
+    """
+    mz_array = np.asarray(mz_array)
+    if feature_categories.empty:
+        return np.full(mz_array.shape, "non_annotated", dtype=object)
+
+    feature_mz = feature_categories["mz"].to_numpy()
+    feature_category = feature_categories["category"].to_numpy()
+
+    idx = np.searchsorted(feature_mz, mz_array)
+    idx = np.clip(idx, 1, len(feature_mz) - 1)
+    left_closer = (mz_array - feature_mz[idx - 1]) <= (feature_mz[idx] - mz_array)
+    idx = np.where(left_closer, idx - 1, idx)
+    return feature_category[idx]
 
 
 class AnalysisBridge(QObject):
@@ -322,7 +353,10 @@ class AnalysisBridge(QObject):
             html = "<p style='font-family: sans-serif; color: #900;'>No spectrum found for this sample.</p>"
             return self._write_spectrum_html(html)
 
-        fig = Plotter.plot_spectra(mz, intensity)
+        categories = _categorize_peaks(
+            mz, analysis_db.load_feature_categories(analysis_db_path)
+        )
+        fig = Plotter.plot_spectra(mz, intensity, categories=categories)
         body = fig.to_html(
             full_html=False, include_plotlyjs=True, div_id=_SPECTRUM_DIV_ID
         )

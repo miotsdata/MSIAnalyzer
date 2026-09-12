@@ -14,6 +14,7 @@ from msianalyzer.core.analysis_db import (
     find_nearest_feature,
     init_analysis_db,
     is_command_already_run,
+    load_feature_categories,
     load_feature_compound_scores,
     load_feature_list,
     load_feature_ms2_count,
@@ -589,6 +590,79 @@ def test_load_feature_list_empty_without_features(tmp_path: Path):
     init_analysis_db(db).close()
 
     assert load_feature_list(db).empty
+
+
+# ---------------------------------------------------------------------------
+# load_feature_categories
+# ---------------------------------------------------------------------------
+
+
+def test_load_feature_categories_classifies_no_ms2_annotated_and_non_annotated(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, ?)",
+            [
+                (1, 100.0, '{"s1": 0}'),  # no MS2 at all
+                (2, 200.0, '{"s1": 0}'),  # MS2 but no library match
+                (3, 300.0, '{"s1": 0}'),  # MS2 and annotated
+            ],
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
+            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_flat_fragmentation, median_n_peaks) "
+            "VALUES (2, 200.0, 3, 1, 0, 0, 0, 0, 3.0)"
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
+            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_flat_fragmentation, median_n_peaks) "
+            "VALUES (3, 300.0, 2, 1, 0, 0, 0, 0, 3.0)"
+        )
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.execute(
+            "INSERT INTO annotation_libraries (id, path, name) "
+            "VALUES (1, 'lib.db', 'my_library')"
+        )
+        con.execute(
+            "INSERT INTO ms2_associations "
+            "(sample_id, scan_id, match_key, precursor_mz, "
+            "n_features_in_window, rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 300.1, 1, 12.3, 5, 'positive')"
+        )
+        con.execute(
+            "INSERT INTO ms2_annotations "
+            "(id, feature_id, sample_id, scan_id, library_id, "
+            "library_spectrum_id, compound_name, compound_formula, inchikey, "
+            "score, dot_product_score, lib_coverage, emp_coverage, "
+            "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
+            "n_emp_peaks_filtered, rank_ms2, rank_feature) "
+            "VALUES (1, 3, 1, 42, 1, 9, 'Caffeine', 'C8H10N4O2', "
+            "'RYYVLZVUVIJVGH-UHFFFAOYSA-N', 0.87, 0.9, 0.8, 0.75, 0.77, "
+            "2, 2, 10, 3, 1, 1)"
+        )
+        con.commit()
+
+    df = load_feature_categories(db)
+
+    categories = dict(zip(df["feature_id"], df["category"]))
+    assert categories == {1: "no_ms2", 2: "non_annotated", 3: "annotated"}
+    # ordered by mz, ascending — nearest-mz matching against this relies on it
+    assert list(df["mz"]) == [100.0, 200.0, 300.0]
+
+
+def test_load_feature_categories_empty_without_features(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_feature_categories(db).empty
 
 
 # ---------------------------------------------------------------------------
