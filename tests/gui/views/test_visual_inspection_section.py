@@ -237,8 +237,8 @@ def sortable_features_model(visual_analysis_model):
             con.execute(
                 "INSERT INTO ms2_associations "
                 "(sample_id, scan_id, match_key, precursor_mz, "
-                "n_features_in_window, rt, n_peaks, polarity) "
-                "VALUES (1, ?, ?, ?, 1, 12.3, 5, 'positive')",
+                "rt, n_peaks, polarity) "
+                "VALUES (1, ?, ?, ?, 12.3, 5, 'positive')",
                 (scan_id, f"k{scan_id}", mz),
             )
             con.execute(

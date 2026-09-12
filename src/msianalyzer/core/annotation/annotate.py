@@ -23,9 +23,13 @@ Design (see ADR 0007):
   ``rank_feature_sample`` then rank the feature's rows outright (``1`` = its
   single best hit), and ``rank_scan_feature`` /
   ``rank_scan_feature_sample`` rank its *scans* by their best hit.
-* **Chimeric scans** (isolation window held >1 feature) are scored against
-  their primary feature and flagged ``is_chimeric``; ``annotate_chimeric``
-  can drop them entirely.
+* **Every associated MS2 scan is scored, unconditionally.** There is no
+  longer a "chimeric" gate keyed on how many *other* aligned features
+  happen to share a scan's isolation window — that count says nothing
+  about what actually co-fragmented into any one scan's own spectrum, and
+  over-flagged badly once a feature list grew dense (see ADR 0019).
+  ``min_precursor_frac`` is the real, per-scan signal to filter on instead,
+  if you want to skip scoring scans with poor precursor purity.
 * **Raw spectra, not filtered ones.** The *untouched* empirical and
   library peak lists — not the noise-filtered/max-normalised copies
   actually scored — are persisted on every row (``store_raw_spectra``),
@@ -154,8 +158,6 @@ class AnnotationRow:
     n_lib_peaks: int
     n_emp_peaks_raw: int
     n_emp_peaks_filtered: int
-    is_chimeric: bool
-    n_features_in_window: int | None
     precursor_only: bool
     flat_fragmentation: bool
     # The untouched (pre-noise-filtering) spectra on both sides — not the
@@ -175,8 +177,6 @@ class AnnotationRow:
     rank_feature_sample: int | None = None
     rank_scan_feature: int | None = None
     rank_scan_feature_sample: int | None = None
-    purity: float | None = None
-    runner_up_rel_int: float | None = None
     precursor_confirmed: bool | None = None
     precursor_frac: float | None = None
 
@@ -372,12 +372,8 @@ def _row_from_match(
         n_lib_peaks=m.n_lib_peaks,
         n_emp_peaks_raw=m.n_emp_peaks_raw,
         n_emp_peaks_filtered=m.n_emp_peaks_filtered,
-        is_chimeric=bool(scan.get("is_chimeric")),
-        n_features_in_window=scan.get("n_features_in_window"),
         precursor_only=bool(scan.get("precursor_only")),
         flat_fragmentation=bool(scan.get("flat_fragmentation")),
-        purity=scan.get("purity"),
-        runner_up_rel_int=scan.get("runner_up_rel_int"),
         precursor_confirmed=scan.get("precursor_confirmed"),
         precursor_frac=scan.get("precursor_frac"),
         # The untouched spectra — `scan["emp_mz"]`/`["emp_int"]` (this
@@ -408,8 +404,7 @@ def annotate_feature(
     weight_dot: float = 1.0,
     weight_lib_coverage: float = 0.5,
     weight_emp_coverage: float = 0.5,
-    annotate_chimeric: bool = True,
-    min_purity: float | None = None,
+    min_precursor_frac: float | None = None,
 ) -> list[AnnotationRow]:
     """Score every scan of one feature against a shared candidate set.
 
@@ -417,14 +412,11 @@ def annotate_feature(
         feature_id: The master feature id stamped on every produced row.
         feature_mz: The feature's m/z (candidates were gathered around it).
         scans: Dicts with ``scan_id``, ``sample_id``, ``emp_mz``,
-            ``emp_int``, ``is_chimeric``, ``n_features_in_window``,
-            ``precursor_only`` and (optional) ``purity`` /
-            ``runner_up_rel_int``.
+            ``emp_int``, ``precursor_only`` and (optional)
+            ``precursor_frac`` / ``precursor_confirmed``.
         candidates: Library spectra to score against (shared by all scans).
-        annotate_chimeric: When False, scans flagged ``is_chimeric`` are
-            skipped.
-        min_purity: When set, scans with a known ``purity`` below this are
-            skipped.
+        min_precursor_frac: When set, scans with a known ``precursor_frac``
+            below this are skipped.
 
     Returns:
         All rows for the feature, each with ``rank_ms2`` filled (per scan)
@@ -436,11 +428,9 @@ def annotate_feature(
     """
     rows: list[AnnotationRow] = []
     for scan in scans:
-        if scan.get("is_chimeric") and not annotate_chimeric:
-            continue
-        if min_purity is not None:
-            p = scan.get("purity")
-            if p is not None and p < min_purity:
+        if min_precursor_frac is not None:
+            frac = scan.get("precursor_frac")
+            if frac is not None and frac < min_precursor_frac:
                 continue
         scored = score_scan_against_candidates(
             scan["emp_mz"],
@@ -584,8 +574,7 @@ def _annotate_feature_batch(
     mz_power: float,
     int_power: float,
     min_matched_peaks: int,
-    annotate_chimeric: bool,
-    min_purity: float | None = None,
+    min_precursor_frac: float | None = None,
     weight_dot: float = 1.0,
     weight_lib_coverage: float = 0.5,
     weight_emp_coverage: float = 0.5,
@@ -593,9 +582,11 @@ def _annotate_feature_batch(
     """Annotate one chunk of features (a worker task).
 
     Candidates from every configured library are pooled per scan, so
-    ``rank_ms2`` orders the best hit across all of them. ``precursor_purity`` is
-    left-joined so every row can carry the scan's ``purity`` /
-    ``runner_up_rel_int`` and ``min_purity`` can drop low-purity scans.
+    ``rank_ms2`` orders the best hit across all of them. Every MS2 scan
+    associated with the feature is scored unconditionally — ``precursor_purity``
+    is left-joined so every row can carry the scan's ``precursor_frac`` /
+    ``precursor_confirmed`` and ``min_precursor_frac`` can drop low-purity
+    scans (see ADR 0019).
     """
     libraries = _WORKER_LIBRARIES
     rows: list[AnnotationRow] = []
@@ -604,9 +595,8 @@ def _annotate_feature_batch(
     try:
         for feature_id, feature_mz in batch:
             assoc = adb.execute(
-                "SELECT a.scan_id, a.sample_id, a.n_features_in_window, "
+                "SELECT a.scan_id, a.sample_id, "
                 "a.precursor_only, a.flat_fragmentation, a.polarity, "
-                "p.purity, p.runner_up_rel_int, "
                 "p.precursor_confirmed, p.precursor_frac "
                 "FROM ms2_associations a "
                 "LEFT JOIN precursor_purity p "
@@ -619,13 +609,14 @@ def _annotate_feature_batch(
 
             scans_by_pol: dict[str | None, list[dict]] = defaultdict(list)
             for (
-                scan_id, sample_id, n_in_win, prec_only, flat_frag, pol,
-                purity, runner_up, confirmed, frac,
+                scan_id, sample_id, prec_only, flat_frag, pol,
+                confirmed, frac,
             ) in assoc:
-                is_chimeric = (n_in_win or 0) > 1
-                if is_chimeric and not annotate_chimeric:
-                    continue
-                if min_purity is not None and purity is not None and purity < min_purity:
+                if (
+                    min_precursor_frac is not None
+                    and frac is not None
+                    and frac < min_precursor_frac
+                ):
                     continue
                 emp_mz, emp_int = _read_fragments(
                     raw_cons, sample_raw_db, sample_id, scan_id
@@ -636,12 +627,8 @@ def _annotate_feature_batch(
                     {
                         "scan_id": scan_id,
                         "sample_id": sample_id,
-                        "n_features_in_window": n_in_win,
-                        "is_chimeric": is_chimeric,
                         "precursor_only": bool(prec_only),
                         "flat_fragmentation": bool(flat_frag),
-                        "purity": purity,
-                        "runner_up_rel_int": runner_up,
                         "precursor_confirmed": (
                             None if confirmed is None else bool(confirmed)
                         ),
@@ -679,8 +666,7 @@ def _annotate_feature_batch(
                         weight_dot=weight_dot,
                         weight_lib_coverage=weight_lib_coverage,
                         weight_emp_coverage=weight_emp_coverage,
-                        annotate_chimeric=annotate_chimeric,
-                        min_purity=min_purity,
+                        min_precursor_frac=min_precursor_frac,
                     )
                 )
     finally:
@@ -718,10 +704,6 @@ _ANN_COLS = (
     "rank_feature_sample",
     "rank_scan_feature",
     "rank_scan_feature_sample",
-    "is_chimeric",
-    "n_features_in_window",
-    "purity",
-    "runner_up_rel_int",
     "precursor_confirmed",
     "precursor_frac",
     "precursor_only",
@@ -815,10 +797,6 @@ def persist_annotations(
                         r.rank_feature_sample,
                         r.rank_scan_feature,
                         r.rank_scan_feature_sample,
-                        int(r.is_chimeric),
-                        r.n_features_in_window,
-                        r.purity,
-                        r.runner_up_rel_int,
                         None if r.precursor_confirmed is None else int(r.precursor_confirmed),
                         r.precursor_frac,
                         int(r.precursor_only),
@@ -986,8 +964,7 @@ def run_annotation(
         weight_dot=getattr(config, "score_weight_dot", 1.0),
         weight_lib_coverage=getattr(config, "score_weight_lib_coverage", 0.5),
         weight_emp_coverage=getattr(config, "score_weight_emp_coverage", 0.5),
-        annotate_chimeric=config.annotate_chimeric,
-        min_purity=getattr(config, "min_purity", None),
+        min_precursor_frac=getattr(config, "min_precursor_frac", None),
     )
 
     rows: list[AnnotationRow] = []

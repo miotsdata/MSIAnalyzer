@@ -76,9 +76,12 @@ Stage A of annotation: snap each MS2 scan to a feature. Detail in
 [ADR 2](../adr/0002-ms2-feature-association-design.md).
 
 - Pure: `associate_scan`, `group_ms2`, `summarize_features`,
-  `detect_precursor_only`, `ppm_between`.
-- Data classes: `WindowFeature`, `ScanAssociation`, `FeatureMs2Summary`,
-  `GroupingResult`.
+  `detect_precursor_only`, `ppm_between`. `associate_scan` narrows its
+  candidate search to features physically inside the scan's isolation
+  window before picking the nearest one within `assoc_ppm`, but no longer
+  persists how many *other* features also fell in that window — see
+  [ADR 19](../adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md).
+- Data classes: `ScanAssociation`, `FeatureMs2Summary`, `GroupingResult`.
 - IO: `persist_grouping(db_path, result, command_id)` (calls
   `create_analysis_schema`, then replace-and-insert),
   `run_grouper(analysis_db_path, *, assoc_ppm, align_ppm, include_unmatched, …)`
@@ -86,26 +89,25 @@ Stage A of annotation: snap each MS2 scan to a feature. Detail in
 
 ## `annotation/precursor_purity.py`
 
-Stage A′ of annotation: per-MS2 isolation-window purity, measured against the
-scan's parent MS1 scan (and the next MS1 on the same raster line), independent of
-the feature list. Detail in
-[MS2 annotation](../../user-guide/ms2-annotation.md) and
-[ADR 8](../adr/0008-precursor-ion-purity.md).
+Stage A′ of annotation: per-MS2 precursor purity, measured against the scan's
+own parent MS1 scan, independent of the feature list. Detail in
+[MS2 annotation](../../user-guide/ms2-annotation.md),
+[ADR 8](../adr/0008-precursor-ion-purity.md) and
+[ADR 19](../adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md)
+(which retired the module's original peak-picking-based `purity` measurement
+and the parent+next-MS1 raster-interpolation machinery that supported it —
+`RasterGeometry`/`infer_raster_geometry`, `detect_window_peaks`,
+`score_window`, `interpolate_purity` are gone).
 
-- Pure (arrays only): `window_bounds`, `detect_window_peaks`, `score_window`,
-  `interpolate_purity`, `compute_scan_purity`, `ppm_between`;
-  `integrate_precursor_fraction` (peak-detection-free `precursor_frac` /
-  `precursor_confirmed` — the recorded precursor really carries signal in its
-  own parent MS1) and `snap_precursor_mz` (refine `precursor_mz` to a
-  parent-MS1 local max within a tight radius; association is not re-run).
-- Raw-DB readers: `infer_raster_geometry(con)` (infers the fast raster axis +
-  inter-pixel gap tolerance), `SampleScanIndex(con)` (preloads MS1 rt/polarity,
-  the scan→pixel map and pixel geometry once per sample so the hot loop does no
-  per-scan SQL), `resolve_parent_next(index, ms2_row, geom, …)` (parent MS1 + a
-  `same_pixel` / `same_line` next MS1, or `parent_only`; also accepts a bare
-  connection for one-off calls).
-- Data classes: `RasterGeometry`, `WindowPurity`, `ResolvedScans`, `PurityRow`,
-  `PurityResult`.
+- Pure (arrays only): `window_bounds`, `ppm_between`,
+  `integrate_precursor_fraction` (peak-detection-free `precursor_frac` — the
+  metric) and `snap_precursor_mz` (refine `precursor_mz` to a parent-MS1
+  local max within a tight radius; association is not re-run).
+- Raw-DB readers: `SampleScanIndex(con)` (preloads MS1 rt/polarity once per
+  sample so the hot loop does no per-scan SQL), `resolve_parent(index,
+  ms2_row, …)` (the parent MS1 scan; also accepts a bare connection for
+  one-off calls), `compute_scan_purity`.
+- Data classes: `ResolvedParent`, `PurityRow`, `PurityResult`.
 - IO: `persist_purity(db_path, result, command_id)` (replace-and-insert),
   `run_precursor_purity(analysis_db_path, config, *, command_id, n_workers)
   -> PurityResult` — the orchestration entry point used by `run.py`. Samples
@@ -116,12 +118,13 @@ the feature list. Detail in
 ## `annotation/consensus.py`
 
 Stage A″ of annotation: pick one representative MS2 scan per feature by folding
-the best library score, precursor `purity` and fragment-peak count into one
-`consensus_score`. Detail in
-[MS2 annotation](../../user-guide/ms2-annotation.md) and
-[ADR 9](../adr/0009-consume-purity-and-consensus.md).
+the best library score, precursor purity (`precursor_frac`) and fragment-peak
+count into one `consensus_score`. Detail in
+[MS2 annotation](../../user-guide/ms2-annotation.md),
+[ADR 9](../adr/0009-consume-purity-and-consensus.md) and
+[ADR 19](../adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md).
 
-- Pure: `peak_term`, `purity_term`, `consensus_score`, `pick_feature`,
+- Pure: `peak_term`, `precursor_frac_term`, `consensus_score`, `pick_feature`,
   `build_consensus`.
 - Data classes: `ScanStat`, `ConsensusRow`, `ConsensusResult`.
 - IO: `persist_consensus(db_path, result, command_id)` (replace-and-insert),
@@ -138,21 +141,22 @@ in [Outputs](../../user-guide/outputs.md).
 - Pure stats: `per_sample_counts`, `feature_membership`, `overlap_combos`,
   `ms2_summary`, `per_sample_ms2`, `associated_purity` (`precursor_frac`
   distribution restricted to MS2 that associated to a feature — the ones that
-  feed the library search), `purity_unscored`, `annotation_summary` (Stage B
+  feed the library search), `annotation_summary` (Stage B
   roll-up: best-hit-per-feature scores, plausible-compounds-per-feature,
-  cross-scan agreement, top compounds; returns `None` when no library ran)
-  (classifies every `precursor_purity` row: scored / faint precursor not in MS1
-  / parent MS1 off-pixel [flyback] / no precursor m/z / no parent),
+  cross-scan agreement, top compounds; returns `None` when no library ran),
   `unassociated_recheck` (re-tests unassociated MS2 against the sample's
   *pre-filter* centroids — `detect_ms1_centroids` output — with the grouper's
-  own `assoc_ppm`), `collect_stats` → `SummaryStats`.
+  own `assoc_ppm`), `collect_stats` → `SummaryStats`. `purity_unscored` /
+  `UnscoredSummary` / `figure_purity_unscored` (classifying peak-based-purity
+  failure reasons) were removed with the peak-based `purity` measurement
+  itself — see
+  [ADR 19](../adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md).
 - Figures (Plotly, no new dependency; horizontal legends sit above the plot,
   counts use a thousands separator): `figure_per_sample`, `figure_overlap_upset`
   (hand-rolled UpSet), `figure_ms2_association` (overall donut) +
   `figure_ms2_association_per_sample` (100%-stacked bar),
   `figure_unassociated_recheck`, `figure_purity` (overall histogram) +
-  `figure_purity_per_sample` (violin per sample) + `figure_purity_unscored`
-  (scored-vs-reason stacked bar).
+  `figure_purity_per_sample` (violin per sample).
 - Entry point: `build_summary_report(analysis_db_path, raw_db_paths, out_dir,
   *, config)` — called by `run.py` and by the `msianalyzer report` CLI.
 

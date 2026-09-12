@@ -37,8 +37,6 @@ __all__ = [
     "PerSampleMs2",
     "AssocPuritySample",
     "AssociatedPuritySummary",
-    "UnscoredPurity",
-    "UnscoredSummary",
     "MadFilterSample",
     "MadFilterSummary",
     "RecheckSummary",
@@ -51,7 +49,6 @@ __all__ = [
     "ms2_summary",
     "per_sample_ms2",
     "associated_purity",
-    "purity_unscored",
     "mad_filter_summary",
     "unassociated_recheck",
     "annotation_summary",
@@ -62,7 +59,6 @@ __all__ = [
     "figure_unassociated_recheck",
     "figure_purity",
     "figure_purity_per_sample",
-    "figure_purity_unscored",
     "figure_annotation_yield",
     "figure_annotation_score",
     "figure_annotation_ambiguity",
@@ -247,57 +243,6 @@ class AssociatedPuritySummary:
 
 
 @dataclass
-class UnscoredPurity:
-    """Why precursor purity (the peak-based value) is unscored for one sample.
-
-    Mutually exclusive, in priority order:
-
-    Attributes:
-        n_scored: peak-based purity was computed.
-        n_no_parent: no MS1 scan resolved before the MS2 (rare).
-        n_no_precursor_mz: scan carries no ``precursor_mz`` / isolation target.
-        n_off_pixel: the parent MS1 is not among the sample's imaged pixels
-            (laser flyback / off-tissue / warm-up scans).
-        n_unresolved_confirmed: the precursor ion *is* present in its own
-            parent MS1 (``precursor_confirmed``), the peak-picker just could
-            not resolve it as a discrete peak (dense low-m/z window). Not a
-            data problem — ``precursor_frac`` still measures its purity.
-        n_not_confirmed: no real signal at ``precursor_mz`` in the parent MS1
-            (dynamic-exclusion carry-over, wrong pixel, precursor gone).
-    """
-
-    sample_id: int
-    name: str
-    n_scored: int
-    n_no_parent: int
-    n_no_precursor_mz: int
-    n_off_pixel: int
-    n_unresolved_confirmed: int
-    n_not_confirmed: int
-
-
-@dataclass
-class UnscoredSummary:
-    per_sample: list[UnscoredPurity]
-    n_scored: int
-    n_no_parent: int
-    n_no_precursor_mz: int
-    n_off_pixel: int
-    n_unresolved_confirmed: int
-    n_not_confirmed: int
-
-    @property
-    def n_unscored(self) -> int:
-        return (
-            self.n_no_parent
-            + self.n_no_precursor_mz
-            + self.n_off_pixel
-            + self.n_unresolved_confirmed
-            + self.n_not_confirmed
-        )
-
-
-@dataclass
 class MadFilterSample:
     """MAD peak-intensity filter outcome for one sample.
 
@@ -389,8 +334,8 @@ class AnnotationSummary:
             score)`` rows — the best-annotated features, highest score
             first.
         n_best_confident / n_confident_*: of the best hits at the high
-            cutoff, how many come from a confirmed precursor / non-chimeric
-            window / real (non-precursor-only, non-flat) fragmentation.
+            cutoff, how many come from a confirmed precursor / real
+            (non-precursor-only, non-flat) fragmentation.
         n_consensus / n_consensus_matches_best: ``feature_ms2_consensus``
             rows, and how often its scan is the annotated best scan.
     """
@@ -411,7 +356,6 @@ class AnnotationSummary:
     top_features: list[tuple[int, float, str, str, float]]
     n_best_confident: int
     n_confident_precursor_confirmed: int
-    n_confident_not_chimeric: int
     n_confident_not_precursor_only: int
     n_confident_not_flat_fragmentation: int
     n_consensus: int
@@ -428,7 +372,6 @@ class SummaryStats:
     ms2: Ms2Summary
     per_sample_ms2: list[PerSampleMs2]
     associated_purity: AssociatedPuritySummary
-    unscored: UnscoredSummary
     mad_filter: "MadFilterSummary | None"
     recheck: RecheckSummary
     annotation: "AnnotationSummary | None"
@@ -443,7 +386,6 @@ class SummaryStats:
         for ps in ap["per_sample"]:
             ps.pop("frac_values", None)
         ap["pct_ge_cutoff"] = round(self.associated_purity.pct_ge_cutoff, 2)
-        d["unscored"]["n_unscored"] = self.unscored.n_unscored
         d["overlap_combos"] = [
             {"samples": list(s), "n_features": n} for s, n in self.overlap_combos
         ]
@@ -551,20 +493,6 @@ def _group_ms2_args(con: sqlite3.Connection) -> dict:
         return json.loads(row[0])
     except (ValueError, TypeError):
         return {}
-
-
-def _pixel_scan_ids(raw_db_path: str | Path | None) -> set[int] | None:
-    """The set of MS1 ``scan_id`` mapped to a pixel, or ``None`` if unknown."""
-    if not raw_db_path or not Path(raw_db_path).exists():
-        return None
-    try:
-        with sqlite3.connect(str(raw_db_path)) as con:
-            rows = con.execute(
-                "SELECT scan_id FROM pixel_ms1_scans"
-            ).fetchall()
-    except sqlite3.OperationalError:
-        return None
-    return {int(r[0]) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -763,80 +691,6 @@ def per_sample_ms2(analysis_db_path: Path | str) -> list[PerSampleMs2]:
 
 
 @log_call(source="analysis_db_path")
-def purity_unscored(
-    analysis_db_path: Path | str,
-    raw_db_paths: dict[int, str | Path] | None = None,
-) -> UnscoredSummary:
-    """Classify every ``precursor_purity`` row: scored, or why not.
-
-    ``raw_db_paths`` (or ``samples.raw_db_path``) is needed to tell an
-    off-pixel parent MS1 (laser flyback / off-tissue) apart from an in-ROI
-    scan; without it those collapse into the peak-based buckets.
-    """
-    analysis_db_path = Path(analysis_db_path)
-    _keys = ("scored", "no_parent", "no_precursor_mz", "off_pixel",
-             "unresolved_confirmed", "not_confirmed")
-    with sqlite3.connect(analysis_db_path) as con:
-        samples = con.execute(
-            "SELECT sample_id, name, raw_db_path FROM samples ORDER BY sample_id"
-        ).fetchall()
-
-        per_sample: list[UnscoredPurity] = []
-        tot = {k: 0 for k in _keys}
-        for sample_id, name, raw_db_path in samples:
-            path = (
-                raw_db_paths.get(sample_id, raw_db_path)
-                if raw_db_paths is not None
-                else raw_db_path
-            )
-            pixel_ids = _pixel_scan_ids(path)
-            rows = con.execute(
-                "SELECT parent_ms1_scan_id, window_lo_mz, purity, precursor_confirmed "
-                "FROM precursor_purity WHERE sample_id = ?",
-                (sample_id,),
-            ).fetchall()
-
-            s = {k: 0 for k in _keys}
-            for parent_id, window_lo, purity, confirmed in rows:
-                if purity is not None:
-                    s["scored"] += 1
-                elif parent_id is None:
-                    s["no_parent"] += 1
-                elif window_lo is None:
-                    s["no_precursor_mz"] += 1
-                elif pixel_ids is not None and int(parent_id) not in pixel_ids:
-                    s["off_pixel"] += 1
-                elif confirmed:
-                    s["unresolved_confirmed"] += 1
-                else:
-                    s["not_confirmed"] += 1
-            for k in tot:
-                tot[k] += s[k]
-            per_sample.append(
-                UnscoredPurity(
-                    sample_id=int(sample_id),
-                    name=str(name),
-                    n_scored=s["scored"],
-                    n_no_parent=s["no_parent"],
-                    n_no_precursor_mz=s["no_precursor_mz"],
-                    n_off_pixel=s["off_pixel"],
-                    n_unresolved_confirmed=s["unresolved_confirmed"],
-                    n_not_confirmed=s["not_confirmed"],
-                )
-            )
-
-    return UnscoredSummary(
-        per_sample=per_sample,
-        n_scored=tot["scored"],
-        n_no_parent=tot["no_parent"],
-        n_no_precursor_mz=tot["no_precursor_mz"],
-        n_off_pixel=tot["off_pixel"],
-        n_unresolved_confirmed=tot["unresolved_confirmed"],
-        n_not_confirmed=tot["not_confirmed"],
-    )
-
-
-@log_call(source="analysis_db_path")
 def mad_filter_summary(analysis_db_path: Path | str) -> MadFilterSummary | None:
     """Per-sample MAD threshold, and how many peaks survived it.
 
@@ -1014,7 +868,7 @@ def annotation_summary(
         # one row per annotated feature: its single best (scan, candidate) hit
         best = con.execute(
             "SELECT ms2_annotations.feature_id, sample_id, scan_id, score, "
-            "       inchikey, compound_name, precursor_confirmed, is_chimeric, "
+            "       inchikey, compound_name, precursor_confirmed, "
             "       precursor_only, library_id, flat_fragmentation, features.mz "
             "FROM ms2_annotations "
             "JOIN features ON features.feature_id = ms2_annotations.feature_id "
@@ -1041,9 +895,9 @@ def annotation_summary(
     best_scores: list[float] = []
     best_scan: dict[int, tuple] = {}
     top_features: list[tuple[int, float, str, str, float]] = []
-    n_confident = n_conf_confirmed = n_conf_not_chim = n_conf_not_po = 0
+    n_confident = n_conf_confirmed = n_conf_not_po = 0
     n_conf_not_flat = 0
-    for fid, sid, scid, score, ik, name, confirmed, chim, po, lib_id, flat, fmz in best:
+    for fid, sid, scid, score, ik, name, confirmed, po, lib_id, flat, fmz in best:
         score = float(score or 0.0)
         best_scores.append(score)
         best_scan[fid] = (sid, scid)
@@ -1054,7 +908,6 @@ def annotation_summary(
         if score >= hi:
             n_confident += 1
             n_conf_confirmed += int(bool(confirmed))
-            n_conf_not_chim += int(not chim)
             n_conf_not_po += int(not po)
             n_conf_not_flat += int(not flat)
 
@@ -1133,7 +986,6 @@ def annotation_summary(
         top_features=top_features,
         n_best_confident=n_confident,
         n_confident_precursor_confirmed=n_conf_confirmed,
-        n_confident_not_chimeric=n_conf_not_chim,
         n_confident_not_precursor_only=n_conf_not_po,
         n_confident_not_flat_fragmentation=n_conf_not_flat,
         n_consensus=n_consensus,
@@ -1411,42 +1263,6 @@ def figure_purity_per_sample(assoc: AssociatedPuritySummary) -> go.Figure:
     return fig
 
 
-_UNSCORED_SEGMENTS = [
-    ("purity scored (peak resolved)", "n_scored", _C_OK),
-    ("precursor confirmed in MS1, peak not resolved", "n_unresolved_confirmed", _C_GOOD),
-    ("precursor not confirmed in MS1", "n_not_confirmed", _C_WARN),
-    ("parent MS1 off-pixel (flyback)", "n_off_pixel", _C_MUTED),
-    ("no MS1 before the scan", "n_no_parent", _C_DARK),
-    ("no precursor m/z", "n_no_precursor_mz", _C_FAINT),
-]
-
-
-def figure_purity_unscored(unscored: UnscoredSummary) -> go.Figure:
-    """Stacked bar per sample: scored vs. each reason purity is unscored."""
-    ps = unscored.per_sample
-    if not ps:
-        return _empty("Precursor purity — scored vs. unscored")
-    names = [p.name for p in ps]
-    fig = go.Figure()
-    for label, attr, color in _UNSCORED_SEGMENTS:
-        vals = [getattr(p, attr) for p in ps]
-        if not any(vals):
-            continue
-        fig.add_bar(
-            name=label, x=names, y=vals, marker_color=color,
-            hovertemplate=f"%{{x}}<br>{label}: %{{y:,}}<extra></extra>",
-        )
-    fig.update_layout(
-        title="Precursor purity — scored vs. why unscored",
-        barmode="stack",
-        xaxis=dict(title="sample"),
-        yaxis=dict(title="MS2 scans", tickformat=","),
-        legend=_LEGEND_TOP,
-        margin=_MARGIN_TOP,
-    )
-    return fig
-
-
 # --- annotation (Stage B) figures -----------------------------------------
 
 
@@ -1589,7 +1405,6 @@ def collect_stats(
         ms2=ms2_summary(analysis_db_path),
         per_sample_ms2=per_sample_ms2(analysis_db_path),
         associated_purity=associated_purity(analysis_db_path, cutoff=purity_cutoff),
-        unscored=purity_unscored(analysis_db_path, raw_db_paths),
         mad_filter=mad_filter_summary(analysis_db_path),
         recheck=unassociated_recheck(analysis_db_path),
         annotation=annotation_summary(analysis_db_path),
@@ -1684,8 +1499,7 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
         trust = (
             f" Of the {_fmt(c)} best hits ≥ {hi:g}: "
             f"{100.0 * a.n_confident_precursor_confirmed / c:.0f}% from a "
-            f"confirmed precursor, {100.0 * a.n_confident_not_chimeric / c:.0f}% "
-            f"non-chimeric, {100.0 * a.n_confident_not_precursor_only / c:.0f}% "
+            f"confirmed precursor, {100.0 * a.n_confident_not_precursor_only / c:.0f}% "
             f"with real fragmentation, "
             f"{100.0 * a.n_confident_not_flat_fragmentation / c:.0f}% not flagged "
             f"flat fragmentation."

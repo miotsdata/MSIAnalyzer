@@ -5,7 +5,7 @@ cross-sample m/z list (``features`` table). It does *not* filter scans — a
 scan that matches nothing, or whose fragmentation clearly failed, is kept
 and flagged so the counts stay visible downstream.
 
-Three distinct tolerances are involved and must not be conflated:
+Two distinct tolerances are involved and must not be conflated:
 
 * ``align_ppm`` — MS1<->MS1 tolerance used once by
   ``align_mz_across_samples`` to decide feature identity. It also sets each
@@ -14,16 +14,20 @@ Three distinct tolerances are involved and must not be conflated:
   used here. It must cover the feature's own width *plus* the extra
   measurement / calibration slack of a single survey-scan precursor, so
   ``assoc_ppm >= align_ppm`` always (a warning is emitted otherwise).
-* the isolation window ``[target - lower, target + upper]`` — physical, in
-  Da, read from the mzML. Used only to enumerate the features that could
-  have co-fragmented into a scan (the chimera count), never as the matcher.
+
+A scan's physical isolation window (``[target - lower, target + upper]``,
+read from the mzML) narrows the search for its matching feature but is no
+longer used to count or flag "chimeric" scans — that count (how many
+*aligned features* fall inside the window) measures feature-list density,
+not what actually co-fragmented into that scan's own spectrum, and
+over-flags badly on large acquisitions (a wide enough window straddles
+several features even when the scan's own parent MS1 held a single clean
+peak there). See :mod:`msianalyzer.core.annotation.precursor_purity` for
+the scan-intrinsic replacement (``precursor_frac``) and ADR 0019.
 
 Outputs (schema in :func:`msianalyzer.core.analysis_db.create_analysis_schema`):
 
 * ``ms2_associations`` — one row per MS2 scan (the primary pick + flags).
-* ``ms2_window_features`` — one row per (scan, feature inside its isolation
-  window); ``is_primary`` marks the chosen one. Always populated: a clean
-  single match is one row.
 * ``feature_ms2_summary`` — one row per feature: how many MS2 hit it, how
   many across samples, and how many of those show no real fragmentation.
 """
@@ -34,20 +38,19 @@ import logging
 import sqlite3
 import warnings
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
 import numpy as np
 
 from ..analysis_db import create_analysis_schema
-from ..utils.db import safe_execute, safe_executemany
+from ..utils.db import safe_executemany
 from ..utils.logging_utils import log_call
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "WindowFeature",
     "ScanAssociation",
     "FeatureMs2Summary",
     "GroupingResult",
@@ -169,17 +172,6 @@ def detect_flat_fragmentation(
 
 
 @dataclass(frozen=True)
-class WindowFeature:
-    """One master feature lying inside a scan's isolation window."""
-
-    feature_id: int
-    feature_mz: float
-    ppm_diff: float | None  # signed ppm of the match value vs this feature
-    within_tol: bool  # |ppm_diff| <= assoc_ppm
-    is_primary: bool  # chosen as the scan's association
-
-
-@dataclass(frozen=True)
 class ScanAssociation:
     """The association of a single MS2 scan (one ``ms2_associations`` row)."""
 
@@ -193,7 +185,6 @@ class ScanAssociation:
     isolation_window_lower: float | None
     isolation_window_upper: float | None
     ppm_offset: float | None  # signed, match value vs chosen feature
-    n_features_in_window: int
     nearest_other_feature_ppm: float | None
     precursor_target_delta_ppm: float | None
     rt: float | None
@@ -202,7 +193,6 @@ class ScanAssociation:
     polarity: str | None
     precursor_only: bool
     flat_fragmentation: bool
-    window_features: list[WindowFeature] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -215,7 +205,6 @@ class FeatureMs2Summary:
     n_samples: int
     n_precursor_only: int
     n_single_peak: int
-    n_chimeric: int
     n_flat_fragmentation: int
     median_n_peaks: float
 
@@ -292,6 +281,13 @@ def associate_scan(
     upper = scan.get("isolation_window_upper")
 
     # --- isolation window -> candidate features -------------------------
+    # Scopes the search to features physically inside the scan's isolation
+    # window before picking the nearest one within assoc_ppm — in practice
+    # this scoping step never changes the outcome (assoc_ppm's Da-equivalent
+    # width is always far tighter than a real isolation window), so it's
+    # kept only as a cheap pre-filter, not persisted as a "how many features
+    # could have co-fragmented" count (see the module docstring / ADR 0019
+    # for why that count is a misleading chimeric signal, not a real one).
     center = tgt if tgt is not None else match_val
     lo_off = float(lower) if lower is not None else default_isolation_half_width
     up_off = float(upper) if upper is not None else default_isolation_half_width
@@ -300,31 +296,14 @@ def associate_scan(
     else:
         in_win = np.zeros(features.size, dtype=bool)
 
-    window_features: list[WindowFeature] = []
-    for fid, fmz in zip(feature_ids[in_win], features[in_win]):
-        d = ppm_between(match_val, float(fmz)) if match_val is not None else None
-        window_features.append(
-            WindowFeature(
-                feature_id=int(fid),
-                feature_mz=float(fmz),
-                ppm_diff=d,
-                within_tol=d is not None and abs(d) <= assoc_ppm,
-                is_primary=False,
-            )
-        )
-
     # --- primary pick: nearest in-window feature within tolerance -------
     feature_id = feature_mz = ppm_offset = None
-    candidates = [w for w in window_features if w.within_tol]
-    if candidates:
-        best = min(candidates, key=lambda w: abs(w.ppm_diff))
-        window_features = [
-            replace(w, is_primary=(w.feature_id == best.feature_id))
-            for w in window_features
-        ]
-        feature_id = best.feature_id
-        feature_mz = best.feature_mz
-        ppm_offset = best.ppm_diff
+    if match_val is not None:
+        best_d = None
+        for fid, fmz in zip(feature_ids[in_win], features[in_win]):
+            d = ppm_between(match_val, float(fmz))
+            if abs(d) <= assoc_ppm and (best_d is None or abs(d) < abs(best_d)):
+                feature_id, feature_mz, ppm_offset, best_d = int(fid), float(fmz), d, d
 
     # --- flags --------------------------------------------------------
     nearest_other = None
@@ -373,7 +352,6 @@ def associate_scan(
         isolation_window_lower=None if lower is None else float(lower),
         isolation_window_upper=None if upper is None else float(upper),
         ppm_offset=ppm_offset,
-        n_features_in_window=len(window_features),
         nearest_other_feature_ppm=nearest_other,
         precursor_target_delta_ppm=prec_tgt_delta,
         rt=scan.get("rt"),
@@ -382,7 +360,6 @@ def associate_scan(
         polarity=scan.get("polarity"),
         precursor_only=precursor_only,
         flat_fragmentation=flat_fragmentation,
-        window_features=window_features,
     )
 
 
@@ -407,7 +384,6 @@ def summarize_features(
                 n_samples=len({r.sample_id for r in rows}),
                 n_precursor_only=sum(r.precursor_only for r in rows),
                 n_single_peak=sum(r.n_peaks <= 1 for r in rows),
-                n_chimeric=sum(r.n_features_in_window > 1 for r in rows),
                 n_flat_fragmentation=sum(r.flat_fragmentation for r in rows),
                 median_n_peaks=float(np.median(n_peaks)) if n_peaks else 0.0,
             )
@@ -497,7 +473,6 @@ _ASSOC_COLS = (
     "isolation_window_lower",
     "isolation_window_upper",
     "ppm_offset",
-    "n_features_in_window",
     "nearest_other_feature_ppm",
     "precursor_target_delta_ppm",
     "rt",
@@ -524,27 +499,22 @@ def persist_grouping(
         db_path: Path to the analysis database.
         result: The grouping to store.
         command_id: Optional ``commands.id`` stamped on every association.
-        replace_existing: Clear the three grouper tables first (a re-run
-            replaces the association without touching ``features`` /
-            ``samples``).
+        replace_existing: Clear the grouper tables first (a re-run replaces
+            the association without touching ``features`` / ``samples``).
     """
     with sqlite3.connect(Path(db_path)) as con:
         con.execute("PRAGMA foreign_keys = ON")
         create_analysis_schema(con)  # idempotent; grouper tables live here
         if replace_existing:
-            con.execute("DELETE FROM ms2_window_features")
             con.execute("DELETE FROM ms2_associations")
             con.execute("DELETE FROM feature_ms2_summary")
 
         placeholders = ", ".join("?" * len(_ASSOC_COLS))
-        insert_assoc = (
+        safe_executemany(
+            con,
             f"INSERT INTO ms2_associations ({', '.join(_ASSOC_COLS)}) "
-            f"VALUES ({placeholders})"
-        )
-        for a in result.associations:
-            cur = safe_execute(
-                con,
-                insert_assoc,
+            f"VALUES ({placeholders})",
+            [
                 (
                     a.sample_id,
                     a.scan_id,
@@ -555,7 +525,6 @@ def persist_grouping(
                     a.isolation_window_lower,
                     a.isolation_window_upper,
                     a.ppm_offset,
-                    a.n_features_in_window,
                     a.nearest_other_feature_ppm,
                     a.precursor_target_delta_ppm,
                     a.rt,
@@ -565,40 +534,20 @@ def persist_grouping(
                     int(a.precursor_only),
                     int(a.flat_fragmentation),
                     command_id,
-                ),
-                table="ms2_associations",
-                logger=logger,
-                source=db_path,
-            )
-            assoc_id = cur.lastrowid
-            if a.window_features:
-                safe_executemany(
-                    con,
-                    "INSERT INTO ms2_window_features "
-                    "(association_id, feature_id, feature_mz, ppm_diff, "
-                    " within_tol, is_primary) VALUES (?, ?, ?, ?, ?, ?)",
-                    [
-                        (
-                            assoc_id,
-                            w.feature_id,
-                            w.feature_mz,
-                            w.ppm_diff,
-                            int(w.within_tol),
-                            int(w.is_primary),
-                        )
-                        for w in a.window_features
-                    ],
-                    table="ms2_window_features",
-                    logger=logger,
-                    source=db_path,
                 )
+                for a in result.associations
+            ],
+            table="ms2_associations",
+            logger=logger,
+            source=db_path,
+        )
 
         safe_executemany(
             con,
             "INSERT INTO feature_ms2_summary "
             "(feature_id, feature_mz, n_ms2, n_samples, n_precursor_only, "
-            " n_single_peak, n_chimeric, n_flat_fragmentation, median_n_peaks) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " n_single_peak, n_flat_fragmentation, median_n_peaks) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     s.feature_id,
@@ -607,7 +556,6 @@ def persist_grouping(
                     s.n_samples,
                     s.n_precursor_only,
                     s.n_single_peak,
-                    s.n_chimeric,
                     s.n_flat_fragmentation,
                     s.median_n_peaks,
                 )

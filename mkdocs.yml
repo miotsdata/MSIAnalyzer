@@ -74,6 +74,7 @@ nav:
           - 16 — Store raw library spectrum: developer/adr/0016-store-raw-library-spectrum.md
           - 17 — Mirror plot background worker: developer/adr/0017-mirror-plot-background-worker.md
           - 18 — Reconstruct filtered spectra on demand: developer/adr/0018-reconstruct-filtered-spectra-on-demand.md
+          - 19 — Retire feature-density chimeric flag & peak-based purity: developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md
       - Testing: developer/testing.md
       - Logging: developer/logging.md
       - API reference:

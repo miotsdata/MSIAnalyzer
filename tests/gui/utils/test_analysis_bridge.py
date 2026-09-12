@@ -74,8 +74,8 @@ def _seed_annotated_feature(db_path, *, with_raw_spectra=True):
         con.execute(
             "INSERT INTO ms2_associations "
             "(sample_id, scan_id, match_key, precursor_mz, "
-            "n_features_in_window, rt, n_peaks, polarity) "
-            "VALUES (1, 42, 'k1', 150.1234, 1, 12.3, 5, 'positive')"
+            "rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 150.1234, 12.3, 5, 'positive')"
         )
 
         if with_raw_spectra:
@@ -557,15 +557,15 @@ def test_get_spectrum_url_colors_peaks_by_feature_category(tmp_path):
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (2, 200.0, 3, 1, 0, 0, 0, 0, 3.0)"
+            "VALUES (2, 200.0, 3, 1, 0, 0, 0, 3.0)"
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (3, 300.0, 2, 1, 0, 0, 0, 0, 3.0)"
+            "VALUES (3, 300.0, 2, 1, 0, 0, 0, 3.0)"
         )
         con.execute(
             "INSERT INTO annotation_libraries (id, path, name) "
@@ -574,8 +574,8 @@ def test_get_spectrum_url_colors_peaks_by_feature_category(tmp_path):
         con.execute(
             "INSERT INTO ms2_associations "
             "(sample_id, scan_id, match_key, precursor_mz, "
-            "n_features_in_window, rt, n_peaks, polarity) "
-            "VALUES (1, 42, 'k1', 300.1, 1, 12.3, 5, 'positive')"
+            "rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 300.1, 12.3, 5, 'positive')"
         )
         con.execute(
             "INSERT INTO ms2_annotations "
@@ -643,9 +643,9 @@ def test_get_feature_detail_reports_presence_ms2_and_hits(tmp_path):
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (7, 150.0, 5, 1, 0, 0, 0, 0, 3.0)"
+            "VALUES (7, 150.0, 5, 1, 0, 0, 0, 3.0)"
         )
         con.commit()
     _seed_annotated_feature(db_path)

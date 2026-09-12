@@ -16,9 +16,8 @@ samples              one row per raw database feeding the analysis
 aggregated_spectra   averaged MS1 / centroids / filtered peaks, per sample
 features             aligned cross-sample master m/z list
 ms2_associations     one row per MS2 scan snapped to a feature (grouper)
-ms2_window_features  features inside each scan's isolation window
 feature_ms2_summary  per-feature MS2 coverage roll-up
-precursor_purity     per-MS2 isolation-window purity vs. its parent MS1
+precursor_purity     per-MS2 precursor purity (precursor_frac) vs. its parent MS1
 feature_ms2_consensus per-feature "best MS2 scan" pick
 annotation_libraries one row per spectral library used to annotate
 ms2_annotations      one row per (MS2 scan, library candidate) comparison
@@ -177,7 +176,14 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
 
     # --- MS2 -> feature association (Stage A of annotation) ---------------
     # Written by core.annotation.group_ms2. One row per MS2 scan; a re-run
-    # replaces these rows without touching features / samples.
+    # replaces these rows without touching features / samples. A scan's
+    # physical isolation window narrows the search for its matching feature
+    # internally, but the count of *other* aligned features that also fall
+    # inside it is no longer stored or exposed — it measures feature-list
+    # density, not what actually co-fragmented into this scan's own
+    # spectrum, and over-flagged badly once a feature list grew dense (see
+    # ADR 0019). precursor_purity.precursor_frac is the scan-intrinsic
+    # replacement.
     con.execute("""
         CREATE TABLE IF NOT EXISTS ms2_associations (
             id                          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,7 +196,6 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             isolation_window_lower      REAL,
             isolation_window_upper      REAL,
             ppm_offset                  REAL,
-            n_features_in_window        INTEGER NOT NULL,
             nearest_other_feature_ppm   REAL,
             precursor_target_delta_ppm  REAL,
             rt                          REAL,
@@ -208,21 +213,6 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_assoc_feature ON ms2_associations(feature_id)"
     )
-    # One row per (association, feature inside its isolation window). Always
-    # populated: a clean single match is one row with is_primary = 1.
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS ms2_window_features (
-            association_id  INTEGER NOT NULL,
-            feature_id      INTEGER NOT NULL,
-            feature_mz      REAL    NOT NULL,
-            ppm_diff        REAL,
-            within_tol      INTEGER NOT NULL,
-            is_primary      INTEGER NOT NULL,
-            PRIMARY KEY (association_id, feature_id),
-            FOREIGN KEY (association_id) REFERENCES ms2_associations(id) ON DELETE CASCADE,
-            FOREIGN KEY (feature_id) REFERENCES features(feature_id)
-        )
-    """)
     # Per-feature MS2 coverage roll-up (materialised at grouper time).
     con.execute("""
         CREATE TABLE IF NOT EXISTS feature_ms2_summary (
@@ -232,7 +222,6 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             n_samples         INTEGER NOT NULL,
             n_precursor_only  INTEGER NOT NULL,
             n_single_peak     INTEGER NOT NULL,
-            n_chimeric        INTEGER NOT NULL,
             n_flat_fragmentation INTEGER NOT NULL DEFAULT 0,
             median_n_peaks    REAL    NOT NULL,
             FOREIGN KEY (feature_id) REFERENCES features(feature_id)
@@ -242,26 +231,22 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     # --- MS2 precursor ion purity (Stage A' of annotation) --------------
     # Written by core.annotation.precursor_purity.run_precursor_purity. One
     # row per MS2 scan; a re-run replaces every row. Chimericity measured
-    # against the scan's own parent MS1 (and the next MS1 on the same raster
-    # line), not the analysis-wide feature list.
+    # against the scan's own parent MS1, not the analysis-wide feature
+    # list — precursor_frac (peak-detection-free) is the metric; see
+    # ADR 0019 for why the old peak-picking-based purity/n_peaks_in_window/
+    # runner_up_rel_int (and the parent+next-MS1 raster interpolation that
+    # fed them) were retired: on real MALDI-imaging data the peak-picker
+    # failed to resolve the precursor as a discrete peak in ~56% of dense,
+    # matrix-heavy, low-m/z windows, even when the signal was plainly
+    # present.
     con.execute("""
         CREATE TABLE IF NOT EXISTS precursor_purity (
             id                      INTEGER PRIMARY KEY AUTOINCREMENT,
             sample_id               INTEGER,
             ms2_scan_id             INTEGER NOT NULL,
             parent_ms1_scan_id      INTEGER,
-            next_ms1_scan_id        INTEGER,
-            bracket_kind            TEXT    NOT NULL,
-            rt_weight               REAL,
             window_lo_mz            REAL,
             window_hi_mz            REAL,
-            precursor_found         INTEGER NOT NULL,
-            precursor_mz_ms1        REAL,
-            precursor_intensity_ms1 REAL,
-            n_peaks_in_window       INTEGER NOT NULL,
-            runner_up_rel_int       REAL,
-            purity                  REAL,
-            purity_parent           REAL,
             precursor_confirmed     INTEGER,
             precursor_frac          REAL,
             precursor_mz_snapped    REAL,
@@ -277,15 +262,16 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         "ON precursor_purity(sample_id, ms2_scan_id)"
     )
     con.execute(
-        "CREATE INDEX IF NOT EXISTS idx_purity_value ON precursor_purity(purity)"
+        "CREATE INDEX IF NOT EXISTS idx_purity_value "
+        "ON precursor_purity(precursor_frac)"
     )
 
     # --- per-feature "best MS2 scan" pick (Stage A'' of annotation) ------
     # Written by core.annotation.consensus.run_consensus. One row per
     # feature that carries at least one (kept) MS2 scan; a re-run replaces
-    # every row. Folds annotation score (when available), purity and peak
-    # count into a single pick so downstream can grab one spectrum per
-    # feature without re-deriving the ranking.
+    # every row. Folds annotation score (when available), precursor purity
+    # and peak count into a single pick so downstream can grab one spectrum
+    # per feature without re-deriving the ranking.
     con.execute("""
         CREATE TABLE IF NOT EXISTS feature_ms2_consensus (
             feature_id             INTEGER PRIMARY KEY,
@@ -296,7 +282,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             n_ms2_considered       INTEGER NOT NULL,
             n_ms2_scored           INTEGER NOT NULL,
             consensus_score        REAL    NOT NULL,
-            purity                 REAL,
+            precursor_frac         REAL,
             n_peaks                INTEGER,
             best_annotation_score  REAL,
             best_compound_name     TEXT,
@@ -334,6 +320,10 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     #   rank_scan_feature         - the feature's scans by their best hit
     #                              (all samples), broadcast onto the scan's rows
     #   rank_scan_feature_sample  - same, within one sample
+    # Every MS2 scan associated with a feature is scored unconditionally —
+    # there is no more feature-list-density "chimeric" gate (see ADR 0019).
+    # precursor_confirmed/precursor_frac are carried through from
+    # precursor_purity as the real, per-scan quality signal.
     # emp_raw_*/lib_raw_* are the *untouched* (pre-noise-filtering) spectra
     # on both sides: emp_raw_* is the scan's own raw fragment arrays
     # (identical across every candidate row of that scan), lib_raw_* is the
@@ -374,10 +364,6 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             rank_feature_sample      INTEGER,
             rank_scan_feature        INTEGER,
             rank_scan_feature_sample INTEGER,
-            is_chimeric            INTEGER NOT NULL DEFAULT 0,
-            n_features_in_window   INTEGER,
-            purity                 REAL,
-            runner_up_rel_int      REAL,
             precursor_confirmed    INTEGER,
             precursor_frac         REAL,
             precursor_only         INTEGER NOT NULL DEFAULT 0,

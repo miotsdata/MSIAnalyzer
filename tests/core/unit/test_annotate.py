@@ -68,8 +68,6 @@ def _row(scan_id, score, *, feature_id=1, sample_id=1):
         n_lib_peaks=3,
         n_emp_peaks_raw=5,
         n_emp_peaks_filtered=4,
-        is_chimeric=False,
-        n_features_in_window=1,
         precursor_only=False,
         flat_fragmentation=False,
         emp_raw_mz=empty,
@@ -250,8 +248,6 @@ def test_annotate_feature_true_compound_outranks_decoys_and_carries_raw_arrays()
     scan = {
         "scan_id": 7,
         "sample_id": 1,
-        "n_features_in_window": 1,
-        "is_chimeric": False,
         "precursor_only": False,
         "emp_mz": emp_mz,
         "emp_int": emp_int,
@@ -288,49 +284,43 @@ def test_annotate_feature_true_compound_outranks_decoys_and_carries_raw_arrays()
     np.testing.assert_allclose(top.lib_raw_intensity, true_c.intensity)
 
 
-def test_annotate_feature_skips_chimeric_when_disabled():
+def test_annotate_feature_scores_every_scan_regardless_of_window_crowding():
+    # There is no more "chimeric" gate keyed on isolation-window feature
+    # density (see ADR 0019) — every scan is scored unconditionally.
     scan = {
         "scan_id": 1,
         "sample_id": 1,
-        "n_features_in_window": 3,
-        "is_chimeric": True,
         "precursor_only": False,
         "emp_mz": np.array([100.0, 200.0]),
         "emp_int": np.array([1.0, 1.0]),
     }
     cand = _cand(1, [100.0, 200.0], [1.0, 1.0])
-    assert (
-        annotate_feature(
-            1,
-            150.0,
-            [scan],
-            [cand],
-            fragment_ppm=10.0,
-            noise_threshold=0.0,
-            mz_power=2.0,
-            int_power=0.5,
-            min_matched_peaks=1,
-            annotate_chimeric=False,
-        )
-        == []
+    rows = annotate_feature(
+        1,
+        150.0,
+        [scan],
+        [cand],
+        fragment_ppm=10.0,
+        noise_threshold=0.0,
+        mz_power=2.0,
+        int_power=0.5,
+        min_matched_peaks=1,
     )
+    assert len(rows) == 1
 
 
-def _purity_scan(scan_id, purity, *, runner_up=None):
+def _purity_scan(scan_id, precursor_frac):
     return {
         "scan_id": scan_id,
         "sample_id": 1,
-        "n_features_in_window": 1,
-        "is_chimeric": False,
         "precursor_only": False,
-        "purity": purity,
-        "runner_up_rel_int": runner_up,
+        "precursor_frac": precursor_frac,
         "emp_mz": np.array([100.0, 200.0]),
         "emp_int": np.array([1.0, 1.0]),
     }
 
 
-def _annotate_one(scans, *, min_purity=None):
+def _annotate_one(scans, *, min_precursor_frac=None):
     return annotate_feature(
         1,
         150.0,
@@ -341,20 +331,19 @@ def _annotate_one(scans, *, min_purity=None):
         mz_power=2.0,
         int_power=0.5,
         min_matched_peaks=1,
-        min_purity=min_purity,
+        min_precursor_frac=min_precursor_frac,
     )
 
 
-def test_annotate_feature_carries_purity_onto_rows():
-    rows = _annotate_one([_purity_scan(1, 0.83, runner_up=0.2)])
-    assert rows[0].purity == pytest.approx(0.83)
-    assert rows[0].runner_up_rel_int == pytest.approx(0.2)
+def test_annotate_feature_carries_precursor_frac_onto_rows():
+    rows = _annotate_one([_purity_scan(1, 0.83)])
+    assert rows[0].precursor_frac == pytest.approx(0.83)
 
 
-def test_annotate_feature_min_purity_skips_low_and_keeps_unscored():
+def test_annotate_feature_min_precursor_frac_skips_low_and_keeps_unscored():
     rows = _annotate_one(
         [_purity_scan(1, 0.4), _purity_scan(2, 0.9), _purity_scan(3, None)],
-        min_purity=0.5,
+        min_precursor_frac=0.5,
     )
     kept = {r.scan_id for r in rows}
     assert kept == {2, 3}  # 0.4 dropped; None (unscored) kept
@@ -462,19 +451,18 @@ def _seeded_analysis_db(tmp_path, mock, make_ms2_db):
     return adb
 
 
-def _seed_purity(adb, scan_id, purity, *, sample_id=1, confirmed=1, frac=0.42):
+def _seed_purity(adb, scan_id, precursor_frac, *, sample_id=1, confirmed=1):
     with sqlite3.connect(adb) as con:
         con.execute("PRAGMA foreign_keys = ON")
         con.execute(
-            "INSERT INTO precursor_purity (sample_id, ms2_scan_id, bracket_kind, "
-            "precursor_found, n_peaks_in_window, purity, precursor_confirmed, "
-            "precursor_frac) VALUES (?,?,'parent_only',1,3,?,?,?)",
-            (sample_id, scan_id, purity, confirmed, frac),
+            "INSERT INTO precursor_purity (sample_id, ms2_scan_id, "
+            "precursor_confirmed, precursor_frac) VALUES (?,?,?,?)",
+            (sample_id, scan_id, confirmed, precursor_frac),
         )
         con.commit()
 
 
-def test_run_annotation_carries_purity_and_min_purity_filters(
+def test_run_annotation_carries_precursor_frac_and_min_precursor_frac_filters(
     ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
 ):
     mock = ms2_grouper_mock_data(n=1000)
@@ -487,23 +475,23 @@ def test_run_annotation_carries_purity_and_min_purity_filters(
     run_annotation(adb, cfg)
     with sqlite3.connect(adb) as con:
         row = con.execute(
-            "SELECT purity, precursor_confirmed, precursor_frac "
+            "SELECT precursor_confirmed, precursor_frac "
             "FROM ms2_annotations WHERE scan_id = ?", (single_scan,)
         ).fetchone()
     assert row is not None
-    assert row[0] == pytest.approx(0.2)
-    assert row[1] == 1  # precursor_confirmed carried through
-    assert row[2] == pytest.approx(0.42)
+    assert row[0] == 1  # precursor_confirmed carried through
+    assert row[1] == pytest.approx(0.2)
 
     cfg_filtered = AnnotateConfig(
-        library_path=str(lib), candidate_ppm=25.0, n_workers=1, min_purity=0.5
+        library_path=str(lib), candidate_ppm=25.0, n_workers=1,
+        min_precursor_frac=0.5,
     )
     run_annotation(adb, cfg_filtered)
     with sqlite3.connect(adb) as con:
         n = con.execute(
             "SELECT COUNT(*) FROM ms2_annotations WHERE scan_id = ?", (single_scan,)
         ).fetchone()[0]
-    assert n == 0  # dropped by min_purity
+    assert n == 0  # dropped by min_precursor_frac
 
 
 def test_run_annotation_end_to_end_ranks_true_compound(
@@ -539,9 +527,12 @@ def test_run_annotation_end_to_end_ranks_true_compound(
     assert blob_to_array(top[7]).size > 0
 
 
-def test_run_annotation_flags_chimeric_scans(
+def test_run_annotation_scores_scans_whose_window_holds_several_features(
     ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
 ):
+    # A scan whose isolation window physically holds several aligned
+    # features (the "chimeric" mock case) is still scored and stored —
+    # there is no more window-crowding gate (see ADR 0019).
     mock = ms2_grouper_mock_data(n=1000)
     adb = _seeded_analysis_db(tmp_path, mock, make_ms2_db)
     lib = make_library_db(mock, case="chimeric")
@@ -551,13 +542,11 @@ def test_run_annotation_flags_chimeric_scans(
 
     chim_scan_id = mock.planted["chimeric"].scan_id
     with sqlite3.connect(adb) as con:
-        rows = con.execute(
-            "SELECT DISTINCT is_chimeric, n_features_in_window FROM ms2_annotations "
-            "WHERE scan_id = ?",
+        n = con.execute(
+            "SELECT COUNT(*) FROM ms2_annotations WHERE scan_id = ?",
             (chim_scan_id,),
-        ).fetchall()
-    assert rows, "the chimeric scan should still be annotated"
-    assert all(r[0] == 1 and r[1] == 3 for r in rows)
+        ).fetchone()[0]
+    assert n > 0, "the scan should still be annotated"
 
 
 def test_run_annotation_no_library_is_a_noop(
@@ -625,13 +614,13 @@ def test_run_annotation_multiple_libraries_pooled_and_registered(
             "WHERE scan_id = ? AND rank_ms2 = 1",
             (single_scan_id,),
         ).fetchone()
-        # the chimeric feature is only in lib_b; it is still annotated + flagged
-        chim_rows = con.execute(
-            "SELECT DISTINCT is_chimeric FROM ms2_annotations WHERE scan_id = ?",
+        # the chimeric feature is only in lib_b; it is still annotated
+        chim_n = con.execute(
+            "SELECT COUNT(*) FROM ms2_annotations WHERE scan_id = ?",
             (chim_scan_id,),
-        ).fetchall()
+        ).fetchone()[0]
     assert single_top is not None and single_top[0] == "TrueCompound"
-    assert chim_rows and all(r[0] == 1 for r in chim_rows)
+    assert chim_n > 0
 
 
 def test_run_annotation_re_run_replaces_all_configured_libraries(

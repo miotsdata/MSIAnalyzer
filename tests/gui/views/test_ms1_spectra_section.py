@@ -27,9 +27,9 @@ def ms1_analysis_model(annotated_analysis_model):
     with sqlite3.connect(db_path) as con:
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (7, 123.4567, 5, 1, 0, 0, 0, 0, 3.0)"
+            "VALUES (7, 123.4567, 5, 1, 0, 0, 0, 3.0)"
         )
         con.commit()
 

@@ -286,8 +286,8 @@ def annotated_analysis_model(analysis_model):
         con.execute(
             "INSERT INTO ms2_associations "
             "(sample_id, scan_id, match_key, precursor_mz, "
-            "n_features_in_window, rt, n_peaks, polarity) "
-            "VALUES (1, 42, 'k1', 150.1234, 1, 12.3, 5, 'positive')"
+            "rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 150.1234, 12.3, 5, 'positive')"
         )
         blob = array_to_blob(np.array([100.0, 200.0], dtype=np.float32))
         con.execute(

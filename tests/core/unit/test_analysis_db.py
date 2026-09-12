@@ -66,7 +66,6 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             "aggregated_spectra",
             "features",
             "ms2_associations",
-            "ms2_window_features",
             "feature_ms2_summary",
             "precursor_purity",
             "feature_ms2_consensus",
@@ -78,7 +77,7 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             row[1] for row in conn.execute("PRAGMA table_info(commands)").fetchall()
         }
         assert "sample_id" in cmd_cols
-        # precursor_purity carries the purity headline columns
+        # precursor_purity carries the precursor-purity headline columns
         purity_cols = {
             row[1]
             for row in conn.execute(
@@ -88,12 +87,6 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
         assert {
             "ms2_scan_id",
             "parent_ms1_scan_id",
-            "next_ms1_scan_id",
-            "bracket_kind",
-            "n_peaks_in_window",
-            "runner_up_rel_int",
-            "purity",
-            "purity_parent",
             "precursor_confirmed",
             "precursor_frac",
             "precursor_mz_snapped",
@@ -106,9 +99,7 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
                 "PRAGMA table_info(ms2_annotations)"
             ).fetchall()
         }
-        assert {
-            "purity", "runner_up_rel_int", "precursor_confirmed", "precursor_frac"
-        } <= ann_cols
+        assert {"precursor_confirmed", "precursor_frac"} <= ann_cols
         assert {
             "rank_ms2",
             "rank_feature",
@@ -375,15 +366,15 @@ def _seed_samples_features_ms2_summary(db: Path) -> None:
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (1, 100.0, 5, 2, 0, 0, 0, 0, 3.0)"
+            "VALUES (1, 100.0, 5, 2, 0, 0, 0, 3.0)"
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (2, 200.0, 0, 0, 0, 0, 0, 0, 0.0)"
+            "VALUES (2, 200.0, 0, 0, 0, 0, 0, 0.0)"
         )
         con.commit()
 
@@ -542,9 +533,9 @@ def test_load_feature_ms2_count_returns_n_ms2(tmp_path: Path):
     with sqlite3.connect(db) as con:
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (1, 100.0, 7, 2, 0, 0, 0, 0, 3.0)"
+            "VALUES (1, 100.0, 7, 2, 0, 0, 0, 3.0)"
         )
         con.commit()
 
@@ -585,8 +576,8 @@ def test_load_feature_list_labels_annotated_and_unannotated_features(tmp_path: P
         con.execute(
             "INSERT INTO ms2_associations "
             "(sample_id, scan_id, match_key, precursor_mz, "
-            "n_features_in_window, rt, n_peaks, polarity) "
-            "VALUES (1, 42, 'k1', 100.1, 1, 12.3, 5, 'positive')"
+            "rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 100.1, 12.3, 5, 'positive')"
         )
         con.execute(
             "INSERT INTO ms2_annotations "
@@ -637,15 +628,15 @@ def test_load_feature_categories_classifies_no_ms2_annotated_and_non_annotated(
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (2, 200.0, 3, 1, 0, 0, 0, 0, 3.0)"
+            "VALUES (2, 200.0, 3, 1, 0, 0, 0, 3.0)"
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, n_chimeric, "
+            "n_samples, n_precursor_only, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
-            "VALUES (3, 300.0, 2, 1, 0, 0, 0, 0, 3.0)"
+            "VALUES (3, 300.0, 2, 1, 0, 0, 0, 3.0)"
         )
         con.execute(
             "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
@@ -658,8 +649,8 @@ def test_load_feature_categories_classifies_no_ms2_annotated_and_non_annotated(
         con.execute(
             "INSERT INTO ms2_associations "
             "(sample_id, scan_id, match_key, precursor_mz, "
-            "n_features_in_window, rt, n_peaks, polarity) "
-            "VALUES (1, 42, 'k1', 300.1, 1, 12.3, 5, 'positive')"
+            "rt, n_peaks, polarity) "
+            "VALUES (1, 42, 'k1', 300.1, 12.3, 5, 'positive')"
         )
         con.execute(
             "INSERT INTO ms2_annotations "

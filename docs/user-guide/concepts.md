@@ -64,15 +64,19 @@ number:
 The window is **hundreds of ppm wide** — far wider than a ppm match tolerance. So
 the quadrupole often transmits, and co-fragments, *several* MS1 ions at once: an
 MS2 scan can be **chimeric**. MSIAnalyzer matches on `precursor_mz` (same kind of
-quantity as a feature) and uses the window only to count how many features could
-have contributed. See [ADR 5](../developer/adr/0005-three-ppm-tolerances.md).
+quantity as a feature), narrowing its search to features physically inside that
+window before picking the nearest one. See
+[ADR 5](../developer/adr/0005-three-ppm-tolerances.md).
 
-That count (`n_features_in_window`) uses the analysis-wide feature list and
-over-flags on large runs. The **precursor purity** stage
+How many features happen to fall inside that window is *not* a reliable
+chimericity signal — it's a property of how dense the analysis-wide feature
+list is, not of what actually co-fragmented into any one scan (see
+[ADR 19](../developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md)).
+The **precursor purity** stage
 ([ADR 8](../developer/adr/0008-precursor-ion-purity.md)) instead measures how
 much of the ion current in the window actually belonged to the precursor,
 reading the scan's own parent MS1 — a chimericity signal that does not depend on
-how many samples the analysis spans.
+how many samples the analysis spans, or how many features it detected.
 
 ## Fragmentation failure
 

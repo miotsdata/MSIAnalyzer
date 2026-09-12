@@ -20,8 +20,7 @@ This page covers the core pipeline. See [GUI](gui.md) for the desktop app
                  │  aggregated_spectra                      │  avg / centroids / filtered
                  │  features                                │  cross-sample master m/z
                  │  ms2_associations                        │  ┐
-                 │  ms2_window_features                     │  ├─ grouper
-                 │  feature_ms2_summary                     │  ┘
+                 │  feature_ms2_summary                     │  ┘  grouper
                  └──────────────────────────────────────────┘
 ```
 
@@ -44,7 +43,7 @@ default, overridable per sample via `io.db_paths`), never inside an analysis
 | centroids | `detect_ms1_centroids` | previous aggregated spectrum | analysis: `aggregated_spectra` |
 | filter | `filter_intensities_mad` / threshold | previous aggregated spectrum | analysis: `aggregated_spectra` |
 | align | `align_mz_across_samples` | per-sample filtered peaks | analysis: `features`; `aligned_mzs.csv` |
-| group MS2 | `run_grouper` | analysis `features`, `samples`; raw `ms2_scans` | analysis: `ms2_associations`, `ms2_window_features`, `feature_ms2_summary` |
+| group MS2 | `run_grouper` | analysis `features`, `samples`; raw `ms2_scans` | analysis: `ms2_associations`, `feature_ms2_summary` |
 | annotate MS2 | `run_annotation` | analysis `features`, `ms2_associations`; raw `ms2_scans`; library DB | analysis: `annotation_libraries`, `ms2_annotations` |
 | AnnData | `create_spatial_adata` | raw `ms1_scans`, `pixel_ms1_scans`, `spatial_pixels`; feature m/z | `<sample>.h5ad` |
 

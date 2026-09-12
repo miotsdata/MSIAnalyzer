@@ -23,7 +23,6 @@ from msianalyzer.core.report.summary import (
     AssociatedPuritySummary,
     Ms2Summary,
     RecheckSummary,
-    UnscoredSummary,
     annotation_summary,
     associated_purity,
     build_summary_report,
@@ -34,14 +33,12 @@ from msianalyzer.core.report.summary import (
     figure_per_sample,
     figure_purity,
     figure_purity_per_sample,
-    figure_purity_unscored,
     figure_unassociated_recheck,
     mad_filter_summary,
     ms2_summary,
     overlap_combos,
     per_sample_counts,
     per_sample_ms2,
-    purity_unscored,
     unassociated_recheck,
 )
 from msianalyzer.core.spectra.average_spectra import mad_threshold
@@ -154,39 +151,37 @@ def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
 
         con.executemany(
             "INSERT INTO ms2_associations "
-            "(sample_id, scan_id, feature_id, match_key, n_features_in_window, "
+            "(sample_id, scan_id, feature_id, match_key, "
             " n_peaks, precursor_only, precursor_mz, isolation_window_target, "
             " isolation_window_lower, isolation_window_upper) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             [
                 # s1: two associated, one unassociated but recoverable (555.5)
-                (sid1, 1001, 1, "precursor_mz", 1, 10, 0, 500.0, 500.0, 0.5, 0.5),
-                (sid1, 1002, 1, "precursor_mz", 3, 20, 0, 500.0, 500.0, 0.5, 0.5),
-                (sid1, 1003, None, "precursor_mz", 0, 2, 1, 555.5, 555.5, 0.5, 0.5),
+                (sid1, 1001, 1, "precursor_mz", 10, 0, 500.0, 500.0, 0.5, 0.5),
+                (sid1, 1002, 1, "precursor_mz", 20, 0, 500.0, 500.0, 0.5, 0.5),
+                (sid1, 1003, None, "precursor_mz", 2, 1, 555.5, 555.5, 0.5, 0.5),
                 # s2: one associated, one unassociated + unrecoverable (999.0),
                 #     one unassociated with no precursor m/z at all
-                (sid2, 1001, 2, "precursor_mz", 2, 8, 0, 700.0, 700.0, 0.5, 0.5),
-                (sid2, 1002, None, "precursor_mz", 0, 4, 0, 999.0, 999.0, 0.5, 0.5),
-                (sid2, 1003, None, "none", 0, 1, 0, None, None, None, None),
+                (sid2, 1001, 2, "precursor_mz", 8, 0, 700.0, 700.0, 0.5, 0.5),
+                (sid2, 1002, None, "precursor_mz", 4, 0, 999.0, 999.0, 0.5, 0.5),
+                (sid2, 1003, None, "none", 1, 0, None, None, None, None),
             ],
         )
         con.executemany(
             "INSERT INTO precursor_purity "
-            "(sample_id, ms2_scan_id, bracket_kind, parent_ms1_scan_id, "
-            " window_lo_mz, precursor_found, n_peaks_in_window, purity, "
+            "(sample_id, ms2_scan_id, parent_ms1_scan_id, "
             " precursor_confirmed, precursor_frac) "
-            "VALUES (?,?,'parent_only',?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?)",
             [
-                # s1: 1001/1002 are ASSOCIATED (feature_id=1); 2001.. are extras
-                (sid1, 1001, 1, 499.5, 1, 1, 0.97, 1, 0.90),
-                (sid1, 1002, 1, 499.5, 1, 3, 0.35, 1, 0.40),
-                (sid1, 2001, 1, 499.5, 0, 2, None, 1, 0.05),   # on-pixel, confirmed, peak unresolved
-                (sid1, 2005, 1, 499.5, 0, 2, None, 0, 0.001),  # on-pixel, NOT confirmed
-                (sid1, 2002, 99, 499.5, 0, 2, None, 1, 0.05),  # parent MS1 off-pixel
-                (sid1, 2003, 1, None, 0, 0, None, 0, None),    # no precursor m/z (no window)
-                (sid1, 2004, None, None, 0, 0, None, 0, None), # no parent MS1
+                # s1: 1001/1002 are ASSOCIATED (feature_id=1); 2001/2002 are
+                # extra, unassociated scans kept only for "all MS2" context.
+                (sid1, 1001, 1, 1, 0.90),
+                (sid1, 1002, 1, 1, 0.40),
+                (sid1, 2001, 1, 1, 0.05),
+                (sid1, 2002, 1, 0, 0.15),
                 # s2: 1001 is ASSOCIATED (feature_id=2)
-                (sid2, 1001, 5, 699.5, 1, 2, 0.60, 1, 0.70),
+                (sid2, 1001, 5, 1, 0.70),
+                (sid2, 2001, 5, 1, 0.10),
             ],
         )
         con.commit()
@@ -275,31 +270,6 @@ def test_unassociated_recheck(tmp_path):
     assert by_name["s2"]["n_no_precursor_mz"] == 1
 
 
-def test_purity_unscored(tmp_path):
-    adb, raw_map = _analysis_db(tmp_path)
-    u = purity_unscored(adb, raw_map)
-    assert u.n_scored == 3  # 2 in s1 + 1 in s2
-    assert u.n_unresolved_confirmed == 1  # 2001: on-pixel, confirmed, peak unresolved
-    assert u.n_not_confirmed == 1         # 2005: on-pixel, not confirmed
-    assert u.n_off_pixel == 1             # 2002
-    assert u.n_no_precursor_mz == 1       # 2003
-    assert u.n_no_parent == 1             # 2004
-    assert u.n_unscored == 5
-    s1 = next(p for p in u.per_sample if p.name == "s1")
-    assert (s1.n_scored, s1.n_off_pixel, s1.n_unresolved_confirmed) == (2, 1, 1)
-
-
-def test_purity_unscored_without_pixel_map_folds_off_pixel_by_confirmed(tmp_path):
-    adb, raw_map = _analysis_db(tmp_path)
-    sid1, sid2 = sorted(raw_map)
-    # point s1 at the raw DB that has no pixel_ms1_scans table
-    u = purity_unscored(adb, raw_db_paths={sid1: raw_map[sid2]})
-    # off-pixel can no longer be distinguished; 2002 was confirmed -> unresolved
-    assert u.n_off_pixel == 0
-    assert u.n_unresolved_confirmed == 2  # 2001 + 2002
-    assert u.n_not_confirmed == 1         # 2005
-
-
 def test_mad_filter_summary_none_when_not_used(tmp_path):
     adb, _ = _analysis_db(tmp_path)  # filter_spectra logged with empty arguments
     assert mad_filter_summary(adb) is None
@@ -357,9 +327,6 @@ def test_figures_return_figures_and_tolerate_empty():
     assert isinstance(
         figure_unassociated_recheck(RecheckSummary(10.0, 0, 0, 0, 0, [])),
         go.Figure,
-    )
-    assert isinstance(
-        figure_purity_unscored(UnscoredSummary([], 0, 0, 0, 0, 0, 0)), go.Figure
     )
 
 
@@ -419,8 +386,8 @@ def _seed_annotations(adb: Path) -> None:
         "lib_coverage, emp_coverage, coverage_score, n_matched_peaks, n_lib_peaks, "
         "n_emp_peaks_raw, n_emp_peaks_filtered, rank_ms2, rank_feature, "
         "rank_feature_sample, rank_scan_feature, rank_scan_feature_sample, "
-        "precursor_confirmed, is_chimeric, precursor_only) "
-        "VALUES (?,?,?,1,?,?,?,?,?,1,1,1,3,3,5,4,?,?,?,?,?,?,?,?)"
+        "precursor_confirmed, precursor_only) "
+        "VALUES (?,?,?,1,?,?,?,?,?,1,1,1,3,3,5,4,?,?,?,?,?,?,?)"
     )
     with sqlite3.connect(adb) as con:
         con.execute("PRAGMA foreign_keys = ON")
@@ -434,11 +401,11 @@ def _seed_annotations(adb: Path) -> None:
                 # sid, scan, feat, lib_spec_id, inchikey, name, score, dot,
                 # rank_ms2, rank_feature, rank_feature_sample,
                 # rank_scan_feature, rank_scan_feature_sample,
-                # confirmed, chimeric, prec_only
-                (1, 1001, 1, 10, "COMPA0000000AA", "Alpha", 0.85, 0.9, 1, 1, 1, 1, 1, 1, 0, 0),  # noqa: E501
-                (1, 1001, 1, 11, "COMPB0000000BB", "Beta", 0.55, 0.6, 2, 3, 3, 1, 1, 1, 0, 0),  # noqa: E501
-                (1, 1002, 1, 10, "COMPA0000000AA", "Alpha", 0.60, 0.7, 1, 2, 2, 2, 2, 1, 0, 0),  # noqa: E501
-                (2, 1001, 2, 12, "COMPC0000000CC", "Gamma", 0.72, 0.8, 1, 1, 1, 1, 1, 1, 0, 0),  # noqa: E501
+                # confirmed, prec_only
+                (1, 1001, 1, 10, "COMPA0000000AA", "Alpha", 0.85, 0.9, 1, 1, 1, 1, 1, 1, 0),
+                (1, 1001, 1, 11, "COMPB0000000BB", "Beta", 0.55, 0.6, 2, 3, 3, 1, 1, 1, 0),
+                (1, 1002, 1, 10, "COMPA0000000AA", "Alpha", 0.60, 0.7, 1, 2, 2, 2, 2, 1, 0),
+                (2, 1001, 2, 12, "COMPC0000000CC", "Gamma", 0.72, 0.8, 1, 1, 1, 1, 1, 1, 0),
             ],
         )
         con.execute(
@@ -525,8 +492,6 @@ def test_collect_stats(tmp_path):
     assert stats.ms2.n_total == 6
     assert len(stats.per_sample_ms2) == 2
     assert stats.recheck.n_would_associate == 1
-    assert stats.unscored.n_unscored == 5
-    assert stats.unscored.n_off_pixel == 1
     assert stats.mad_filter is None  # filter_spectra logged with empty arguments
     assert stats.associated_purity.n_associated == 3
     assert stats.associated_purity.n_ge_cutoff == 1
@@ -538,8 +503,6 @@ def test_collect_stats(tmp_path):
     assert all("frac_values" not in ps for ps in ap["per_sample"])
     assert ap["pct_ge_cutoff"] == pytest.approx(33.33, abs=0.1)
     assert d["recheck"]["n_would_associate"] == 1
-    assert d["unscored"]["n_unscored"] == 5
-    assert d["unscored"]["n_off_pixel"] == 1
     assert stats.annotation is None  # no library in the base fixture
     assert d["annotation"] is None
 
@@ -574,7 +537,6 @@ def test_build_summary_report_writes_files(tmp_path):
     assert payload["ms2"]["n_total"] == 6
     assert payload["recheck"]["assoc_ppm"] == 10.0
     assert len(payload["per_sample_ms2"]) == 2
-    assert payload["unscored"]["n_unscored"] == 5
     assert payload["associated_purity"]["n_associated"] == 3
 
 

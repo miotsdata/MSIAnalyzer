@@ -162,7 +162,6 @@ One row per MS2 scan considered.
 | `precursor_mz` | REAL | |
 | `isolation_window_target` / `_lower` / `_upper` | REAL | copied from the scan |
 | `ppm_offset` | REAL | signed, match value vs chosen feature |
-| `n_features_in_window` | INTEGER | chimera count, not null |
 | `nearest_other_feature_ppm` | REAL | ppm to closest non-chosen feature |
 | `precursor_target_delta_ppm` | REAL | ppm `precursor_mz` vs `isolation_window_target` |
 | `rt`, `collision_energy`, `n_peaks`, `polarity` | | copied from the scan |
@@ -171,21 +170,14 @@ One row per MS2 scan considered.
 
 Index: `idx_assoc_feature (feature_id)`.
 
-### `ms2_window_features`  (grouper)
-
-One row per (association, feature inside the scan's isolation window). Always
-populated — a clean single match is one row.
-
-| column | type | notes |
-|---|---|---|
-| `association_id` | INTEGER | FK → `ms2_associations(id)` `ON DELETE CASCADE` |
-| `feature_id` | INTEGER | FK → `features` |
-| `feature_mz` | REAL | not null |
-| `ppm_diff` | REAL | signed, match value vs this feature |
-| `within_tol` | INTEGER | 0/1 — inside `assoc_ppm`? |
-| `is_primary` | INTEGER | 0/1 — the chosen feature |
-
-Primary key `(association_id, feature_id)`.
+There is no per-scan "chimeric" count or candidate-list table any more
+([ADR 19](../adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md)):
+`associate_scan` still narrows its search to features physically inside the
+scan's isolation window before picking the nearest one within `assoc_ppm`,
+but how many *other* aligned features also happened to fall in that window
+said nothing about the scan's own spectrum and is no longer persisted —
+`precursor_purity.precursor_frac` is the real, scan-intrinsic signal for
+"was this precursor selection clean."
 
 ### `feature_ms2_summary`  (grouper)
 
@@ -199,16 +191,17 @@ One row per feature with MS2 coverage; rebuilt on every grouper run.
 | `n_samples` | INTEGER |
 | `n_precursor_only` | INTEGER |
 | `n_single_peak` | INTEGER |
-| `n_chimeric` | INTEGER |
 | `median_n_peaks` | REAL |
 
 ### `precursor_purity`  (purity stage)
 
-One row per MS2 scan; rebuilt on every run of the purity stage. Chimericity
-measured against the scan's own **parent MS1** (`ms2_scans.parent_scan_id`, or
-the nearest earlier MS1) and, when the laser had moved to the same pixel or an
-adjacent pixel on the same raster line, the next MS1 — never the analysis-wide
-feature list. See [ADR 8](../adr/0008-precursor-ion-purity.md).
+One row per MS2 scan; rebuilt on every run of the purity stage. Measured
+against the scan's own **parent MS1** (`ms2_scans.parent_scan_id`, or the
+nearest earlier MS1) — never the analysis-wide feature list. See
+[ADR 8](../adr/0008-precursor-ion-purity.md) and
+[ADR 19](../adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md)
+(which retired the peak-picking-based `purity` value and the parent+next-MS1
+raster interpolation that used to also live here).
 
 | column | type | notes |
 |---|---|---|
@@ -216,29 +209,20 @@ feature list. See [ADR 8](../adr/0008-precursor-ion-purity.md).
 | `sample_id` | INTEGER | FK → `samples` |
 | `ms2_scan_id` | INTEGER | not null — the scan in the sample's raw `ms2_scans` |
 | `parent_ms1_scan_id` | INTEGER | the MS1 the scan was triggered from |
-| `next_ms1_scan_id` | INTEGER | second MS1 used for interpolation, else NULL |
-| `bracket_kind` | TEXT | not null — `parent_only` / `same_pixel` / `same_line` |
-| `rt_weight` | REAL | 0 = parent only … 1 = next MS1; the interpolation weight |
 | `window_lo_mz` / `window_hi_mz` | REAL | resolved isolation window bounds |
-| `precursor_found` | INTEGER | 0/1 — an in-window MS1 peak matched the precursor |
-| `precursor_mz_ms1` / `precursor_intensity_ms1` | REAL | that peak, in the parent MS1 |
-| `n_peaks_in_window` | INTEGER | not null — real peaks in the parent MS1 window (`> 1` ⇒ co-isolation) |
-| `runner_up_rel_int` | REAL | strongest non-precursor in-window peak / precursor peak |
-| `purity` | REAL | precursor / total in-window intensity, RT-interpolated when `next_ms1_scan_id` is set. **Peak-based → NULL when `precursor_found = 0`.** |
-| `purity_parent` | REAL | the same, parent MS1 only |
-| `precursor_frac` | REAL | **peak-detection-free** purity proxy: above-baseline profile area within `purity.precursor_confirm_ppm` of the recorded `precursor_mz`, over the whole isolation window. Always computed (`0` if no signal). |
+| `precursor_frac` | REAL | **peak-detection-free** purity proxy: above-baseline profile area within `purity.precursor_confirm_ppm` of the recorded `precursor_mz`, over the whole isolation window. Always computed (`0` if no signal) — this is the metric. |
 | `precursor_confirmed` | INTEGER | 0/1 — `precursor_frac >= purity.precursor_confirm_min_frac`: the recorded precursor really carries signal in its own parent MS1 |
 | `precursor_mz_snapped` | REAL | `precursor_mz` moved to the nearest parent-MS1 local max within `purity.precursor_snap_ppm` (no-op when already on a peak; association is *not* re-run) |
 | `snap_shift_ppm` | REAL | signed ppm shift the snap applied (`0` = no move) |
 | `command_id` | INTEGER | FK → `commands` |
 
 `UNIQUE (sample_id, ms2_scan_id)`. Indexes: `idx_purity_scan (sample_id,
-ms2_scan_id)`, `idx_purity_value (purity)`.
+ms2_scan_id)`, `idx_purity_value (precursor_frac)`.
 
 ### `feature_ms2_consensus`  (consensus stage)
 
 One row per MS2-bearing feature; rebuilt on every run of the consensus stage.
-`consensus_score = best library score x purity term x peak term`; see
+`consensus_score = best library score x precursor_frac term x peak term`; see
 [ADR 9](../adr/0009-consume-purity-and-consensus.md).
 
 | column | type | notes |
@@ -247,10 +231,10 @@ One row per MS2-bearing feature; rebuilt on every run of the consensus stage.
 | `feature_mz` | REAL | not null |
 | `best_sample_id` / `best_scan_id` | INTEGER | the chosen MS2 scan |
 | `n_ms2` | INTEGER | scans associated to the feature |
-| `n_ms2_considered` | INTEGER | scans that passed `consensus.min_purity` |
+| `n_ms2_considered` | INTEGER | scans that passed `consensus.min_precursor_frac` |
 | `n_ms2_scored` | INTEGER | of those, how many had a library hit |
 | `consensus_score` | REAL | not null — the winning scan's score |
-| `purity` / `n_peaks` | — | the winning scan's purity and fragment count |
+| `precursor_frac` / `n_peaks` | — | the winning scan's precursor purity and fragment count |
 | `best_annotation_score` | REAL | its `ms2_annotations.score` at `rank_ms2 = 1`, or NULL |
 | `best_compound_name` / `best_inchikey` | TEXT | that hit's identity, when present |
 | `command_id` | INTEGER | FK → `commands` |
@@ -293,9 +277,7 @@ with several libraries configured the rows are interleaved and distinguished by
 | `rank_feature_sample` | INTEGER | row rank over one (feature, sample) — 1 = the feature's best hit in this sample |
 | `rank_scan_feature` | INTEGER | the feature's *scans* ranked by their best hit (all samples), broadcast onto that scan's rows |
 | `rank_scan_feature_sample` | INTEGER | same, within one sample |
-| `is_chimeric` | INTEGER | 0/1, from the grouper |
-| `n_features_in_window` | INTEGER | from the grouper |
-| `purity` / `runner_up_rel_int` / `precursor_confirmed` / `precursor_frac` | — | left-joined from `precursor_purity`; NULL when the scan was not purity-scored |
+| `precursor_confirmed` / `precursor_frac` | — | left-joined from `precursor_purity`; NULL when the scan was not purity-scored |
 | `precursor_only` | INTEGER | 0/1, from the grouper |
 | `emp_raw_mz` / `emp_raw_intensity` | BLOB | untouched (pre-filtering) empirical spectrum (zlib float32); NULL if `store_raw_spectra` off |
 | `lib_raw_mz` / `lib_raw_intensity` | BLOB | same for the library spectrum |
@@ -331,7 +313,7 @@ Rows with `inchikey IS NULL` are excluded. `msianalyzer report` and
 | action | effect |
 |---|---|
 | re-run any stage | never rewrites a raw DB |
-| re-run the grouper | `DELETE` + repopulate `ms2_associations`, `ms2_window_features`, `feature_ms2_summary`; `features` / `samples` untouched |
+| re-run the grouper | `DELETE` + repopulate `ms2_associations`, `feature_ms2_summary`; `features` / `samples` untouched |
 | re-run the purity stage | `DELETE FROM precursor_purity` then repopulate; nothing else touched |
 | re-run the annotator | `DELETE FROM ms2_annotations WHERE library_id = ?` then repopulate; `annotation_libraries` row is upserted |
 | re-run the consensus stage | `DELETE FROM feature_ms2_consensus` then repopulate; nothing else touched |

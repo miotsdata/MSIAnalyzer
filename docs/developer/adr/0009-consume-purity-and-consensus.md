@@ -1,6 +1,13 @@
 # 9 — Consuming precursor purity + per-feature MS2 consensus
 
-**Status:** Accepted
+**Status:** Accepted; superseded in part by
+[ADR 19](0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md).
+`annotate_chimeric`/`is_chimeric` (kept "as they are" by the decision
+below) are removed entirely, not just left coarse; `purity`/`min_purity`/
+`neutral_purity` become `precursor_frac`/`min_precursor_frac`/
+`neutral_precursor_frac`. The consensus design itself (three-term
+`consensus_score`, its own table, library-free and purity-free operation)
+is unchanged.
 
 ## Context
 

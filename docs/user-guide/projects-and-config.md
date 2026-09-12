@@ -10,13 +10,13 @@ find that marker.
 ## The config file
 
 A run is driven by one config file (`.yaml`/`.yml` or `.toml`). It has a
-`version` key (currently **14**) and one section per pipeline stage. Only `io` is
+`version` key (currently **15**) and one section per pipeline stage. Only `io` is
 required; every other section falls back to its defaults — you never need to
 write out every field, only the ones you want to change from the defaults shown
 below.
 
 ```yaml
-version: 14
+version: 15
 io:
   project_folder: .
   mzml_paths: [data/s1.mzML, data/s2.mzML]
@@ -26,7 +26,7 @@ io:
 ms1:      {bin_width: 0.0001, min_mz: 70.0, max_mz: 900.0}
 align:    {align_ppm: 5.0, mz_decimals: 4}
 group_ms2: {assoc_ppm: 10.0, include_unmatched: true}
-purity:   {enabled: true, ppm_precursor_match: 20.0}
+purity:   {enabled: true, precursor_confirm_ppm: 25.0}
 annotate: {library_path: null}   # a path (or [list, of, paths]) enables Stage B
 consensus: {enabled: true, target_peaks: 10}
 report:   {enabled: true, purity_cutoff: 0.8}
@@ -140,23 +140,19 @@ dropped.
 ### `purity` — precursor ion purity
 
 Measures how "clean" each MS2 scan's precursor selection was — how much of the
-isolation-window ion current in its parent MS1 scan (and optionally the next
-MS1 on the same raster line) actually belonged to the intended precursor,
-versus another co-isolated compound at similar mass. Independent of the
-feature list — use it instead of the grouper's `n_features_in_window` on large
-runs, or to catch chimeric spectra the grouper's window-count check misses.
+isolation-window ion current in its parent MS1 scan actually belonged to the
+intended precursor, versus another co-isolated compound at similar mass.
+Independent of the feature list, and needs no peak detection — a
+profile-area integration that stays computable even in dense, matrix-heavy,
+low-mass windows where a discrete peak often can't be resolved. See
+[ADR 19](../developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md).
 
 | key | default | meaning |
 |---|---|---|
-| `enabled` | `true` | run the stage; `false` skips it entirely (every `purity`/`n_peaks_in_window`/`runner_up_rel_int` field then stays NULL) |
-| `ppm_precursor_match` | `20.0` | ppm tolerance for deciding which in-window MS1 peak is the precursor, matched against `precursor_mz` (or `isolation_window_target` when a scan has no precursor m/z) |
+| `enabled` | `true` | run the stage; `false` skips it entirely (every `precursor_frac`/`precursor_confirmed` field then stays NULL) |
 | `default_half_window_da` | `0.5` | isolation half-width (Da) assumed when a scan carries no isolation offsets |
-| `min_rel_intensity` | `0.01` | drop in-window MS1 peaks below this fraction of the window's own base peak before counting/scoring — keeps small noise spikes from inflating `n_peaks_in_window` |
-| `merge_ppm` | `5.0` | ppm tolerance for merging split/duplicate profile peaks within the isolation-window slice |
-| `use_next_ms1` | `true` | interpolate purity across the parent MS1 and the next MS1 scan when it is the same pixel or an adjacent pixel on the same raster line; `false` uses only the parent MS1 |
-| `max_interpixel_gap_sec` | `null` | max parent→next-pixel time gap (seconds) allowed for the interpolation above; `null` derives it automatically per sample from that sample's own median in-line pixel gap |
-| `precursor_confirm_ppm` | `25.0` | half-width (ppm) of a band placed exactly on `precursor_mz`, used for a second, peak-detection-free check: `precursor_frac = I(band) / I(isolation window)` |
-| `precursor_confirm_min_frac` | `0.01` | `precursor_frac >= this` sets the `precursor_confirmed` flag — a deliberately lenient sanity check that *some* signal sits where expected, not a purity threshold (use `annotate.min_purity`/`consensus.min_purity` for that) |
+| `precursor_confirm_ppm` | `25.0` | half-width (ppm) of a band placed exactly on `precursor_mz`, used to compute `precursor_frac = I(band) / I(isolation window)` — the fraction of the window's ion current sitting on the precursor. This is the metric. |
+| `precursor_confirm_min_frac` | `0.01` | `precursor_frac >= this` sets the `precursor_confirmed` flag — a deliberately lenient sanity check that *some* signal sits where expected, not a purity threshold (use `annotate.min_precursor_frac`/`consensus.min_precursor_frac` for that) |
 | `precursor_snap_ppm` | `15.0` | snap `precursor_mz` to the nearest parent-MS1 local max within this many ppm (`0` disables); stored as `precursor_mz_snapped` — association is **not** re-run with the snapped value |
 | `n_workers` | `null` | samples scored in parallel, one process per sample; `null`/`0` uses `os.cpu_count()`, `1` forces serial. Capped at the sample count; lower it if memory is tight (each worker holds one sample's scan index in memory). |
 
@@ -181,8 +177,7 @@ setting below is then unused.
 | `score_weight_lib_coverage` | `0.5` | exponent on `lib_coverage` — the fraction of the *library candidate's* peaks matched in the scan |
 | `score_weight_emp_coverage` | `0.5` | exponent on `emp_coverage` — the fraction of the *scan's own* peaks matched in the candidate. Defaults reproduce `dot_product_score × sqrt(lib_coverage × emp_coverage)`. Lower this (even to `0`) when a spectrum's own real, library-absent background/matrix peaks are suppressing an otherwise good match — high dot product, high library coverage, low empirical coverage. `dot_product_score`/`lib_coverage`/`emp_coverage`/`coverage_score` are always stored unweighted, so a config change only shows up in `score` after a re-run. |
 | `min_matched_peaks` | `1` | store a candidate only when it shares at least this many fragments with the scan |
-| `min_purity` | `null` | skip scans whose precursor purity (Stage A′) is known and below this; `null` scores every scan. Rows still carry `purity` / `runner_up_rel_int` regardless. |
-| `annotate_chimeric` | `true` | score chimeric scans (against their primary feature); they are always flagged `is_chimeric` either way. `false` skips scoring them entirely. |
+| `min_precursor_frac` | `null` | skip scans whose precursor purity (Stage A′) is known and below this; `null` scores every scan. Every associated scan is scored unconditionally regardless of how many features share its isolation window — see [ADR 19](../developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md). Rows still carry `precursor_frac` regardless of this setting. |
 | `store_raw_spectra` | `true` | persist the untouched empirical + library spectra on every row, so mirror plots never need to re-open the raw per-sample database or the library file (either can be a slow/remote mount). The noise-filtered view shown in a mirror plot is reconstructed on demand from these plus `noise_threshold`, not stored a second time. `false` writes the raw columns NULL and keeps the table smaller. |
 | `batch_size` | `200` | features handed to each worker process at a time (memory/speed only) |
 | `n_workers` | `null` | parallel worker processes; `null` uses `os.cpu_count()` — lower on a shared machine or under memory pressure |
@@ -191,8 +186,8 @@ setting below is then unused.
 
 A feature usually has several MS2 scans behind it, of varying quality. This
 stage folds each scan's best library score (when `annotate` ran), its
-precursor-ion `purity`, and its fragment-peak count into one
-`consensus_score = best_score × purity_term × peak_term`, and picks the
+precursor purity (`precursor_frac`), and its fragment-peak count into one
+`consensus_score = best_score × precursor_frac_term × peak_term`, and picks the
 highest-scoring scan to represent that feature. Runs regardless of whether
 annotation or purity ran (missing pieces fall back to neutral values).
 
@@ -208,21 +203,21 @@ which one is the best all-around representative to show/export."
 |---|---|---|
 | `enabled` | `true` | run the stage; `false` skips it (`feature_ms2_consensus` is left empty) |
 | `target_peaks` | `10` | the peak-richness term is `peak_term = min(1, n_peaks / target_peaks)` — the fragment count at which a scan earns full credit (`1.0`); more peaks don't earn extra credit past that, fewer scale down proportionally. Worked example at the default `10`: a scan with 10+ peaks scores `1.0`, 5 peaks scores `0.5`, 2 peaks scores `0.2`. Raise it to weigh peak richness more heavily in the pick; lower it if your data is naturally low-peak-count. |
-| `neutral_purity` | `0.5` | purity value substituted for a scan the purity stage couldn't score (e.g. purity disabled, or precursor not found) — a neutral value that neither rewards nor penalizes missing purity data |
-| `min_purity` | `null` | scans with a *known* purity below this are excluded from the pick (they still count toward `n_ms2`); `null` considers every scan |
+| `neutral_precursor_frac` | `0.5` | precursor-purity value substituted for a scan the purity stage couldn't score (e.g. purity disabled) — a neutral value that neither rewards nor penalizes missing purity data |
+| `min_precursor_frac` | `null` | scans with a *known* `precursor_frac` below this are excluded from the pick (they still count toward `n_ms2`); `null` considers every scan |
 
 ### `report` — end-of-run summary
 
 Writes a human-readable `summary_report.html` (open in any browser) +
 machine-readable `summary.json` (also what the GUI's Analysis Summary section
 reads) after every other stage — per-sample scan/peak counts, a feature-overlap
-"UpSet" plot, and MS2 association/chimericity/purity distributions.
+"UpSet" plot, and MS2 association/purity distributions.
 
 | key | default | meaning |
 |---|---|---|
 | `enabled` | `true` | write the report; `false` skips it (e.g. for a quick exploratory run) |
 | `overlap_top_n` | `30` | max sample-combination bars in the feature-overlap UpSet plot, largest first — a run with `n` samples has up to `2^n - 1` possible combinations, so this keeps the plot readable |
-| `purity_cutoff` | `0.8` | purity value below which a scan counts as "low purity" in the report, and where the reference line is drawn on the purity histogram — a reporting threshold only, independent of `annotate.min_purity`/`consensus.min_purity` |
+| `purity_cutoff` | `0.8` | `precursor_frac` value below which a scan counts as "low purity" in the report, and where the reference line is drawn on the precursor-purity histogram — a reporting threshold only, independent of `annotate.min_precursor_frac`/`consensus.min_precursor_frac` |
 
 ### `h5ad` — spatial AnnData assembly
 

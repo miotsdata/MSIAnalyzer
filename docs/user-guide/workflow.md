@@ -67,34 +67,35 @@ per-sample spectrum figure (`<sample>_filtered_ms1.html`) and CSV
 ## Stage 7 — Associate MS2 with features (→ analysis DB)
 
 `run_grouper()` reads `features` and every sample's `ms2_scans`, and snaps each
-MS2 scan to a feature. It writes three tables — `ms2_associations`,
-`ms2_window_features`, `feature_ms2_summary` — and drops nothing. Controlled by
+MS2 scan to a feature. It writes two tables — `ms2_associations`,
+`feature_ms2_summary` — and drops nothing. Controlled by
 the `group_ms2.*` settings. Full detail in [MS2 annotation](ms2-annotation.md).
 
 ## Stage 8 — Precursor ion purity (→ analysis DB)
 
 `run_precursor_purity()` scores every MS2 scan's isolation window against its own
-parent MS1 scan (and the next MS1 on the same raster line): `purity`,
-`n_peaks_in_window`, `runner_up_rel_int` per scan, in `precursor_purity`. A
-feature-list-free chimericity signal that stays meaningful on large runs.
-Samples are scored one process per sample (`purity.n_workers`). Controlled by
-`purity.*`; set `purity.enabled: false` to skip. Full detail in
+parent MS1 scan: `precursor_frac` (peak-detection-free, always computable) and
+`precursor_confirmed` per scan, in `precursor_purity`. A feature-list-free
+purity signal that stays meaningful on large runs. Samples are scored one
+process per sample (`purity.n_workers`). Controlled by `purity.*`; set
+`purity.enabled: false` to skip. Full detail in
 [MS2 annotation](ms2-annotation.md).
 
 ## Stage 9 — Annotate MS2 against a library (→ analysis DB)
 
 `run_annotation()` runs only when `annotate.library_path` is set. For every
 feature that carries MS2 it pulls library candidates near the feature m/z
-(`annotate.candidate_ppm`), scores each scan against each candidate with a
-coverage-aware reverse dot product, and writes `annotation_libraries` +
-`ms2_annotations` (one row per scored candidate, ranked). Each row also carries
-the scan's `purity` / `runner_up_rel_int`; `annotate.min_purity` skips
-known-low-purity scans. Full detail in [MS2 annotation](ms2-annotation.md).
+(`annotate.candidate_ppm`), scores every associated scan unconditionally
+against each candidate with a coverage-aware reverse dot product, and writes
+`annotation_libraries` + `ms2_annotations` (one row per scored candidate,
+ranked). Each row also carries the scan's `precursor_frac`;
+`annotate.min_precursor_frac` skips known-low-purity scans. Full detail in
+[MS2 annotation](ms2-annotation.md).
 
 ## Stage 10 — MS2 consensus (→ analysis DB)
 
 `run_consensus()` picks one representative MS2 scan per feature —
-`consensus_score = best library score × purity term × peak term` — into
+`consensus_score = best library score × precursor_frac term × peak term` — into
 `feature_ms2_consensus`. Works library-free and purity-free. Controlled by
 `consensus.*`; set `consensus.enabled: false` to skip.
 

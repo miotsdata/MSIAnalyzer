@@ -658,12 +658,11 @@ class Run:
                     adb_path, purity_cfg, command_id=command_id
                 )
                 logger.info(
-                    "Precursor purity: scored %d MS2 scans (%d with >1 in-window "
-                    "peak, %d with no precursor peak, %d interpolated)",
+                    "Precursor purity: scored %d MS2 scans (%d precursor-confirmed, "
+                    "%d snapped)",
                     purity_result.n_scans,
-                    purity_result.n_multi_peak,
-                    purity_result.n_precursor_missing,
-                    purity_result.n_interpolated,
+                    purity_result.n_confirmed,
+                    purity_result.n_snapped,
                 )
             else:
                 logger.debug("Already run precursor_purity")

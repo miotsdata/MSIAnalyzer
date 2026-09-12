@@ -12,17 +12,21 @@ For every MS2 scan in every sample:
 
 1. **Pick a match value.** Use `precursor_mz`. If it is missing, fall back to
    `isolation_window_target`. The column `match_key` records which was used.
-2. **Enumerate the isolation window.** Every feature whose m/z lies in
-   `[target − lower, target + upper]` is a candidate that could have
-   co-fragmented. `n_features_in_window` is that count — the **chimera flag**.
-   Missing isolation offsets fall back to `group_ms2.default_isolation_half_width`.
-3. **Choose the primary feature.** Among the in-window features within
+2. **Choose the primary feature.** Among the features physically inside the
+   isolation window `[target − lower, target + upper]` (missing offsets fall
+   back to `group_ms2.default_isolation_half_width`) and within
    `group_ms2.assoc_ppm` of the match value, pick the closest in ppm. If none
    qualifies, the scan is **unassigned** (`feature_id` is NULL).
-4. **Record a ppm difference for every in-window feature**, not just the chosen
-   one (`ms2_window_features`).
-5. **Flag fragmentation failure** (`precursor_only`, see below). Nothing is ever
+3. **Flag fragmentation failure** (`precursor_only`, see below). Nothing is ever
    dropped.
+
+How many *other* features also happened to fall inside that isolation window
+is **not** tracked or stored — it measures feature-list density, not what
+actually co-fragmented into the scan's own spectrum, and it used to be
+recorded (and used to gate scoring) as a "chimeric" flag. See
+[ADR 19](../developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md)
+for why that was removed, and use **Stage A′ / precursor purity** below for
+the real, per-scan signal instead.
 
 Why match on `precursor_mz` and not the isolation target: the target is an
 *instruction* to the instrument and is often rounded; `precursor_mz` is a
@@ -40,17 +44,10 @@ comparison is meaningful. See
 | `feature_id` | the chosen feature, or NULL if unassigned |
 | `match_key` | `precursor_mz` or `isolation_window_target` |
 | `ppm_offset` | signed ppm, match value vs the chosen feature |
-| `n_features_in_window` | features inside the isolation window (chimera count) |
 | `nearest_other_feature_ppm` | ppm to the closest feature that is *not* the chosen one |
 | `precursor_target_delta_ppm` | ppm between `precursor_mz` and `isolation_window_target` |
 | `precursor_only` | `1` when fragmentation appears not to have occurred |
 | `rt`, `collision_energy`, `n_peaks`, `polarity` | copied from the scan |
-
-### `ms2_window_features` — one row per (scan, in-window feature)
-
-`ppm_diff` (signed, vs the match value), `within_tol` (inside `assoc_ppm`?),
-`is_primary` (the chosen one). A clean single match is exactly one row with
-`is_primary = 1`; a chimeric scan has several, one primary.
 
 ### `feature_ms2_summary` — one row per feature
 
@@ -60,7 +57,6 @@ comparison is meaningful. See
 | `n_samples` | distinct samples those scans came from |
 | `n_precursor_only` | how many showed no real fragmentation |
 | `n_single_peak` | how many had ≤ 1 fragment peak |
-| `n_chimeric` | how many had > 1 feature in their isolation window |
 | `median_n_peaks` | median fragment-peak count |
 
 This answers questions like *"feature 743.52 was fragmented 8× across 3 samples;
@@ -84,28 +80,13 @@ feature is still stored, with `feature_id` NULL — useful for spotting features
 that peak-picking or alignment missed. Set it to `false` to keep only MS2 tied to
 an imageable feature.
 
-## Chimeric scans — policy
-
-A chimeric scan (`n_features_in_window > 1`) is associated **only to its nearest
-feature**; the alternatives are still recorded in `ms2_window_features` with
-their ppm differences. Stage B scores it against that primary feature and marks
-every result row `is_chimeric = 1` (see below).
-
-`n_features_in_window` counts the *analysis-wide* feature list, which is the
-union over every sample and pixel. On a large run a wide isolation window almost
-always straddles several features even when the scan's own parent MS1 held a
-single clean peak there, so this count over-flags. Use **Stage A′ / precursor
-purity** for a per-acquisition chimericity signal that does not depend on the
-feature list.
-
 ---
 
 # Stage A′ — precursor ion purity
 
-`core.annotation.precursor_purity` asks a different question: not *"how many
-features could this window contain?"* but *"how much of the ion current actually
-in this window belonged to the precursor?"* It measures that where it physically
-happened — in the MS1 scan the MS2 was triggered from
+`core.annotation.precursor_purity` asks: *"how much of the ion current in this
+scan's isolation window actually belonged to the precursor?"* It measures that
+where it physically happened — in the MS1 scan the MS2 was triggered from
 (`ms2_scans.parent_scan_id`, or the nearest earlier MS1) — and never touches the
 feature list. Set `purity.enabled = false` to skip the stage.
 
@@ -116,41 +97,35 @@ For every MS2 scan:
 1. **Resolve the parent MS1** and slice it to the isolation window
    `[target − lower, target + upper]` (missing offsets fall back to
    `purity.default_half_window_da`).
-2. **Detect real peaks** in that slice — local maxima above
-   `purity.min_rel_intensity × (window base peak)`, refined by parabolic
-   interpolation and merged within `purity.merge_ppm`.
-3. **Identify the precursor peak** — the in-window peak nearest `precursor_mz`
-   (or `isolation_window_target`) within `purity.ppm_precursor_match`.
-4. **Score:** `purity = precursor intensity / total in-window intensity`;
-   `runner_up_rel_int = strongest other in-window peak / precursor peak`;
-   `n_peaks_in_window` = the peak count.
-5. **Interpolate** across the parent MS1 and the *next* MS1 scan when the laser
-   had only moved to the **same pixel** or an **adjacent pixel on the same
-   raster line** (`purity.use_next_ms1`, default on). The MS2's retention time
-   sets the blend weight (`rt_weight`). Otherwise only the parent MS1 is used
-   and `purity == purity_parent`.
-6. **Confirm the precursor without peak detection.** The peak-picker in step 2
-   fails in dense, matrix-heavy, low-m/z windows even when the precursor is
-   plainly there. So the stage also integrates the raw profile: `precursor_frac
-   = I(precursor_mz ± purity.precursor_confirm_ppm) / I(isolation window)`
-   (above-baseline area). `precursor_confirmed = precursor_frac >=
+2. **Confirm the precursor without peak detection.** A local peak-picker fails
+   in dense, matrix-heavy, low-m/z windows even when the precursor is plainly
+   there, so the stage integrates the raw profile directly: `precursor_frac =
+   I(precursor_mz ± purity.precursor_confirm_ppm) / I(isolation window)`
+   (above-baseline area). This is *the* metric — always computable, never
+   dependent on resolving a discrete peak.
+3. **Set `precursor_confirmed`.** `precursor_confirmed = precursor_frac >=
    purity.precursor_confirm_min_frac` — the recorded precursor really carries
-   signal in its own parent MS1. `precursor_frac` is a purity value that is
-   *always* available.
-7. **Snap `precursor_mz`.** Move it to the nearest parent-MS1 local maximum
+   signal in its own parent MS1.
+4. **Snap `precursor_mz`.** Move it to the nearest parent-MS1 local maximum
    within `purity.precursor_snap_ppm` (a tight radius, so it can never jump to
    a neighbour; a no-op when the recorded value is already on a peak). Stored
    as `precursor_mz_snapped` / `snap_shift_ppm`. **Association is not re-run** —
    this is a refined value for downstream QC.
 
-The "same raster line" test compares pixel identity, then `(x, y)` indices plus
-the acquisition-time gap (`purity.max_interpixel_gap_sec`, auto-derived when
-null) — never raw coordinates, so serpentine vs. flyback rastering is
-irrelevant. If pixel mapping never ran, the stage is parent-MS1-only.
-
 Samples are scored **one process per sample** (`purity.n_workers`, default one
 per CPU, capped at the sample count; set `1` to force the serial path). The
 `precursor_purity` table is written once, after every sample is in.
+
+!!! note "History"
+    This stage originally also computed a peak-picking-based `purity` value
+    (msPurity-style: detect a peak in the window, compare intensities,
+    interpolate across the parent + next MS1 scan on the same raster line).
+    That measurement failed to resolve the precursor as a discrete peak in
+    ~56% of scans on real MALDI-imaging data, so it — and the raster
+    interpolation that supported it — were retired in favor of
+    `precursor_frac`, which needs no peak at all. See
+    [ADR 8](../developer/adr/0008-precursor-ion-purity.md) and
+    [ADR 19](../developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md).
 
 ## `precursor_purity` — one row per MS2 scan
 
@@ -158,25 +133,14 @@ per CPU, capped at the sample count; set `1` to force the serial path). The
 |---|---|
 | `sample_id`, `ms2_scan_id` | back-pointer into the sample's raw `ms2_scans` |
 | `parent_ms1_scan_id` | the MS1 the scan was triggered from |
-| `next_ms1_scan_id` | second MS1 used for interpolation, or NULL |
-| `bracket_kind` | `parent_only` / `same_pixel` / `same_line` |
-| `rt_weight` | 0 (parent only) … 1 (next MS1) — the interpolation weight |
 | `window_lo_mz`, `window_hi_mz` | resolved isolation window bounds |
-| `precursor_found` | `1` when an in-window MS1 peak matched the precursor |
-| `precursor_mz_ms1`, `precursor_intensity_ms1` | that peak in the parent MS1 |
-| `n_peaks_in_window` | real peaks in the parent MS1 window — `> 1` ⇒ co-isolation |
-| `runner_up_rel_int` | strongest non-precursor in-window peak ÷ precursor peak (`> 1` ⇒ the precursor was a minor ion) |
-| `purity` | precursor ÷ total in-window intensity, RT-interpolated when `next_ms1_scan_id` is set. **Peak-based → NULL when `precursor_found = 0`.** |
-| `purity_parent` | the same, parent MS1 only |
-| `precursor_frac` | **peak-detection-free** purity proxy (see step 6). Always populated. |
+| `precursor_frac` | **peak-detection-free** purity proxy (see step 2). Always populated (`0` if there's no signal at all). |
 | `precursor_confirmed` | `1` when `precursor_frac` clears the threshold — the precursor is really there in its own MS1 |
 | `precursor_mz_snapped` / `snap_shift_ppm` | `precursor_mz` snapped to a parent-MS1 peak, and the ppm it moved |
 
-Filter chimeras with `precursor_frac < 0.5` (or `purity < 0.8` where it is
-non-NULL) rather than `n_features_in_window > 1`. `precursor_found = 0` with
-`precursor_confirmed = 1` means the peak-picker could not resolve a discrete
-peak but the precursor **is** present — use `precursor_frac`, not "faint
-precursor". The stage stores the measurement, not a verdict.
+Filter low-purity scans with `precursor_frac < 0.5` (a query-time choice —
+the stage stores a measurement, not a verdict), not on how many features
+happen to share a scan's isolation window.
 
 ---
 
@@ -197,14 +161,20 @@ The unit of work is **one feature**:
    `annotate.candidate_ppm` of the feature m/z. The same candidate set is reused
    for all of that feature's scans (features are processed in parallel,
    `annotate.batch_size` per worker).
-2. **Score each scan against each candidate.** Both spectra are max-normalised to
+2. **Score every associated scan, unconditionally.** There is no gate based on
+   how many features share a scan's isolation window (see
+   [ADR 19](../developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md)).
+   Optionally set `annotate.min_precursor_frac` to skip scans whose precursor
+   purity (Stage A′) is known and below that — scans the purity stage could
+   not score are always kept, the filter never guesses.
+3. **Score each scan against each candidate.** Both spectra are max-normalised to
    1; peaks below `annotate.noise_threshold` are dropped from *both*; fragments
    are aligned within `annotate.fragment_ppm`; a weighted reverse dot product
    (`annotate.mz_power` / `annotate.int_power`) plus a coverage term gives
    `score = dot_product_score × coverage_score` in `[0, 1]`.
-3. **Keep every candidate** that shared at least `annotate.min_matched_peaks`
+4. **Keep every candidate** that shared at least `annotate.min_matched_peaks`
    fragment peaks, each stored with a `rank_ms2` within its scan.
-4. **Rank the feature's hits.** `rank_feature` / `rank_feature_sample` rank
+5. **Rank the feature's hits.** `rank_feature` / `rank_feature_sample` rank
    *rows* outright — `rank_feature = 1` **is** the feature's single best hit
    (add `AND sample_id = ?` via `rank_feature_sample = 1` for one sample).
    `rank_scan_feature` / `rank_scan_feature_sample` instead rank the feature's
@@ -237,8 +207,7 @@ points back via `library_id`.
 | `rank_feature_sample` | row rank over one (feature, sample) — 1 = the feature's best hit in this sample |
 | `rank_scan_feature` | the feature's *scans* ranked by best hit (all samples), value repeated on every row of the scan |
 | `rank_scan_feature_sample` | same, within one sample |
-| `is_chimeric`, `n_features_in_window` | carried through from the grouper |
-| `purity`, `runner_up_rel_int`, `precursor_confirmed`, `precursor_frac` | carried through from the purity stage (NULL when the scan was not purity-scored) |
+| `precursor_confirmed`, `precursor_frac` | carried through from the purity stage (NULL when the scan was not purity-scored) |
 | `precursor_only` | carried through — fragmentation looked to have failed |
 | `emp_raw_mz` / `emp_raw_intensity` | the untouched (pre-filtering) **empirical** spectrum |
 | `lib_raw_mz` / `lib_raw_intensity` | the untouched (pre-filtering) **library** spectrum |
@@ -271,19 +240,19 @@ ORDER BY best_score DESC;
 or `analysis_db.load_feature_compound_scores(db, feature_id=1223)` for a
 DataFrame.
 
-## Chimeric, low-purity and precursor-only scans
+## Low-purity and precursor-only scans
 
-Chimeric scans are scored against their primary feature and flagged
-`is_chimeric = 1`; the coverage term already penalises mixed spectra, so
-downstream can down-weight or exclude them. Set `annotate.annotate_chimeric =
-false` to skip them entirely. `precursor_only` scans are annotated too (the flag
-rides along) — usually you will filter them out when reviewing hits.
+Every associated scan is scored — there is no gate based on isolation-window
+feature density (see
+[ADR 19](../developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md)).
+`precursor_only` scans are annotated too (the flag rides along) — usually you
+will filter them out when reviewing hits.
 
-Set `annotate.min_purity` (e.g. `0.5`) to **not** score scans whose precursor
-purity (Stage A′) is known and below that. Scans the purity stage could not
-score (`precursor_found = 0`, or the stage disabled) are always kept — the
-filter never guesses. Every stored row carries the scan's `purity` and
-`runner_up_rel_int` regardless, so you can also filter at query time.
+Set `annotate.min_precursor_frac` (e.g. `0.5`) to **not** score scans whose
+precursor purity (Stage A′) is known and below that. Scans the purity stage
+could not score (no parent MS1 resolved) are always kept — the filter never
+guesses. Every stored row carries the scan's `precursor_frac` regardless, so
+you can also filter at query time.
 
 ## In the summary report
 
@@ -303,21 +272,22 @@ the annotated best scan.
 feature?"*. For each MS2-bearing feature it folds three per-scan signals into
 
 ```
-consensus_score = best_score × purity_term × peak_term
+consensus_score = best_score × precursor_frac_term × peak_term
 ```
 
 * `best_score` — the scan's `ms2_annotations.score` at `rank_ms2 = 1`, or `1.0` when
   no library ran;
-* `purity_term` — `clamp(purity)`, or `consensus.neutral_purity` (default `0.5`)
-  when the scan was not purity-scored;
+* `precursor_frac_term` — `clamp(precursor_frac)`, or
+  `consensus.neutral_precursor_frac` (default `0.5`) when the scan was not
+  purity-scored;
 * `peak_term` — `min(1, n_peaks / consensus.target_peaks)` on the scan's
   fragment-peak count.
 
-The highest-scoring scan wins. `consensus.min_purity` (its own knob) drops
-scans with a *known* low purity from the pick but not from the `n_ms2` count.
-The stage works library-free (score term collapses to purity × peaks) and
-purity-free (`neutral_purity` stands in); set `consensus.enabled = false` to
-skip it.
+The highest-scoring scan wins. `consensus.min_precursor_frac` (its own knob)
+drops scans with a *known* low precursor purity from the pick but not from the
+`n_ms2` count. The stage works library-free (score term collapses to
+precursor_frac × peaks) and purity-free (`neutral_precursor_frac` stands in);
+set `consensus.enabled = false` to skip it.
 
 ## `feature_ms2_consensus` — one row per MS2-bearing feature
 
@@ -326,9 +296,9 @@ skip it.
 | `feature_id`, `feature_mz` | the feature |
 | `best_sample_id`, `best_scan_id` | the chosen MS2 scan |
 | `n_ms2` | scans associated to the feature |
-| `n_ms2_considered` | scans that passed `min_purity` |
+| `n_ms2_considered` | scans that passed `min_precursor_frac` |
 | `n_ms2_scored` | of those, how many had a library hit |
 | `consensus_score` | the winning scan's score |
-| `purity`, `n_peaks` | the winning scan's purity and fragment count |
+| `precursor_frac`, `n_peaks` | the winning scan's precursor purity and fragment count |
 | `best_annotation_score` | its `rank_ms2 = 1` library score, or NULL |
 | `best_compound_name`, `best_inchikey` | that hit's identity, when present |

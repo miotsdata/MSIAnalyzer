@@ -1,6 +1,13 @@
 # 8 — Precursor ion purity (Stage A′)
 
-**Status:** Accepted
+**Status:** Accepted; the peak-picking-based `purity`/`n_peaks_in_window`/
+`runner_up_rel_int` measurement and the parent+next-MS1 raster
+interpolation described below are superseded by
+[ADR 19](0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md),
+which retired them in favor of the peak-detection-free `precursor_frac`
+already introduced here as a "Follow-up (v8)". The core argument for
+measuring against the parent MS1 rather than the feature list still holds
+and motivated ADR 19 directly.
 
 ## Context
 

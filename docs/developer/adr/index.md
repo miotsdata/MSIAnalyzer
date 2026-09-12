@@ -16,8 +16,8 @@ useful).
 | [5](0005-three-ppm-tolerances.md) | Three separate ppm tolerances | Accepted |
 | [6](0006-schema-single-source-of-truth.md) | One schema builder per database | Accepted |
 | [7](0007-library-annotation-design.md) | Library annotation design (Stage B) | Accepted |
-| [8](0008-precursor-ion-purity.md) | Precursor ion purity (Stage A′) | Accepted |
-| [9](0009-consume-purity-and-consensus.md) | Consume purity: annotation filter + per-feature consensus | Accepted |
+| [8](0008-precursor-ion-purity.md) | Precursor ion purity (Stage A′) | Accepted; partially superseded by 19 |
+| [9](0009-consume-purity-and-consensus.md) | Consume purity: annotation filter + per-feature consensus | Accepted; partially superseded by 19 |
 | [10](0010-score-weights-and-flat-fragmentation.md) | Configurable score weights + flat-fragmentation flag | Accepted |
 | [11](0011-run-progress-callback.md) | `Run` step-progress callback for GUI consumption | Accepted |
 | [12](0012-tic-normalization.md) | TIC normalization + merged AnnData | Accepted |
@@ -27,3 +27,4 @@ useful).
 | [16](0016-store-raw-library-spectrum.md) | Persist the untouched library spectrum alongside the filtered one | Accepted; superseded by 18 |
 | [17](0017-mirror-plot-background-worker.md) | Background thread for mirror-plot data resolution, not figure-building | Accepted |
 | [18](0018-reconstruct-filtered-spectra-on-demand.md) | Reconstruct filtered spectra on demand instead of storing them | Accepted |
+| [19](0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md) | Retire the feature-density chimeric flag and peak-based purity | Accepted |
