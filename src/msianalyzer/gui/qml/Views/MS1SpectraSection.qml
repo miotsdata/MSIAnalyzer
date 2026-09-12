@@ -26,6 +26,15 @@ Item {
     // with less space given to them" — half of the top-hits cap.
     property int detailSecondaryListMaxHeight: detailListRowHeight * 5
 
+    // AnalysisPage.qml's loading overlay reads this to decide when the
+    // MS1 tab is truly ready ("the whole page is ready (plots
+    // included)") — `spectrumView.loading` alone would read `false`
+    // (nothing loaded yet) in the brief moment before `selectedSampleId`
+    // assigns a real URL, so also count "no URL assigned yet, but there
+    // are samples to load one for" as still loading.
+    readonly property bool plotLoading: ms1Section.samples.length > 0
+                                         && (spectrumView.url == "" || spectrumView.loading)
+
     WebChannel {
         id: webChannel
     }

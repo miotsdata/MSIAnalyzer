@@ -114,8 +114,14 @@ Page {
                                 radius: 4
 
                                 MouseArea {
+                                    objectName: "runRowMouseArea_" + modelData.id
                                     anchors.fill: parent
                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    // "the analyses cards... should make
+                                    // the user understand that they can
+                                    // be clickable (on hover, use the
+                                    // classic 'hand' logo)"
+                                    cursorShape: Qt.PointingHandCursor
                                     onClicked: (mouse) => {
                                         if (mouse.button === Qt.RightButton) {
                                             runContextMenu.popup()

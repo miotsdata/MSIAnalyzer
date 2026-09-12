@@ -10,6 +10,7 @@
         <file>Views/NewAnalysisPage.qml</file>
         <file>Views/RunningAnalysisPage.qml</file>
         <file>Views/AnalysisPage.qml</file>
+        <file>Views/LoadingOverlay.qml</file>
         <file>Views/SummarySection.qml</file>
         <file>Views/AnnotationsSection.qml</file>
         <file>Views/AnnotationCandidatesPopup.qml</file>

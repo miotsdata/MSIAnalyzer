@@ -32,6 +32,32 @@ def test_nav_rail_has_four_sections(analysis_view, analysis_model, find_visual_c
         assert button.property("text") == label
 
 
+def test_nav_buttons_and_back_button_show_pointing_hand_on_hover(
+    analysis_view, analysis_model, find_visual_child
+):
+    # "the buttons in analyses (MS1, Annotation etc)... should make the
+    # user understand that they can be clickable (on hover, use the
+    # classic 'hand' logo)" — Buttons don't get a pointing-hand cursor by
+    # default in Qt Quick Controls. `HoverHandler` isn't a QQuickItem (not
+    # reachable via find_visual_child's childItems() walk, nor via
+    # findChild from `root` — it's parented directly to the button as a
+    # plain QObject), so it's found via the button's own `.findChild`
+    # once the button itself has been located.
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+
+    for i in range(4):
+        nav_button = find_visual_child(root, "navButton_" + str(i))
+        hover_handler = nav_button.findChild(object, "navButtonHover_" + str(i))
+        assert hover_handler is not None
+        assert hover_handler.property("cursorShape") == Qt.PointingHandCursor
+
+    back_button = root.findChild(QQuickItem, "backToProjectButton")
+    back_hover = back_button.findChild(object, "backToProjectButtonHover")
+    assert back_hover is not None
+    assert back_hover.property("cursorShape") == Qt.PointingHandCursor
+
+
 def test_back_to_project_button_navigates_to_project_home(
     analysis_view, analysis_model, application, qtbot
 ):
@@ -72,6 +98,85 @@ def test_clicking_nav_button_switches_section(
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
 
     assert stack.property("currentIndex") == 1
+
+
+def test_annotations_and_visual_sections_are_lazy(
+    analysis_view, analysis_model, find_visual_child, qtbot
+):
+    # Opening the workspace used to eagerly construct all four sections'
+    # full QML trees at once even though only Summary was visible —
+    # Annotations/Visual Inspection now only construct once their own tab
+    # is actually opened, matching MS1's existing (WebEngineView-driven)
+    # lazy pattern. Cuts the one-time cost of opening the workspace down
+    # to just Summary's.
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+
+    annotations_loader = root.findChild(QQuickItem, "annotationsSectionLoader")
+    visual_loader = root.findChild(QQuickItem, "visualSectionLoader")
+    assert annotations_loader.property("active") is False
+    assert visual_loader.property("active") is False
+
+    annotations_button = find_visual_child(root, "navButton_2")
+    center = annotations_button.mapToScene(annotations_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert annotations_loader.property("active") is True
+    assert annotations_loader.property("item") is not None
+    assert visual_loader.property("active") is False
+
+
+def test_loading_overlay_hides_once_summary_is_ready(analysis_view, analysis_model, qtbot):
+    # "when the whole page is ready... it is displayed" — Summary
+    # constructs synchronously/near-instantly, so the overlay shouldn't
+    # still be covering it after a short settle.
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+    qtbot.wait(50)
+
+    overlay = root.findChild(QQuickItem, "sectionLoadingOverlay")
+    assert overlay is not None
+    assert overlay.property("visible") is False
+
+
+def test_loading_overlay_covers_ms1_tab_until_plot_finishes_loading(
+    analysis_view, analysis_model, find_visual_child, qtbot
+):
+    # "plots included" — the overlay should stay up for the MS1 tab until
+    # the spectrum plot itself (not just the section's own QML) is ready.
+    # Needs a real sample + saved spectrum, or there's nothing for
+    # `plotLoading` to gate on (the empty-state case never counts as
+    # "still loading" — see MS1SpectraSection.qml's `plotLoading`).
+    import numpy as np
+
+    from msianalyzer.core.analysis_db import log_command, register_sample
+    from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
+
+    db_path = analysis_model.analysisDbPath
+    sample_id = register_sample(db_path, name="s1", raw_db_path="a.db")
+    command_id = log_command(db_path, "filter_spectra", {}, run_id="test-run", sample_id=sample_id)
+    save_aggregated_spectra(
+        np.array([100.0, 200.0]), np.array([10.0, 20.0]),
+        analysis_db_path=db_path, run_id="test-run", sample_id=sample_id, command_id=command_id,
+    )
+
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+
+    ms1_button = find_visual_child(root, "navButton_1")
+    center = ms1_button.mapToScene(ms1_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+
+    overlay = root.findChild(QQuickItem, "sectionLoadingOverlay")
+    ms1_loader = root.findChild(QQuickItem, "ms1SectionLoader")
+
+    qtbot.waitUntil(
+        lambda: ms1_loader.property("item") is not None
+                and not ms1_loader.property("item").property("plotLoading"),
+        timeout=2000,
+    )
+    assert overlay.property("visible") is False
 
 
 def test_summary_section_empty_state_for_empty_db(analysis_view, analysis_model, qtbot):

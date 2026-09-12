@@ -185,3 +185,19 @@ def test_clicking_run_row_emits_analysis_selected(
 
     qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
     assert spy.at(0)[0] == run_id
+
+
+def test_run_row_shows_pointing_hand_cursor_on_hover(
+    project_home_view, project_with_runs, find_visual_child
+):
+    # "the analyses cards in project home... should make the user
+    # understand that they can be clickable"
+    model = ProjectModel(project_with_runs, "/tmp/proj")
+    view = project_home_view(model)
+    root = view.rootObject()
+
+    run_id = next(iter(project_with_runs.runs.keys()))
+    mouse_area = find_visual_child(root, "runRowMouseArea_" + run_id)
+
+    assert mouse_area is not None
+    assert mouse_area.property("cursorShape") == Qt.PointingHandCursor
