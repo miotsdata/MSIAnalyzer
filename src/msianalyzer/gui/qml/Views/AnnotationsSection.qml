@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtWebEngine
 
 Item {
     id: annotationsSection
@@ -52,8 +51,12 @@ Item {
     property int topN: 5
     property var topHits: []
     property var selectedHit: null
-    property string empSource: "filtered"
-    property string libSource: "filtered"
+    // Always the stored *filtered* spectra, rendered as a plain PNG — no
+    // WebEngineView/Chromium renderer for this inline panel at all. Raw
+    // sources and the full interactive Plotly view only exist in the
+    // "Details" popup (mirrorPlotDetailWindow below); see
+    // AnalysisBridge.getBasicMirrorPlotImage's docstring.
+    property string basicPlotImage: ""
 
     function refreshTopHits() {
         annotationsSection.topHits = (analysis && analysis.analysisDbPath
@@ -66,21 +69,44 @@ Item {
                                           ? annotationsSection.topHits[0] : null
     }
 
-    function refreshMirrorPlot() {
-        if (annotationsSection.selectedHit && analysis && analysis.analysisDbPath) {
-            // A file:// url, not loadHtml() — see AnalysisBridge.getMirrorPlotUrl:
-            // loadHtml()/setHtml() silently fail past Qt's ~2MB limit, and a
-            // plot with Plotly.js embedded is already ~4.6MB on its own.
-            mirrorPlotView.url = AnalysisBridge.getMirrorPlotUrl(
-                analysis.analysisDbPath, annotationsSection.selectedHit.id,
-                annotationsSection.empSource, annotationsSection.libSource)
-        }
+    function refreshBasicPlot() {
+        annotationsSection.basicPlotImage = (annotationsSection.selectedHit
+                                              && analysis && analysis.analysisDbPath)
+            ? AnalysisBridge.getBasicMirrorPlotImage(
+                  analysis.analysisDbPath, annotationsSection.selectedHit.id)
+            : ""
     }
 
     onSelectedFeatureIdChanged: refreshTopHits()
-    onSelectedHitChanged: refreshMirrorPlot()
-    onEmpSourceChanged: refreshMirrorPlot()
-    onLibSourceChanged: refreshMirrorPlot()
+    onSelectedHitChanged: refreshBasicPlot()
+
+    // "all the stats are written better (list, clear)" — a flat
+    // label/value pair list (statsRepeater below lays it out as a
+    // 2-column grid), built straight from the already-fetched
+    // `selectedHit` — no extra bridge round trip needed.
+    readonly property var statsRows: {
+        var h = annotationsSection.selectedHit
+        if (!h)
+            return []
+        var pairs = [
+            ["Compound", (h.compound_name || h.inchikey || "?")
+                         + (h.compound_formula ? " (" + h.compound_formula + ")" : "")],
+            ["InChIKey", h.inchikey || "?"],
+            ["Sample", h.sample_name || "?"],
+            ["Library", h.library_name || "?"],
+            ["Score", Number(h.score).toFixed(3)
+                      + "  (dot product " + Number(h.dot_product_score).toFixed(3) + ")"],
+            ["Coverage", "library " + Number(h.lib_coverage).toFixed(2)
+                         + "  ·  empirical " + Number(h.emp_coverage).toFixed(2)],
+            ["Matched peaks", h.n_matched_peaks + " / " + h.n_lib_peaks],
+        ]
+        var flat = []
+        for (var i = 0; i < pairs.length; i++) {
+            flat.push(pairs[i][0] + ":")
+            flat.push(pairs[i][1])
+        }
+        return flat
+    }
 
     Text {
         id: emptyStateLabel
@@ -106,6 +132,17 @@ Item {
         ColumnLayout {
             id: tablePanel
             objectName: "annotationsTablePanel"
+            // Explicit — a SplitView pane's cross-axis size (height, for
+            // this horizontal orientation) is supposed to auto-fill from
+            // the SplitView itself with no binding needed at all, and
+            // that's the case elsewhere in this codebase (ProjectHomePage.qml's
+            // panes). Here it intermittently didn't: measured stuck at
+            // the pane's own tiny implicit content height instead of
+            // annotationsSplit's real height, with no explicit binding of
+            // ours to blame — a `SplitView` cross-axis quirk, not
+            // something a specific property change caused. Binding this
+            // directly sidesteps it regardless of the underlying cause.
+            height: annotationsSplit.height
             SplitView.preferredWidth: annotationsSplit.width * 0.4
             SplitView.minimumWidth: 240
             spacing: 8
@@ -157,10 +194,34 @@ Item {
                 Layout.fillHeight: true
                 clip: true
                 contentWidth: width
-                contentHeight: tableColumn.implicitHeight
+                // Computed from the row count directly, not
+                // `tableColumn.implicitHeight` — that formed a genuine
+                // binding cycle (Column's own implicit size, computed
+                // from its children's positions, indirectly depends on
+                // this Flickable's contentItem geometry, which this
+                // property was supposed to help determine) that silently
+                // never resolved: `tableColumn` stayed frozen at height 0
+                // and every row at y=0, permanently (confirmed: still 0
+                // after a 1.2s wait, not a timing issue). Every row here
+                // has the same fixed height (40) and spacing (4), so the
+                // total is just arithmetic — no dependency on anything
+                // this property itself feeds into.
+                contentHeight: annotationsSection.sortedRows.length > 0
+                    ? annotationsSection.sortedRows.length * 40
+                      + (annotationsSection.sortedRows.length - 1) * tableColumn.spacing
+                    : 0
                 boundsBehavior: Flickable.StopAtBounds
 
-                ColumnLayout {
+                // A plain `Column` positioner, not `ColumnLayout` — the
+                // latter, for a Repeater-generated list of same-width
+                // rows nested inside a Flickable, reproducibly failed to
+                // stack its children vertically at all (every row landed
+                // at y=0, overlapping) regardless of what Layout.*
+                // properties the delegates carried. `Column` just stacks
+                // children by `spacing` unconditionally, with no Layout-
+                // system sizing negotiation to go wrong — everything
+                // these rows need (`topHitsColumn` below, same fix).
+                Column {
                     id: tableColumn
                     width: tableFlickable.width
                     spacing: 4
@@ -172,7 +233,7 @@ Item {
 
                         delegate: Rectangle {
                             objectName: "annotationRow_" + modelData.feature_id
-                            Layout.fillWidth: true
+                            width: tableColumn.width
                             height: 40
                             radius: 4
                             color: annotationsSection.selectedFeatureId === modelData.feature_id
@@ -231,6 +292,7 @@ Item {
         ColumnLayout {
             id: detailPanel
             objectName: "annotationsDetailPanel"
+            height: annotationsSplit.height
             SplitView.fillWidth: true
             SplitView.minimumWidth: 320
             spacing: 12
@@ -265,15 +327,19 @@ Item {
                 visible: annotationsSection.selectedFeatureId >= 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                // Explicit, not relying on Layout.fillHeight alone — see
+                // tablePanel/detailPanel's own `height: annotationsSplit.height`
+                // above for the same fix and why it's needed.
+                height: detailPanel.height
 
-                // Row 1: top-N hits for the selected feature — "like in
-                // ms1", but each hit also states which sample it came
-                // from, since a feature's best hit for one compound can
-                // come from any of its samples. Scrolls internally
+                // Row 1 (of 3): top-N hits for the selected feature —
+                // "like in ms1", but each hit also states which sample it
+                // came from, since a feature's best hit for one compound
+                // can come from any of its samples. Scrolls internally
                 // (topHitsFlickable) if there isn't room for all of them.
                 ColumnLayout {
                     objectName: "topHitsPanel"
-                    SplitView.preferredHeight: detailSplit.height * 0.4
+                    height: detailSplit.height * 0.3
                     SplitView.minimumHeight: 80
                     spacing: 4
 
@@ -312,10 +378,18 @@ Item {
                         Layout.fillHeight: true
                         clip: true
                         contentWidth: width
-                        contentHeight: topHitsColumn.implicitHeight
+                        // Computed directly, not topHitsColumn.implicitHeight
+                        // — see tableFlickable's own contentHeight comment
+                        // above for why (the same binding-cycle freeze).
+                        contentHeight: annotationsSection.topHits.length > 0
+                            ? annotationsSection.topHits.length * 30
+                              + (annotationsSection.topHits.length - 1) * topHitsColumn.spacing
+                            : 0
                         boundsBehavior: Flickable.StopAtBounds
 
-                        ColumnLayout {
+                        // Column, not ColumnLayout — see tableColumn's own
+                        // comment above for why.
+                        Column {
                             id: topHitsColumn
                             width: topHitsFlickable.width
                             spacing: 2
@@ -327,7 +401,7 @@ Item {
 
                                 delegate: Rectangle {
                                     objectName: "topHit_" + modelData.id
-                                    Layout.fillWidth: true
+                                    width: topHitsColumn.width
                                     height: 30
                                     radius: 4
                                     color: annotationsSection.selectedHit
@@ -362,55 +436,142 @@ Item {
                     }
                 }
 
-                // Row 2: empirical (top) vs library (bottom) mirror plot
-                // for the selected hit, with an independent raw/filtered
-                // toggle for each side. "cannot scroll, so plot adapts to
-                // it" is handled on the plot's own side too, see
-                // AnalysisBridge.getMirrorPlotUrl.
+                // Row 2 (of 3): the match's stats, as a plain label/value
+                // list — "all the stats are written better (list,
+                // clear)" — instead of packed into the interactive
+                // plot's own title/metadata box (still there in the
+                // "Details" popup's full Plotly view, just not the
+                // primary way to read them here).
                 ColumnLayout {
-                    objectName: "mirrorPlotPanel"
-                    SplitView.preferredHeight: detailSplit.height * 0.6
-                    SplitView.minimumHeight: 120
+                    objectName: "statsPanel"
+                    height: detailSplit.height * 0.2
+                    SplitView.minimumHeight: 60
                     spacing: 4
 
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Text { text: "Empirical:" }
-                        ComboBox {
-                            id: empSourceCombo
-                            objectName: "empSourceCombo"
-                            model: ["filtered", "raw"]
-                            currentIndex: 0
-                            onActivated: (index) => annotationsSection.empSource = model[index]
-                        }
-                        Text { text: "Library:" }
-                        ComboBox {
-                            id: libSourceCombo
-                            objectName: "libSourceCombo"
-                            model: ["filtered", "raw"]
-                            currentIndex: 0
-                            onActivated: (index) => annotationsSection.libSource = model[index]
-                        }
-                        Item { Layout.fillWidth: true }
+                    Text {
+                        text: "Match details:"
+                        font.bold: true
                     }
 
                     Text {
-                        objectName: "mirrorPlotEmptyLabel"
+                        objectName: "statsEmptyLabel"
                         visible: !annotationsSection.selectedHit
                         text: "No hit selected."
                         color: "gray"
                     }
 
-                    WebEngineView {
-                        id: mirrorPlotView
-                        objectName: "mirrorPlotView"
+                    Flickable {
+                        objectName: "statsFlickable"
                         visible: !!annotationsSection.selectedHit
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        clip: true
+                        contentWidth: width
+                        contentHeight: statsGrid.implicitHeight
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        GridLayout {
+                            id: statsGrid
+                            width: parent.width
+                            columns: 2
+                            columnSpacing: 10
+                            rowSpacing: 2
+
+                            Repeater {
+                                objectName: "statsRepeater"
+                                model: annotationsSection.statsRows
+
+                                delegate: Text {
+                                    objectName: index % 2 === 0
+                                                ? "statLabel_" + Math.floor(index / 2)
+                                                : "statValue_" + Math.floor(index / 2)
+                                    Layout.column: index % 2
+                                    Layout.row: Math.floor(index / 2)
+                                    Layout.fillWidth: index % 2 === 1
+                                    font.bold: index % 2 === 0
+                                    elide: Text.ElideRight
+                                    text: modelData
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Row 3 (of 3): a fast static raster plot — "a basic plot
+                // in that panel (no plotly)" — always the stored filtered
+                // spectra. No WebEngineView here at all; the "Details"
+                // button opens the full interactive Plotly view (with the
+                // raw/filtered toggles) in its own window instead.
+                ColumnLayout {
+                    objectName: "basicPlotPanel"
+                    height: detailSplit.height * 0.5
+                    SplitView.minimumHeight: 150
+                    spacing: 4
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "Mirror plot:"
+                            font.bold: true
+                            Layout.fillWidth: true
+                        }
+                        ToolButton {
+                            objectName: "mirrorPlotDetailsButton"
+                            text: "🔍 Details"
+                            enabled: !!annotationsSection.selectedHit
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+
+                            onClicked: {
+                                // Lazily constructs mirrorPlotDetailWindowLoader.item on
+                                // first click, not before — see the Loader's own comment.
+                                mirrorPlotDetailWindowLoader.active = true
+                                var win = mirrorPlotDetailWindowLoader.item
+                                win.analysisDbPath = analysis.analysisDbPath
+                                win.annotationId = annotationsSection.selectedHit.id
+                                win.visible = true
+                                win.raise()
+                                win.requestActivate()
+                            }
+                        }
+                    }
+
+                    Text {
+                        objectName: "basicPlotEmptyLabel"
+                        visible: !annotationsSection.selectedHit
+                        text: "No hit selected."
+                        color: "gray"
+                    }
+
+                    Image {
+                        objectName: "basicPlotImage"
+                        visible: !!annotationsSection.selectedHit
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        fillMode: Image.PreserveAspectFit
+                        cache: false
+                        source: annotationsSection.basicPlotImage
                     }
                 }
             }
+        }
+    }
+
+    // Lazy — a WebEngineView (inside MirrorPlotDetailWindow) starts its
+    // Chromium renderer as soon as it's *constructed*, regardless of the
+    // owning Window's own `visible` state; declaring it as a plain child
+    // here got one spun up the moment the Annotations tab opened, even
+    // if "Details" was never clicked. Same reasoning as MS1/Annotations/
+    // VisualInspection themselves being lazy Loaders in AnalysisPage.qml
+    // rather than eager StackLayout children.
+    Loader {
+        id: mirrorPlotDetailWindowLoader
+        objectName: "mirrorPlotDetailWindowLoader"
+        active: false
+        sourceComponent: MirrorPlotDetailWindow {
+            objectName: "mirrorPlotDetailWindow"
         }
     }
 }

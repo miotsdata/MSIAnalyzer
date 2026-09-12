@@ -201,6 +201,31 @@ def test_plot_ms2_annotation_custom_title_overrides_auto_title(tmp_path):
     assert fig.layout.title.text == "My Title"
 
 
+def test_get_annotation_spectra_returns_arrays_and_metadata(tmp_path):
+    # The shared data both plot_ms2_annotation and the GUI's fast raster
+    # mirror plot (Plotter().get_annotation_spectra ->
+    # mirror_plot_raster.render_mirror_plot_png) draw from.
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    annotation_id = _insert_annotation(db)
+
+    data = Plotter().get_annotation_spectra(db, annotation_id)
+
+    assert list(data["empirical_mz"]) == [100.0, 150.0, 200.0]
+    assert list(data["library_mz"]) == [100.01, 199.99]
+    assert data["compound_name"] == "Caffeine"
+    assert data["fragment_ppm_tolerance"] == 10.0  # class default, no commands row
+
+
+def test_get_annotation_spectra_raises_for_invalid_source(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    annotation_id = _insert_annotation(db)
+
+    with pytest.raises(ValueError, match="emp_source"):
+        Plotter().get_annotation_spectra(db, annotation_id, emp_source="nope")
+
+
 def _line_traces(fig: go.Figure) -> list:
     return [t for t in fig.data if t.mode == "lines"]
 

@@ -1,3 +1,4 @@
+import base64
 import logging
 import os
 import sqlite3
@@ -9,9 +10,11 @@ import pandas as pd
 from PySide6.QtCore import QObject, Signal, Slot
 
 from msianalyzer.core import analysis_db
+from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
 from msianalyzer.core.plotting.plotter import Plotter
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
+from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
 
 logger = logging.getLogger(__name__)
 
@@ -82,20 +85,35 @@ class AnalysisBridge(QObject):
     Stateless — every method takes the analysis' `analysis_db_path`/
     `out_dir` explicitly (from an `AnalysisModel`) rather than holding its
     own "current analysis" state. Local SQLite reads are fast enough to
-    stay synchronous; no QThread/worker needed here, unlike `RunWorker`.
-    Methods are called directly from QML (unlike `CoreBridge`, whose
-    methods are only ever invoked from `Application`), so they're named to
-    read naturally as QML calls — camelCase, matching `Router.toLocalPath`.
+    stay synchronous; no QThread/worker needed for most of them, unlike
+    `RunWorker`. Methods are called directly from QML (unlike `CoreBridge`,
+    whose methods are only ever invoked from `Application`), so they're
+    named to read naturally as QML calls — camelCase, matching
+    `Router.toLocalPath`.
 
-    `spectrumPointClicked` is the one exception to "QML calls in, nothing
-    flows back out": the MS1 spectra section's `WebEngineView` registers
-    this object on a `WebChannel`, and the JS embedded in
-    `getSpectrumUrl`'s output calls `onSpectrumPointClicked` when the user
-    clicks a point on the plot — QML listens for the resulting signal to
-    update the feature-detail side panel.
+    Two exceptions to "QML calls in, a value flows straight back out":
+
+    - `spectrumPointClicked`: the MS1 spectra section's `WebEngineView`
+      registers this object on a `WebChannel`, and the JS embedded in
+      `getSpectrumUrl`'s output calls `onSpectrumPointClicked` when the
+      user clicks a point on the plot — QML listens for the resulting
+      signal to update the feature-detail side panel.
+    - `mirrorPlotReady`: `requestMirrorPlot` (unlike every other method
+      here) does *not* return its result directly — it can involve
+      `emp_source`/`lib_source="raw"`, real file I/O against a raw
+      per-sample database or a spectral library file that isn't
+      guaranteed to be fast or even local (a network mount). Running that
+      synchronously on the call-in thread — which for a `@Slot` invoked
+      from QML is the GUI thread — blocked Qt's entire event loop for as
+      long as the I/O took, reported as the app going fully unresponsive
+      ("python is not responding") rather than a normal wait. Offloaded
+      to `MirrorPlotWorker` (a `QThread`) instead; QML calls
+      `requestMirrorPlot` and listens for `mirrorPlotReady` instead of
+      using a return value.
     """
 
     spectrumPointClicked = Signal(float)
+    mirrorPlotReady = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -117,6 +135,15 @@ class AnalysisBridge(QObject):
         self._spectrum_prev_path: Path | None = None
         self._mirror_plot_counter = 0
         self._mirror_plot_prev_path: Path | None = None
+        # Kept alive while running — nothing else holds a reference to it
+        # (same pattern as CoreBridge._run_worker). Replacing it (a new
+        # request before the previous one finished) is also how a stale
+        # result gets discarded: _onMirrorPlotSucceeded/_onMirrorPlotFailed
+        # check `self.sender() is self._mirror_plot_worker` before
+        # emitting, so toggling emp/lib source quickly can't let an
+        # in-flight older (e.g. slower raw-source) request overwrite a
+        # newer result.
+        self._mirror_plot_worker: MirrorPlotWorker | None = None
 
     @Slot(float)
     def onSpectrumPointClicked(self, mz: float) -> None:
@@ -283,12 +310,59 @@ class AnalysisBridge(QObject):
         self._mirror_plot_prev_path = path
         return path.as_uri()
 
-    @Slot(str, int, str, str, result=str)
-    def getMirrorPlotUrl(
+    @Slot(str, int, result=str)
+    def getBasicMirrorPlotImage(self, analysis_db_path: str, annotation_id: int) -> str:
+        """A fast, static empirical-vs-library mirror plot for one
+        `ms2_annotations` row, always from the stored *filtered* spectra
+        — the Annotations section's inline default view.
+
+        Always synchronous: unlike `requestMirrorPlot`, this never touches
+        a raw per-sample database or a library file (only the already
+        max-normalised, pre-computed arrays `ms2_annotations` itself
+        stores), so there's no slow/remote I/O risk to move off the GUI
+        thread, and no `WebEngineView`/Chromium renderer needed just to
+        show it.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            annotation_id: Primary key in `ms2_annotations`.
+
+        Returns:
+            A `data:image/png;base64,...` URI for a QML `Image.source`.
+            A 1x1 transparent PNG data URI on any failure (unknown id, no
+            stored filtered spectra) instead — the panel's own stats
+            text (from `getFeatureTopHits`' data) already explains why,
+            so this just needs to not be a broken image.
+        """
+        try:
+            data = Plotter().get_annotation_spectra(analysis_db_path, annotation_id)
+            png = render_mirror_plot_png(
+                data["empirical_mz"], data["empirical_intensity"],
+                data["library_mz"], data["library_intensity"],
+                data["fragment_ppm_tolerance"],
+            )
+        except (ValueError, OSError) as e:
+            logger.warning("basic mirror plot for annotation %s failed: %s", annotation_id, e)
+            # 1x1 transparent PNG — a valid image, just nothing to see.
+            png = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+                "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )
+        return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+    @Slot(str, int, str, str)
+    def requestMirrorPlot(
         self, analysis_db_path: str, annotation_id: int, emp_source: str, lib_source: str
-    ) -> str:
-        """The empirical-vs-library mirror plot for one `ms2_annotations`
-        row, as a `file://` URL for a `WebEngineView`'s `url` to load.
+    ) -> None:
+        """Start building the full interactive (Plotly) mirror plot for
+        one `ms2_annotations` row on a background thread; the result
+        (or an error page) arrives via `mirrorPlotReady(url)`.
+
+        Fire-and-forget rather than a return value — see the class
+        docstring for why (`emp_source`/`lib_source="raw"` can mean slow
+        or remote file I/O, which must not block the GUI thread). Used by
+        the Annotations section's "view details" popup, which shows a
+        loading state (`LoadingOverlay`) until `mirrorPlotReady` fires.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
@@ -297,43 +371,39 @@ class AnalysisBridge(QObject):
                 to show (see `Plotter.plot_ms2_annotation`).
             lib_source: `"filtered"` or `"raw"` — which library spectrum
                 to show.
-
-        Returns:
-            A `file://` URL to a self-contained HTML page (full inline
-            Plotly.js — `include_plotlyjs=True` — so it stays viewable
-            without network access). Written to disk rather than returned
-            as HTML for `loadHtml()`/`setHtml()` to load directly: that
-            API silently fails past Qt's ~2MB limit, and embedding
-            Plotly.js alone is already ~4.6MB. On any failure (unknown id,
-            requested source unavailable) the page is a short `<p>` error
-            message instead — the section stays usable rather than showing
-            a blank/broken view.
         """
-        try:
-            fig = Plotter().plot_ms2_annotation(
-                analysis_db_path, annotation_id, emp_source=emp_source, lib_source=lib_source
-            )
-        except (ValueError, OSError) as e:
-            logger.warning("mirror plot for annotation %s failed: %s", annotation_id, e)
-            html = f"<p style='font-family: sans-serif; color: #900;'>{e}</p>"
-        else:
-            # Fill the WebEngineView's viewport instead of the figure's own
-            # fixed pixel height — same fix as MS1's spectrum plot
-            # (getSpectrumUrl below): left as the figure's own `height`,
-            # a mismatch between it and the panel QML actually gives the
-            # plot ("mirror plot part should take 60% [...] and cannot
-            # scroll, so plot adapts to it") showed up as a scrollbar
-            # inside the WebEngineView instead of the plot resizing.
-            fig.update_layout(autosize=True)
-            fig.layout.height = None
-            html = fig.to_html(
-                full_html=False, include_plotlyjs=True, config={"responsive": True}
-            )
-            html += (
-                "<style>html, body { margin: 0; padding: 0; "
-                "height: 100%; overflow: hidden; }</style>"
-            )
-        return self._write_mirror_plot_html(html)
+        worker = MirrorPlotWorker(analysis_db_path, annotation_id, emp_source, lib_source, self)
+        worker.succeeded.connect(self._onMirrorPlotSucceeded)
+        worker.failed.connect(self._onMirrorPlotFailed)
+        self._mirror_plot_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _onMirrorPlotSucceeded(self, data: dict) -> None:
+        if self.sender() is not self._mirror_plot_worker:
+            return  # superseded by a newer request — discard
+        # Building the Plotly figure here (main thread), not inside
+        # MirrorPlotWorker — see MirrorPlotWorker's own docstring for why
+        # (a real crash) doing it on the worker thread reproduced.
+        fig = Plotter().build_mirror_figure(data)
+        # Fill the WebEngineView's viewport instead of the figure's own
+        # fixed pixel height — same fix as MS1's spectrum plot
+        # (getSpectrumUrl below).
+        fig.update_layout(autosize=True)
+        fig.layout.height = None
+        html = fig.to_html(full_html=False, include_plotlyjs=True, config={"responsive": True})
+        html += (
+            "<style>html, body { margin: 0; padding: 0; "
+            "height: 100%; overflow: hidden; }</style>"
+        )
+        self.mirrorPlotReady.emit(self._write_mirror_plot_html(html))
+
+    @Slot(str)
+    def _onMirrorPlotFailed(self, message: str) -> None:
+        if self.sender() is not self._mirror_plot_worker:
+            return  # superseded by a newer request — discard
+        html = f"<p style='font-family: sans-serif; color: #900;'>{message}</p>"
+        self.mirrorPlotReady.emit(self._write_mirror_plot_html(html))
 
     @Slot(str, result=list)
     def getSamples(self, analysis_db_path: str) -> list:

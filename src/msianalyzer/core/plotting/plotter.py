@@ -244,6 +244,74 @@ class Plotter:
             )
         )
 
+    def get_annotation_spectra(
+        self,
+        analysis_db_path: Path | str,
+        annotation_id: int,
+        emp_source: str = "filtered",
+        lib_source: str = "filtered",
+        fragment_ppm_tolerance: float | None = None,
+    ) -> dict:
+        """Resolve one annotation's empirical/library (mz, intensity)
+        arrays and metadata — the data both `plot_ms2_annotation`
+        (interactive Plotly) and the GUI's fast raster mirror plot
+        (`mirror_plot_raster.render_mirror_plot_png`) need, without either
+        one building a full Plotly figure just to get it.
+
+        See `plot_ms2_annotation` for what `emp_source`/`lib_source`/
+        `fragment_ppm_tolerance` mean and what this raises.
+
+        Returns:
+            `{"empirical_mz", "empirical_intensity", "library_mz",
+            "library_intensity"}` (already max-normalised — a no-op for
+            the filtered spectra, which are stored pre-normalised),
+            `"fragment_ppm_tolerance"` (resolved), plus the annotation's
+            own metadata fields (`compound_name`, `compound_formula`,
+            `inchikey`, `score`, `dot_product_score`, `lib_coverage`,
+            `emp_coverage`, `n_matched_peaks`, `n_lib_peaks`,
+            `n_emp_peaks_raw`, `n_emp_peaks_filtered`, `scan_id`,
+            `precursor_mz`, `library_name`).
+        """
+        if emp_source not in ("filtered", "raw"):
+            raise ValueError(f"emp_source must be 'filtered' or 'raw', got {emp_source!r}")
+        if lib_source not in ("filtered", "raw"):
+            raise ValueError(f"lib_source must be 'filtered' or 'raw', got {lib_source!r}")
+
+        ann = self._fetch_annotation(analysis_db_path, annotation_id)
+
+        empirical_mz, empirical_int = self._resolve_side(
+            ann, side="emp", source=emp_source, annotation_id=annotation_id
+        )
+        library_mz, library_int = self._resolve_side(
+            ann, side="lib", source=lib_source, annotation_id=annotation_id
+        )
+        empirical_int = _normalize_to_max(empirical_int)
+        library_int = _normalize_to_max(library_int)
+
+        if fragment_ppm_tolerance is None:
+            fragment_ppm_tolerance = self._resolve_fragment_ppm_tolerance(
+                analysis_db_path, ann["command_id"]
+            )
+
+        return {
+            "empirical_mz": empirical_mz,
+            "empirical_intensity": empirical_int,
+            "library_mz": library_mz,
+            "library_intensity": library_int,
+            "fragment_ppm_tolerance": fragment_ppm_tolerance,
+            "emp_source": emp_source,
+            "lib_source": lib_source,
+            **{
+                key: ann[key]
+                for key in (
+                    "compound_name", "compound_formula", "inchikey", "score",
+                    "dot_product_score", "lib_coverage", "emp_coverage",
+                    "n_matched_peaks", "n_lib_peaks", "n_emp_peaks_raw",
+                    "n_emp_peaks_filtered", "scan_id", "precursor_mz", "library_name",
+                )
+            },
+        }
+
     @log_call
     def plot_ms2_annotation(
         self,
@@ -305,26 +373,45 @@ class Plotter:
                 found, or the scan/spectrum id no longer exists in it); or
                 `emp_source`/`lib_source` isn't `"filtered"`/`"raw"`.
         """
-        if emp_source not in ("filtered", "raw"):
-            raise ValueError(f"emp_source must be 'filtered' or 'raw', got {emp_source!r}")
-        if lib_source not in ("filtered", "raw"):
-            raise ValueError(f"lib_source must be 'filtered' or 'raw', got {lib_source!r}")
-
-        ann = self._fetch_annotation(analysis_db_path, annotation_id)
-
-        empirical_mz, empirical_int = self._resolve_side(
-            ann, side="emp", source=emp_source, annotation_id=annotation_id
+        data = self.get_annotation_spectra(
+            analysis_db_path, annotation_id, emp_source, lib_source, fragment_ppm_tolerance
         )
-        library_mz, library_int = self._resolve_side(
-            ann, side="lib", source=lib_source, annotation_id=annotation_id
-        )
-        empirical_int = _normalize_to_max(empirical_int)
-        library_int = _normalize_to_max(library_int)
+        return self.build_mirror_figure(data, title=title, height=height)
 
-        if fragment_ppm_tolerance is None:
-            fragment_ppm_tolerance = self._resolve_fragment_ppm_tolerance(
-                analysis_db_path, ann["command_id"]
-            )
+    def build_mirror_figure(
+        self, data: dict, title: Optional[str] = None, height: int = 500
+    ) -> go.Figure:
+        """The Plotly figure for one `get_annotation_spectra` result.
+
+        Split out from `plot_ms2_annotation` so the (potentially slow —
+        raw source) data-resolution step and this (fast, pure
+        Python/Plotly, CPU-only) figure-building step can run on
+        different threads: `AnalysisBridge`'s `MirrorPlotWorker` calls
+        `get_annotation_spectra` on a background `QThread` (see its
+        docstring for why), but calling *this* method there too
+        reproducibly crashed — Plotly's own object graph isn't safe to
+        build concurrently with the main thread's own Python activity
+        (observed: a segfault inside `plotly`'s `_perform_plotly_relayout`
+        while the main thread was mid garbage-collection). `AnalysisBridge`
+        therefore calls this method back on the main thread once the
+        worker's data arrives.
+
+        Args:
+            data: A `get_annotation_spectra` result.
+            title: Plot title. Auto-generated from `data`'s metadata if None.
+            height: Figure height in pixels.
+
+        Returns:
+            plotly.graph_objects.Figure
+        """
+        empirical_mz = data["empirical_mz"]
+        empirical_int = data["empirical_intensity"]
+        library_mz = data["library_mz"]
+        library_int = data["library_intensity"]
+        fragment_ppm_tolerance = data["fragment_ppm_tolerance"]
+        emp_source = data["emp_source"]
+        lib_source = data["lib_source"]
+        ann = data
 
         # Match masks — each sized to its own spectrum
         _, emp_matched_mask = _align_peaks(

@@ -180,13 +180,23 @@ def test_get_feature_top_hits_empty_for_unknown_feature(tmp_path):
     assert bridge.getFeatureTopHits(str(db_path), 999, 5) == []
 
 
-def test_get_mirror_plot_url_returns_html_for_valid_annotation(tmp_path):
+def _request_mirror_plot_sync(bridge, qtbot, *args, timeout=5000) -> str:
+    """`requestMirrorPlot` is fire-and-forget (see the class docstring —
+    it runs on a background `MirrorPlotWorker` so slow/remote raw-source
+    I/O never blocks the GUI thread); tests wait for `mirrorPlotReady`
+    and return the file:// URL it carried."""
+    with qtbot.waitSignal(bridge.mirrorPlotReady, timeout=timeout) as blocker:
+        bridge.requestMirrorPlot(*args)
+    return blocker.args[0]
+
+
+def test_request_mirror_plot_emits_ready_with_html_for_valid_annotation(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    url = bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered")
+    url = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
     html = _read_url(url)
 
     assert url.startswith("file://")
@@ -194,7 +204,7 @@ def test_get_mirror_plot_url_returns_html_for_valid_annotation(tmp_path):
     assert "plotly" in html.lower()
 
 
-def test_get_mirror_plot_url_fills_container_instead_of_fixed_height(tmp_path):
+def test_request_mirror_plot_fills_container_instead_of_fixed_height(tmp_path, qtbot):
     # "mirror plot part should take 60% [of the panel] and cannot scroll,
     # so plot adapts to it" — same fix as MS1's getSpectrumUrl: autosize,
     # no fixed pixel height baked into the figure, and CSS clearing the
@@ -204,7 +214,9 @@ def test_get_mirror_plot_url_fills_container_instead_of_fixed_height(tmp_path):
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered"))
+    html = _read_url(
+        _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
+    )
 
     assert '"autosize": true' in html or '"autosize":true' in html
     assert "overflow: hidden" in html
@@ -213,43 +225,49 @@ def test_get_mirror_plot_url_fills_container_instead_of_fixed_height(tmp_path):
     assert '"height": 500' not in html and '"height":500' not in html
 
 
-def test_get_mirror_plot_url_returns_error_message_for_unknown_id(tmp_path):
+def test_request_mirror_plot_emits_error_message_for_unknown_id(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
 
     bridge = AnalysisBridge()
-    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 999, "filtered", "filtered"))
+    html = _read_url(
+        _request_mirror_plot_sync(bridge, qtbot, str(db_path), 999, "filtered", "filtered")
+    )
 
     assert "<p" in html
     assert "No annotation found" in html
 
 
-def test_get_mirror_plot_url_returns_error_message_without_filtered_spectra(tmp_path):
+def test_request_mirror_plot_emits_error_message_without_filtered_spectra(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path, with_filtered_spectra=False)
 
     bridge = AnalysisBridge()
-    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered"))
+    html = _read_url(
+        _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
+    )
 
     assert "<p" in html
     assert "no stored filtered empirical spectrum" in html
 
 
-def test_get_mirror_plot_url_returns_error_message_for_unavailable_raw_source(tmp_path):
+def test_request_mirror_plot_emits_error_message_for_unavailable_raw_source(tmp_path, qtbot):
     # 'a.db' (the seeded sample's raw_db_path) doesn't exist on disk.
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    html = _read_url(bridge.getMirrorPlotUrl(str(db_path), 1, "raw", "filtered"))
+    html = _read_url(
+        _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "raw", "filtered")
+    )
 
     assert "<p" in html
     assert "raw empirical spectrum not found" in html
 
 
-def test_get_mirror_plot_url_is_unique_per_call(tmp_path):
+def test_request_mirror_plot_url_is_unique_per_call(tmp_path, qtbot):
     # Each render needs a distinct URL — an unchanged QML `url` binding
     # doesn't reload, even when the underlying file's content changed.
     db_path = tmp_path / "analysis.db"
@@ -257,10 +275,62 @@ def test_get_mirror_plot_url_is_unique_per_call(tmp_path):
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    url1 = bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered")
-    url2 = bridge.getMirrorPlotUrl(str(db_path), 1, "filtered", "filtered")
+    url1 = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
+    url2 = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
 
     assert url1 != url2
+
+
+def test_request_mirror_plot_stale_request_is_discarded(tmp_path, qtbot):
+    # Firing a second request before the first's worker thread has
+    # finished must not let the first one's (now-stale) result win —
+    # only one mirrorPlotReady should reach QML, for the newer request.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+
+    bridge = AnalysisBridge()
+    received = []
+    bridge.mirrorPlotReady.connect(received.append)
+
+    bridge.requestMirrorPlot(str(db_path), 1, "filtered", "filtered")
+    first_worker = bridge._mirror_plot_worker
+    bridge.requestMirrorPlot(str(db_path), 1, "filtered", "filtered")
+
+    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+    qtbot.wait(50)  # give a stray first-request signal a chance to (wrongly) arrive too
+
+    assert len(received) == 1
+
+
+def test_get_basic_mirror_plot_image_returns_png_data_uri(tmp_path):
+    # Always synchronous (filtered-only, no raw I/O) — the Annotations
+    # section's inline default view, no WebEngineView involved.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+
+    bridge = AnalysisBridge()
+    uri = bridge.getBasicMirrorPlotImage(str(db_path), 1)
+
+    assert uri.startswith("data:image/png;base64,")
+    import base64
+    png = base64.b64decode(uri.split(",", 1)[1])
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_get_basic_mirror_plot_image_returns_placeholder_for_unknown_id(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    uri = bridge.getBasicMirrorPlotImage(str(db_path), 999)
+
+    assert uri.startswith("data:image/png;base64,")
+    import base64
+    png = base64.b64decode(uri.split(",", 1)[1])
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_get_samples_returns_every_sample(tmp_path):
