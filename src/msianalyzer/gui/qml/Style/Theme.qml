@@ -104,13 +104,18 @@ QtObject {
 
     // The one border/divider shade actually used by name throughout the
     // rest of the app (`palette.mid`, read directly — e.g.
-    // `AppMenuItem.qml`, stat tiles, panel borders). The other three
-    // below exist for completeness (Fusion's own internal bevel/shadow
-    // rendering on standard Controls reads them) but nothing outside
-    // Main.qml currently names them directly. Same descending-brightness
-    // order (light > midlight > control > border/mid > dark > shadow) in
-    // both modes.
-    readonly property color borderColor: isDark ? "#2a2a2a" : "#c8c8ce"
+    // `AppMenuItem.qml`, stat tiles, panel borders, the menu bar's own
+    // bottom border). Needs to read as clearly *not background* — in
+    // light mode that means darker than the background (correctly, `mid`
+    // is traditionally the darker side of Qt's light/midlight/mid/dark
+    // bevel scale), but in dark mode a border darker than an already-dark
+    // background is nearly invisible; it needs to go *lighter* instead
+    // (reported 2026-09-15: "the line dividing different sections... as
+    // well as menubar border, should be lighter, not darker"). So this
+    // one token breaks from the classical descending light > midlight >
+    // control > mid > dark > shadow gradient in dark mode specifically —
+    // deliberately, for visibility, not an oversight.
+    readonly property color borderColor: isDark ? "#48484c" : "#c8c8ce"
     readonly property color lightColor: isDark ? "#4a4a4a" : "#ffffff"
     readonly property color midlightColor: isDark ? "#414141" : "#e0e0e6"
     readonly property color darkColor: isDark ? "#1e1e1e" : "#a0a0a8"

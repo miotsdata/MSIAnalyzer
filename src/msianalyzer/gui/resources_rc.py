@@ -3296,7 +3296,7 @@ IpR\xa0V\x96\xd8\x1a\x90\xb1\x02\x99,?\xec$\
 m\
 odule Main\x0aMain \
 1.0 Main.qml\x0a\
-\x00\x00\x1b\xb5\
+\x00\x00\x1dL\
 p\
 ragma Singleton\x0a\
 import QtQuick\x0a\x0a\
@@ -3667,81 +3667,106 @@ lette.mid`, read\
 g.\x0a    // `AppMe\
 nuItem.qml`, sta\
 t tiles, panel b\
-orders). The oth\
-er three\x0a    // \
-below exist for \
-completeness (Fu\
-sion's own inter\
-nal bevel/shadow\
-\x0a    // renderin\
-g on standard Co\
-ntrols reads the\
-m) but nothing o\
-utside\x0a    // Ma\
-in.qml currently\
- names them dire\
-ctly. Same desce\
-nding-brightness\
-\x0a    // order (l\
+orders, the menu\
+ bar's own\x0a    /\
+/ bottom border)\
+. Needs to read \
+as clearly *not \
+background* \xe2\x80\x94 \
+in\x0a    // light \
+mode that means \
+darker than the \
+background (corr\
+ectly, `mid`\x0a   \
+ // is tradition\
+ally the darker \
+side of Qt's lig\
+ht/midlight/mid/\
+dark\x0a    // beve\
+l scale), but in\
+ dark mode a bor\
+der darker than \
+an already-dark\x0a\
+    // backgroun\
+d is nearly invi\
+sible; it needs \
+to go *lighter* \
+instead\x0a    // (\
+reported 2026-09\
+-15: \x22the line d\
+ividing differen\
+t sections... as\
+\x0a    // well as \
+menubar border, \
+should be lighte\
+r, not darker\x22).\
+ So this\x0a    // \
+one token breaks\
+ from the classi\
+cal descending l\
 ight > midlight \
-> control > bord\
-er/mid > dark > \
-shadow) in\x0a    /\
-/ both modes.\x0a  \
-  readonly prope\
-rty color border\
-Color: isDark ? \
-\x22#2a2a2a\x22 : \x22#c8\
-c8ce\x22\x0a    readon\
-ly property colo\
-r lightColor: is\
-Dark ? \x22#4a4a4a\x22\
- : \x22#ffffff\x22\x0a   \
+>\x0a    // control\
+ > mid > dark > \
+shadow gradient \
+in dark mode spe\
+cifically \xe2\x80\x94\x0a  \
+  // deliberatel\
+y, for visibilit\
+y, not an oversi\
+ght.\x0a    readonl\
+y property color\
+ borderColor: is\
+Dark ? \x22#48484c\x22\
+ : \x22#c8c8ce\x22\x0a   \
  readonly proper\
-ty color midligh\
-tColor: isDark ?\
- \x22#414141\x22 : \x22#e\
-0e0e6\x22\x0a    reado\
-nly property col\
-or darkColor: is\
-Dark ? \x22#1e1e1e\x22\
- : \x22#a0a0a8\x22\x0a   \
- // Actual drop-\
-shadow alpha eff\
-ects, not a surf\
-ace color \xe2\x80\x94 st\
-ays near-\x0a    //\
- black regardles\
-s of theme, same\
- as most design \
-systems' \x22shadow\
-\x22.\x0a    readonly \
-property color s\
-hadowColor: \x22#00\
-0000\x22\x0a\x0a    // --\
-- Type scale ---\
+ty color lightCo\
+lor: isDark ? \x22#\
+4a4a4a\x22 : \x22#ffff\
+ff\x22\x0a    readonly\
+ property color \
+midlightColor: i\
+sDark ? \x22#414141\
+\x22 : \x22#e0e0e6\x22\x0a  \
+  readonly prope\
+rty color darkCo\
+lor: isDark ? \x22#\
+1e1e1e\x22 : \x22#a0a0\
+a8\x22\x0a    // Actua\
+l drop-shadow al\
+pha effects, not\
+ a surface color\
+ \xe2\x80\x94 stays near-\
+\x0a    // black re\
+gardless of them\
+e, same as most \
+design systems' \
+\x22shadow\x22.\x0a    re\
+adonly property \
+color shadowColo\
+r: \x22#000000\x22\x0a\x0a  \
+  // --- Type sc\
+ale ------------\
 ----------------\
 ----------------\
----------------\x0a\
-\x0a    // A page's\
- own title (e.g.\
- \x22Create project\
-\x22, a project's n\
-ame on\x0a    // Pr\
-oject Home) and \
-small caption/hi\
-nt text under a \
-control. Sizes,\x0a\
-    // not color\
-s \xe2\x80\x94 no light/d\
-ark variant need\
-ed.\x0a    readonly\
- property int he\
-adingPixelSize: \
-18\x0a    readonly \
-property int cap\
-tionPixelSize: 1\
-0\x0a}\x0a\
+------\x0a\x0a    // A\
+ page's own titl\
+e (e.g. \x22Create \
+project\x22, a proj\
+ect's name on\x0a  \
+  // Project Hom\
+e) and small cap\
+tion/hint text u\
+nder a control. \
+Sizes,\x0a    // no\
+t colors \xe2\x80\x94 no \
+light/dark varia\
+nt needed.\x0a    r\
+eadonly property\
+ int headingPixe\
+lSize: 18\x0a    re\
+adonly property \
+int captionPixel\
+Size: 10\x0a}\x0a\
 \x00\x00\x03\x88\
 i\
 mport QtQuick\x0aim\
@@ -3955,12 +3980,12 @@ qt_resource_struct = b"\
 \x00\x00\x01\xa0\x95\x1b\x82\xce\
 \x00\x00\x02\xd0\x00\x04\x00\x00\x00\x01\x00\x00\xb0\xa0\
 \x00\x00\x01\xa0\x9b\x9b\x85m\
-\x00\x00\x03$\x00\x00\x00\x00\x00\x01\x00\x00\xe6\xfe\
+\x00\x00\x03$\x00\x00\x00\x00\x00\x01\x00\x00\xe8\x95\
 \x00\x00\x01\xa0\x9c\x11\xb2i\
-\x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00\xea\x8a\
+\x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00\xec!\
 \x00\x00\x01\xa0\x9c\x11\xc4?\
 \x00\x00\x03\x0c\x00\x00\x00\x00\x00\x01\x00\x00\xcbE\
-\x00\x00\x01\xa0\x9c\x1d\xbb\xab\
+\x00\x00\x01\xa0\x9c%\x8e\xed\
 \x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00\xcb#\
 \x00\x00\x01\xa0C\x10\x19\xe2\
 \x00\x00\x02\xf6\x00\x04\x00\x00\x00\x01\x00\x00\xbb\xf1\
