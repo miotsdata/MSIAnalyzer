@@ -131,13 +131,21 @@ Window {
             Item { Layout.fillWidth: true }
         }
 
-        // A resizable SplitView, not a plain RowLayout — a RowLayout here
-        // left the WebEngineView pane with an unreliable/zero effective
-        // size in the real app (Plotly then computed nonsensical
-        // "-Infinity" text positions, and the metadata panel visually
-        // overlapped the plot instead of sitting in its own column) even
-        // though it measured fine under the offscreen test platform. Same
-        // SplitView-with-explicit-cross-axis-height fix already proven for
+        // A SplitView (not a plain RowLayout — see the pane cross-axis
+        // fix below), but a fixed 70/30 split, not user-resizable: each
+        // pane's min/max width are pinned to the same value as its
+        // preferred width, which leaves the handle with no room to drag.
+        // Interactively resizing the plot pane meant live-reflowing the
+        // WebEngineView's Chromium renderer on every drag frame, visibly
+        // laggy — not worth it for a two-pane detail window.
+        //
+        // SplitView over a plain RowLayout: a RowLayout here left the
+        // WebEngineView pane with an unreliable/zero effective size in
+        // the real app (Plotly then computed nonsensical "-Infinity" text
+        // positions, and the metadata panel visually overlapped the plot
+        // instead of sitting in its own column) even though it measured
+        // fine under the offscreen test platform. Same SplitView-with-
+        // explicit-cross-axis-height fix already proven for
         // AnnotationsSection.qml's own panes (see its detailSplit/
         // tablePanel/detailPanel comments) — each pane's `height:` is
         // bound explicitly rather than relying on the SplitView to
@@ -154,8 +162,9 @@ Window {
                 id: plotPane
                 objectName: "detailPlotPane"
                 height: detailContentSplit.height
-                SplitView.fillWidth: true
-                SplitView.minimumWidth: 300
+                SplitView.preferredWidth: detailContentSplit.width * 0.7
+                SplitView.minimumWidth: SplitView.preferredWidth
+                SplitView.maximumWidth: SplitView.preferredWidth
 
                 WebEngineView {
                     id: mirrorPlotView
@@ -174,73 +183,85 @@ Window {
             }
 
             // Score/coverage/peak-count/identity table, next to the plot
-            // instead of packed into its title/corner annotation.
-            ColumnLayout {
-                id: metadataPanel
-                objectName: "detailMetadataPanel"
+            // instead of packed into its title/corner annotation. A plain
+            // Item pane (like plotPane) with the actual content anchored
+            // inside and given a left margin, rather than putting
+            // SplitView.* directly on the ColumnLayout — that margin is
+            // what keeps the text from sitting flush against the divider.
+            Item {
+                id: metadataPane
+                objectName: "detailMetadataPane"
                 height: detailContentSplit.height
-                SplitView.preferredWidth: 280
-                SplitView.minimumWidth: 220
-                spacing: 8
+                SplitView.preferredWidth: detailContentSplit.width * 0.3
+                SplitView.minimumWidth: SplitView.preferredWidth
+                SplitView.maximumWidth: SplitView.preferredWidth
 
-                Text { text: "Details"; font.bold: true }
+                ColumnLayout {
+                    id: metadataPanel
+                    objectName: "detailMetadataPanel"
+                    anchors.fill: parent
+                    anchors.leftMargin: 12
+                    spacing: 8
 
-                MirrorPlotMetadataRow {
-                    label: "Compound"; valueObjectName: "detailMetadataCompound"
-                    value: detailWindow.compoundText
-                }
-                MirrorPlotMetadataRow {
-                    label: "InChIKey"; valueObjectName: "detailMetadataInchikey"
-                    value: detailWindow.metadata.inchikey || "—"
-                }
-                MirrorPlotMetadataRow {
-                    label: "Library"; valueObjectName: "detailMetadataLibrary"
-                    value: detailWindow.metadata.library_name || "—"
-                }
-                MirrorPlotMetadataRow {
-                    label: "Score"; valueObjectName: "detailMetadataScore"
-                    value: detailWindow.fmtFloat(detailWindow.metadata.score, 4)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Dot product"; valueObjectName: "detailMetadataDotProduct"
-                    value: detailWindow.fmtFloat(detailWindow.metadata.dot_product_score, 4)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Coverage score"; valueObjectName: "detailMetadataCoverageScore"
-                    value: detailWindow.fmtFloat(detailWindow.metadata.coverage_score, 4)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Library coverage"; valueObjectName: "detailMetadataLibCoverage"
-                    value: detailWindow.fmtFloat(detailWindow.metadata.lib_coverage, 2)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Empirical coverage"; valueObjectName: "detailMetadataEmpCoverage"
-                    value: detailWindow.fmtFloat(detailWindow.metadata.emp_coverage, 2)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Matched / library peaks"; valueObjectName: "detailMetadataMatchedPeaks"
-                    value: detailWindow.fmtInt(detailWindow.metadata.n_matched_peaks) + " / "
-                           + detailWindow.fmtInt(detailWindow.metadata.n_lib_peaks)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Empirical peaks (filtered/raw)"; valueObjectName: "detailMetadataEmpPeaks"
-                    value: detailWindow.fmtInt(detailWindow.metadata.n_emp_peaks_filtered) + " / "
-                           + detailWindow.fmtInt(detailWindow.metadata.n_emp_peaks_raw)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Scan ID"; valueObjectName: "detailMetadataScanId"
-                    value: detailWindow.fmtInt(detailWindow.metadata.scan_id)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Precursor m/z"; valueObjectName: "detailMetadataPrecursorMz"
-                    value: detailWindow.fmtFloat(detailWindow.metadata.precursor_mz, 4)
-                }
-                MirrorPlotMetadataRow {
-                    label: "Fragment tolerance"; valueObjectName: "detailMetadataFragmentTolerance"
-                    value: detailWindow.fmtFloat(detailWindow.metadata.fragment_ppm_tolerance, 1) + " ppm"
-                }
+                    Text { text: "Details"; font.bold: true }
 
-                Item { Layout.fillHeight: true }
+                    MirrorPlotMetadataRow {
+                        label: "Compound"; valueObjectName: "detailMetadataCompound"
+                        value: detailWindow.compoundText
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "InChIKey"; valueObjectName: "detailMetadataInchikey"
+                        value: detailWindow.metadata.inchikey || "—"
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Library"; valueObjectName: "detailMetadataLibrary"
+                        value: detailWindow.metadata.library_name || "—"
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Score"; valueObjectName: "detailMetadataScore"
+                        value: detailWindow.fmtFloat(detailWindow.metadata.score, 4)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Dot product"; valueObjectName: "detailMetadataDotProduct"
+                        value: detailWindow.fmtFloat(detailWindow.metadata.dot_product_score, 4)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Coverage score"; valueObjectName: "detailMetadataCoverageScore"
+                        value: detailWindow.fmtFloat(detailWindow.metadata.coverage_score, 4)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Library coverage"; valueObjectName: "detailMetadataLibCoverage"
+                        value: detailWindow.fmtFloat(detailWindow.metadata.lib_coverage, 2)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Empirical coverage"; valueObjectName: "detailMetadataEmpCoverage"
+                        value: detailWindow.fmtFloat(detailWindow.metadata.emp_coverage, 2)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Matched / library peaks"; valueObjectName: "detailMetadataMatchedPeaks"
+                        value: detailWindow.fmtInt(detailWindow.metadata.n_matched_peaks) + " / "
+                               + detailWindow.fmtInt(detailWindow.metadata.n_lib_peaks)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Empirical peaks (filtered/raw)"; valueObjectName: "detailMetadataEmpPeaks"
+                        value: detailWindow.fmtInt(detailWindow.metadata.n_emp_peaks_filtered) + " / "
+                               + detailWindow.fmtInt(detailWindow.metadata.n_emp_peaks_raw)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Scan ID"; valueObjectName: "detailMetadataScanId"
+                        value: detailWindow.fmtInt(detailWindow.metadata.scan_id)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Precursor m/z"; valueObjectName: "detailMetadataPrecursorMz"
+                        value: detailWindow.fmtFloat(detailWindow.metadata.precursor_mz, 4)
+                    }
+                    MirrorPlotMetadataRow {
+                        label: "Fragment tolerance"; valueObjectName: "detailMetadataFragmentTolerance"
+                        value: detailWindow.fmtFloat(detailWindow.metadata.fragment_ppm_tolerance, 1) + " ppm"
+                    }
+
+                    Item { Layout.fillHeight: true }
+                }
             }
         }
     }
