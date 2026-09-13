@@ -58,6 +58,7 @@ Item {
                 objectName: "statTile_" + modelData.key
                 Layout.preferredWidth: 180
                 Layout.preferredHeight: 100
+                color: Theme.secondaryColor
                 border.color: palette.mid
                 border.width: 1
                 radius: 6

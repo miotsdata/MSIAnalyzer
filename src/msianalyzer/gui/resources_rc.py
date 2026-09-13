@@ -976,7 +976,7 @@ lData\x0a          \
             }\x0a  \
           }\x0a    \
     }\x0a    }\x0a}\x0a\
-\x00\x00\x0ay\
+\x00\x00\x0a\xa5\
 i\
 mport QtQuick\x0aim\
 port QtQuick.Con\
@@ -1100,52 +1100,55 @@ idth: 180\x0a      \
           Layout\
 .preferredHeight\
 : 100\x0a          \
-      border.col\
-or: palette.mid\x0a\
+      color: The\
+me.secondaryColo\
+r\x0a              \
+  border.color: \
+palette.mid\x0a    \
+            bord\
+er.width: 1\x0a    \
+            radi\
+us: 6\x0a\x0a         \
+       ColumnLay\
+out {\x0a          \
+          anchor\
+s.centerIn: pare\
+nt\x0a             \
+       spacing: \
+4\x0a\x0a             \
+       Label {\x0a \
                 \
-border.width: 1\x0a\
+       objectNam\
+e: \x22statValue_\x22 \
++ modelData.key\x0a\
                 \
-radius: 6\x0a\x0a     \
-           Colum\
-nLayout {\x0a      \
-              an\
-chors.centerIn: \
-parent\x0a         \
-           spaci\
-ng: 4\x0a\x0a         \
-           Label\
- {\x0a             \
-           objec\
-tName: \x22statValu\
-e_\x22 + modelData.\
-key\x0a            \
-            text\
-: summarySection\
-.tileText(modelD\
-ata.key)\x0a       \
+        text: su\
+mmarySection.til\
+eText(modelData.\
+key)\x0a           \
+             fon\
+t.pixelSize: 22\x0a\
                 \
- font.pixelSize:\
- 22\x0a            \
-            font\
-.bold: true\x0a    \
+        font.bol\
+d: true\x0a        \
                 \
-    Layout.align\
-ment: Qt.AlignHC\
-enter\x0a          \
-          }\x0a    \
-                \
-Label {\x0a        \
-                \
-text: modelData.\
-label\x0a          \
-              La\
-yout.alignment: \
-Qt.AlignHCenter\x0a\
-                \
-    }\x0a          \
+Layout.alignment\
+: Qt.AlignHCente\
+r\x0a              \
       }\x0a        \
-    }\x0a        }\x0a\
-    }\x0a}\x0a\
+            Labe\
+l {\x0a            \
+            text\
+: modelData.labe\
+l\x0a              \
+          Layout\
+.alignment: Qt.A\
+lignHCenter\x0a    \
+                \
+}\x0a              \
+  }\x0a            \
+}\x0a        }\x0a    \
+}\x0a}\x0a\
 \x00\x00\x04`\
 i\
 mport QtQuick\x0aim\
@@ -3044,256 +3047,282 @@ ol\xff_I6\x0a\xecV\xe17\xd2\xa1'\x0f?\
 ].\x0e\x88\xea\xf8\x94 \xa4v^\xec\x80\xda\x80\x89\
 \xd44\xe6@\x11\xc7H\x84\x0e\xfb\x0f\x81 (\xc6\xe8\
 \xbe`\xd5\x1a\x0b\xdf\xe8\xa0\x92\x8eT\x02\
-\x00\x00\x0f$\
+\x00\x00\x10\xc6\
 i\
 mport QtQuick\x0aim\
 port QtQuick.Con\
 trols\x0aimport QtQ\
-uick.Dialogs\x0a\x0aAp\
-plicationWindow \
-{\x0a    id: window\
-\x0a\x0a    visible: t\
-rue\x0a    // Bigge\
-r than the old 9\
-00x650 default \xe2\
-\x80\x94 several secti\
-ons (the 13-tab\x0a\
-    // config Fl\
-ow, Visual Inspe\
-ction's control \
-panel + heatmap \
-grid) need\x0a    /\
-/ real room; min\
-imumWidth/Height\
- stop the window\
- being resized b\
-elow\x0a    // wher\
-e that content s\
-tops fitting at \
-all.\x0a    width: \
-1280\x0a    height:\
- 850\x0a    minimum\
-Width: 1000\x0a    \
-minimumHeight: 7\
-00\x0a    title: \x22M\
-SIAnalyzer\x22\x0a\x0a   \
- // ApplicationW\
-indow's own back\
-ground fill is `\
-color`, a separa\
-te\x0a    // proper\
-ty from `palette\
-` below (which o\
-nly governs how \
-*controls*\x0a    /\
-/ render themsel\
-ves) \xe2\x80\x94 left un\
-set, it stayed w\
-hatever the plat\
-form's\x0a    // ow\
-n default surfac\
-e color is regar\
-dless of the pal\
-ette override,\x0a \
-   // which is t\
-he most likely r\
-eason the window\
- still looked da\
-rk after\x0a    // \
-that alone.\x0a    \
-color: palette.w\
-indow\x0a\x0a    // Pr\
-ofessional dark-\
-neutral palette \
-(2026-09-14 mock\
-up, not yet\x0a    \
-// confirmed) \xe2\x80\
-\x94 replaces the e\
-arlier flat ligh\
-t palette. `pale\
-tte` is a\x0a    //\
- QQuickItem-inhe\
-rited property (\
-not style-specif\
-ic \xe2\x80\x94 Fusion, B\
-asic,\x0a    // Mat\
-erial, Universal\
- all read from i\
-t), so setting i\
-t once here\x0a    \
-// cascades to e\
-very control in \
-the app regardle\
-ss of the host t\
-heme;\x0a    // see\
- the comment thi\
-s replaced for w\
-hy an explicit p\
-alette is needed\
-\x0a    // at all (\
-Fusion otherwise\
- follows the hos\
-t desktop's GTK \
-theme).\x0a    //\x0a \
-   // Deliberate\
-ly mid-dark neut\
-ral gray (VS Cod\
-e/Adobe-panel te\
-rritory,\x0a    // \
-#2d2d30 window /\
- #252526 base), \
-not the near-bla\
-ck tried earlier\
- \xe2\x80\x94\x0a    // that\
- one was reporte\
-d \x22too dark\x22. `b\
-ase`/`alternateB\
-ase` sit a shade\
-\x0a    // darker t\
-han `window` so \
-input fields and\
- table rows read\
- as\x0a    // reces\
-sed against the \
-surrounding chro\
-me, and `light`/\
-`midlight`/\x0a    \
-// `mid`/`dark` \
-step in even inc\
-rements so borde\
-rs and pressed/h\
-over\x0a    // stat\
-es have real vis\
-ual depth instea\
-d of everything \
-sitting at the\x0a \
-   // same flat \
-gray. `highlight\
-` is a restraine\
-d blue rather th\
-an an\x0a    // Ado\
-be-brand color \xe2\
-\x80\x94 this app isn'\
-t Adobe-branded,\
- just aiming for\
-\x0a    // the same\
- \x22serious creati\
-ve/analysis tool\
-\x22 register.\x0a    \
-palette {\x0a      \
-  window: \x22#2d2d\
-30\x22\x0a        wind\
-owText: \x22#e0e0e0\
-\x22\x0a        base: \
-\x22#252526\x22\x0a      \
-  alternateBase:\
- \x22#323234\x22\x0a     \
-   text: \x22#e0e0e\
-0\x22\x0a        butto\
-n: \x22#3c3c3c\x22\x0a   \
-     buttonText:\
- \x22#e0e0e0\x22\x0a     \
-   toolTipBase: \
-\x22#3c3c3c\x22\x0a      \
-  toolTipText: \x22\
-#e0e0e0\x22\x0a       \
- placeholderText\
-: \x22#8a8a8a\x22\x0a    \
-    highlight: \x22\
-#3d8bd4\x22\x0a       \
- highlightedText\
-: \x22#ffffff\x22\x0a    \
-    light: \x22#4a4\
-a4a\x22\x0a        mid\
-light: \x22#414141\x22\
-\x0a        mid: \x22#\
-2a2a2a\x22\x0a        \
-dark: \x22#1e1e1e\x22\x0a\
-        shadow: \
-\x22#000000\x22\x0a    }\x0a\
-\x0a    StackView {\
-\x0a        id: sta\
-ckView\x0a        o\
-bjectName: \x22stac\
-kView\x22\x0a        a\
-nchors.fill: par\
-ent\x0a\x0a        ini\
-tialItem: \x22qrc:/\
-Views/StartPage.\
-qml\x22\x0a    }\x0a\x0a    \
-Connections {\x0a  \
-      target: Ro\
-uter\x0a        fun\
-ction onShowProj\
-ectHomeRequested\
-(project) {\x0a    \
-        stackVie\
-w.push(\x22qrc:/Vie\
-ws/ProjectHomePa\
-ge.qml\x22, {\x22proje\
-ct\x22: project})\x0a \
-       }\x0a\x0a      \
-  function onCre\
-ateProjectPageRe\
-quested() {\x0a    \
-        stackVie\
-w.push(\x22qrc:/Vie\
-ws/CreateProject\
-Page.qml\x22)\x0a     \
-   }\x0a\x0a        fu\
-nction onNewAnal\
-ysisPageRequeste\
-d(project) {\x0a   \
-         stackVi\
-ew.push(\x22qrc:/Vi\
-ews/NewAnalysisP\
-age.qml\x22, {\x22proj\
-ect\x22: project})\x0a\
-        }\x0a\x0a     \
-   function onSh\
-owRunningPageReq\
-uested(project, \
-runId) {\x0a       \
-     stackView.p\
-ush(\x22qrc:/Views/\
-RunningAnalysisP\
-age.qml\x22, {\x22proj\
-ect\x22: project, \x22\
-runId\x22: runId})\x0a\
-        }\x0a\x0a     \
-   function onSh\
-owAnalysisReques\
-ted(analysis) {\x0a\
-            stac\
-kView.push(\x22qrc:\
-/Views/AnalysisP\
-age.qml\x22, {\x22anal\
-ysis\x22: analysis}\
+uick.Dialogs\x0aimp\
+ort \x22qrc:/Style\x22\
+\x0a\x0aApplicationWin\
+dow {\x0a    id: wi\
+ndow\x0a\x0a    visibl\
+e: true\x0a    // B\
+igger than the o\
+ld 900x650 defau\
+lt \xe2\x80\x94 several s\
+ections (the 13-\
+tab\x0a    // confi\
+g Flow, Visual I\
+nspection's cont\
+rol panel + heat\
+map grid) need\x0a \
+   // real room;\
+ minimumWidth/He\
+ight stop the wi\
+ndow being resiz\
+ed below\x0a    // \
+where that conte\
+nt stops fitting\
+ at all.\x0a    wid\
+th: 1280\x0a    hei\
+ght: 850\x0a    min\
+imumWidth: 1000\x0a\
+    minimumHeigh\
+t: 700\x0a    title\
+: \x22MSIAnalyzer\x22\x0a\
+\x0a    // Applicat\
+ionWindow's own \
+background fill \
+is `color`, a se\
+parate\x0a    // pr\
+operty from `pal\
+ette` below (whi\
+ch only governs \
+how *controls*\x0a \
+   // render the\
+mselves) \xe2\x80\x94 lef\
+t unset, it stay\
+ed whatever the \
+platform's\x0a    /\
+/ own default su\
+rface color is r\
+egardless of the\
+ palette overrid\
+e,\x0a    // which \
+is the most like\
+ly reason the wi\
+ndow still looke\
+d dark after\x0a   \
+ // that alone.\x0a\
+    color: palet\
+te.window\x0a\x0a    /\
+/ Professional d\
+ark-neutral pale\
+tte \xe2\x80\x94 replaces\
+ the earlier fla\
+t light\x0a    // p\
+alette. `palette\
+` is a QQuickIte\
+m-inherited prop\
+erty (not\x0a    //\
+ style-specific \
+\xe2\x80\x94 Fusion, Basi\
+c, Material, Uni\
+versal all read \
+from\x0a    // it),\
+ so setting it o\
+nce here cascade\
+s to every contr\
+ol in the app\x0a  \
+  // regardless \
+of the host them\
+e; see the comme\
+nt this replaced\
+ for why\x0a    // \
+an explicit pale\
+tte is needed at\
+ all (Fusion oth\
+erwise follows t\
+he\x0a    // host d\
+esktop's GTK the\
+me).\x0a    //\x0a    \
+// Deliberately \
+mid-dark neutral\
+ gray (VS Code/A\
+dobe-panel terri\
+tory,\x0a    // #2d\
+2d30 window / #2\
+52526 base), not\
+ the near-black \
+tried earlier \xe2\x80\
+\x94\x0a    // that on\
+e was reported \x22\
+too dark\x22. `base\
+`/`alternateBase\
+` sit a shade\x0a  \
+  // darker than\
+ `window` so inp\
+ut fields and ta\
+ble rows read as\
+\x0a    // recessed\
+ against the sur\
+rounding chrome,\
+ and `light`/`mi\
+dlight`/\x0a    // \
+`mid`/`dark` ste\
+p in even increm\
+ents so borders \
+and pressed/hove\
+r\x0a    // states \
+have real visual\
+ depth instead o\
+f everything sit\
+ting at the\x0a    \
+// same flat gra\
+y. `highlight` i\
+s a restrained b\
+lue rather than \
+an\x0a    // Adobe-\
+brand color \xe2\x80\x94 \
+this app isn't A\
+dobe-branded, ju\
+st aiming for\x0a  \
+  // the same \x22s\
+erious creative/\
+analysis tool\x22 r\
+egister.\x0a    //\x0a\
+    // window/al\
+ternateBase/high\
+light read from \
+Style/Theme.qml'\
+s\x0a    // backgro\
+undColor/seconda\
+ryColor/primaryC\
+olor \xe2\x80\x94 those t\
+hree are the\x0a   \
+ // ones anythin\
+g outside this b\
+lock also needs \
+to reference by \
+name\x0a    // (e.g\
+. a card backgro\
+und), so Theme i\
+s their source o\
+f truth, not\x0a   \
+ // this block. \
+Every other role\
+ below has no ou\
+tside consumer y\
+et, so\x0a    // it\
+'s still just a \
+literal here.\x0a  \
+  palette {\x0a    \
+    window: Them\
+e.backgroundColo\
+r\x0a        window\
+Text: \x22#e0e0e0\x22\x0a\
+        base: \x22#\
+252526\x22\x0a        \
+alternateBase: T\
+heme.secondaryCo\
+lor\x0a        text\
+: \x22#e0e0e0\x22\x0a    \
+    button: \x22#3c\
+3c3c\x22\x0a        bu\
+ttonText: \x22#e0e0\
+e0\x22\x0a        tool\
+TipBase: \x22#3c3c3\
+c\x22\x0a        toolT\
+ipText: \x22#e0e0e0\
+\x22\x0a        placeh\
+olderText: \x22#8a8\
+a8a\x22\x0a        hig\
+hlight: Theme.pr\
+imaryColor\x0a     \
+   highlightedTe\
+xt: \x22#ffffff\x22\x0a  \
+      light: \x22#4\
+a4a4a\x22\x0a        m\
+idlight: \x22#41414\
+1\x22\x0a        mid: \
+\x22#2a2a2a\x22\x0a      \
+  dark: \x22#1e1e1e\
+\x22\x0a        shadow\
+: \x22#000000\x22\x0a    \
+}\x0a\x0a    StackView\
+ {\x0a        id: s\
+tackView\x0a       \
+ objectName: \x22st\
+ackView\x22\x0a       \
+ anchors.fill: p\
+arent\x0a\x0a        i\
+nitialItem: \x22qrc\
+:/Views/StartPag\
+e.qml\x22\x0a    }\x0a\x0a  \
+  Connections {\x0a\
+        target: \
+Router\x0a        f\
+unction onShowPr\
+ojectHomeRequest\
+ed(project) {\x0a  \
+          stackV\
+iew.push(\x22qrc:/V\
+iews/ProjectHome\
+Page.qml\x22, {\x22pro\
+ject\x22: project})\
+\x0a        }\x0a\x0a    \
+    function onC\
+reateProjectPage\
+Requested() {\x0a  \
+          stackV\
+iew.push(\x22qrc:/V\
+iews/CreateProje\
+ctPage.qml\x22)\x0a   \
+     }\x0a\x0a        \
+function onNewAn\
+alysisPageReques\
+ted(project) {\x0a \
+           stack\
+View.push(\x22qrc:/\
+Views/NewAnalysi\
+sPage.qml\x22, {\x22pr\
+oject\x22: project}\
 )\x0a        }\x0a\x0a   \
      function on\
-ShowErrorRequest\
-ed(message) {\x0a  \
-          errorD\
-ialog.text = mes\
-sage\x0a           \
- errorDialog.ope\
-n()\x0a        }\x0a  \
-  }\x0a\x0a    Message\
-Dialog {\x0a       \
- id: errorDialog\
-\x0a        objectN\
-ame: \x22errorDialo\
-g\x22\x0a        butto\
-ns: MessageDialo\
-g.Ok\x0a        mod\
-ality: Qt.Applic\
-ationModal\x0a    }\
-\x0a}\x0a\
+ShowRunningPageR\
+equested(project\
+, runId) {\x0a     \
+       stackView\
+.push(\x22qrc:/View\
+s/RunningAnalysi\
+sPage.qml\x22, {\x22pr\
+oject\x22: project,\
+ \x22runId\x22: runId}\
+)\x0a        }\x0a\x0a   \
+     function on\
+ShowAnalysisRequ\
+ested(analysis) \
+{\x0a            st\
+ackView.push(\x22qr\
+c:/Views/Analysi\
+sPage.qml\x22, {\x22an\
+alysis\x22: analysi\
+s})\x0a        }\x0a\x0a \
+       function \
+onShowErrorReque\
+sted(message) {\x0a\
+            erro\
+rDialog.text = m\
+essage\x0a         \
+   errorDialog.o\
+pen()\x0a        }\x0a\
+    }\x0a\x0a    Messa\
+geDialog {\x0a     \
+   id: errorDial\
+og\x0a        objec\
+tName: \x22errorDia\
+log\x22\x0a        but\
+tons: MessageDia\
+log.Ok\x0a        m\
+odality: Qt.Appl\
+icationModal\x0a   \
+ }\x0a}\x0a\
 \x00\x00\x00\x1e\
 m\
 odule Main\x0aMain \
 1.0 Main.qml\x0a\
-\x00\x00\x06\x8f\
+\x00\x00\x0b~\
 p\
 ragma Singleton\x0a\
 import QtQuick\x0a\x0a\
@@ -3302,104 +3331,183 @@ import QtQuick\x0a\x0a\
 very page \xe2\x80\x94 th\
 e single source \
 of truth for\x0a// \
-values that aren\
-'t already cover\
-ed by the app's \
-`palette` (set o\
-nce on\x0a// Applic\
-ationWindow in M\
-ain.qml, which e\
-very Control-der\
-ived item alread\
-y\x0a// inherits). \
-Two ad hoc, hand\
--picked colors (\
-\x22blue\x22 page titl\
-es, a raw\x0a// \x22#0\
-078d4\x22/\x22#e6e6e6\x22\
-/\x22#202020\x22 butto\
-n style) already\
- drifted out of \
-sync\x0a// with the\
- real theme once\
- before (2026-09\
--14) \xe2\x80\x94 this ex\
-ists so the next\
-\x0a// palette chan\
-ge doesn't requi\
-re hunting down \
-every hardcoded \
-hex again.\x0a//\x0a//\
- Deliberately le\
-an: only tokens \
-an existing page\
- actually consum\
-es today.\x0a// A s\
-tructural/chrome\
- color (button f\
-ill, borders, se\
-lection highligh\
-t)\x0a// should rea\
-d from `palette.\
-*` directly inst\
-ead of duplicati\
-ng a role\x0a// her\
-e \xe2\x80\x94 `Theme` on\
-ly holds what `p\
-alette` has no r\
-ole for at all\x0a/\
-/ (semantic erro\
-r color, seconda\
-ry/caption text,\
- the heading/cap\
-tion\x0a// type sca\
-le).\x0aQtObject {\x0a\
-    // Secondary\
-/hint text \xe2\x80\x94 c\
-aptions, placeho\
-lders-that-aren'\
-t-placeholders,\x0a\
-    // \x22no X sel\
-ected\x22 labels. `\
-palette.placehol\
-derText` exists \
-but is\x0a    // sp\
-ecifically for T\
-extField placeho\
-lder text, not g\
-eneral secondary\
-\x0a    // body tex\
-t, hence a separ\
-ate token.\x0a    r\
-eadonly property\
- color mutedText\
-Color: \x22#808080\x22\
-\x0a\x0a    // Error/f\
-ailure text (e.g\
-. a run's \x22Faile\
-d: ...\x22 message)\
-. No QPalette\x0a  \
-  // role covers\
- semantic error \
-state.\x0a    reado\
-nly property col\
-or errorColor: \x22\
-#e06c75\x22\x0a\x0a    //\
- Type scale: a p\
-age's own title \
-(e.g. \x22Create pr\
-oject\x22, a projec\
-t's\x0a    // name \
-on Project Home)\
- and small capti\
-on/hint text und\
-er a control.\x0a  \
-  readonly prope\
-rty int headingP\
-ixelSize: 18\x0a   \
+the app's color \
+scheme and type \
+scale. Two ad ho\
+c, hand-picked c\
+olors\x0a// (\x22blue\x22\
+ page titles, a \
+raw \x22#0078d4\x22/\x22#\
+e6e6e6\x22/\x22#202020\
+\x22 button style)\x0a\
+// already drift\
+ed out of sync w\
+ith the real the\
+me once before\x0a/\
+/ (2026-09-14) \xe2\
+\x80\x94 this exists s\
+o the next palet\
+te change doesn'\
+t require\x0a// hun\
+ting down every \
+hardcoded hex ag\
+ain.\x0a//\x0a// `back\
+groundColor`/`se\
+condaryColor`/`p\
+rimaryColor` are\
+ the three named\
+\x0a// tokens most \
+design systems c\
+all \x22background/\
+secondary/primar\
+y\x22 \xe2\x80\x94 Main.qml'\
+s\x0a// Application\
+Window `palette \
+{}` block reads \
+all three of *th\
+ese*\x0a// (`window\
+: Theme.backgrou\
+ndColor`, `alter\
+nateBase: Theme.\
+secondaryColor`,\
+\x0a// `highlight: \
+Theme.primaryCol\
+or`) rather than\
+ the other way a\
+round, so\x0a// THI\
+S file is the on\
+e true source of\
+ truth for them,\
+ not a mirror of\
+ it.\x0a// Every ot\
+her palette role\
+ (`base`/`button\
+`/`text`/border \
+shades/...) is\x0a/\
+/ still just set\
+ directly in Mai\
+n.qml's palette \
+block \xe2\x80\x94 only p\
+romoted to\x0a// a \
+named Theme toke\
+n here once some\
+thing outside th\
+at block needs t\
+o\x0a// reference i\
+t too (as `secon\
+daryColor` now d\
+oes, for card/ti\
+le\x0a// background\
+s \xe2\x80\x94 see Summar\
+ySection.qml's s\
+tat tiles).\x0aQtOb\
+ject {\x0a    // Th\
+e page's own bas\
+e canvas color \xe2\
+\x80\x94 same value as\
+ `palette.window\
+`.\x0a    readonly \
+property color b\
+ackgroundColor: \
+\x22#2d2d30\x22\x0a\x0a    /\
+/ A surface that\
+ sits visually \x22\
+above\x22 the backg\
+round \xe2\x80\x94 card/t\
+ile\x0a    // backg\
+rounds, anything\
+ that should rea\
+d as a distinct \
+panel rather\x0a   \
+ // than bare pa\
+ge background (e\
+.g. Summary's st\
+at tiles, previo\
+usly\x0a    // left\
+ at Rectangle's \
+default white \xe2\x80\
+\x94 a real bug onc\
+e the palette\x0a  \
+  // went dark).\
+ Same value as `\
+palette.alternat\
+eBase`. Some des\
+ign\x0a    // syste\
+ms call this \x22su\
+rface\x22 instead o\
+f \x22secondary\x22 \xe2\x80\
+\x94 same idea.\x0a   \
  readonly proper\
-ty int captionPi\
-xelSize: 10\x0a}\x0a\
+ty color seconda\
+ryColor: \x22#32323\
+4\x22\x0a\x0a    // The m\
+ain accent/actio\
+n color \xe2\x80\x94 same\
+ value as `palet\
+te.highlight`.\x0a \
+   // Every ordi\
+nary Control alr\
+eady picks this \
+up automatically\
+ via\x0a    // `hig\
+hlighted: true`/\
+selection state;\
+ reach for this \
+token directly\x0a \
+   // only when \
+drawing a custom\
+ (non-Control) s\
+hape that needs \
+to match.\x0a    re\
+adonly property \
+color primaryCol\
+or: \x22#3d8bd4\x22\x0a\x0a \
+   // Secondary/\
+hint text \xe2\x80\x94 ca\
+ptions, placehol\
+ders-that-aren't\
+-placeholders,\x0a \
+   // \x22no X sele\
+cted\x22 labels. `p\
+alette.placehold\
+erText` exists b\
+ut is\x0a    // spe\
+cifically for Te\
+xtField placehol\
+der text, not ge\
+neral secondary\x0a\
+    // body text\
+, hence a separa\
+te token.\x0a    re\
+adonly property \
+color mutedTextC\
+olor: \x22#808080\x22\x0a\
+\x0a    // Error/fa\
+ilure text (e.g.\
+ a run's \x22Failed\
+: ...\x22 message).\
+ No QPalette\x0a   \
+ // role covers \
+semantic error s\
+tate.\x0a    readon\
+ly property colo\
+r errorColor: \x22#\
+e06c75\x22\x0a\x0a    // \
+Type scale: a pa\
+ge's own title (\
+e.g. \x22Create pro\
+ject\x22, a project\
+'s\x0a    // name o\
+n Project Home) \
+and small captio\
+n/hint text unde\
+r a control.\x0a   \
+ readonly proper\
+ty int headingPi\
+xelSize: 18\x0a    \
+readonly propert\
+y int captionPix\
+elSize: 10\x0a}\x0a\
 \x00\x00\x00+\
 m\
 odule Style\x0asing\
@@ -3518,44 +3626,44 @@ qt_resource_struct = b"\
 \x00\x00\x00\x00\x00\x00\x00\x00\
 \x00\x00\x00h\x00\x00\x00\x00\x00\x01\x00\x00\x0c\xd3\
 \x00\x00\x01\xa0\x9b\x9b\x8f\xea\
-\x00\x00\x02n\x00\x04\x00\x00\x00\x01\x00\x00\x8c\xe6\
+\x00\x00\x02n\x00\x04\x00\x00\x00\x01\x00\x00\x8d\x12\
 \x00\x00\x01\xa0\x9b\x9b\xbd\xe5\
-\x00\x00\x01|\x00\x00\x00\x00\x00\x01\x00\x00J\xe2\
+\x00\x00\x01|\x00\x00\x00\x00\x00\x01\x00\x00K\x0e\
 \x00\x00\x01\xa0\x91\xffXc\
 \x00\x00\x01\x00\x00\x00\x00\x00\x00\x01\x00\x002\xee\
 \x00\x00\x01\xa0\x9b\x9b\x85i\
-\x00\x00\x02\xa0\x00\x04\x00\x00\x00\x01\x00\x00\xa3\x9e\
+\x00\x00\x02\xa0\x00\x04\x00\x00\x00\x01\x00\x00\xa3\xca\
 \x00\x00\x01\xa0\x9b\x9b\x85x\
-\x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00m*\
+\x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00mV\
 \x00\x00\x01\xa0\x9a=\xab\xb7\
-\x00\x00\x01\xf4\x00\x04\x00\x00\x00\x01\x00\x00d\x19\
+\x00\x00\x01\xf4\x00\x04\x00\x00\x00\x01\x00\x00dE\
 \x00\x00\x01\xa0\x9b\x9b\xa6\x96\
-\x00\x00\x022\x00\x04\x00\x00\x00\x01\x00\x00o\xb5\
+\x00\x00\x022\x00\x04\x00\x00\x00\x01\x00\x00o\xe1\
 \x00\x00\x01\xa0\x9b\x9b\xd7\xd8\
-\x00\x00\x01\x9c\x00\x00\x00\x00\x00\x01\x00\x00O\xe3\
+\x00\x00\x01\x9c\x00\x00\x00\x00\x00\x01\x00\x00P\x0f\
 \x00\x00\x01\xa0\x92T\xc9=\
 \x00\x00\x00\xcc\x00\x00\x00\x00\x00\x01\x00\x00)W\
 \x00\x00\x01\xa0\x9b\x9br\xc3\
 \x00\x00\x00\xa0\x00\x04\x00\x00\x00\x01\x00\x00\x10u\
 \x00\x00\x01\xa0\x9b\x9b\x8f\xea\
 \x00\x00\x01(\x00\x00\x00\x00\x00\x01\x00\x00<\x01\
-\x00\x00\x01\xa0\x9b\x9b\xbd\xe4\
+\x00\x00\x01\xa0\x9b\xf4\x97\xc3\
 \x00\x00\x00.\x00\x04\x00\x00\x00\x01\x00\x00\x00\x00\
 \x00\x00\x01\xa0\x9b\x92Lj\
-\x00\x00\x01\xc4\x00\x00\x00\x00\x00\x01\x00\x00\x5c\xff\
+\x00\x00\x01\xc4\x00\x00\x00\x00\x00\x01\x00\x00]+\
 \x00\x00\x01\xa0\x9b\x9b\xa6\x97\
-\x00\x00\x01R\x00\x00\x00\x00\x00\x01\x00\x00F~\
+\x00\x00\x01R\x00\x00\x00\x00\x00\x01\x00\x00F\xaa\
 \x00\x00\x01\xa0\x95\x1b\x82\xce\
-\x00\x00\x02\xd0\x00\x04\x00\x00\x00\x01\x00\x00\xb0t\
+\x00\x00\x02\xd0\x00\x04\x00\x00\x00\x01\x00\x00\xb0\xa0\
 \x00\x00\x01\xa0\x9b\x9b\x85m\
-\x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00\xd1\xa2\
+\x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00\xd8_\
 \x00\x00\x01\xa0\x9b\x9b\x0b*\
-\x00\x00\x03\x0c\x00\x00\x00\x00\x00\x01\x00\x00\xcb\x0f\
-\x00\x00\x01\xa0\x9b\x9b\x03\xb8\
-\x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00\xca\xed\
+\x00\x00\x03\x0c\x00\x00\x00\x00\x00\x01\x00\x00\xcc\xdd\
+\x00\x00\x01\xa0\x9b\xf4J\xa1\
+\x00\x00\x02 \x00\x00\x00\x00\x00\x01\x00\x00\xcc\xbb\
 \x00\x00\x01\xa0C\x10\x19\xe2\
-\x00\x00\x02\xf6\x00\x00\x00\x00\x00\x01\x00\x00\xbb\xc5\
-\x00\x00\x01\xa0\x9b\x8e\x0d\xc7\
+\x00\x00\x02\xf6\x00\x00\x00\x00\x00\x01\x00\x00\xbb\xf1\
+\x00\x00\x01\xa0\x9b\xf4\x89\xf0\
 "
 
 def qInitResources():

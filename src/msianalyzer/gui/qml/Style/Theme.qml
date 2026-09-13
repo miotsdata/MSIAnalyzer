@@ -2,20 +2,41 @@ pragma Singleton
 import QtQuick
 
 // Design tokens shared across every page — the single source of truth for
-// values that aren't already covered by the app's `palette` (set once on
-// ApplicationWindow in Main.qml, which every Control-derived item already
-// inherits). Two ad hoc, hand-picked colors ("blue" page titles, a raw
-// "#0078d4"/"#e6e6e6"/"#202020" button style) already drifted out of sync
-// with the real theme once before (2026-09-14) — this exists so the next
-// palette change doesn't require hunting down every hardcoded hex again.
+// the app's color scheme and type scale. Two ad hoc, hand-picked colors
+// ("blue" page titles, a raw "#0078d4"/"#e6e6e6"/"#202020" button style)
+// already drifted out of sync with the real theme once before
+// (2026-09-14) — this exists so the next palette change doesn't require
+// hunting down every hardcoded hex again.
 //
-// Deliberately lean: only tokens an existing page actually consumes today.
-// A structural/chrome color (button fill, borders, selection highlight)
-// should read from `palette.*` directly instead of duplicating a role
-// here — `Theme` only holds what `palette` has no role for at all
-// (semantic error color, secondary/caption text, the heading/caption
-// type scale).
+// `backgroundColor`/`secondaryColor`/`primaryColor` are the three named
+// tokens most design systems call "background/secondary/primary" — Main.qml's
+// ApplicationWindow `palette {}` block reads all three of *these*
+// (`window: Theme.backgroundColor`, `alternateBase: Theme.secondaryColor`,
+// `highlight: Theme.primaryColor`) rather than the other way around, so
+// THIS file is the one true source of truth for them, not a mirror of it.
+// Every other palette role (`base`/`button`/`text`/border shades/...) is
+// still just set directly in Main.qml's palette block — only promoted to
+// a named Theme token here once something outside that block needs to
+// reference it too (as `secondaryColor` now does, for card/tile
+// backgrounds — see SummarySection.qml's stat tiles).
 QtObject {
+    // The page's own base canvas color — same value as `palette.window`.
+    readonly property color backgroundColor: "#2d2d30"
+
+    // A surface that sits visually "above" the background — card/tile
+    // backgrounds, anything that should read as a distinct panel rather
+    // than bare page background (e.g. Summary's stat tiles, previously
+    // left at Rectangle's default white — a real bug once the palette
+    // went dark). Same value as `palette.alternateBase`. Some design
+    // systems call this "surface" instead of "secondary" — same idea.
+    readonly property color secondaryColor: "#323234"
+
+    // The main accent/action color — same value as `palette.highlight`.
+    // Every ordinary Control already picks this up automatically via
+    // `highlighted: true`/selection state; reach for this token directly
+    // only when drawing a custom (non-Control) shape that needs to match.
+    readonly property color primaryColor: "#3d8bd4"
+
     // Secondary/hint text — captions, placeholders-that-aren't-placeholders,
     // "no X selected" labels. `palette.placeholderText` exists but is
     // specifically for TextField placeholder text, not general secondary

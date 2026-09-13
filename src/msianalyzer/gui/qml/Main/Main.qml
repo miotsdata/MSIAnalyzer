@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
+import "qrc:/Style"
 
 ApplicationWindow {
     id: window
@@ -24,13 +25,13 @@ ApplicationWindow {
     // that alone.
     color: palette.window
 
-    // Professional dark-neutral palette (2026-09-14 mockup, not yet
-    // confirmed) — replaces the earlier flat light palette. `palette` is a
-    // QQuickItem-inherited property (not style-specific — Fusion, Basic,
-    // Material, Universal all read from it), so setting it once here
-    // cascades to every control in the app regardless of the host theme;
-    // see the comment this replaced for why an explicit palette is needed
-    // at all (Fusion otherwise follows the host desktop's GTK theme).
+    // Professional dark-neutral palette — replaces the earlier flat light
+    // palette. `palette` is a QQuickItem-inherited property (not
+    // style-specific — Fusion, Basic, Material, Universal all read from
+    // it), so setting it once here cascades to every control in the app
+    // regardless of the host theme; see the comment this replaced for why
+    // an explicit palette is needed at all (Fusion otherwise follows the
+    // host desktop's GTK theme).
     //
     // Deliberately mid-dark neutral gray (VS Code/Adobe-panel territory,
     // #2d2d30 window / #252526 base), not the near-black tried earlier —
@@ -42,18 +43,25 @@ ApplicationWindow {
     // same flat gray. `highlight` is a restrained blue rather than an
     // Adobe-brand color — this app isn't Adobe-branded, just aiming for
     // the same "serious creative/analysis tool" register.
+    //
+    // window/alternateBase/highlight read from Style/Theme.qml's
+    // backgroundColor/secondaryColor/primaryColor — those three are the
+    // ones anything outside this block also needs to reference by name
+    // (e.g. a card background), so Theme is their source of truth, not
+    // this block. Every other role below has no outside consumer yet, so
+    // it's still just a literal here.
     palette {
-        window: "#2d2d30"
+        window: Theme.backgroundColor
         windowText: "#e0e0e0"
         base: "#252526"
-        alternateBase: "#323234"
+        alternateBase: Theme.secondaryColor
         text: "#e0e0e0"
         button: "#3c3c3c"
         buttonText: "#e0e0e0"
         toolTipBase: "#3c3c3c"
         toolTipText: "#e0e0e0"
         placeholderText: "#8a8a8a"
-        highlight: "#3d8bd4"
+        highlight: Theme.primaryColor
         highlightedText: "#ffffff"
         light: "#4a4a4a"
         midlight: "#414141"
