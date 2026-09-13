@@ -1,4 +1,5 @@
 # src/msianalyzer/gui/main.py
+import importlib.metadata
 import os
 import sys
 
@@ -60,6 +61,14 @@ def build_engine(
     # Static schema metadata, not app state — see config_schema.py.
     config_schema_provider = ConfigSchemaProvider(engine)
     context.setContextProperty("ConfigSchema", config_schema_provider)
+    # Help > About. Reads the installed distribution's own metadata
+    # (pyproject.toml's `version`) rather than a separately hand-maintained
+    # constant, so it can't drift out of sync with an actual release.
+    try:
+        app_version = importlib.metadata.version("MSIAnalyzer")
+    except importlib.metadata.PackageNotFoundError:
+        app_version = "dev"
+    context.setContextProperty("AppVersion", app_version)
 
     errors = []
     engine.warnings.connect(lambda warnings: errors.extend(warnings))

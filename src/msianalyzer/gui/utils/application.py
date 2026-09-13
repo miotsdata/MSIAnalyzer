@@ -46,6 +46,7 @@ class Application(QObject):
         self.core_bridge.runStarted.connect(self._on_run_started)
         self.core_bridge.runCompleted.connect(self._on_run_completed)
         self.router.analysisSelected.connect(self._on_analysis_selected)
+        self.router.closeProjectRequested.connect(self._on_close_project_requested)
 
     def _on_project_folder_chosen(self, path):
         self.project_folder = path
@@ -86,3 +87,13 @@ class Application(QObject):
         run_dict = self.project.runs[run_id]
         analysis_model = AnalysisModel(self.project_model, run_id, run_dict, self)
         self.router.showAnalysisRequested.emit(analysis_model)
+
+    def _on_close_project_requested(self):
+        """Menu bar > Project > Close Project — drops the currently open
+        project so nothing later (e.g. a stray signal referencing a run_id)
+        can resolve against it by accident. QML's own Connections handler
+        does the actual navigation back to StartPage."""
+        self.project = None
+        self.project_model = None
+        self.project_folder = None
+        self.current_run_id = None

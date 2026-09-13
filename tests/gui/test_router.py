@@ -183,3 +183,194 @@ def test_invalidCreateProjectPath_shows_message(application, engine, qtbot):
     qtbot.waitUntil(lambda: message_dialog.property("visible") is True, timeout=2000)
     assert message_dialog.property("text") == error_message
     message_dialog.setProperty("visible", False)
+
+
+# ---------------------------------------------------------------------------
+# Menu bar
+# ---------------------------------------------------------------------------
+
+
+def _project_with_n_runs(name, n):
+    p = Project(name=name)
+    for i in range(n):
+        run_id = f"run-{i}"
+        p.runs[run_id] = {
+            "id": run_id,
+            "start_date": f"2026-01-{i + 1:02d} 12:00:00",
+            "end_date": f"2026-01-{i + 1:02d} 12:30:00",
+            "status": "COMPLETED",
+            "config": {"io": {"out_dir": f"/tmp/proj/output_{i}"}},
+            "config_path": f"/tmp/proj/configs/run_{i}.yaml",
+        }
+    return p
+
+
+def test_project_menu_new_project_opens_create_project_page(
+    application, engine, qtbot
+):
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+    menu_item = window.findChild(QObject, "newProjectMenuItem")
+    assert menu_item is not None
+
+    menu_item.click()
+    qtbot.wait(100)
+
+    assert stack_view.property("currentItem").objectName() == "createProjectPage"
+
+
+def test_analyses_menu_disabled_without_a_current_project(application, engine):
+    window = engine.rootObjects()[0]
+    new_item = window.findChild(QObject, "newAnalysisMenuItem")
+    open_menu = window.findChild(QObject, "openAnalysisMenu")
+    close_item = window.findChild(QObject, "closeProjectMenuItem")
+
+    assert new_item.property("enabled") is False
+    assert open_menu.property("enabled") is False
+    assert close_item.property("enabled") is False
+
+
+def test_project_menu_close_project_returns_to_start_and_clears_state(
+    application, project, engine, qtbot
+):
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+    project_model = ProjectModel(project, "/tmp/proj", application)
+    application.project = project
+    application.project_model = project_model
+    application.project_folder = "/tmp/proj"
+
+    application.router.showProjectHomeRequested.emit(project_model)
+    qtbot.wait(100)
+    assert window.property("currentProject") is not None
+
+    close_item = window.findChild(QObject, "closeProjectMenuItem")
+    assert close_item.property("enabled") is True
+    close_item.click()
+    qtbot.wait(100)
+
+    assert stack_view.property("currentItem").objectName() == "startPage"
+    assert window.property("currentProject") is None
+    assert application.project is None
+    assert application.project_model is None
+    assert application.project_folder is None
+
+
+def test_analyses_menu_new_opens_new_analysis_page_for_current_project(
+    application, project, engine, qtbot
+):
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+    project_model = ProjectModel(project, "/tmp/proj", application)
+
+    application.router.showProjectHomeRequested.emit(project_model)
+    qtbot.wait(100)
+
+    new_item = window.findChild(QObject, "newAnalysisMenuItem")
+    assert new_item.property("enabled") is True
+    new_item.click()
+    qtbot.wait(100)
+
+    current_item = stack_view.property("currentItem")
+    assert current_item.objectName() == "newAnalysisPage"
+
+
+def test_open_analysis_submenu_lists_5_most_recent_runs_and_navigates(
+    application, engine, qtbot
+):
+    # 7 runs seeded; only the 5 most recent (runsList is already newest
+    # first) should show as menu slots.
+    proj = _project_with_n_runs("menu_test_proj", 7)
+    project_model = ProjectModel(proj, "/tmp/proj", application)
+    application.project = proj
+    application.project_model = project_model
+    application.project_folder = "/tmp/proj"
+
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+
+    application.router.showProjectHomeRequested.emit(project_model)
+    qtbot.wait(100)
+
+    items = [
+        window.findChild(QObject, f"openAnalysisMenuItem_{i}") for i in range(5)
+    ]
+    # `visible` on a MenuItem that's never actually been popped open isn't
+    # a reliable read via QObject.property() in this offscreen test
+    # environment (a Popup-family quirk seen elsewhere in this codebase —
+    # see conftest.py's find_visual_child docstring for the general
+    # class) — `run`/`text` are ordinary bound properties and do read
+    # correctly, so assert through those instead.
+    assert all(item.property("run") is not None for item in items)
+    # newest first: run-6 (2026-01-07) is the most recent of the 7 seeded.
+    assert items[0].property("text").startswith("2026-01-07")
+    assert items[4].property("text").startswith("2026-01-03")
+
+    items[0].click()
+    qtbot.wait(100)
+
+    assert stack_view.property("currentItem").objectName() == "analysisPage"
+
+
+def test_open_analysis_submenu_hides_slots_beyond_available_runs(
+    application, engine, qtbot
+):
+    # `visible` itself isn't reliably readable via QObject.property() for
+    # a MenuItem that's never been popped open in this offscreen test
+    # environment — see the previous test's comment. `run`/`text` (which
+    # `visible` is itself bound to, `run !== null`) read correctly and are
+    # what the QML actually gates the item's presence on.
+    proj = _project_with_n_runs("menu_test_proj_2", 2)
+    project_model = ProjectModel(proj, "/tmp/proj", application)
+    application.project = proj
+    application.project_model = project_model
+    application.project_folder = "/tmp/proj"
+
+    window = engine.rootObjects()[0]
+    application.router.showProjectHomeRequested.emit(project_model)
+    qtbot.wait(100)
+
+    has_run = [
+        window.findChild(QObject, f"openAnalysisMenuItem_{i}").property("run") is not None
+        for i in range(5)
+    ]
+    assert has_run == [True, True, False, False, False]
+
+
+def test_about_dialog_shows_software_name_and_version(application, engine, qtbot):
+    window = engine.rootObjects()[0]
+    about_item = window.findChild(QObject, "aboutMenuItem")
+    about_dialog = window.findChild(QObject, "aboutDialog")
+    assert about_dialog.property("visible") is False
+
+    about_item.click()
+    qtbot.wait(50)
+
+    assert about_dialog.property("visible") is True
+    version_label = about_dialog.findChild(QObject, "aboutVersionLabel")
+    assert version_label is not None
+    assert version_label.property("text").startswith("Version ")
+
+
+def test_open_user_guide_opens_local_built_docs(monkeypatch, application):
+    # The repo's own `site/index.html` (built via `mkdocs build`, see
+    # docs/ CI/dev workflow) — real path resolution, but QDesktopServices
+    # itself is mocked out so the test doesn't actually launch a browser.
+    opened = []
+    monkeypatch.setattr(
+        "msianalyzer.gui.utils.router.QDesktopServices.openUrl",
+        lambda url: opened.append(url) or True,
+    )
+
+    result = application.router.openUserGuide()
+
+    assert result is True
+    assert len(opened) == 1
+    assert opened[0].toLocalFile().endswith("site/index.html")
+
+
+def test_open_user_guide_returns_false_when_docs_not_built(monkeypatch, application):
+    monkeypatch.setattr(
+        "msianalyzer.gui.utils.router.Path.exists", lambda self: False, raising=False
+    )
+    assert application.router.openUserGuide() is False

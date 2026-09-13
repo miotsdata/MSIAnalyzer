@@ -17,6 +17,26 @@ ApplicationWindow {
     minimumHeight: 700
     title: "MSIAnalyzer"
 
+    // The project currently open, tracked here (not just passed
+    // page-to-page as a property) so the menu bar — visible on every
+    // page — knows whether a project is open at all, and can read its
+    // `runsList` for the "Analyses > Open" submenu, regardless of which
+    // page happens to be on top of `stackView` right now.
+    property var currentProject: null
+
+    // The Nth-most-recent run of the current project, or null — used to
+    // fill the "Analyses > Open" submenu's fixed 5 slots. A plain
+    // function over a Repeater: this codebase's test harness has a
+    // confirmed fragility with Repeater models that are arrays of plain
+    // objects (see Style/Theme.qml/gui-workspace-status memory), and 5 is
+    // a small, fixed count anyway.
+    function recentRun(index) {
+        if (!currentProject)
+            return null
+        var runs = currentProject.runsList
+        return index < runs.length ? runs[index] : null
+    }
+
     // ApplicationWindow's own background fill is `color`, a separate
     // property from `palette` below (which only governs how *controls*
     // render themselves) — left unset, it stayed whatever the platform's
@@ -70,6 +90,120 @@ ApplicationWindow {
         shadow: "#000000"
     }
 
+    // In-window (not native/OS) menu bar — consistent across platforms,
+    // and this app isn't macOS-only, where a native global menu bar would
+    // otherwise be the more idiomatic choice.
+    menuBar: MenuBar {
+        objectName: "mainMenuBar"
+
+        Menu {
+            objectName: "projectMenu"
+            title: "Project"
+
+            MenuItem {
+                objectName: "newProjectMenuItem"
+                text: "New Project"
+                onTriggered: Router.createProjectPageRequested()
+            }
+            MenuItem {
+                objectName: "openProjectMenuItem"
+                text: "Open Project…"
+                onTriggered: openProjectDialog.open()
+            }
+            MenuSeparator {}
+            MenuItem {
+                objectName: "closeProjectMenuItem"
+                text: "Close Project"
+                enabled: window.currentProject !== null
+                onTriggered: Router.closeProjectRequested()
+            }
+            MenuSeparator {}
+            MenuItem {
+                objectName: "exitMenuItem"
+                text: "Exit"
+                onTriggered: Qt.quit()
+            }
+        }
+
+        Menu {
+            objectName: "analysesMenu"
+            title: "Analyses"
+
+            MenuItem {
+                objectName: "newAnalysisMenuItem"
+                text: "New"
+                enabled: window.currentProject !== null
+                onTriggered: Router.newAnalysisPageRequested(window.currentProject)
+            }
+            Menu {
+                objectName: "openAnalysisMenu"
+                title: "Open"
+                enabled: window.currentProject !== null
+                         && window.currentProject.runsList.length > 0
+
+                // A fixed 5 slots, not a Repeater over `runsList` — see
+                // `recentRun`'s own comment for why. Each slot hides
+                // itself once there's no Nth-most-recent run to show.
+                MenuItem {
+                    objectName: "openAnalysisMenuItem_0"
+                    readonly property var run: window.recentRun(0)
+                    visible: run !== null
+                    text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
+                    onTriggered: Router.analysisSelected(run.id)
+                }
+                MenuItem {
+                    objectName: "openAnalysisMenuItem_1"
+                    readonly property var run: window.recentRun(1)
+                    visible: run !== null
+                    text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
+                    onTriggered: Router.analysisSelected(run.id)
+                }
+                MenuItem {
+                    objectName: "openAnalysisMenuItem_2"
+                    readonly property var run: window.recentRun(2)
+                    visible: run !== null
+                    text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
+                    onTriggered: Router.analysisSelected(run.id)
+                }
+                MenuItem {
+                    objectName: "openAnalysisMenuItem_3"
+                    readonly property var run: window.recentRun(3)
+                    visible: run !== null
+                    text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
+                    onTriggered: Router.analysisSelected(run.id)
+                }
+                MenuItem {
+                    objectName: "openAnalysisMenuItem_4"
+                    readonly property var run: window.recentRun(4)
+                    visible: run !== null
+                    text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
+                    onTriggered: Router.analysisSelected(run.id)
+                }
+            }
+        }
+
+        Menu {
+            objectName: "helpMenu"
+            title: "Help"
+
+            MenuItem {
+                objectName: "aboutMenuItem"
+                text: "About"
+                onTriggered: aboutDialog.open()
+            }
+            MenuItem {
+                objectName: "userGuideMenuItem"
+                text: "User Guide"
+                onTriggered: {
+                    if (!Router.openUserGuide()) {
+                        Router.showErrorRequested(
+                            "User guide not found — build it first with `mkdocs build`.")
+                    }
+                }
+            }
+        }
+    }
+
     StackView {
         id: stackView
         objectName: "stackView"
@@ -81,6 +215,7 @@ ApplicationWindow {
     Connections {
         target: Router
         function onShowProjectHomeRequested(project) {
+            window.currentProject = project
             stackView.push("qrc:/Views/ProjectHomePage.qml", {"project": project})
         }
 
@@ -89,20 +224,28 @@ ApplicationWindow {
         }
 
         function onNewAnalysisPageRequested(project) {
+            window.currentProject = project
             stackView.push("qrc:/Views/NewAnalysisPage.qml", {"project": project})
         }
 
         function onShowRunningPageRequested(project, runId) {
+            window.currentProject = project
             stackView.push("qrc:/Views/RunningAnalysisPage.qml", {"project": project, "runId": runId})
         }
 
         function onShowAnalysisRequested(analysis) {
+            window.currentProject = analysis.project
             stackView.push("qrc:/Views/AnalysisPage.qml", {"analysis": analysis})
         }
 
         function onShowErrorRequested(message) {
             errorDialog.text = message
             errorDialog.open()
+        }
+
+        function onCloseProjectRequested() {
+            window.currentProject = null
+            stackView.push("qrc:/Views/StartPage.qml")
         }
     }
 
@@ -111,5 +254,39 @@ ApplicationWindow {
         objectName: "errorDialog"
         buttons: MessageDialog.Ok
         modality: Qt.ApplicationModal
+    }
+
+    Dialog {
+        id: aboutDialog
+        objectName: "aboutDialog"
+        title: "About MSIAnalyzer"
+        modal: true
+        standardButtons: Dialog.Close
+        anchors.centerIn: parent
+
+        Column {
+            spacing: 6
+            Label {
+                text: "MSIAnalyzer"
+                font.bold: true
+                font.pixelSize: Theme.headingPixelSize
+            }
+            Label {
+                objectName: "aboutVersionLabel"
+                text: "Version " + AppVersion
+            }
+        }
+    }
+
+    // Mirrors StartPage.qml's own "Load Project" FolderDialog — kept as a
+    // separate instance rather than shared, since QML dialogs aren't
+    // easily reused across two different declaring files, and this one
+    // needs to be reachable from the menu bar regardless of which page
+    // is currently on top of `stackView`.
+    FolderDialog {
+        id: openProjectDialog
+        objectName: "openProjectDialog"
+        options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
+        onAccepted: Router.projectFolderChosen(Router.toLocalPath(selectedFolder))
     }
 }
