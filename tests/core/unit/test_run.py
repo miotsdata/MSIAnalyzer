@@ -36,7 +36,7 @@ class MockIOConfig:
         default_dir = Path(self.project_folder) / "parsed"
         return [
             self.db_paths[i]
-            if i < len(self.db_paths)
+            if i < len(self.db_paths) and self.db_paths[i] is not None
             else default_dir / f"{Path(m).stem}.db"
             for i, m in enumerate(self.mzml_paths)
         ]
@@ -435,6 +435,139 @@ def test_process_one_sample_peak_threshold_filtering(mocker, tmp_path):
 
 
 # ==============================================================================
+# TESTS FOR Run._raw_db_is_ready (already-parsed, db-only samples)
+# ==============================================================================
+
+
+def test_raw_db_is_ready_false_when_file_missing(tmp_path):
+    assert Run._raw_db_is_ready(tmp_path / "does_not_exist.db") is False
+
+
+def test_raw_db_is_ready_false_when_empty(tmp_path):
+    from msianalyzer.core.parser.mzml_parser import init_raw_db
+
+    db_path = tmp_path / "empty.db"
+    init_raw_db(db_path).close()
+
+    assert Run._raw_db_is_ready(db_path) is False
+
+
+def test_raw_db_is_ready_true_when_parsed_and_pixel_mapped(tmp_path):
+    from msianalyzer.core.parser.mzml_parser import array_to_blob, init_raw_db
+
+    db_path = tmp_path / "ready.db"
+    con = init_raw_db(db_path)
+    blob = array_to_blob(np.array([100.0]))
+    con.execute(
+        "INSERT INTO ms1_scans (scan_id, rt, polarity, mz_array, intensity_array) "
+        "VALUES (1, 0.0, '+', ?, ?)",
+        (blob, blob),
+    )
+    # spatial_pixels is created by map_pixels_to_db, not init_raw_db's own
+    # base schema — build it directly, same as map_pixels_to_db would.
+    con.execute(
+        "CREATE TABLE spatial_pixels (pixel_id INTEGER PRIMARY KEY "
+        "AUTOINCREMENT, x INTEGER NOT NULL, y INTEGER NOT NULL, "
+        "t_start REAL NOT NULL, t_end REAL NOT NULL)"
+    )
+    con.execute(
+        "INSERT INTO spatial_pixels (pixel_id, x, y, t_start, t_end) "
+        "VALUES (1, 0, 0, 0.0, 1.0)"
+    )
+    con.commit()
+    con.close()
+
+    assert Run._raw_db_is_ready(db_path) is True
+
+
+def test_raw_db_is_ready_false_when_scans_but_no_pixel_mapping(tmp_path):
+    from msianalyzer.core.parser.mzml_parser import array_to_blob, init_raw_db
+
+    db_path = tmp_path / "unmapped.db"
+    con = init_raw_db(db_path)
+    blob = array_to_blob(np.array([100.0]))
+    con.execute(
+        "INSERT INTO ms1_scans (scan_id, rt, polarity, mz_array, intensity_array) "
+        "VALUES (1, 0.0, '+', ?, ?)",
+        (blob, blob),
+    )
+    con.commit()
+    con.close()
+
+    assert Run._raw_db_is_ready(db_path) is False
+
+
+# ==============================================================================
+# TESTS FOR Run._process_one_sample with an already-parsed, db-only sample
+# ==============================================================================
+
+
+def test_process_one_sample_already_parsed_db_only_skips_parse_and_pixel_map(
+    mocker, tmp_path
+):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    db_path = tmp_path / "parsed" / "already_parsed.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.touch()
+
+    config = DummyConfig(tmp_path)
+    m = _patch_common(mocker)
+    m["analysis_db"].is_command_already_run.return_value = False
+    mocker.patch.object(Run, "_raw_db_is_ready", return_value=True)
+
+    mock_fig = mocker.MagicMock()
+    m["Plotter"].return_value.plot_spectra.return_value = mock_fig
+
+    res = Run._process_one_sample(
+        None,
+        None,
+        1,
+        db_path,
+        config=config,
+        run_id="proj_test",
+        analysis_id="ana_test",
+        analysis_db_path=out_dir / "analysis.db",
+    )
+
+    assert res.out_db_path == db_path
+    m["MzmlParser"].return_value.parse.assert_not_called()
+    m["map_pixels_to_db"].assert_not_called()
+    m["parse_raster_xml"].assert_not_called()
+    # the rest of the pipeline (averaging/centroiding/filtering) still runs,
+    # using the database's own stem ("already_parsed") for output filenames
+    m["get_average_ms1_spectra"].assert_called_once()
+    mock_fig.write_html.assert_called_once_with(
+        out_dir / "already_parsed_filtered_ms1.html"
+    )
+    assert (out_dir / "already_parsed_peaks_data.csv").exists()
+
+
+def test_process_one_sample_already_parsed_db_only_raises_when_not_ready(
+    mocker, tmp_path
+):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    db_path = tmp_path / "parsed" / "not_ready.db"
+
+    config = DummyConfig(tmp_path)
+    _patch_common(mocker)
+    mocker.patch.object(Run, "_raw_db_is_ready", return_value=False)
+
+    with pytest.raises(FileNotFoundError, match="not_ready.db"):
+        Run._process_one_sample(
+            None,
+            None,
+            1,
+            db_path,
+            config=config,
+            run_id="proj_test",
+            analysis_id="ana_test",
+            analysis_db_path=out_dir / "analysis.db",
+        )
+
+
+# ==============================================================================
 # TESTS FOR run_core (USING mocker)
 # ==============================================================================
 
@@ -550,6 +683,84 @@ def test_run_core_executes_successfully(mocker, tmp_path):
         "sample1": out_dir / "sample1.h5ad",
         "sample2": out_dir / "sample2.h5ad",
     }
+
+
+def test_run_core_registers_already_parsed_sample_by_its_own_db_stem(mocker, tmp_path):
+    # sample1 is a normal mzML/XML pair; sample2 is already-parsed (no
+    # mzml_paths/xml_paths entry) — its raw database is given directly via
+    # db_paths and must be named after its own stem, not crash on
+    # `Path(None).stem`.
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    config.io.mzml_paths = [tmp_path / "sample1.mzML", None]
+    config.io.xml_paths = [tmp_path / "sample1.xml", None]
+    config.io.db_paths = [None, tmp_path / "parsed" / "already_parsed.db"]
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(
+        out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0, 200.0])
+    )
+    res2 = SampleResult(
+        out_db_path=tmp_path / "parsed" / "already_parsed.db",
+        peaks_mzs=np.array([100.0, 300.0]),
+    )
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    mocker.patch(
+        "msianalyzer.core.run.run.run_grouper",
+        return_value=mocker.MagicMock(associations=[], feature_summary=[]),
+    )
+    mocker.patch(
+        "msianalyzer.core.run.run.run_precursor_purity",
+        return_value=mocker.MagicMock(n_scans=0, n_confirmed=0, n_snapped=0),
+    )
+    mocker.patch(
+        "msianalyzer.core.run.run.run_consensus",
+        return_value=mocker.MagicMock(n_features=0, n_features_scored=0),
+    )
+    mocker.patch("msianalyzer.core.run.run.build_summary_report")
+    mocker.patch(
+        "msianalyzer.core.run.run.align_mz_across_samples",
+        return_value=pd.DataFrame(index=[100.0, 200.0, 300.0]),
+    )
+    mock_adata = mocker.MagicMock()
+    mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mock_adata
+    )
+    mock_norm_result = mocker.MagicMock(n_samples=2, n_pixels=10, median_tic=123.0)
+    mock_norm_result.merged_path.name = "merged.h5ad"
+    mocker.patch(
+        "msianalyzer.core.run.run.run_tic_normalization",
+        return_value=mock_norm_result,
+    )
+
+    mock_executor = mocker.MagicMock()
+    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
+    mocker.patch(
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
+    )
+
+    run.run_core()
+
+    assert mock_adb.register_sample.call_count == 2
+    names = [c.kwargs["name"] for c in mock_adb.register_sample.call_args_list]
+    assert names == ["sample1", "already_parsed"]
+
+    # the None placeholders for the already-parsed sample are passed through
+    # to the worker pool as-is (positionally: mzml_paths, xml_paths, ...)
+    map_call = mock_executor.__enter__.return_value.map.call_args
+    assert list(map_call.args[1]) == [tmp_path / "sample1.mzML", None]
+    assert list(map_call.args[2]) == [tmp_path / "sample1.xml", None]
 
 
 def test_run_core_skips_existing_outputs(mocker, tmp_path):

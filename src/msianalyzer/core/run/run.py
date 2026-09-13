@@ -233,10 +233,43 @@ class Run:
             return cursor.fetchone() is not None
 
     @staticmethod
-    @log_call(source="mzml_path")
+    def _raw_db_is_ready(db_path: str | Path) -> bool:
+        """Whether a raw database already has scans and pixel mapping.
+
+        Used for an "already-parsed, db-only" sample (`io.mzml_paths[i] is
+        None`) — there's no mzML/XML to (re-)parse from, so this is the only
+        check available that the given database is actually usable, rather
+        than an empty or half-finished one. Independent of any `run_id` —
+        unlike `is_command_already_run`, this reads the database's own
+        content directly, since a user-supplied database may well have been
+        parsed under a different project (a different `run_id`) entirely.
+
+        Args:
+            db_path: Path to the raw per-sample database to check.
+
+        Returns:
+            True if the database has at least one MS1 scan and at least one
+            mapped pixel; False if either table is missing, empty, or the
+            file doesn't exist at all.
+        """
+        db_path = Path(db_path)
+        if not db_path.exists():
+            return False
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as con:
+            try:
+                n_scans = con.execute("SELECT COUNT(*) FROM ms1_scans").fetchone()[0]
+                n_pixels = con.execute(
+                    "SELECT COUNT(*) FROM spatial_pixels"
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                return False
+        return n_scans > 0 and n_pixels > 0
+
+    @staticmethod
+    @log_call(source="raw_db_path")
     def _process_one_sample(
-        mzml_path: Path,
-        xml_path: Path,
+        mzml_path: Path | None,
+        xml_path: Path | None,
         sample_id: int,
         raw_db_path: Path,
         *,
@@ -249,51 +282,82 @@ class Run:
         centroid / filter MS1 peaks (analysis DB).
 
         Args:
-            mzml_path: Source mzML file.
-            xml_path: Raster XML providing pixel timing.
+            mzml_path: Source mzML file, or `None` for an already-parsed,
+                db-only sample (see `xml_path`).
+            xml_path: Raster XML providing pixel timing, or `None` exactly
+                when `mzml_path` is — an already-parsed sample's pixel
+                mapping is already in `raw_db_path`, so there's nothing left
+                to parse or map; both steps below are skipped for it, after
+                confirming `raw_db_path` is actually ready
+                (`Run._raw_db_is_ready`).
             sample_id: Row id of this sample in the analysis `samples` table.
-            raw_db_path: Destination of this sample's parsed raw database
-                (project-scoped, shared across analyses).
+            raw_db_path: This sample's raw database — parsed into fresh when
+                `mzml_path` is given, read as-is (already parsed) otherwise.
+                Project-scoped, shared across analyses.
             config: The run configuration.
             run_id: Project-scoped id used for raw-DB command bookkeeping.
             analysis_id: This run's id, used for analysis-DB bookkeeping.
             analysis_db_path: Path to the run's analysis database.
+
+        Raises:
+            FileNotFoundError: `mzml_path` is None (an already-parsed
+                sample) but `raw_db_path` doesn't exist, or exists but isn't
+                actually parsed and pixel-mapped yet.
         """
-        logger.debug("%s: Starting processing.", mzml_path)
         out_dir = Path(config.io.out_dir)
         out_db_path = Path(raw_db_path)
-        out_db_path.parent.mkdir(parents=True, exist_ok=True)
+        # The sample's own display name/log label, and the stem used for
+        # this run's own output files below — the mzML's stem for a
+        # normal sample, the raw database's own stem for an already-parsed
+        # one (there's no mzML to name it after).
+        sample_stem = Path(mzml_path).stem if mzml_path is not None else out_db_path.stem
+        logger.debug("%s: Starting processing.", sample_stem)
 
-        # --- PARSE (raw DB) ---
-        if not out_db_path.exists() or not Run.is_command_already_run(
-            "parse_spectra", run_id, out_db_path
-        ):
-            MzmlParser().parse(mzml_path=mzml_path, ms1_db_path=out_db_path)
-            log_command(
-                db_path=out_db_path,
-                run_id=run_id,
-                command_name="parse_spectra",
-                arguments={},
-            )
+        if mzml_path is None:
+            # --- ALREADY PARSED (raw DB provided as-is) ---
+            out_db_path.parent.mkdir(parents=True, exist_ok=True)
+            if not Run._raw_db_is_ready(out_db_path):
+                raise FileNotFoundError(
+                    f"io: sample {sample_id} ({out_db_path}) has no mzml_path "
+                    "to parse from, but its raw database is missing, or "
+                    "isn't fully parsed and pixel-mapped yet — an "
+                    "already-parsed sample must point db_paths at a "
+                    "database that has already been through both steps."
+                )
+            logger.debug("%s: Already-parsed database provided as-is.", sample_stem)
         else:
-            logger.debug("%s: Already parsed spectra.", mzml_path)
+            out_db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # --- MAP PIXELS (raw DB) ---
-        if not Run.is_command_already_run("map_pixels_to_db", run_id, out_db_path):
-            df_pixels, _ = parse_raster_xml(xml_path)
-            map_pixels_to_db(db_path=out_db_path, df_pixels=df_pixels)
-            log_command(
-                db_path=out_db_path,
-                run_id=run_id,
-                command_name="map_pixels_to_db",
-                arguments={},
-            )
-            logger.info(
-                "%s: mapped %d pixels", mzml_path, df_pixels.shape[0],
-                extra={"source_file": mzml_path},
-            )
-        else:
-            logger.debug("%s: Already run map_pixels_to_db", mzml_path)
+            # --- PARSE (raw DB) ---
+            if not out_db_path.exists() or not Run.is_command_already_run(
+                "parse_spectra", run_id, out_db_path
+            ):
+                MzmlParser().parse(mzml_path=mzml_path, ms1_db_path=out_db_path)
+                log_command(
+                    db_path=out_db_path,
+                    run_id=run_id,
+                    command_name="parse_spectra",
+                    arguments={},
+                )
+            else:
+                logger.debug("%s: Already parsed spectra.", sample_stem)
+
+            # --- MAP PIXELS (raw DB) ---
+            if not Run.is_command_already_run("map_pixels_to_db", run_id, out_db_path):
+                df_pixels, _ = parse_raster_xml(xml_path)
+                map_pixels_to_db(db_path=out_db_path, df_pixels=df_pixels)
+                log_command(
+                    db_path=out_db_path,
+                    run_id=run_id,
+                    command_name="map_pixels_to_db",
+                    arguments={},
+                )
+                logger.info(
+                    "%s: mapped %d pixels", sample_stem, df_pixels.shape[0],
+                    extra={"source_file": raw_db_path},
+                )
+            else:
+                logger.debug("%s: Already run map_pixels_to_db", sample_stem)
 
         # --- GET AVERAGE MS1 SPECTRA (analysis DB) ---
         if not analysis_db.is_command_already_run(
@@ -318,11 +382,11 @@ class Run:
                 command_id=command_id,
             )
             logger.info(
-                "%s: averaged MS1 -> %d bins", mzml_path, len(average_ms1_mzs),
-                extra={"source_file": mzml_path},
+                "%s: averaged MS1 -> %d bins", sample_stem, len(average_ms1_mzs),
+                extra={"source_file": raw_db_path},
             )
         else:
-            logger.debug("%s: Already run get_average_ms1_spectra", mzml_path)
+            logger.debug("%s: Already run get_average_ms1_spectra", sample_stem)
 
         # --- DETECT MS1 CENTROIDS (analysis DB) ---
         if not analysis_db.is_command_already_run(
@@ -358,11 +422,11 @@ class Run:
                 command_id=command_id,
             )
             logger.info(
-                "%s: detected %d centroids", mzml_path, len(peaks_mzs),
-                extra={"source_file": mzml_path},
+                "%s: detected %d centroids", sample_stem, len(peaks_mzs),
+                extra={"source_file": raw_db_path},
             )
         else:
-            logger.debug("%s: Already run detect_ms1_centroids", mzml_path)
+            logger.debug("%s: Already run detect_ms1_centroids", sample_stem)
 
         # --- PEAK FILTERING (analysis DB) ---
         if not analysis_db.is_command_already_run(
@@ -379,7 +443,7 @@ class Run:
             if config.peak.filter_mad:
                 logger.debug(
                     "%s: Filtering with mad, log %s, nmads %.2f",
-                    mzml_path,
+                    sample_stem,
                     str(config.peak.filter_mad_log),
                     config.peak.filter_mad_nmads,
                 )
@@ -410,14 +474,14 @@ class Run:
                 command_id=command_id,
             )
             logger.info(
-                "%s: filtered -> %d peaks", mzml_path, len(filtered_peaks_mzs),
-                extra={"source_file": mzml_path},
+                "%s: filtered -> %d peaks", sample_stem, len(filtered_peaks_mzs),
+                extra={"source_file": raw_db_path},
             )
         else:
-            logger.debug("%s: Already run filter_spectra", mzml_path)
+            logger.debug("%s: Already run filter_spectra", sample_stem)
 
         # --- FIGURE ---
-        figure_path = out_dir / f"{mzml_path.stem}_filtered_ms1.html"
+        figure_path = out_dir / f"{sample_stem}_filtered_ms1.html"
         if not figure_path.exists():
             if "filtered_peaks_mzs" not in locals():
                 filtered_peaks_mzs, filtered_peaks_intensities = load_aggregated_spectra(
@@ -429,10 +493,10 @@ class Run:
             f = Plotter().plot_spectra(filtered_peaks_mzs, filtered_peaks_intensities)
             f.write_html(figure_path)
         else:
-            logger.debug("%s: Already created figure", mzml_path)
+            logger.debug("%s: Already created figure", sample_stem)
 
         # --- PEAKS CSV ---
-        peaks_df_path = out_dir / f"{mzml_path.stem}_peaks_data.csv"
+        peaks_df_path = out_dir / f"{sample_stem}_peaks_data.csv"
         if not peaks_df_path.exists():
             if "filtered_peaks_mzs" not in locals():
                 filtered_peaks_mzs, filtered_peaks_intensities = load_aggregated_spectra(
@@ -512,7 +576,9 @@ class Run:
         sample_ids = [
             analysis_db.register_sample(
                 adb_path,
-                name=Path(m).stem,
+                # An already-parsed, db-only sample (m is None) has no mzML
+                # to name itself after — use its raw database's own stem.
+                name=Path(m).stem if m is not None else raw_db_paths[i].stem,
                 raw_db_path=raw_db_paths[i],
             )
             for i, m in enumerate(config.io.mzml_paths)
@@ -569,7 +635,10 @@ class Run:
             sample_names = (
                 config.align.sample_names
                 if config.align.sample_names is not None
-                else [Path(m).stem for m in config.io.mzml_paths]
+                else [
+                    Path(m).stem if m is not None else db.stem
+                    for m, db in zip(config.io.mzml_paths, out_db_paths)
+                ]
             )
             mzs_df = align_mz_across_samples(
                 mz_arrays=all_peaks_mzs,

@@ -64,6 +64,24 @@ put the results.
 | `db_paths` | parsed raw-database path per sample, paired with `mzml_paths`. Leave empty to use `<project_folder>/parsed/<stem>.db` (the recommended default — raw DBs are shared across analyses, so they belong at the project level, not in an analysis `out_dir`). Only set this if you deliberately want the parsed database somewhere else. |
 | `out_dir` | where **this analysis'** outputs (analysis database, `.h5ad` files, summary report) are written, e.g. `results/run_1` |
 
+**Already-parsed samples.** A sample can skip mzML/XML parsing entirely if
+you already have its parsed, pixel-mapped raw database (e.g. from a
+previous run): put `null` at that index in both `mzml_paths` and
+`xml_paths`, and the real `.db` path at the same index in `db_paths`.
+mzML-sourced and already-parsed samples can be freely mixed in the same
+run:
+
+```yaml
+io:
+  mzml_paths: [data/s1.mzML, null]
+  xml_paths:  [data/s1.xml,  null]
+  db_paths:   [null,         parsed/s2.db]
+```
+
+The GUI's New Analysis wizard exposes this via the **"Add db files..."**
+button on the input/output tab, as a separate list from the mzML/XML
+sample table.
+
 ### `ms1` — averaged MS1 spectrum
 
 Bins every pixel's raw MS1 scan onto a shared m/z axis and averages them into

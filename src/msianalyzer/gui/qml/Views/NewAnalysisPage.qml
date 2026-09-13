@@ -9,6 +9,12 @@ Page {
 
     property var project
     property var sampleRows: []
+    // Already-parsed samples: each entry here is a raw .db path that
+    // skips the parse/pixel-map pipeline stages entirely (see ADR — core
+    // Run._process_one_sample branches on mzml_path === null). Kept as a
+    // separate list rather than folded into sampleRows because these
+    // samples have no mzML/XML pair at all, just one path.
+    property var dbOnlyPaths: []
 
     // Native dialogs (GTK/KDE portal on Linux): FolderDialog gets
     // create-folder support, FileDialog gets working multi-select — the
@@ -61,6 +67,7 @@ Page {
 
     readonly property var mzmlCommonDir: commonDir(sampleRows.map(function (r) { return r.mzml }))
     readonly property var xmlCommonDir: commonDir(sampleRows.map(function (r) { return r.xml }))
+    readonly property var dbOnlyCommonDir: commonDir(dbOnlyPaths)
 
     // ------------------------------------------------------------------ //
     // Sample-row bookkeeping (io.mzml_paths / io.xml_paths, kept paired)
@@ -149,6 +156,21 @@ Page {
     }
 
     // ------------------------------------------------------------------ //
+    // Already-parsed db-only samples (io.db_paths, paired with a `null`
+    // entry in mzml_paths/xml_paths at the same index — see collectConfig)
+    // ------------------------------------------------------------------ //
+
+    function addDbPathsAsNewEntries(paths) {
+        dbOnlyPaths = dbOnlyPaths.concat(paths)
+    }
+
+    function removeDbOnlyPath(index) {
+        var paths = dbOnlyPaths.slice()
+        paths.splice(index, 1)
+        dbOnlyPaths = paths
+    }
+
+    // ------------------------------------------------------------------ //
     // Generic-field lookup / value parsing (fields tab is data-driven from
     // ConfigSchema, see gui/utils/config_schema.py)
     // ------------------------------------------------------------------ //
@@ -216,9 +238,19 @@ Page {
     function collectConfig() {
         var mzmlPaths = []
         var xmlPaths = []
+        var dbPaths = []
         for (var i = 0; i < sampleRows.length; i++) {
             mzmlPaths.push(sampleRows[i].mzml)
             xmlPaths.push(sampleRows[i].xml)
+            dbPaths.push(null)
+        }
+        // Already-parsed samples: null mzml/xml entries, real db_paths
+        // entry at the same index — this is the sentinel core's
+        // Run._process_one_sample checks for (see IOConfig docstring).
+        for (var d = 0; d < dbOnlyPaths.length; d++) {
+            mzmlPaths.push(null)
+            xmlPaths.push(null)
+            dbPaths.push(dbOnlyPaths[d])
         }
 
         var configDict = {}
@@ -226,7 +258,7 @@ Page {
             "project_folder": project ? project.folder : "",
             "mzml_paths": mzmlPaths,
             "xml_paths": xmlPaths,
-            "db_paths": [],
+            "db_paths": dbPaths,
             "out_dir": outDirField.text
         }
 
@@ -295,6 +327,19 @@ Page {
             for (var i = 0; i < selectedFiles.length; i++)
                 paths.push(Router.toLocalPath(selectedFiles[i]))
             newAnalysisPage.addXmlPathsSequentially(paths)
+        }
+    }
+    FileDialog {
+        id: bulkDbDialog
+        objectName: "bulkDbDialog"
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["msianalyzer databases (*.db)", "All files (*)"]
+        onAccepted: {
+            var paths = []
+            for (var i = 0; i < selectedFiles.length; i++)
+                paths.push(Router.toLocalPath(selectedFiles[i]))
+            newAnalysisPage.addDbPathsAsNewEntries(paths)
         }
     }
     FolderDialog {
@@ -530,6 +575,54 @@ Page {
                         text: "Add Sample"
                         onClicked: newAnalysisPage.addSampleRow()
                     }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 12
+                        Text {
+                            text: "Already-parsed samples"
+                            font.bold: true
+                            Layout.fillWidth: true
+                        }
+                        Button {
+                            objectName: "addDbFilesButton"
+                            text: "Add db files..."
+                            onClicked: bulkDbDialog.open()
+                        }
+                    }
+                    Text {
+                        text: "Pick .db files that have already been parsed and pixel-mapped "
+                              + "(e.g. from a previous run) to skip mzML/XML parsing for those "
+                              + "samples — they can be mixed freely with the samples above."
+                        color: "gray"
+                        font.pixelSize: 10
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                    }
+
+                    Repeater {
+                        model: dbOnlyPaths
+                        delegate: RowLayout {
+                            id: dbOnlyRow
+                            objectName: "dbOnlyRow_" + index
+                            Layout.fillWidth: true
+
+                            Text {
+                                objectName: "dbOnlyRowPath_" + index
+                                text: newAnalysisPage.displayPath(modelData, newAnalysisPage.dbOnlyCommonDir)
+                                Layout.fillWidth: true
+                                elide: Text.ElideMiddle
+                                HoverHandler { id: dbOnlyHover_ }
+                                ToolTip.visible: dbOnlyHover_.hovered
+                                ToolTip.text: modelData
+                            }
+                            Button {
+                                objectName: "removeDbOnlyPathButton_" + index
+                                text: "Remove"
+                                onClicked: newAnalysisPage.removeDbOnlyPath(index)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -644,8 +737,8 @@ Page {
             id: runButton
             objectName: "runButton"
             text: "Run"
-            enabled: sampleRows.length > 0 && outDirField.text.trim() !== ""
-                     && allSampleRowsFilled()
+            enabled: (sampleRows.length > 0 || dbOnlyPaths.length > 0)
+                     && outDirField.text.trim() !== "" && allSampleRowsFilled()
             onClicked: Router.runAnalysisRequested(project, collectConfig())
         }
     }

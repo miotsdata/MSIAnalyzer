@@ -43,19 +43,34 @@ class IOConfig:
             `["data/sample_1.mzML", "data/sample_2.mzML"]`. Every other
             per-sample list (`xml_paths`, `db_paths`) is paired with this
             one by position — index 0 of each list all describe the same
-            sample.
+            sample. An entry can be `None` for a sample that's already been
+            parsed and pixel-mapped in a previous run — that sample is
+            sourced entirely from `db_paths[i]` instead (see `db_paths`);
+            its `xml_paths[i]` must then be `None` too, and `db_paths[i]`
+            is required. mzML-sourced and already-parsed samples can be
+            freely mixed in the same run.
         xml_paths: One raster/imaging-metadata XML file per entry in
             `mzml_paths`, giving each scan's pixel position and timing
             (needed to reconstruct the 2D image). Must be the same length
-            and sample order as `mzml_paths`.
+            and sample order as `mzml_paths`; `xml_paths[i]` is `None`
+            exactly when `mzml_paths[i]` is (an already-parsed, db-only
+            sample has no XML to read either — its pixel mapping is already
+            baked into the database).
         db_paths: Where each sample's *parsed* raw database (built once
             from its mzML/XML pair, then reused by every analysis that
-            touches that sample) should live. Leave this empty (the normal
-            case) and it defaults to `<project_folder>/parsed/<mzml
-            stem>.db` — recommended, since parsed databases are immutable
-            and shared across every analysis in the project, not specific
-            to this one run. Only set it to point somewhere else on
-            purpose (e.g. re-using a database already parsed elsewhere).
+            touches that sample) lives. For a normal mzML-sourced sample,
+            leave the corresponding entry `None` (the usual case) and it
+            defaults to `<project_folder>/parsed/<mzml stem>.db` —
+            recommended, since parsed databases are immutable and shared
+            across every analysis in the project, not specific to this one
+            run; only set it to point somewhere else on purpose (e.g.
+            re-using a database already parsed elsewhere). For an
+            already-parsed, db-only sample (`mzml_paths[i] is None`), this
+            entry is **required** — it's that sample's only source, must
+            already exist, and must already be fully parsed and
+            pixel-mapped (checked before processing; see
+            `Run._process_one_sample`). Shorter than `mzml_paths` is fine —
+            missing trailing entries are treated as `None`.
         out_dir: Directory this analysis' own outputs (the analysis
             database, `.h5ad` files, the summary report, logs) are written
             to — usually something like `results/run_1`, distinct per run
@@ -64,52 +79,82 @@ class IOConfig:
     """
 
     project_folder: Path
-    mzml_paths: list[Path]
-    xml_paths: list[Path]
-    db_paths: list[Path]
+    mzml_paths: list[Path | None]
+    xml_paths: list[Path | None]
+    db_paths: list[Path | None]
     out_dir: Path
 
     def __post_init__(self) -> None:
 
         self.project_folder = Path(self.project_folder)
 
-        self.mzml_paths = [Path(m) for m in self.mzml_paths]
+        self.mzml_paths = [Path(m) if m else None for m in self.mzml_paths]
 
-        self.xml_paths = [Path(x) for x in self.xml_paths]
+        self.xml_paths = [Path(x) if x else None for x in self.xml_paths]
 
-        self.db_paths = [Path(d) for d in self.db_paths]
+        self.db_paths = [Path(d) if d else None for d in self.db_paths]
 
         self.out_dir = Path(self.out_dir)
+
+        # Only the new "already-parsed, db-only sample" pairing is enforced
+        # here — a `None` mzml_paths entry. Everything else about how
+        # xml_paths/db_paths line up with mzml_paths (including being
+        # shorter, historically tolerated) is unchanged.
+        for i, m in enumerate(self.mzml_paths):
+            if m is not None:
+                continue
+            x = self.xml_paths[i] if i < len(self.xml_paths) else None
+            if x is not None:
+                raise ValueError(
+                    f"io: sample {i} has no mzml_paths entry (an "
+                    "already-parsed, db-only sample) but xml_paths"
+                    f"[{i}] is set — an already-parsed sample has no XML "
+                    "to read; its pixel mapping is already in the database"
+                )
+            if i >= len(self.db_paths) or self.db_paths[i] is None:
+                raise ValueError(
+                    f"io: sample {i} has no mzml_paths entry, so "
+                    f"db_paths[{i}] (an already-parsed, pixel-mapped "
+                    "database) is required"
+                )
 
     def resolve_paths(self) -> None:
         """Resolve `out_dir` and every input path against `project_folder`.
 
         Absolute paths are left unchanged; relative paths are interpreted
-        relative to the resolved `project_folder` and made absolute.
+        relative to the resolved `project_folder` and made absolute. `None`
+        entries (an already-parsed, db-only sample's `mzml_paths`/
+        `xml_paths`) pass through unchanged.
         """
         base_dir = self.project_folder.resolve()
 
         self.out_dir = (base_dir / self.out_dir).resolve()
 
         self.mzml_paths = [
-            p if p.is_absolute() else (base_dir / p).resolve() for p in self.mzml_paths
+            p if p is None or p.is_absolute() else (base_dir / p).resolve()
+            for p in self.mzml_paths
         ]
 
         self.xml_paths = [
-            p if p.is_absolute() else (base_dir / p).resolve() for p in self.xml_paths
+            p if p is None or p.is_absolute() else (base_dir / p).resolve()
+            for p in self.xml_paths
         ]
 
         self.db_paths = [
-            p if p.is_absolute() else (base_dir / p).resolve() for p in self.db_paths
+            p if p is None or p.is_absolute() else (base_dir / p).resolve()
+            for p in self.db_paths
         ]
 
     def raw_db_paths(self) -> list[Path]:
-        """Effective parsed raw-database path for each mzML input.
+        """Effective parsed raw-database path for each sample.
 
-        For index ``i`` the path is ``db_paths[i]`` when provided, otherwise
-        ``project_folder / PARSED_DIRNAME / "<mzml stem>.db"``. Raw databases
-        are immutable and shared across analyses, so the default keeps them
-        out of any single analysis' ``out_dir``.
+        For index ``i`` the path is ``db_paths[i]`` when given, otherwise
+        ``project_folder / PARSED_DIRNAME / "<mzml stem>.db"`` (only
+        possible when ``mzml_paths[i]`` is set — `__post_init__` already
+        guarantees an already-parsed, db-only sample always has a
+        `db_paths[i]`). Raw databases are immutable and shared across
+        analyses, so the default keeps them out of any single analysis'
+        ``out_dir``.
 
         Returns:
             One path per entry in ``mzml_paths``.
@@ -903,8 +948,10 @@ class Config:
         def convert(value: Any) -> Any:
             if isinstance(value, Path):
                 return str(value)
-            if isinstance(value, list) and value and isinstance(value[0], Path):
-                return [str(v) for v in value]
+            if isinstance(value, list) and any(isinstance(v, Path) for v in value):
+                # `None` entries pass through unconverted — e.g. io.mzml_paths /
+                # io.xml_paths carry one per "already-parsed, db-only" sample.
+                return [str(v) if isinstance(v, Path) else v for v in value]
             return value
 
         d: dict[str, Any] = {"version": self.version}

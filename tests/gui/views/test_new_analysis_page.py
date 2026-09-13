@@ -172,6 +172,41 @@ def test_remove_sample_row_disables_run_button_again(new_analysis_view, project)
     assert run_button.property("enabled") is False
 
 
+def test_add_db_paths_appends_entries(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addDbPathsAsNewEntries(["/data/s1.db", "/data/s2.db"])
+
+    paths = root.property("dbOnlyPaths").toVariant()
+    assert paths == ["/data/s1.db", "/data/s2.db"]
+
+
+def test_add_db_paths_with_no_paths_is_a_no_op(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addDbPathsAsNewEntries([])
+
+    assert root.property("dbOnlyPaths").toVariant() == []
+
+
+def test_remove_db_only_path(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addDbPathsAsNewEntries(["/data/s1.db", "/data/s2.db"])
+    root.removeDbOnlyPath(0)
+
+    assert root.property("dbOnlyPaths").toVariant() == ["/data/s2.db"]
+
+
+def test_db_only_paths_alone_enable_run_button(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addDbPathsAsNewEntries(["/data/s1.db"])
+
+    assert run_button.property("enabled") is True
+
+
 def test_bool_field_renders_as_checkbox_with_default(
     new_analysis_view, project, find_visual_child
 ):
@@ -287,6 +322,32 @@ def test_run_click_emits_router_signal_with_nested_config(
     assert emitted_project.name == model.name
     assert config_dict["io"]["mzml_paths"] == ["/data/sample1.mzML"]
     assert config_dict["io"]["xml_paths"] == ["/data/sample1.xml"]
+    assert config_dict["io"]["db_paths"] == [None]
     assert config_dict["io"]["project_folder"] == model.folder
     assert config_dict["peak"]["filter_mad"] is True
     assert config_dict["annotate"]["library_path"] is None
+
+
+def test_run_click_emits_config_with_mixed_mzml_and_db_only_samples(
+    new_analysis_view, project, application, qtbot
+):
+    view, root, model = _make_page(new_analysis_view, project)
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/sample1.mzML")
+    root.setSampleField(0, "xml", "/data/sample1.xml")
+    root.addDbPathsAsNewEntries(["/data/already_parsed.db"])
+
+    application.core_bridge.run_analysis = MagicMock()
+
+    spy = QSignalSpy(application.router.runAnalysisRequested)
+    button_center = run_button.mapToScene(run_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    _, config_dict = spy.at(0)
+
+    assert config_dict["io"]["mzml_paths"] == ["/data/sample1.mzML", None]
+    assert config_dict["io"]["xml_paths"] == ["/data/sample1.xml", None]
+    assert config_dict["io"]["db_paths"] == [None, "/data/already_parsed.db"]

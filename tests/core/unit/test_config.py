@@ -90,6 +90,88 @@ def test_io_config_raw_db_paths_default_and_override(tmp_path: Path):
     assert io.out_dir not in raw[1].parents
 
 
+def test_io_config_allows_already_parsed_db_only_sample(tmp_path: Path):
+    """A `None` mzml_paths/xml_paths entry paired with a db_paths entry is
+    an already-parsed, db-only sample — no mzML/XML needed for it."""
+    db = tmp_path / "parsed" / "already_parsed.db"
+    io = IOConfig(
+        project_folder=tmp_path,
+        mzml_paths=["a.mzML", None],
+        xml_paths=["a.xml", None],
+        db_paths=[None, db],
+        out_dir="out",
+    )
+
+    assert io.mzml_paths[1] is None
+    assert io.xml_paths[1] is None
+    assert io.raw_db_paths() == [tmp_path / "parsed" / "a.db", db]
+
+
+def test_io_config_rejects_xml_without_matching_mzml(tmp_path: Path):
+    with pytest.raises(ValueError, match="xml_paths\\[0\\] is set"):
+        IOConfig(
+            project_folder=tmp_path,
+            mzml_paths=[None],
+            xml_paths=["a.xml"],
+            db_paths=[tmp_path / "a.db"],
+            out_dir="out",
+        )
+
+
+def test_io_config_requires_db_path_for_already_parsed_sample(tmp_path: Path):
+    with pytest.raises(ValueError, match="db_paths\\[0\\]"):
+        IOConfig(
+            project_folder=tmp_path,
+            mzml_paths=[None],
+            xml_paths=[None],
+            db_paths=[],
+            out_dir="out",
+        )
+
+
+def test_io_config_resolve_paths_leaves_none_entries_alone(tmp_path: Path):
+    proj_dir = (tmp_path / "my_project").resolve()
+    proj_dir.mkdir()
+    db = proj_dir / "parsed" / "already_parsed.db"
+
+    io = IOConfig(
+        project_folder=proj_dir,
+        mzml_paths=["data/sample1.mzml", None],
+        xml_paths=["configs/meta.xml", None],
+        db_paths=[None, db],
+        out_dir="output",
+    )
+    io.resolve_paths()
+
+    assert io.mzml_paths[1] is None
+    assert io.xml_paths[1] is None
+    assert io.mzml_paths[0] == (proj_dir / "data/sample1.mzml").resolve()
+
+
+def test_config_round_trips_none_entries_in_mixed_sample_lists(tmp_path: Path):
+    """`Config.to_dict()`/`from_dict()` must preserve `None` alongside real
+    `Path` entries in the same list, not silently str()-convert or drop
+    them (regression: the old `to_dict` converter only checked the list's
+    first element's type)."""
+    db = tmp_path / "parsed" / "already_parsed.db"
+    io = IOConfig(
+        project_folder=tmp_path,
+        mzml_paths=[None, tmp_path / "b.mzML"],
+        xml_paths=[None, tmp_path / "b.xml"],
+        db_paths=[db, None],
+        out_dir="out",
+    )
+    config = Config(io=io)
+
+    d = config.to_dict()
+    assert d["io"]["mzml_paths"] == [None, str(tmp_path / "b.mzML")]
+    assert d["io"]["db_paths"] == [str(db), None]
+
+    reloaded = Config.from_dict(d)
+    assert reloaded.io.mzml_paths == [None, tmp_path / "b.mzML"]
+    assert reloaded.io.db_paths == [db, None]
+
+
 def test_default_dataclass_initializations():
     """Verify default values for all sub-config dataclasses."""
     assert MS1Config().chunk_size == 2000
