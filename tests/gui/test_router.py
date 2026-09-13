@@ -371,6 +371,44 @@ def test_about_dialog_shows_software_name_and_version(application, engine, qtbot
     assert version_label.property("text").startswith("Version ")
 
 
+# ---------------------------------------------------------------------------
+# View menu — light/dark theme switch
+# ---------------------------------------------------------------------------
+
+
+def test_view_menu_dark_is_checked_by_default(application, engine):
+    window = engine.rootObjects()[0]
+    dark_item = window.findChild(QObject, "darkThemeMenuItem")
+    light_item = window.findChild(QObject, "lightThemeMenuItem")
+
+    assert dark_item.property("checked") is True
+    assert light_item.property("checked") is False
+
+
+def test_view_menu_light_switches_window_color_live_and_back(
+    application, engine, qtbot
+):
+    window = engine.rootObjects()[0]
+    dark_color = window.property("color")
+
+    light_item = window.findChild(QObject, "lightThemeMenuItem")
+    light_item.click()
+    qtbot.wait(50)
+
+    dark_item = window.findChild(QObject, "darkThemeMenuItem")
+    assert light_item.property("checked") is True
+    assert dark_item.property("checked") is False
+    light_color = window.property("color")
+    assert light_color != dark_color
+
+    dark_item.click()
+    qtbot.wait(50)
+
+    assert dark_item.property("checked") is True
+    assert light_item.property("checked") is False
+    assert window.property("color") == dark_color
+
+
 def test_open_user_guide_opens_local_built_docs(monkeypatch, application):
     # The repo's own `site/index.html` (built via `mkdocs build`, see
     # docs/ CI/dev workflow) — real path resolution, but QDesktopServices

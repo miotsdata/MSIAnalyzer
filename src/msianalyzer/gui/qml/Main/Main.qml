@@ -217,6 +217,34 @@ ApplicationWindow {
         }
 
         Menu {
+            objectName: "viewMenu"
+            title: "View"
+
+            // Plain checkable items with a one-directional `checked`
+            // binding + `onTriggered` writing straight into `Theme.isDark`
+            // — not RadioButton+ButtonGroup. A checked-binding +
+            // write-back-onToggled cycle on grouped checkable controls
+            // hung the QML engine once already (see
+            // VisualInspectionSection.qml's Raw/TIC toggle comment); both
+            // items here just read `Theme.isDark`, so they stay in sync
+            // with each other without an actual exclusivity group.
+            AppMenuItem {
+                objectName: "lightThemeMenuItem"
+                text: "Light"
+                checkable: true
+                checked: !Theme.isDark
+                onTriggered: Theme.isDark = false
+            }
+            AppMenuItem {
+                objectName: "darkThemeMenuItem"
+                text: "Dark"
+                checkable: true
+                checked: Theme.isDark
+                onTriggered: Theme.isDark = true
+            }
+        }
+
+        Menu {
             objectName: "helpMenu"
             title: "Help"
 
