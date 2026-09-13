@@ -258,25 +258,23 @@ class AnalysisBridge(QObject):
 
     @Slot(str, result=list)
     def getAnnotationTable(self, analysis_db_path: str) -> list:
-        """One row per feature — its single best (highest-score) compound hit.
+        """One row per feature — its representative compound hit.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
 
         Returns:
-            Records from `analysis_db.load_feature_compound_scores`, kept to
-            the top-scoring row per `feature_id`. Empty when annotation
-            never ran (or the db path doesn't exist).
+            Records from `analysis_db.load_feature_representative_annotations`
+            — not necessarily the single highest-`score` compound, see
+            `AnnotateConfig.representative_score_tolerance`. Empty when
+            annotation never ran (or the db path doesn't exist).
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return []
-        df = analysis_db.load_feature_compound_scores(analysis_db_path)
+        df = analysis_db.load_feature_representative_annotations(analysis_db_path)
         if df.empty:
             return []
-        # already ordered feature_id, best_score DESC — first row per group
-        # is the feature's single best hit
-        top = df.drop_duplicates(subset="feature_id", keep="first")
-        return _dataframe_to_records(top)
+        return _dataframe_to_records(df)
 
     @Slot(str, int, int, result=list)
     def getFeatureTopHits(self, analysis_db_path: str, feature_id: int, top_n: int) -> list:

@@ -594,6 +594,23 @@ class AnnotateConfig:
             Raise this (e.g. to `3`) to only keep candidates with
             reasonably substantial spectral overlap, cutting down on
             spurious single-peak "matches."
+        representative_score_tolerance: When a feature has multiple
+            candidate rows within this many `score` points of the top one
+            (default `0.05`), the one with the most `n_matched_peaks`
+            becomes the feature's representative row (`rank_feature ==
+            1`) — the compound name shown for it everywhere (GUI
+            Annotations table, Visual Inspection's feature labels, the
+            report's "top features" list) — instead of automatically
+            whichever merely scored a hair higher. A real case this
+            addresses: a library entry with only 1 characteristic
+            fragment can score higher than a richer 3+-peak match from a
+            different library entry purely because it was matched in a
+            "cleaner" (fewer unrelated peaks) scan, not because it's a
+            more confident identification. Only changes *which row is
+            picked as representative* — `score` itself, and every other
+            row's rank, are untouched. Set to `0` to disable (plain
+            highest-`score`-wins, ties broken arbitrarily, the old
+            behavior).
         min_precursor_frac: When set (e.g. `0.5`), scans whose precursor
             purity (`precursor_frac` from the `purity` stage) is known and
             below this value are skipped entirely — not scored, not
@@ -643,6 +660,7 @@ class AnnotateConfig:
     score_weight_lib_coverage: float = 0.5
     score_weight_emp_coverage: float = 0.5
     min_matched_peaks: int = 1
+    representative_score_tolerance: float = 0.05
     min_precursor_frac: float | None = None
     store_raw_spectra: bool = True
     batch_size: int = 200

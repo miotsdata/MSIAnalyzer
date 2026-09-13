@@ -29,3 +29,4 @@ useful).
 | [18](0018-reconstruct-filtered-spectra-on-demand.md) | Reconstruct filtered spectra on demand instead of storing them | Accepted |
 | [19](0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md) | Retire the feature-density chimeric flag and peak-based purity | Accepted |
 | [20](0020-already-parsed-db-only-samples.md) | Already-parsed, db-only samples | Accepted |
+| [21](0021-representative-compound-peak-count-tolerance.md) | Representative-compound selection: prefer more matched peaks within a score tolerance | Accepted |

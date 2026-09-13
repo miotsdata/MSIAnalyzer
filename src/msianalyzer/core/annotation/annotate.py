@@ -275,21 +275,46 @@ def _rank_rows_by_score(
     rows: list[AnnotationRow],
     group_key: Callable[[AnnotationRow], object],
     attr: str,
+    *,
+    representative_score_tolerance: float = 0.0,
 ) -> None:
     """Rank every row of a group 1..n by ``score`` desc; write onto ``attr``.
 
     A per-row rank (like :func:`rank_scan_rows`, but over a wider group), so
-    ``attr == 1`` marks the single best (scan, candidate) row of the group.
-    Strictly increasing — ties do not share a rank.
+    ``attr == 1`` marks the single best (scan, candidate) row of the group —
+    the *representative* one, e.g. the compound name a feature is labelled
+    with everywhere in the GUI/report. Strictly increasing — ties do not
+    share a rank.
+
+    ``representative_score_tolerance`` only changes *which row lands at
+    rank 1* — every other rank (2, 3, ...) is always plain ``score`` desc,
+    unaffected. Among rows within that tolerance of the group's top score,
+    the one with the most ``n_matched_peaks`` wins rank 1 instead of
+    whichever merely scored highest. This addresses a real case: two
+    candidates can score within a hair of each other while one matched a
+    single library fragment and the other matched several — the trivial
+    single-peak match isn't a more confident identification just because
+    a small scoring-formula quirk (e.g. a busier scan depressing
+    ``emp_coverage``) nudged its score a few points higher. `score` itself
+    is never touched by this — only representative-row *selection* is.
     """
     by_group: dict[object, list[AnnotationRow]] = defaultdict(list)
     for r in rows:
         by_group[group_key(r)].append(r)
 
     for grows in by_group.values():
-        for i, r in enumerate(
-            sorted(grows, key=lambda r: r.score, reverse=True), start=1
-        ):
+        by_score = sorted(grows, key=lambda r: r.score, reverse=True)
+        if representative_score_tolerance > 0.0 and len(by_score) > 1:
+            top_score = by_score[0].score
+            pool = [
+                r for r in by_score
+                if r.score >= top_score - representative_score_tolerance
+            ]
+            winner = max(pool, key=lambda r: (r.n_matched_peaks, r.score))
+            ordered = [winner] + [r for r in by_score if r is not winner]
+        else:
+            ordered = by_score
+        for i, r in enumerate(ordered, start=1):
             setattr(r, attr, i)
 
 
@@ -321,7 +346,9 @@ def _rank_scans_by_best_score(
             setattr(r, attr, rank_of[(r.sample_id, r.scan_id)])
 
 
-def assign_feature_ranks(rows: list[AnnotationRow]) -> list[AnnotationRow]:
+def assign_feature_ranks(
+    rows: list[AnnotationRow], *, representative_score_tolerance: float = 0.0
+) -> list[AnnotationRow]:
     """Stamp the four feature-level ranks on every row.
 
     Row-level (``attr == 1`` is the single best (scan, candidate) row):
@@ -338,10 +365,21 @@ def assign_feature_ranks(rows: list[AnnotationRow]) -> list[AnnotationRow]:
 
     Each MS2 scan belongs to a single feature, so ``(feature_id, sample_id)``
     groups are well defined.
+
+    Args:
+        representative_score_tolerance: See
+            :func:`_rank_rows_by_score` — passed through to the two
+            row-level (compound-identity) ranks only; scan-level ranking
+            is a different question ("which scan", not "which compound")
+            and is unaffected.
     """
-    _rank_rows_by_score(rows, lambda r: r.feature_id, "rank_feature")
     _rank_rows_by_score(
-        rows, lambda r: (r.feature_id, r.sample_id), "rank_feature_sample"
+        rows, lambda r: r.feature_id, "rank_feature",
+        representative_score_tolerance=representative_score_tolerance,
+    )
+    _rank_rows_by_score(
+        rows, lambda r: (r.feature_id, r.sample_id), "rank_feature_sample",
+        representative_score_tolerance=representative_score_tolerance,
     )
     _rank_scans_by_best_score(rows, lambda r: r.feature_id, "rank_scan_feature")
     _rank_scans_by_best_score(
@@ -994,7 +1032,12 @@ def run_annotation(
                             "annotation: %d/%d batches done", i, n_batches
                         )
 
-    assign_feature_ranks(rows)
+    assign_feature_ranks(
+        rows,
+        representative_score_tolerance=getattr(
+            config, "representative_score_tolerance", 0.0
+        ),
+    )
     persist_annotations(
         analysis_db_path,
         rows,

@@ -193,6 +193,7 @@ def test_default_dataclass_initializations():
     assert AnnotateConfig().noise_threshold == 0.01
     assert AnnotateConfig().candidate_ppm == 10.0
     assert AnnotateConfig().store_raw_spectra is True
+    assert AnnotateConfig().representative_score_tolerance == 0.05
     # library_path may be a single path or a list of them
     assert AnnotateConfig(library_path=["a.db", "b.db"]).library_path == ["a.db", "b.db"]
     assert H5adConfig().scan_handling == "average"

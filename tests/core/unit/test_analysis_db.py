@@ -18,6 +18,7 @@ from msianalyzer.core.analysis_db import (
     load_feature_compound_scores,
     load_feature_list,
     load_feature_ms2_count,
+    load_feature_representative_annotations,
     load_features,
     load_ms2_annotations_for_feature,
     load_samples,
@@ -346,6 +347,73 @@ def test_load_feature_compound_scores_empty_without_annotations(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# load_feature_representative_annotations
+# ---------------------------------------------------------------------------
+
+
+def _seed_representative_scenario(db: Path) -> None:
+    """Two candidates on the same feature — a higher raw `score` (fewer
+    matched peaks) that lost representative selection to a lower-scoring,
+    richer match, exactly as `annotate.assign_feature_ranks` would leave
+    them with `representative_score_tolerance` set: rank_feature=1 on the
+    row that should win, regardless of which one has the higher `score`.
+    """
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO annotation_libraries (id, path, name) "
+            "VALUES (1, 'lib.db', 'my_library')"
+        )
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) "
+            "VALUES (76, 89.0253, '{}')"
+        )
+        con.executemany(
+            "INSERT INTO ms2_annotations "
+            "(id, feature_id, sample_id, scan_id, library_id, "
+            "library_spectrum_id, compound_name, compound_formula, inchikey, "
+            "score, dot_product_score, lib_coverage, emp_coverage, "
+            "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
+            "n_emp_peaks_filtered, rank_ms2, rank_feature) "
+            "VALUES (?,76,?,?,1,?,?,?,?,?,?,1,1,1,?,?,10,10,1,?)",
+            [
+                # higher score, only 1 matched peak -> loses representative pick
+                (1, 2, 31748, 9, "(S)-LACTATE", "C3H6O3",
+                 "JVTAAEKCZFNVCJ-REOHCLBHSA-N", 0.9330, 1.0, 1, 1, 2),
+                # lower score, 3 matched peaks -> wins (rank_feature=1)
+                (2, 5, 71886, 10, "Lactic acid", "C3H6O3",
+                 "JVTAAEKCZFNVCJ-UWTATZPHSA-N", 0.8572, 0.9999, 3, 3, 1),
+            ],
+        )
+        con.commit()
+
+
+def test_load_feature_representative_annotations_follows_rank_feature_not_score(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_representative_scenario(db)
+
+    df = load_feature_representative_annotations(db)
+
+    assert len(df) == 1  # one row per feature
+    row = df.iloc[0]
+    assert row["feature_id"] == 76
+    assert row["compound_name"] == "Lactic acid"
+    assert row["n_matched_peaks"] == 3
+    # the winning row's own score, not the higher-scoring loser's
+    assert row["best_score"] == pytest.approx(0.8572)
+
+
+def test_load_feature_representative_annotations_empty_without_annotations(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    assert load_feature_representative_annotations(db).empty
+
+
+# ---------------------------------------------------------------------------
 # load_summary_counts
 # ---------------------------------------------------------------------------
 
@@ -598,6 +666,19 @@ def test_load_feature_list_labels_annotated_and_unannotated_features(tmp_path: P
     assert list(df["mz"]) == [100.0, 200.0]
     assert df.loc[df["feature_id"] == 1, "compound_name"].iloc[0] == "Caffeine"
     assert pd.isna(df.loc[df["feature_id"] == 2, "compound_name"].iloc[0])
+
+
+def test_load_feature_list_labels_by_rank_feature_not_raw_score(tmp_path: Path):
+    # A feature can have a higher-scoring candidate that lost
+    # representative selection (assign_feature_ranks' tolerance/peak-count
+    # rule) — the label must follow rank_feature, not just best_score.
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_representative_scenario(db)
+
+    df = load_feature_list(db)
+
+    assert df.loc[df["feature_id"] == 76, "compound_name"].iloc[0] == "Lactic acid"
 
 
 def test_load_feature_list_empty_without_features(tmp_path: Path):

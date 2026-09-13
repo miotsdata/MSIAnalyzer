@@ -123,6 +123,48 @@ def test_get_annotation_table_returns_one_row_per_feature(tmp_path):
     assert rows[0]["mz"] == 300.5
 
 
+def test_get_annotation_table_follows_representative_pick_not_raw_score(tmp_path):
+    # Feature 76's real-world case (see docs/developer/adr/0021): a
+    # higher-scoring, 1-matched-peak candidate lost representative
+    # selection (assign_feature_ranks' tolerance rule) to a lower-scoring,
+    # 3-matched-peak one — rank_feature=1 marks the winner. The bridge
+    # must show that one, not whichever merely scored higher.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO annotation_libraries (id, path, name) "
+            "VALUES (1, 'lib.db', 'my_library')"
+        )
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) "
+            "VALUES (76, 89.0253, '{}')"
+        )
+        con.executemany(
+            "INSERT INTO ms2_annotations "
+            "(id, feature_id, sample_id, scan_id, library_id, "
+            "library_spectrum_id, compound_name, compound_formula, inchikey, "
+            "score, dot_product_score, lib_coverage, emp_coverage, "
+            "coverage_score, n_matched_peaks, n_lib_peaks, n_emp_peaks_raw, "
+            "n_emp_peaks_filtered, rank_ms2, rank_feature) "
+            "VALUES (?,76,?,?,1,?,?,?,?,?,?,1,1,1,?,?,10,10,1,?)",
+            [
+                (1, 2, 31748, 9, "(S)-LACTATE", "C3H6O3",
+                 "JVTAAEKCZFNVCJ-REOHCLBHSA-N", 0.9330, 1.0, 1, 1, 2),
+                (2, 5, 71886, 10, "Lactic acid", "C3H6O3",
+                 "JVTAAEKCZFNVCJ-UWTATZPHSA-N", 0.8572, 0.9999, 3, 3, 1),
+            ],
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    rows = bridge.getAnnotationTable(str(db_path))
+
+    assert len(rows) == 1
+    assert rows[0]["compound_name"] == "Lactic acid"
+    assert rows[0]["n_matched_peaks"] == 3
+
+
 def test_get_annotation_table_empty_without_annotations(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()

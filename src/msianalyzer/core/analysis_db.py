@@ -651,8 +651,14 @@ def load_feature_compound_scores(
     came from (``best_sample_id`` / ``best_scan_id`` / ``best_library_id``),
     plus ``n_candidate_rows`` / ``n_scans``. Joined with ``features`` for
     ``mz`` — the view itself doesn't carry it (pure aggregation over
-    ``ms2_annotations``), and the GUI Annotations table sorts by it. Empty
-    when annotation never ran.
+    ``ms2_annotations``). Empty when annotation never ran.
+
+    Every distinct compound that scored *any* candidate row, not just the
+    winner — use :func:`load_feature_representative_annotations` instead
+    when what you want is the single row a feature is labelled by
+    elsewhere (GUI Annotations table, Visual Inspection): the top row here
+    by plain ``best_score`` is not necessarily that one (see
+    ``AnnotateConfig.representative_score_tolerance``).
 
     Args:
         db_path: The analysis database.
@@ -675,6 +681,45 @@ def load_feature_compound_scores(
             return pd.read_sql_query(sql, con, params=params)
         except (pd.errors.DatabaseError, sqlite3.OperationalError):
             # view absent (schema predates it) or ms2_annotations missing
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def load_feature_representative_annotations(db_path: Path | str) -> pd.DataFrame:
+    """One row per annotated feature — the representative compound it's
+    labelled by everywhere in the GUI/report.
+
+    Reads ``ms2_annotations`` filtered to ``rank_feature = 1`` (stamped at
+    annotate time by ``annotate.assign_feature_ranks`` — see
+    ``AnnotateConfig.representative_score_tolerance`` for how that row is
+    chosen among a feature's candidates: highest ``score``, except a
+    lower-scoring candidate with more ``n_matched_peaks`` wins when within
+    tolerance of the top score). Unlike :func:`load_feature_compound_scores`
+    (every distinct compound that scored anything), this is exactly one row
+    per feature — the GUI Annotations table's backing reader. Empty when
+    annotation never ran.
+
+    Returns:
+        A DataFrame with ``feature_id``, ``mz``, ``compound_name``,
+        ``compound_formula``, ``inchikey``, ``best_score`` (``score``,
+        renamed to match ``load_feature_compound_scores``'s column),
+        ``n_matched_peaks``, ``n_lib_peaks``, ``best_sample_id``,
+        ``best_scan_id``, ``best_library_id``, ordered by ``feature_id``.
+    """
+    sql = """
+        SELECT a.feature_id, f.mz AS mz, a.compound_name, a.compound_formula,
+               a.inchikey, a.score AS best_score, a.n_matched_peaks,
+               a.n_lib_peaks, a.sample_id AS best_sample_id,
+               a.scan_id AS best_scan_id, a.library_id AS best_library_id
+        FROM ms2_annotations a
+        JOIN features f ON f.feature_id = a.feature_id
+        WHERE a.rank_feature = 1
+        ORDER BY a.feature_id
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
             return pd.DataFrame()
 
 
@@ -834,10 +879,14 @@ def load_feature_ms2_count(db_path: Path | str, feature_id: int) -> int:
 
 @log_call(source="db_path")
 def load_feature_list(db_path: Path | str) -> pd.DataFrame:
-    """Every feature, with its best (highest-score) compound name if any.
+    """Every feature, with its representative compound name if any.
 
     For the Visual Inspection section's feature selector: features get
-    labelled by compound name when annotated, else by bare m/z.
+    labelled by compound name when annotated, else by bare m/z. Joins on
+    `ms2_annotations.rank_feature = 1` — the representative row picked at
+    annotate time (see `annotate.assign_feature_ranks` /
+    `AnnotateConfig.representative_score_tolerance`), not necessarily
+    whichever compound has the single highest raw `score`.
 
     Returns:
         A DataFrame with `feature_id`, `mz`, `compound_name` (`None` when
@@ -846,13 +895,8 @@ def load_feature_list(db_path: Path | str) -> pd.DataFrame:
     sql = """
         SELECT f.feature_id, f.mz, best.compound_name
         FROM features f
-        LEFT JOIN (
-            SELECT feature_id, compound_name,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY feature_id ORDER BY best_score DESC
-                   ) AS rn
-            FROM feature_compound_scores
-        ) best ON best.feature_id = f.feature_id AND best.rn = 1
+        LEFT JOIN ms2_annotations best
+            ON best.feature_id = f.feature_id AND best.rank_feature = 1
         ORDER BY f.mz
     """
     with connect(db_path) as con:
@@ -880,13 +924,8 @@ def load_feature_categories(db_path: Path | str) -> pd.DataFrame:
                best.compound_name
         FROM features f
         LEFT JOIN feature_ms2_summary ms2 ON ms2.feature_id = f.feature_id
-        LEFT JOIN (
-            SELECT feature_id, compound_name,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY feature_id ORDER BY best_score DESC
-                   ) AS rn
-            FROM feature_compound_scores
-        ) best ON best.feature_id = f.feature_id AND best.rn = 1
+        LEFT JOIN ms2_annotations best
+            ON best.feature_id = f.feature_id AND best.rank_feature = 1
         ORDER BY f.mz
     """
     with connect(db_path) as con:

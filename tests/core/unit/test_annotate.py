@@ -47,7 +47,7 @@ def _cand(spectrum_id, mz, inten, *, name="C", library_id=1):
     )
 
 
-def _row(scan_id, score, *, feature_id=1, sample_id=1):
+def _row(scan_id, score, *, feature_id=1, sample_id=1, n_matched_peaks=3, compound_name="C"):
     empty = np.array([], dtype=float)
     return AnnotationRow(
         sample_id=sample_id,
@@ -56,7 +56,7 @@ def _row(scan_id, score, *, feature_id=1, sample_id=1):
         library_id=1,
         library_spectrum_id=scan_id,
         compound_id=scan_id,
-        compound_name="C",
+        compound_name=compound_name,
         compound_formula="F",
         inchikey="K",
         score=score,
@@ -64,7 +64,7 @@ def _row(scan_id, score, *, feature_id=1, sample_id=1):
         lib_coverage=1.0,
         emp_coverage=1.0,
         coverage_score=1.0,
-        n_matched_peaks=3,
+        n_matched_peaks=n_matched_peaks,
         n_lib_peaks=3,
         n_emp_peaks_raw=5,
         n_emp_peaks_filtered=4,
@@ -182,6 +182,87 @@ def test_assign_feature_ranks_row_level_marks_single_best_hit():
     assert ordered[0].rank_feature == 1
     # exactly one row is rank_feature == 1
     assert sum(r.rank_feature == 1 for r in rows) == 1
+
+
+def test_assign_feature_ranks_default_tolerance_zero_ignores_peak_count():
+    # No representative_score_tolerance passed -> old behavior: whichever
+    # row scored highest wins rank_feature == 1, regardless of how many
+    # peaks it matched.
+    rows = [
+        _row(10, 0.93, n_matched_peaks=1, compound_name="A"),
+        _row(20, 0.86, n_matched_peaks=3, compound_name="B"),
+    ]
+    assign_feature_ranks(rows)
+    winner = next(r for r in rows if r.rank_feature == 1)
+    assert winner.compound_name == "A"
+
+
+def test_assign_feature_ranks_tolerance_prefers_more_matched_peaks_within_band():
+    # Reproduces the real case reported against feature 76 of a run: a
+    # 1-matched-peak candidate outscored a 3-matched-peak one by ~0.07.
+    # With a tolerance covering that gap, the richer match should win
+    # representative selection even though its raw score is lower.
+    rows = [
+        _row(10, 0.93, n_matched_peaks=1, compound_name="A"),
+        _row(20, 0.86, n_matched_peaks=3, compound_name="B"),
+    ]
+    assign_feature_ranks(rows, representative_score_tolerance=0.1)
+    winner = next(r for r in rows if r.rank_feature == 1)
+    assert winner.compound_name == "B"
+    # score itself is completely untouched by this.
+    assert {r.compound_name: r.score for r in rows} == {"A": 0.93, "B": 0.86}
+
+
+def test_assign_feature_ranks_tolerance_too_narrow_keeps_top_score_winner():
+    # Same rows, but the gap (0.07) exceeds the tolerance (0.05) -> the
+    # plain highest score still wins.
+    rows = [
+        _row(10, 0.93, n_matched_peaks=1, compound_name="A"),
+        _row(20, 0.86, n_matched_peaks=3, compound_name="B"),
+    ]
+    assign_feature_ranks(rows, representative_score_tolerance=0.05)
+    winner = next(r for r in rows if r.rank_feature == 1)
+    assert winner.compound_name == "A"
+
+
+def test_assign_feature_ranks_tolerance_only_affects_rank_one():
+    # A third, even-lower-scoring candidate must still rank below both,
+    # in plain score order -> the tolerance/peak-count rule only ever
+    # changes which row lands at rank 1.
+    rows = [
+        _row(10, 0.93, n_matched_peaks=1, compound_name="A"),
+        _row(20, 0.86, n_matched_peaks=3, compound_name="B"),
+        _row(30, 0.50, n_matched_peaks=5, compound_name="C"),
+    ]
+    assign_feature_ranks(rows, representative_score_tolerance=0.1)
+    ranks = {r.compound_name: r.rank_feature for r in rows}
+    assert ranks == {"B": 1, "A": 2, "C": 3}
+
+
+def test_assign_feature_ranks_tolerance_exact_tie_prefers_more_peaks():
+    # An exact score tie, with any positive tolerance: the peak-count
+    # tie-break applies among rows tied at the top score — no arbitrary
+    # pick left to sort stability.
+    rows = [
+        _row(10, 0.9, n_matched_peaks=1, compound_name="A"),
+        _row(20, 0.9, n_matched_peaks=2, compound_name="B"),
+    ]
+    assign_feature_ranks(rows, representative_score_tolerance=0.001)
+    winner = next(r for r in rows if r.rank_feature == 1)
+    assert winner.compound_name == "B"
+
+
+def test_assign_feature_ranks_zero_tolerance_is_plain_score_order():
+    # Zero tolerance (the documented "disable" value) skips the
+    # peak-count tie-break entirely, even for an exact score tie —
+    # falls back to sorted()'s stable order (original list order here).
+    rows = [
+        _row(10, 0.9, n_matched_peaks=1, compound_name="A"),
+        _row(20, 0.9, n_matched_peaks=2, compound_name="B"),
+    ]
+    assign_feature_ranks(rows, representative_score_tolerance=0.0)
+    winner = next(r for r in rows if r.rank_feature == 1)
+    assert winner.compound_name == "A"
 
 
 def test_assign_feature_ranks_scan_level_orders_scans_by_best_hit():
