@@ -76,3 +76,8 @@ def test_run_failed_shows_error_banner(
 
     assert error_text.property("visible") is True
     assert "sample processing failed" in error_text.property("text")
+    # Style/Theme.qml singleton (2026-09-14) — a raw "red" literal read
+    # harsh against the new dark palette; this should be Theme.errorColor.
+    from PySide6.QtGui import QColor
+
+    assert error_text.property("color") == QColor("#e06c75")

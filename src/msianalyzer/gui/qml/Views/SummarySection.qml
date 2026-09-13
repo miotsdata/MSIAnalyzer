@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 
 Item {
     id: summarySection
@@ -33,13 +34,13 @@ Item {
         return (v === undefined || v === null) ? "—" : String(v)
     }
 
-    Text {
+    Label {
         id: emptyStateLabel
         objectName: "summaryEmptyStateLabel"
         visible: !hasData
         anchors.centerIn: parent
         text: "No analysis data available."
-        color: "gray"
+        color: Theme.mutedTextColor
     }
 
     GridLayout {
@@ -57,7 +58,7 @@ Item {
                 objectName: "statTile_" + modelData.key
                 Layout.preferredWidth: 180
                 Layout.preferredHeight: 100
-                border.color: "#cccccc"
+                border.color: palette.mid
                 border.width: 1
                 radius: 6
 
@@ -65,14 +66,14 @@ Item {
                     anchors.centerIn: parent
                     spacing: 4
 
-                    Text {
+                    Label {
                         objectName: "statValue_" + modelData.key
                         text: summarySection.tileText(modelData.key)
                         font.pixelSize: 22
                         font.bold: true
                         Layout.alignment: Qt.AlignHCenter
                     }
-                    Text {
+                    Label {
                         text: modelData.label
                         Layout.alignment: Qt.AlignHCenter
                     }

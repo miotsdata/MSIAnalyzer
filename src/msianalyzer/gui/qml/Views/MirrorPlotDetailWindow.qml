@@ -106,7 +106,7 @@ Window {
         RowLayout {
             Layout.fillWidth: true
 
-            Text { text: "Empirical:" }
+            Label { text: "Empirical:" }
             ComboBox {
                 id: empSourceCombo
                 objectName: "detailEmpSourceCombo"
@@ -117,7 +117,7 @@ Window {
                     detailWindow.refresh()
                 }
             }
-            Text { text: "Library:" }
+            Label { text: "Library:" }
             ComboBox {
                 id: libSourceCombo
                 objectName: "detailLibSourceCombo"
@@ -203,7 +203,7 @@ Window {
                     anchors.leftMargin: 12
                     spacing: 8
 
-                    Text { text: "Details"; font.bold: true }
+                    Label { text: "Details"; font.bold: true }
 
                     MirrorPlotMetadataRow {
                         label: "Compound"; valueObjectName: "detailMetadataCompound"

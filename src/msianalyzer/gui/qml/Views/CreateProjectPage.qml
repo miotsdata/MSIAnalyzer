@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 import QtQuick.Dialogs
 
 Page {
@@ -11,11 +12,10 @@ Page {
         anchors.centerIn: parent
         spacing: 16
 
-        Text {
+        Label {
             text: "Create project"
-            color: "blue"
-            font.family: "Arial"
-            font.pixelSize: 18
+            font.pixelSize: Theme.headingPixelSize
+            font.bold: true
         }
 
         TextField {

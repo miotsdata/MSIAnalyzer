@@ -24,32 +24,41 @@ ApplicationWindow {
     // that alone.
     color: palette.window
 
-    // Explicit light palette, not just "Fusion instead of Material" —
-    // Fusion (like Basic) still follows the host desktop's own palette
-    // via GTK platform-theme integration, so it stayed dark on a system
-    // with GNOME's dark theme on, same as the very first report. `palette`
-    // is a QQuickItem-inherited property (not style-specific — Fusion,
-    // Basic, Material, Universal all read from it), so setting it once
-    // here cascades to every control in the app regardless of the host
-    // theme, without going back to Material (whose native-FileDialog
-    // combination froze the app).
+    // Professional dark-neutral palette (2026-09-14 mockup, not yet
+    // confirmed) — replaces the earlier flat light palette. `palette` is a
+    // QQuickItem-inherited property (not style-specific — Fusion, Basic,
+    // Material, Universal all read from it), so setting it once here
+    // cascades to every control in the app regardless of the host theme;
+    // see the comment this replaced for why an explicit palette is needed
+    // at all (Fusion otherwise follows the host desktop's GTK theme).
+    //
+    // Deliberately mid-dark neutral gray (VS Code/Adobe-panel territory,
+    // #2d2d30 window / #252526 base), not the near-black tried earlier —
+    // that one was reported "too dark". `base`/`alternateBase` sit a shade
+    // darker than `window` so input fields and table rows read as
+    // recessed against the surrounding chrome, and `light`/`midlight`/
+    // `mid`/`dark` step in even increments so borders and pressed/hover
+    // states have real visual depth instead of everything sitting at the
+    // same flat gray. `highlight` is a restrained blue rather than an
+    // Adobe-brand color — this app isn't Adobe-branded, just aiming for
+    // the same "serious creative/analysis tool" register.
     palette {
-        window: "#f5f5f5"
-        windowText: "#202020"
-        base: "#ffffff"
-        alternateBase: "#eeeeee"
-        text: "#202020"
-        button: "#e6e6e6"
-        buttonText: "#202020"
-        toolTipBase: "#ffffe1"
-        toolTipText: "#202020"
-        placeholderText: "#808080"
-        highlight: "#0078d4"
+        window: "#2d2d30"
+        windowText: "#e0e0e0"
+        base: "#252526"
+        alternateBase: "#323234"
+        text: "#e0e0e0"
+        button: "#3c3c3c"
+        buttonText: "#e0e0e0"
+        toolTipBase: "#3c3c3c"
+        toolTipText: "#e0e0e0"
+        placeholderText: "#8a8a8a"
+        highlight: "#3d8bd4"
         highlightedText: "#ffffff"
-        light: "#ffffff"
-        midlight: "#f0f0f0"
-        mid: "#c0c0c0"
-        dark: "#a0a0a0"
+        light: "#4a4a4a"
+        midlight: "#414141"
+        mid: "#2a2a2a"
+        dark: "#1e1e1e"
         shadow: "#000000"
     }
 

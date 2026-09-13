@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 
 Page {
     id: analysisPage
@@ -28,23 +29,23 @@ Page {
                 objectName: "analysisTitleBlock"
                 spacing: 0
 
-                Text {
+                Label {
                     objectName: "analysisPageTitle"
                     text: "Project: " + (analysis ? analysis.projectName : "")
                     font.pixelSize: 14
                     font.bold: true
                 }
-                Text {
+                Label {
                     objectName: "analysisPageRunId"
                     text: "Analysis: " + (analysis ? analysis.runId : "")
                     font.pixelSize: 11
-                    color: "gray"
+                    color: Theme.mutedTextColor
                 }
-                Text {
+                Label {
                     objectName: "analysisPageDate"
                     text: "Date: " + (analysis ? analysis.startDateDisplay : "")
                     font.pixelSize: 11
-                    color: "gray"
+                    color: Theme.mutedTextColor
                 }
             }
 

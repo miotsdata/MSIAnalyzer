@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 
 Page {
     id: projectHomePage
@@ -13,13 +14,12 @@ Page {
         anchors.margins: 24
         spacing: 16
 
-        Text {
+        Label {
             id: projectNameLabel
             objectName: "projectNameLabel"
             text: project ? project.name : ""
-            color: "blue"
-            font.family: "Arial"
-            font.pixelSize: 18
+            font.pixelSize: Theme.headingPixelSize
+            font.bold: true
         }
 
         SplitView {
@@ -60,7 +60,7 @@ Page {
                 RowLayout {
                     Layout.fillWidth: true
 
-                    Text {
+                    Label {
                         text: "Analyses"
                         font.pixelSize: 14
                         font.bold: true
@@ -75,12 +75,12 @@ Page {
                     }
                 }
 
-                Text {
+                Label {
                     id: emptyStateLabel
                     objectName: "emptyStateLabel"
                     visible: !project || project.runsList.length === 0
                     text: "No analyses yet."
-                    color: "gray"
+                    color: Theme.mutedTextColor
                 }
 
                 Flickable {
@@ -173,7 +173,7 @@ Page {
                                     standardButtons: Dialog.Yes | Dialog.No
                                     anchors.centerIn: Overlay.overlay
 
-                                    Text {
+                                    Label {
                                         width: 320
                                         wrapMode: Text.WordWrap
                                         text: "This permanently deletes the output folder ("
@@ -196,17 +196,17 @@ Page {
                                     anchors.margins: 8
                                     spacing: 2
 
-                                    Text {
+                                    Label {
                                         objectName: "runRowDate"
                                         text: modelData.start_date_display
                                         font.bold: true
                                     }
-                                    Text {
+                                    Label {
                                         objectName: "runRowOutDir"
                                         visible: modelData.out_dir !== ""
                                         text: "Output: " + modelData.out_dir_display
                                     }
-                                    Text {
+                                    Label {
                                         objectName: "runRowConfigPath"
                                         visible: modelData.config_path !== ""
                                         text: "Config: " + modelData.config_path_display

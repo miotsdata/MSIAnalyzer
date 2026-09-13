@@ -2,6 +2,8 @@
     <qresource prefix="/">
         <file>Main/Main.qml</file>
         <file>Main/qmldir</file>
+        <file>Style/qmldir</file>
+        <file>Style/Theme.qml</file>
         <file>Views/qmldir</file>
         <file>Views/StartPage.qml</file>
         <file>Views/ProjectHomePage.qml</file>

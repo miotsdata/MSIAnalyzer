@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 
 Item {
     id: visualSection
@@ -265,12 +266,12 @@ Item {
                + visualSection.vminToken() + "|" + visualSection.vmaxToken()
     }
 
-    Text {
+    Label {
         objectName: "visualEmptyStateLabel"
         visible: visualSection.features.length === 0 && visualSection.obsColumns.length === 0
         anchors.centerIn: parent
         text: "No features to display."
-        color: "gray"
+        color: Theme.mutedTextColor
     }
 
     RowLayout {
@@ -301,7 +302,7 @@ Item {
             width: controlsFlickable.width
             spacing: 10
 
-            Text { text: "Show"; font.bold: true }
+            Label { text: "Show"; font.bold: true }
             RowLayout {
                 // Same plain-Button pattern as the Raw/TIC layer toggle
                 // below (not RadioButton+ButtonGroup) — see that block's
@@ -315,12 +316,12 @@ Item {
                     onClicked: visualSection.inspectionMode = "feature"
                     background: Rectangle {
                         radius: 4
-                        color: featureModeButton.highlighted ? "#0078d4" : "#e6e6e6"
-                        border.color: "#a0a0a0"
+                        color: featureModeButton.highlighted ? palette.highlight : palette.button
+                        border.color: palette.mid
                     }
-                    contentItem: Text {
+                    contentItem: Label {
                         text: featureModeButton.text
-                        color: featureModeButton.highlighted ? "#ffffff" : "#202020"
+                        color: featureModeButton.highlighted ? palette.highlightedText : palette.buttonText
                         font.bold: featureModeButton.highlighted
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -334,12 +335,12 @@ Item {
                     onClicked: visualSection.inspectionMode = "obs"
                     background: Rectangle {
                         radius: 4
-                        color: obsModeButton.highlighted ? "#0078d4" : "#e6e6e6"
-                        border.color: "#a0a0a0"
+                        color: obsModeButton.highlighted ? palette.highlight : palette.button
+                        border.color: palette.mid
                     }
-                    contentItem: Text {
+                    contentItem: Label {
                         text: obsModeButton.text
-                        color: obsModeButton.highlighted ? "#ffffff" : "#202020"
+                        color: obsModeButton.highlighted ? palette.highlightedText : palette.buttonText
                         font.bold: obsModeButton.highlighted
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -347,14 +348,14 @@ Item {
                 }
             }
 
-            Text {
+            Label {
                 text: "Feature"
                 font.bold: true
                 visible: visualSection.inspectionMode === "feature"
             }
             RowLayout {
                 visible: visualSection.inspectionMode === "feature"
-                Text { text: "Sort by" }
+                Label { text: "Sort by" }
                 ComboBox {
                     id: sortModeCombo
                     objectName: "sortModeCombo"
@@ -379,7 +380,7 @@ Item {
                 onActivated: (index) => visualSection.selectedFeatureIndex = index
             }
 
-            Text {
+            Label {
                 text: "Obs column"
                 font.bold: true
                 visible: visualSection.inspectionMode === "obs"
@@ -394,7 +395,7 @@ Item {
                 onActivated: (index) => visualSection.selectedObsIndex = index
             }
 
-            Text {
+            Label {
                 text: "Layer"
                 font.bold: true
                 visible: visualSection.inspectionMode === "feature"
@@ -424,12 +425,12 @@ Item {
                     onClicked: visualSection.dataLayer = "raw"
                     background: Rectangle {
                         radius: 4
-                        color: rawLayerButton.highlighted ? "#0078d4" : "#e6e6e6"
-                        border.color: "#a0a0a0"
+                        color: rawLayerButton.highlighted ? palette.highlight : palette.button
+                        border.color: palette.mid
                     }
-                    contentItem: Text {
+                    contentItem: Label {
                         text: rawLayerButton.text
-                        color: rawLayerButton.highlighted ? "#ffffff" : "#202020"
+                        color: rawLayerButton.highlighted ? palette.highlightedText : palette.buttonText
                         font.bold: rawLayerButton.highlighted
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -443,12 +444,12 @@ Item {
                     onClicked: visualSection.dataLayer = "TIC"
                     background: Rectangle {
                         radius: 4
-                        color: ticLayerButton.highlighted ? "#0078d4" : "#e6e6e6"
-                        border.color: "#a0a0a0"
+                        color: ticLayerButton.highlighted ? palette.highlight : palette.button
+                        border.color: palette.mid
                     }
-                    contentItem: Text {
+                    contentItem: Label {
                         text: ticLayerButton.text
-                        color: ticLayerButton.highlighted ? "#ffffff" : "#202020"
+                        color: ticLayerButton.highlighted ? palette.highlightedText : palette.buttonText
                         font.bold: ticLayerButton.highlighted
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -456,7 +457,7 @@ Item {
                 }
             }
 
-            Text {
+            Label {
                 text: "Colormap"
                 font.bold: true
                 visible: visualSection.showsColorScale
@@ -471,7 +472,7 @@ Item {
                 onActivated: (index) => visualSection.colormap = model[index]
             }
 
-            Text {
+            Label {
                 text: "Color scale"
                 font.bold: true
                 visible: visualSection.showsColorScale
@@ -499,7 +500,7 @@ Item {
                 Layout.fillWidth: true
                 spacing: 2
                 visible: visualSection.showsColorScale
-                Text {
+                Label {
                     objectName: "vminValueLabel"
                     // Shows what autoscale is using while it's on (so
                     // it's not just a mystery), the manual draft while off.
@@ -545,7 +546,7 @@ Item {
                 Layout.fillWidth: true
                 spacing: 2
                 visible: visualSection.showsColorScale
-                Text {
+                Label {
                     objectName: "vmaxValueLabel"
                     text: "vmax: " + (visualSection.autoScale
                                        ? visualSection.autoRange.vmax.toFixed(3)
@@ -591,7 +592,7 @@ Item {
             // a fixed-palette legend. Every tile colors by this same
             // ordered category list (visualSection.obsCategoryLegend),
             // see tileSource().
-            Text {
+            Label {
                 text: "Categories"
                 font.bold: true
                 visible: visualSection.inspectionMode === "obs" && !visualSection.isSelectedObsNumeric
@@ -611,9 +612,9 @@ Item {
                             height: 14
                             radius: 2
                             color: modelData.color
-                            border.color: "#a0a0a0"
+                            border.color: palette.mid
                         }
-                        Text { text: modelData.category }
+                        Label { text: modelData.category }
                     }
                 }
             }
@@ -626,7 +627,7 @@ Item {
             // columns" control returns alongside per-tile sizing that
             // isn't just "fill whatever space division the grid gives it".
 
-            Text { text: "Samples"; font.bold: true }
+            Label { text: "Samples"; font.bold: true }
             // No nested Flickable here (unlike the equivalent samples list
             // elsewhere in this codebase) — this whole panel already
             // scrolls via `controlsFlickable`, and a Flickable inside
@@ -707,7 +708,7 @@ Item {
                         Layout.preferredWidth: gridFlickable.width * 0.8
                         Layout.preferredHeight: 360
 
-                        Text {
+                        Label {
                             objectName: "heatmapTileLabel_" + modelData.name
                             text: modelData.name
                             Layout.fillWidth: true

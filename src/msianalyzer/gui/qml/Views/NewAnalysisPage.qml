@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 import QtQuick.Dialogs
 
 Page {
@@ -360,7 +361,7 @@ Page {
         RowLayout {
             Layout.fillWidth: true
 
-            Text {
+            Label {
                 text: "New Analysis — " + (project ? project.name : "")
                 font.pixelSize: 16
                 font.bold: true
@@ -433,8 +434,8 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { text: "Project folder:"; Layout.preferredWidth: 160 }
-                        Text {
+                        Label { text: "Project folder:"; Layout.preferredWidth: 160 }
+                        Label {
                             objectName: "projectFolderLabel"
                             text: project ? project.folder : ""
                             Layout.fillWidth: true
@@ -444,7 +445,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { text: "Output folder:"; Layout.preferredWidth: 160 }
+                        Label { text: "Output folder:"; Layout.preferredWidth: 160 }
                         TextField {
                             id: outDirField
                             objectName: "outDirField"
@@ -459,7 +460,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { text: "Samples"; font.bold: true; Layout.fillWidth: true }
+                        Label { text: "Samples"; font.bold: true; Layout.fillWidth: true }
                         Button {
                             objectName: "addMzmlFilesButton"
                             text: "Add mzML files..."
@@ -471,11 +472,11 @@ Page {
                             onClicked: bulkXmlDialog.open()
                         }
                     }
-                    Text {
+                    Label {
                         text: "mzML and XML are picked separately and lined up by row "
                               + "order — use the ▲/▼ arrows to fix a mismatched pairing."
-                        color: "gray"
-                        font.pixelSize: 10
+                        color: Theme.mutedTextColor
+                        font.pixelSize: Theme.captionPixelSize
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                     }
@@ -487,7 +488,7 @@ Page {
                             objectName: "sampleRow_" + index
                             Layout.fillWidth: true
 
-                            Text {
+                            Label {
                                 objectName: "sampleRowMzml_" + index
                                 text: modelData.mzml === "" ? "(no mzML selected)"
                                       : newAnalysisPage.displayPath(modelData.mzml, newAnalysisPage.mzmlCommonDir)
@@ -525,7 +526,7 @@ Page {
                                     mzmlDialog.open()
                                 }
                             }
-                            Text {
+                            Label {
                                 objectName: "sampleRowXml_" + index
                                 text: modelData.xml === "" ? "(no XML selected)"
                                       : newAnalysisPage.displayPath(modelData.xml, newAnalysisPage.xmlCommonDir)
@@ -579,7 +580,7 @@ Page {
                     RowLayout {
                         Layout.fillWidth: true
                         Layout.topMargin: 12
-                        Text {
+                        Label {
                             text: "Already-parsed samples"
                             font.bold: true
                             Layout.fillWidth: true
@@ -590,12 +591,12 @@ Page {
                             onClicked: bulkDbDialog.open()
                         }
                     }
-                    Text {
+                    Label {
                         text: "Pick .db files that have already been parsed and pixel-mapped "
                               + "(e.g. from a previous run) to skip mzML/XML parsing for those "
                               + "samples — they can be mixed freely with the samples above."
-                        color: "gray"
-                        font.pixelSize: 10
+                        color: Theme.mutedTextColor
+                        font.pixelSize: Theme.captionPixelSize
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                     }
@@ -607,7 +608,7 @@ Page {
                             objectName: "dbOnlyRow_" + index
                             Layout.fillWidth: true
 
-                            Text {
+                            Label {
                                 objectName: "dbOnlyRowPath_" + index
                                 text: newAnalysisPage.displayPath(modelData, newAnalysisPage.dbOnlyCommonDir)
                                 Layout.fillWidth: true
@@ -644,10 +645,10 @@ Page {
                         width: groupTab.width
                         spacing: 8
 
-                        Text {
+                        Label {
                             objectName: "groupDescription_" + groupTab.groupKey
                             text: modelData.description
-                            color: "gray"
+                            color: Theme.mutedTextColor
                             wrapMode: Text.Wrap
                             Layout.fillWidth: true
                             Layout.bottomMargin: 8
@@ -676,7 +677,7 @@ Page {
                                 // an earlier sibling — see config_schema.py).
                                 enabled: newAnalysisPage.isFieldEnabled(groupTab.groupKey, modelData)
 
-                                Text {
+                                Label {
                                     text: modelData.label
                                     Layout.preferredWidth: 260
                                 }

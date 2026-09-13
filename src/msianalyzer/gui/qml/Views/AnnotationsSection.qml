@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 
 Item {
     id: annotationsSection
@@ -108,13 +109,13 @@ Item {
         return flat
     }
 
-    Text {
+    Label {
         id: emptyStateLabel
         objectName: "annotationsEmptyStateLabel"
         visible: rows.length === 0
         anchors.centerIn: parent
         text: "No annotated features."
-        color: "gray"
+        color: Theme.mutedTextColor
     }
 
     // A resizable split (not a fixed-fraction RowLayout — dragging the
@@ -147,7 +148,7 @@ Item {
             SplitView.minimumWidth: 240
             spacing: 8
 
-            Text {
+            Label {
                 text: "Annotated features (" + annotationsSection.rows.length + ")"
                 font.bold: true
                 font.pixelSize: 14
@@ -174,7 +175,7 @@ Item {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: annotationsSection.sortBy(modelData.key)
 
-                        Text {
+                        Label {
                             id: headerLabel
                             anchors.fill: parent
                             font.bold: true
@@ -238,7 +239,7 @@ Item {
                             radius: 4
                             color: annotationsSection.selectedFeatureId === modelData.feature_id
                                    ? palette.highlight : "transparent"
-                            border.color: "#dddddd"
+                            border.color: palette.mid
                             border.width: 1
 
                             MouseArea {
@@ -252,14 +253,14 @@ Item {
                                 anchors.margins: 8
                                 spacing: 4
 
-                                Text {
+                                Label {
                                     objectName: "annotationRowFeature_" + modelData.feature_id
                                     text: String(modelData.feature_id)
                                     Layout.preferredWidth: 70
                                     color: annotationsSection.selectedFeatureId === modelData.feature_id
                                            ? palette.highlightedText : palette.text
                                 }
-                                Text {
+                                Label {
                                     objectName: "annotationRowCompound_" + modelData.feature_id
                                     text: modelData.compound_name || modelData.inchikey || "?"
                                     elide: Text.ElideRight
@@ -267,7 +268,7 @@ Item {
                                     color: annotationsSection.selectedFeatureId === modelData.feature_id
                                            ? palette.highlightedText : palette.text
                                 }
-                                Text {
+                                Label {
                                     objectName: "annotationRowMz_" + modelData.feature_id
                                     text: modelData.mz !== null && modelData.mz !== undefined
                                           ? Number(modelData.mz).toFixed(4) : "?"
@@ -275,7 +276,7 @@ Item {
                                     color: annotationsSection.selectedFeatureId === modelData.feature_id
                                            ? palette.highlightedText : palette.text
                                 }
-                                Text {
+                                Label {
                                     objectName: "annotationRowScore_" + modelData.feature_id
                                     text: Number(modelData.best_score).toFixed(3)
                                     Layout.preferredWidth: 70
@@ -297,11 +298,11 @@ Item {
             SplitView.minimumWidth: 320
             spacing: 12
 
-            Text {
+            Label {
                 objectName: "annotationsDetailEmptyLabel"
                 visible: annotationsSection.selectedFeatureId < 0
                 text: "Click a feature to see its top hits and mirror plot."
-                color: "gray"
+                color: Theme.mutedTextColor
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
@@ -348,7 +349,7 @@ Item {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text {
+                        Label {
                             text: "Top hits:"
                             font.bold: true
                             Layout.fillWidth: true
@@ -364,11 +365,11 @@ Item {
                         }
                     }
 
-                    Text {
+                    Label {
                         objectName: "topHitsEmptyLabel"
                         visible: annotationsSection.topHits.length === 0
                         text: "No annotation hits for this feature."
-                        color: "gray"
+                        color: Theme.mutedTextColor
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -417,7 +418,7 @@ Item {
                                         onClicked: annotationsSection.selectedHit = modelData
                                     }
 
-                                    Text {
+                                    Label {
                                         objectName: "topHitLabel_" + modelData.id
                                         anchors.fill: parent
                                         anchors.leftMargin: 4
@@ -451,16 +452,16 @@ Item {
                     SplitView.minimumHeight: 60
                     spacing: 4
 
-                    Text {
+                    Label {
                         text: "Match details:"
                         font.bold: true
                     }
 
-                    Text {
+                    Label {
                         objectName: "statsEmptyLabel"
                         visible: !annotationsSection.selectedHit
                         text: "No hit selected."
-                        color: "gray"
+                        color: Theme.mutedTextColor
                     }
 
                     Flickable {
@@ -484,7 +485,7 @@ Item {
                                 objectName: "statsRepeater"
                                 model: annotationsSection.statsRows
 
-                                delegate: Text {
+                                delegate: Label {
                                     objectName: index % 2 === 0
                                                 ? "statLabel_" + Math.floor(index / 2)
                                                 : "statValue_" + Math.floor(index / 2)
@@ -513,7 +514,7 @@ Item {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text {
+                        Label {
                             text: "Mirror plot:"
                             font.bold: true
                             Layout.fillWidth: true
@@ -541,11 +542,11 @@ Item {
                         }
                     }
 
-                    Text {
+                    Label {
                         objectName: "basicPlotEmptyLabel"
                         visible: !annotationsSection.selectedHit
                         text: "No hit selected."
-                        color: "gray"
+                        color: Theme.mutedTextColor
                     }
 
                     Image {

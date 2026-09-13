@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 
 Page {
     id: runningAnalysisPage
@@ -31,7 +32,7 @@ Page {
         RowLayout {
             Layout.fillWidth: true
 
-            Text {
+            Label {
                 text: "Running Analysis — " + (project ? project.name : "")
                 font.pixelSize: 16
                 font.bold: true
@@ -62,11 +63,11 @@ Page {
                     Layout.fillWidth: true
                     objectName: "stepRow_" + modelData
 
-                    Text {
+                    Label {
                         text: modelData
                         Layout.preferredWidth: 220
                     }
-                    Text {
+                    Label {
                         objectName: "stepStatus_" + modelData
                         text: stepStatuses[modelData] || "pending"
                     }
@@ -74,12 +75,12 @@ Page {
             }
         }
 
-        Text {
+        Label {
             id: errorText
             objectName: "errorText"
             visible: errorMessage !== ""
             text: "Failed: " + errorMessage
-            color: "red"
+            color: Theme.errorColor
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }

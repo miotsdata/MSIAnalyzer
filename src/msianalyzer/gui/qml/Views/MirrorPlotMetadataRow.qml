@@ -1,5 +1,7 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 
 // One label/value pair in MirrorPlotDetailWindow's metadata side table.
 // A plain reusable type instead of a Repeater over a JS array — this
@@ -16,12 +18,12 @@ ColumnLayout {
     Layout.fillWidth: true
     spacing: 0
 
-    Text {
+    Label {
         id: labelText
-        color: "gray"
-        font.pixelSize: 10
+        color: Theme.mutedTextColor
+        font.pixelSize: Theme.captionPixelSize
     }
-    Text {
+    Label {
         id: valueText
         wrapMode: Text.Wrap
         Layout.fillWidth: true

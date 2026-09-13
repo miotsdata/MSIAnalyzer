@@ -59,6 +59,36 @@ def test_populated_state_shows_run_rows(project_home_view, project_with_runs):
     assert button.property("visible") is True
 
 
+def test_project_name_label_is_bold_not_hardcoded_blue(project_home_view, project):
+    # Regression check for the "blue" leftover from early scaffolding
+    # (reported hard to read against the new dark palette, 2026-09-14) —
+    # the title should now be a bold, theme-following heading instead of
+    # an explicit color.
+    from PySide6.QtGui import QColor
+
+    model = ProjectModel(project, "/tmp/proj")
+    view = project_home_view(model)
+    root = view.rootObject()
+
+    label = root.findChild(QQuickItem, "projectNameLabel")
+    assert label.property("font").bold() is True
+    assert label.property("color") != QColor("blue")
+
+
+def test_empty_state_label_uses_theme_muted_text_color(project_home_view, project):
+    # Style/Theme.qml singleton (2026-09-14) — secondary/hint text should
+    # read from Theme.mutedTextColor, not a hardcoded "gray" literal, so a
+    # future palette change only needs one edit.
+    from PySide6.QtGui import QColor
+
+    model = ProjectModel(project, "/tmp/proj")
+    view = project_home_view(model)
+    root = view.rootObject()
+
+    empty_label = root.findChild(QQuickItem, "emptyStateLabel")
+    assert empty_label.property("color") == QColor("#808080")
+
+
 def test_run_row_shows_date_out_dir_and_config_path(
     project_home_view, project_with_runs, find_visual_child
 ):

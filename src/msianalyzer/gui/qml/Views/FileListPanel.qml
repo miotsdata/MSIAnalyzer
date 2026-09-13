@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 
 // A titled, bordered panel listing filenames (not full paths) — used for
 // Project Home's mzML/xml file lists (ProjectHomePage.qml), which are
@@ -26,17 +27,17 @@ Rectangle {
         anchors.margins: 10
         spacing: 6
 
-        Text {
+        Label {
             objectName: "fileListPanelTitle_" + fileListPanel.kind
             text: fileListPanel.title + " (" + fileListPanel.files.length + ")"
             font.bold: true
         }
 
-        Text {
+        Label {
             objectName: "fileListPanelEmptyLabel_" + fileListPanel.kind
             visible: fileListPanel.files.length === 0
             text: fileListPanel.emptyText
-            color: "gray"
+            color: Theme.mutedTextColor
         }
 
         Flickable {
@@ -58,7 +59,7 @@ Rectangle {
                     objectName: "fileListPanelRepeater_" + fileListPanel.kind
                     model: fileListPanel.files
 
-                    delegate: Text {
+                    delegate: Label {
                         Layout.fillWidth: true
                         text: modelData
                         elide: Text.ElideMiddle

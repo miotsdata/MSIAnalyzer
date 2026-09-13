@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "qrc:/Style"
 import QtWebEngine
 import QtWebChannel
 
@@ -61,13 +62,13 @@ Item {
         }
     }
 
-    Text {
+    Label {
         id: emptyStateLabel
         objectName: "ms1EmptyStateLabel"
         visible: ms1Section.samples.length === 0
         anchors.centerIn: parent
         text: "No samples in this analysis."
-        color: "gray"
+        color: Theme.mutedTextColor
     }
 
     // A 2-row layout, not 2 columns — MS1 spectra want to be wide, so the
@@ -100,11 +101,11 @@ Item {
             height: 220
             spacing: 10
 
-            Text {
+            Label {
                 objectName: "detailEmptyLabel"
                 visible: !ms1Section.featureDetail
                 text: "Click a peak to see details."
-                color: "gray"
+                color: Theme.mutedTextColor
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
@@ -116,7 +117,7 @@ Item {
                 Layout.fillWidth: true
                 spacing: 20
 
-                Text {
+                Label {
                     objectName: "detailFeatureId"
                     text: ms1Section.featureDetail
                           ? ("Feature " + ms1Section.featureDetail.feature_id
@@ -125,7 +126,7 @@ Item {
                     font.bold: true
                     wrapMode: Text.Wrap
                 }
-                Text {
+                Label {
                     objectName: "detailNMs2"
                     text: ms1Section.featureDetail ? ("MS2 scans: " + ms1Section.featureDetail.n_ms2) : ""
                 }
@@ -150,19 +151,19 @@ Item {
                     Layout.fillHeight: true
                     spacing: 4
 
-                    Text {
+                    Label {
                         text: "Present in:"
                         font.bold: true
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
 
-                    Text {
+                    Label {
                         objectName: "samplesPresentEmptyLabel"
                         visible: ms1Section.featureDetail
                                  && ms1Section.featureDetail.samples_present.length === 0
                         text: "none"
-                        color: "gray"
+                        color: Theme.mutedTextColor
                     }
 
                     Flickable {
@@ -187,7 +188,7 @@ Item {
                                 objectName: "samplesPresentRepeater"
                                 model: ms1Section.featureDetail ? ms1Section.featureDetail.samples_present : []
 
-                                delegate: Text {
+                                delegate: Label {
                                     objectName: "samplesPresentItem_" + index
                                     text: modelData
                                     elide: Text.ElideMiddle
@@ -216,19 +217,19 @@ Item {
                     Layout.fillHeight: true
                     spacing: 4
 
-                    Text {
+                    Label {
                         text: "Absent / filtered out in:"
                         font.bold: true
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
 
-                    Text {
+                    Label {
                         objectName: "samplesAbsentEmptyLabel"
                         visible: ms1Section.featureDetail
                                  && ms1Section.featureDetail.samples_absent.length === 0
                         text: "none"
-                        color: "gray"
+                        color: Theme.mutedTextColor
                     }
 
                     Flickable {
@@ -253,7 +254,7 @@ Item {
                                 objectName: "samplesAbsentRepeater"
                                 model: ms1Section.featureDetail ? ms1Section.featureDetail.samples_absent : []
 
-                                delegate: Text {
+                                delegate: Label {
                                     objectName: "samplesAbsentItem_" + index
                                     text: modelData
                                     elide: Text.ElideMiddle
@@ -281,7 +282,7 @@ Item {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text {
+                        Label {
                             text: "Top hits:"
                             font.bold: true
                             elide: Text.ElideRight
@@ -304,11 +305,11 @@ Item {
                         }
                     }
 
-                    Text {
+                    Label {
                         objectName: "detailNoAnnotationLabel"
                         visible: ms1Section.featureDetail && ms1Section.featureDetail.top_hits.length === 0
                         text: "No annotation for this feature."
-                        color: "gray"
+                        color: Theme.mutedTextColor
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -334,7 +335,7 @@ Item {
                                 objectName: "topHitsRepeater"
                                 model: ms1Section.featureDetail ? ms1Section.featureDetail.top_hits : []
 
-                                delegate: Text {
+                                delegate: Label {
                                     objectName: "topHit_" + index
                                     // Score bolded ("so easy to see") via
                                     // StyledText — compound_name/inchikey/
@@ -366,7 +367,7 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
 
-                Text { text: "Sample:" }
+                Label { text: "Sample:" }
                 ComboBox {
                     id: sampleCombo
                     objectName: "sampleCombo"
