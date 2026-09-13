@@ -10,6 +10,7 @@ LoadingOverlay 1.0 LoadingOverlay.qml
 SummarySection 1.0 SummarySection.qml
 AnnotationsSection 1.0 AnnotationsSection.qml
 MirrorPlotDetailWindow 1.0 MirrorPlotDetailWindow.qml
+MirrorPlotMetadataRow 1.0 MirrorPlotMetadataRow.qml
 MS1SpectraSection 1.0 MS1SpectraSection.qml
 VisualInspectionSection 1.0 VisualInspectionSection.qml
 ZoomableImage 1.0 ZoomableImage.qml

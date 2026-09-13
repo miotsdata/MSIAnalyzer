@@ -323,6 +323,39 @@ class Plotter:
             },
         }
 
+    def get_annotation_metadata(self, analysis_db_path: Path | str, annotation_id: int) -> dict:
+        """Display metadata for one `ms2_annotations` row — compound
+        identity, scores, coverage, and peak counts — split out from
+        `get_annotation_spectra` because none of these fields depend on
+        `emp_source`/`lib_source`. The GUI's mirror-plot detail window uses
+        this for its side metadata table, so it doesn't need to resolve or
+        reconstruct any spectra (a potentially slow raw re-read) just to
+        show numbers that never change with the source toggle.
+
+        Returns:
+            `{"compound_name", "compound_formula", "inchikey",
+            "library_name", "score", "dot_product_score", "coverage_score",
+            "lib_coverage", "emp_coverage", "n_matched_peaks",
+            "n_lib_peaks", "n_emp_peaks_raw", "n_emp_peaks_filtered",
+            "scan_id", "precursor_mz", "fragment_ppm_tolerance"}`.
+
+        Raises:
+            ValueError: No such annotation.
+        """
+        ann = self._fetch_annotation(analysis_db_path, annotation_id)
+        fragment_ppm_tolerance, _ = self._resolve_annotate_args(
+            analysis_db_path, ann["command_id"]
+        )
+        return {
+            key: ann[key]
+            for key in (
+                "compound_name", "compound_formula", "inchikey", "library_name",
+                "score", "dot_product_score", "coverage_score", "lib_coverage",
+                "emp_coverage", "n_matched_peaks", "n_lib_peaks", "n_emp_peaks_raw",
+                "n_emp_peaks_filtered", "scan_id", "precursor_mz",
+            )
+        } | {"fragment_ppm_tolerance": fragment_ppm_tolerance}
+
     @log_call
     def plot_ms2_annotation(
         self,
@@ -477,20 +510,21 @@ class Plotter:
 
         fig.add_hline(y=0, line_width=1, line_color="black")
 
+        # The score/coverage/peak-count breakdown and scan/precursor/library
+        # identifiers used to be packed into this title plus a corner
+        # annotation box — moved to a dedicated side table in the GUI's
+        # mirror-plot detail window instead (ADR — see
+        # gui/qml/Views/MirrorPlotDetailWindow.qml), so the title now only
+        # names what's plotted; the raw/filtered source note stays here
+        # since it directly describes what the two curves below actually
+        # show, not identity/score metadata.
         source_note = (
             f"  ·  empirical: {emp_source}, library: {lib_source}"
             if (emp_source, lib_source) != ("filtered", "filtered")
             else ""
         )
         auto_title = title or (
-            f"{ann['compound_name']}  ({ann['compound_formula']})  ·  "
-            f"score={ann['score']:.4f}  "
-            f"dp={ann['dot_product_score']:.4f}  "
-            f"lib_cov={ann['lib_coverage']:.2f}  "
-            f"emp_cov={ann['emp_coverage']:.2f}  ·  "
-            f"{ann['n_matched_peaks']}/{ann['n_lib_peaks']} lib peaks  "
-            f"{ann['n_emp_peaks_filtered']}/{ann['n_emp_peaks_raw']} emp peaks"
-            f"{source_note}"
+            f"{ann['compound_name']}  ({ann['compound_formula']}){source_note}"
         )
 
         fig.update_layout(
@@ -512,30 +546,26 @@ class Plotter:
                 orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
             ),
             hovermode="x unified",
-            margin=dict(t=100, b=50, l=60, r=20),
+            margin=dict(t=70, b=50, l=60, r=20),
         )
 
-        # Metadata box
-        precursor_text = (
-            f"precursor m/z {ann['precursor_mz']:.4f}  ·  "
-            if ann["precursor_mz"] is not None
-            else ""
+        # Which mirrored half is which — bars pointing up (direction=1) are
+        # always empirical, down (direction=-1) always library (see
+        # _add_bars calls above); label both explicitly since the y-axis
+        # itself is just a symmetric "Normalised intensity" scale with no
+        # indication otherwise.
+        fig.add_annotation(
+            xref="paper", yref="paper", x=0.99, y=0.97,
+            xanchor="right", yanchor="top",
+            text="Empirical", showarrow=False,
+            font=dict(size=11, color="#333333"),
+            bgcolor="rgba(255,255,255,0.7)",
         )
         fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=0.01,
-            y=0.97,
-            xanchor="left",
-            yanchor="top",
-            text=(
-                f"scan {ann['scan_id']}  ·  "
-                f"{precursor_text}"
-                f"library: {ann['library_name'] or '?'}  ·  "
-                f"InChIKey: {ann['inchikey']}"
-            ),
-            showarrow=False,
-            font=dict(size=10, color="#555555"),
+            xref="paper", yref="paper", x=0.99, y=0.03,
+            xanchor="right", yanchor="bottom",
+            text="Library", showarrow=False,
+            font=dict(size=11, color="#333333"),
             bgcolor="rgba(255,255,255,0.7)",
         )
 

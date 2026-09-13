@@ -286,6 +286,31 @@ def test_detail_window_loads_full_plotly_mirror_plot(
     )
 
 
+def test_detail_window_shows_metadata_table_next_to_the_plot(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _select_feature_7(view, root, find_visual_child, qtbot)
+    _click(view, find_visual_child(root, "mirrorPlotDetailsButton"), qtbot)
+
+    detail_window = root.findChild(QObject, "mirrorPlotDetailWindow")
+    qtbot.waitUntil(
+        lambda: detail_window.property("metadata").get("compound_name") == "Caffeine",
+        timeout=5000,
+    )
+
+    panel = detail_window.findChild(QObject, "detailMetadataPanel")
+    assert panel is not None
+    assert "Caffeine" in detail_window.findChild(QObject, "detailMetadataCompound").property("text")
+    assert detail_window.findChild(QObject, "detailMetadataInchikey").property("text") == (
+        "RYYVLZVUVIJVGH-UHFFFAOYSA-N"
+    )
+    assert detail_window.findChild(QObject, "detailMetadataLibrary").property("text") == "my_library"
+    assert detail_window.findChild(QObject, "detailMetadataScore").property("text") == "0.8700"
+    assert detail_window.findChild(QObject, "detailMetadataScanId").property("text") == "42"
+
+
 def test_detail_window_reloads_on_source_toggle(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):

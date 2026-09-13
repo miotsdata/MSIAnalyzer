@@ -5,9 +5,11 @@ import QtQuick.Window
 import QtWebEngine
 
 // The full interactive (Plotly) mirror plot — matched/unmatched
-// coloring, hover tooltips, connector lines, all the metadata in the
-// plot's own title/annotation box — plus the raw/filtered source
-// toggles, in a separate top-level window rather than embedded inline.
+// coloring, hover tooltips, connector lines, "Empirical"/"Library" side
+// labels on the plot itself — next to a metadata table (compound
+// identity, scores, coverage, peak counts; see the MirrorPlotMetadataRow
+// instances below) and the raw/filtered source toggles, in a separate
+// top-level window rather than embedded inline.
 // AnnotationsSection.qml's own panel only ever shows the fast, always-
 // filtered static raster plot (AnalysisBridge.getBasicMirrorPlotImage);
 // this window is what its "Details" button opens, and is the only place
@@ -34,9 +36,37 @@ Window {
     property string empSource: "filtered"
     property string libSource: "filtered"
     property bool plotLoading: false
+    // Compound identity/score/coverage/peak-count fields — rendered as a
+    // side table next to the plot (see the MirrorPlotMetadataRow instances
+    // below) instead of packed into the plot's own title/corner
+    // annotation. Independent of empSource/libSource, so fetched once per
+    // annotation, not per toggle.
+    property var metadata: ({})
+
+    // Formatters for the side table's fields (MirrorPlotMetadataRow
+    // instances below) — a fixed set of rows, not a Repeater over a JS
+    // array: this codebase's test harness has a confirmed fragility with
+    // locating Repeater-created items by objectName (see conftest.py's
+    // `find_visual_child` docstring), and the field set here never varies
+    // in length, so a Repeater buys nothing.
+    function fmtFloat(v, digits) {
+        return (v === undefined || v === null) ? "—" : Number(v).toFixed(digits)
+    }
+    function fmtInt(v) {
+        return (v === undefined || v === null) ? "—" : String(v)
+    }
+    readonly property string compoundText: {
+        var m = detailWindow.metadata || {}
+        var text = m.compound_name || "—"
+        if (m.compound_formula)
+            text += "  (" + m.compound_formula + ")"
+        return text
+    }
 
     function refresh() {
         if (analysisDbPath && annotationId >= 0) {
+            detailWindow.metadata = AnalysisBridge.getAnnotationMetadata(
+                detailWindow.analysisDbPath, detailWindow.annotationId)
             detailWindow.plotLoading = true
             AnalysisBridge.requestMirrorPlot(
                 detailWindow.analysisDbPath, detailWindow.annotationId,
@@ -101,23 +131,99 @@ Window {
             Item { Layout.fillWidth: true }
         }
 
-        Item {
+        RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            spacing: 12
 
-            WebEngineView {
-                id: mirrorPlotView
-                objectName: "detailMirrorPlotView"
-                anchors.fill: parent
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                WebEngineView {
+                    id: mirrorPlotView
+                    objectName: "detailMirrorPlotView"
+                    anchors.fill: parent
+                }
+
+                // A raw source can mean slow/remote file I/O (see
+                // AnalysisBridge.requestMirrorPlot) — this is the visible
+                // sign that it's in flight, not a frozen window.
+                LoadingOverlay {
+                    objectName: "detailLoadingOverlay"
+                    anchors.fill: parent
+                    visible: detailWindow.plotLoading
+                }
             }
 
-            // A raw source can mean slow/remote file I/O (see
-            // AnalysisBridge.requestMirrorPlot) — this is the visible
-            // sign that it's in flight, not a frozen window.
-            LoadingOverlay {
-                objectName: "detailLoadingOverlay"
-                anchors.fill: parent
-                visible: detailWindow.plotLoading
+            // Score/coverage/peak-count/identity table, next to the plot
+            // instead of packed into its title/corner annotation.
+            ColumnLayout {
+                id: metadataPanel
+                objectName: "detailMetadataPanel"
+                Layout.preferredWidth: 260
+                Layout.fillHeight: true
+                Layout.alignment: Qt.AlignTop
+                spacing: 8
+
+                Text { text: "Details"; font.bold: true }
+
+                MirrorPlotMetadataRow {
+                    label: "Compound"; valueObjectName: "detailMetadataCompound"
+                    value: detailWindow.compoundText
+                }
+                MirrorPlotMetadataRow {
+                    label: "InChIKey"; valueObjectName: "detailMetadataInchikey"
+                    value: detailWindow.metadata.inchikey || "—"
+                }
+                MirrorPlotMetadataRow {
+                    label: "Library"; valueObjectName: "detailMetadataLibrary"
+                    value: detailWindow.metadata.library_name || "—"
+                }
+                MirrorPlotMetadataRow {
+                    label: "Score"; valueObjectName: "detailMetadataScore"
+                    value: detailWindow.fmtFloat(detailWindow.metadata.score, 4)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Dot product"; valueObjectName: "detailMetadataDotProduct"
+                    value: detailWindow.fmtFloat(detailWindow.metadata.dot_product_score, 4)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Coverage score"; valueObjectName: "detailMetadataCoverageScore"
+                    value: detailWindow.fmtFloat(detailWindow.metadata.coverage_score, 4)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Library coverage"; valueObjectName: "detailMetadataLibCoverage"
+                    value: detailWindow.fmtFloat(detailWindow.metadata.lib_coverage, 2)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Empirical coverage"; valueObjectName: "detailMetadataEmpCoverage"
+                    value: detailWindow.fmtFloat(detailWindow.metadata.emp_coverage, 2)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Matched / library peaks"; valueObjectName: "detailMetadataMatchedPeaks"
+                    value: detailWindow.fmtInt(detailWindow.metadata.n_matched_peaks) + " / "
+                           + detailWindow.fmtInt(detailWindow.metadata.n_lib_peaks)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Empirical peaks (filtered/raw)"; valueObjectName: "detailMetadataEmpPeaks"
+                    value: detailWindow.fmtInt(detailWindow.metadata.n_emp_peaks_filtered) + " / "
+                           + detailWindow.fmtInt(detailWindow.metadata.n_emp_peaks_raw)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Scan ID"; valueObjectName: "detailMetadataScanId"
+                    value: detailWindow.fmtInt(detailWindow.metadata.scan_id)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Precursor m/z"; valueObjectName: "detailMetadataPrecursorMz"
+                    value: detailWindow.fmtFloat(detailWindow.metadata.precursor_mz, 4)
+                }
+                MirrorPlotMetadataRow {
+                    label: "Fragment tolerance"; valueObjectName: "detailMetadataFragmentTolerance"
+                    value: detailWindow.fmtFloat(detailWindow.metadata.fragment_ppm_tolerance, 1) + " ppm"
+                }
+
+                Item { Layout.fillHeight: true }
             }
         }
     }

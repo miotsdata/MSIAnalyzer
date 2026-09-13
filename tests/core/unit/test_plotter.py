@@ -178,26 +178,48 @@ def test_plot_ms2_annotation_builds_mirror_plot(tmp_path):
     assert isinstance(fig, go.Figure)
     assert len(fig.data) > 0
     assert "Caffeine" in fig.layout.title.text
-    assert "score=0.8700" in fig.layout.title.text
 
-    # metadata annotation box mentions scan, precursor, library, inchikey
-    ann_text = fig.layout.annotations[0].text
-    assert "scan 42" in ann_text
-    assert "precursor m/z 150.1234" in ann_text
-    assert "my_library" in ann_text
-    assert "RYYVLZVUVIJVGH-UHFFFAOYSA-N" in ann_text
+    # Which mirrored half is which — score/scan/precursor/library metadata
+    # moved to AnalysisBridge.getAnnotationMetadata's side table instead
+    # (see test_get_annotation_metadata_* below).
+    annotation_texts = [a.text for a in fig.layout.annotations]
+    assert "Empirical" in annotation_texts
+    assert "Library" in annotation_texts
 
 
-def test_plot_ms2_annotation_missing_precursor_omits_it_gracefully(tmp_path):
+def test_get_annotation_metadata_returns_scores_and_identifiers(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    annotation_id = _insert_annotation(db)
+
+    meta = Plotter().get_annotation_metadata(db, annotation_id)
+
+    assert meta["compound_name"] == "Caffeine"
+    assert meta["score"] == pytest.approx(0.8700, abs=1e-4)
+    assert meta["scan_id"] == 42
+    assert meta["precursor_mz"] == pytest.approx(150.1234, abs=1e-4)
+    assert meta["library_name"] == "my_library"
+    assert meta["inchikey"] == "RYYVLZVUVIJVGH-UHFFFAOYSA-N"
+    assert meta["fragment_ppm_tolerance"] == 10.0  # class default, no commands row
+
+
+def test_get_annotation_metadata_missing_precursor_is_none(tmp_path):
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
     annotation_id = _insert_annotation(db, with_precursor=False)
 
-    fig = Plotter().plot_ms2_annotation(db, annotation_id)
+    meta = Plotter().get_annotation_metadata(db, annotation_id)
 
-    ann_text = fig.layout.annotations[0].text
-    assert "precursor m/z" not in ann_text
-    assert "scan 42" in ann_text
+    assert meta["precursor_mz"] is None
+    assert meta["scan_id"] == 42
+
+
+def test_get_annotation_metadata_raises_for_unknown_id(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    with pytest.raises(ValueError, match="No annotation found"):
+        Plotter().get_annotation_metadata(db, 999)
 
 
 def test_plot_ms2_annotation_raises_without_stored_spectra(tmp_path):

@@ -29,6 +29,25 @@ _EMPTY_SUMMARY = {
     "n_distinct_compounds": 0,
 }
 
+_EMPTY_ANNOTATION_METADATA = {
+    "compound_name": "",
+    "compound_formula": "",
+    "inchikey": "",
+    "library_name": "",
+    "score": None,
+    "dot_product_score": None,
+    "coverage_score": None,
+    "lib_coverage": None,
+    "emp_coverage": None,
+    "n_matched_peaks": None,
+    "n_lib_peaks": None,
+    "n_emp_peaks_raw": None,
+    "n_emp_peaks_filtered": None,
+    "scan_id": None,
+    "precursor_mz": None,
+    "fragment_ppm_tolerance": None,
+}
+
 
 def _dataframe_to_records(df: pd.DataFrame) -> list:
     """`df.to_dict("records")`, scrubbed for QML: numpy scalars -> native
@@ -349,6 +368,35 @@ class AnalysisBridge(QObject):
                 "+A8AAQUBAScY42YAAAAASUVORK5CYII="
             )
         return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+    @Slot(str, int, result=dict)
+    def getAnnotationMetadata(self, analysis_db_path: str, annotation_id: int) -> dict:
+        """Compound identity/score/coverage/peak-count fields for one
+        `ms2_annotations` row — the mirror-plot detail window's side
+        table (`MirrorPlotDetailWindow.qml`), kept next to the plot
+        instead of packed into its title/corner annotation.
+
+        Always synchronous, like `getBasicMirrorPlotImage`: these fields
+        are plain columns (plus one resolved config value), independent
+        of `emp_source`/`lib_source`, so nothing here touches a raw
+        per-sample database or library file.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            annotation_id: Primary key in `ms2_annotations`.
+
+        Returns:
+            See `Plotter.get_annotation_metadata`; an all-empty/None dict
+            (same shape) when `analysis_db_path` doesn't exist or
+            `annotation_id` isn't found.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return dict(_EMPTY_ANNOTATION_METADATA)
+        try:
+            return Plotter().get_annotation_metadata(analysis_db_path, annotation_id)
+        except ValueError as e:
+            logger.warning("annotation metadata for id %s failed: %s", annotation_id, e)
+            return dict(_EMPTY_ANNOTATION_METADATA)
 
     @Slot(str, int, str, str)
     def requestMirrorPlot(

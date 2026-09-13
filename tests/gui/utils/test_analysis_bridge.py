@@ -334,6 +334,42 @@ def test_get_basic_mirror_plot_image_returns_placeholder_for_unknown_id(tmp_path
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_get_annotation_metadata_returns_scores_and_identifiers(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+
+    bridge = AnalysisBridge()
+    meta = bridge.getAnnotationMetadata(str(db_path), 1)
+
+    assert meta["compound_name"] == "Caffeine"
+    assert meta["compound_formula"] == "C8H10N4O2"
+    assert meta["library_name"] == "my_library"
+    assert meta["score"] == 0.87
+    assert meta["scan_id"] == 42
+    assert meta["precursor_mz"] == 150.1234
+    assert meta["fragment_ppm_tolerance"] == 10.0  # class default, no commands row
+
+
+def test_get_annotation_metadata_unknown_id_returns_empty_dict(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    meta = bridge.getAnnotationMetadata(str(db_path), 999)
+
+    assert meta["compound_name"] == ""
+    assert meta["score"] is None
+
+
+def test_get_annotation_metadata_missing_db_returns_empty_dict(tmp_path):
+    bridge = AnalysisBridge()
+    meta = bridge.getAnnotationMetadata(str(tmp_path / "does_not_exist.db"), 1)
+
+    assert meta["compound_name"] == ""
+    assert meta["scan_id"] is None
+
+
 def test_get_samples_returns_every_sample(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
