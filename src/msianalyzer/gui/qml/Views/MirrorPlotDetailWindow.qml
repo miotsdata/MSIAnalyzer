@@ -131,14 +131,31 @@ Window {
             Item { Layout.fillWidth: true }
         }
 
-        RowLayout {
+        // A resizable SplitView, not a plain RowLayout — a RowLayout here
+        // left the WebEngineView pane with an unreliable/zero effective
+        // size in the real app (Plotly then computed nonsensical
+        // "-Infinity" text positions, and the metadata panel visually
+        // overlapped the plot instead of sitting in its own column) even
+        // though it measured fine under the offscreen test platform. Same
+        // SplitView-with-explicit-cross-axis-height fix already proven for
+        // AnnotationsSection.qml's own panes (see its detailSplit/
+        // tablePanel/detailPanel comments) — each pane's `height:` is
+        // bound explicitly rather than relying on the SplitView to
+        // auto-fill it, a confirmed real-app SplitView quirk, not
+        // something a specific property change here caused.
+        SplitView {
+            id: detailContentSplit
+            objectName: "detailContentSplit"
+            orientation: Qt.Horizontal
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 12
 
             Item {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+                id: plotPane
+                objectName: "detailPlotPane"
+                height: detailContentSplit.height
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 300
 
                 WebEngineView {
                     id: mirrorPlotView
@@ -161,9 +178,9 @@ Window {
             ColumnLayout {
                 id: metadataPanel
                 objectName: "detailMetadataPanel"
-                Layout.preferredWidth: 260
-                Layout.fillHeight: true
-                Layout.alignment: Qt.AlignTop
+                height: detailContentSplit.height
+                SplitView.preferredWidth: 280
+                SplitView.minimumWidth: 220
                 spacing: 8
 
                 Text { text: "Details"; font.bold: true }
