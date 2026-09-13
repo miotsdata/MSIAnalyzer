@@ -53,41 +53,31 @@ ApplicationWindow {
     // an explicit palette is needed at all (Fusion otherwise follows the
     // host desktop's GTK theme).
     //
-    // Deliberately mid-dark neutral gray (VS Code/Adobe-panel territory,
-    // #2d2d30 window / #252526 base), not the near-black tried earlier —
-    // that one was reported "too dark". `base`/`alternateBase` sit a shade
-    // darker than `window` so input fields and table rows read as
-    // recessed against the surrounding chrome, and `light`/`midlight`/
-    // `mid`/`dark` step in even increments so borders and pressed/hover
-    // states have real visual depth instead of everything sitting at the
-    // same flat gray. `highlight` is a restrained blue rather than an
-    // Adobe-brand color — this app isn't Adobe-branded, just aiming for
-    // the same "serious creative/analysis tool" register.
-    //
-    // window/alternateBase/highlight read from Style/Theme.qml's
-    // backgroundColor/secondaryColor/primaryColor — those three are the
-    // ones anything outside this block also needs to reference by name
-    // (e.g. a card background), so Theme is their source of truth, not
-    // this block. Every other role below has no outside consumer yet, so
-    // it's still just a literal here.
+    // Every role below reads from Style/Theme.qml — this block itself no
+    // longer carries a single literal color (2026-09-15; it used to, for
+    // every role beyond window/alternateBase/highlight). Theme is now the
+    // one place the app's whole color scheme lives, which is also what
+    // makes a future light/dark toggle cheap: it becomes a property on
+    // Theme, this block never needs to change again. See Theme.qml's own
+    // comments for what each token means and the exact hex values.
     palette {
         window: Theme.backgroundColor
-        windowText: "#e0e0e0"
-        base: "#252526"
+        windowText: Theme.textColor
+        base: Theme.fieldColor
         alternateBase: Theme.secondaryColor
-        text: "#e0e0e0"
-        button: "#3c3c3c"
-        buttonText: "#e0e0e0"
-        toolTipBase: "#3c3c3c"
-        toolTipText: "#e0e0e0"
-        placeholderText: "#8a8a8a"
+        text: Theme.textColor
+        button: Theme.controlColor
+        buttonText: Theme.textColor
+        toolTipBase: Theme.controlColor
+        toolTipText: Theme.textColor
+        placeholderText: Theme.placeholderTextColor
         highlight: Theme.primaryColor
-        highlightedText: "#ffffff"
-        light: "#4a4a4a"
-        midlight: "#414141"
-        mid: "#2a2a2a"
-        dark: "#1e1e1e"
-        shadow: "#000000"
+        highlightedText: Theme.highlightedTextColor
+        light: Theme.lightColor
+        midlight: Theme.midlightColor
+        mid: Theme.borderColor
+        dark: Theme.darkColor
+        shadow: Theme.shadowColor
 
         // The "Disabled" QPalette group — left unset, Qt derives it from
         // the "Active" colors above using an algorithm tuned for a light
