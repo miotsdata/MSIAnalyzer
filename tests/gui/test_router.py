@@ -221,13 +221,32 @@ def test_project_menu_new_project_opens_create_project_page(
 
 def test_analyses_menu_disabled_without_a_current_project(application, engine):
     window = engine.rootObjects()[0]
+    analyses_menu = window.findChild(QObject, "analysesMenu")
     new_item = window.findChild(QObject, "newAnalysisMenuItem")
     open_menu = window.findChild(QObject, "openAnalysisMenu")
     close_item = window.findChild(QObject, "closeProjectMenuItem")
 
+    # The whole top-level entry is disabled, not just its children — it
+    # can't do anything at all without an open project, so it shouldn't
+    # even be openable.
+    assert analyses_menu.property("enabled") is False
     assert new_item.property("enabled") is False
     assert open_menu.property("enabled") is False
     assert close_item.property("enabled") is False
+
+
+def test_analyses_menu_enabled_once_a_project_is_open(
+    application, project, engine, qtbot
+):
+    window = engine.rootObjects()[0]
+    analyses_menu = window.findChild(QObject, "analysesMenu")
+    assert analyses_menu.property("enabled") is False
+
+    project_model = ProjectModel(project, "/tmp/proj", application)
+    application.router.showProjectHomeRequested.emit(project_model)
+    qtbot.wait(100)
+
+    assert analyses_menu.property("enabled") is True
 
 
 def test_project_menu_close_project_returns_to_start_and_clears_state(

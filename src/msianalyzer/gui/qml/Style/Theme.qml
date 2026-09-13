@@ -8,12 +8,14 @@ import QtQuick
 // (2026-09-14) — this exists so the next palette change doesn't require
 // hunting down every hardcoded hex again.
 //
-// `backgroundColor`/`secondaryColor`/`primaryColor` are the three named
-// tokens most design systems call "background/secondary/primary" — Main.qml's
-// ApplicationWindow `palette {}` block reads all three of *these*
-// (`window: Theme.backgroundColor`, `alternateBase: Theme.secondaryColor`,
-// `highlight: Theme.primaryColor`) rather than the other way around, so
-// THIS file is the one true source of truth for them, not a mirror of it.
+// `backgroundColor`/`secondaryColor`/`primaryColor`/`disabledTextColor`
+// are the named tokens most design systems call "background/secondary/
+// primary" (plus a disabled-state color) — Main.qml's ApplicationWindow
+// `palette {}` block reads all of *these* (`window: Theme.backgroundColor`,
+// `alternateBase: Theme.secondaryColor`, `highlight: Theme.primaryColor`,
+// `disabled.windowText: Theme.disabledTextColor`, ...) rather than the
+// other way around, so THIS file is the one true source of truth for
+// them, not a mirror of it.
 // Every other palette role (`base`/`button`/`text`/border shades/...) is
 // still just set directly in Main.qml's palette block — only promoted to
 // a named Theme token here once something outside that block needs to
@@ -42,6 +44,15 @@ QtObject {
     // specifically for TextField placeholder text, not general secondary
     // body text, hence a separate token.
     readonly property color mutedTextColor: "#808080"
+
+    // Text/icon color for a *disabled* control (e.g. a menu item that
+    // can't be used without an open project) — dimmer than
+    // `mutedTextColor`, which is still meant to be read normally, not to
+    // signal "unavailable". Main.qml's palette `disabled` group reads
+    // this (`palette.disabled.windowText`/`.buttonText`/`.text`), so
+    // every Control's own automatic disabled-state rendering already
+    // uses it without needing to reference `Theme` directly.
+    readonly property color disabledTextColor: "#6a6a6a"
 
     // Error/failure text (e.g. a run's "Failed: ..." message). No QPalette
     // role covers semantic error state.

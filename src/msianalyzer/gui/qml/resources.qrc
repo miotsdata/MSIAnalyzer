@@ -4,6 +4,7 @@
         <file>Main/qmldir</file>
         <file>Style/qmldir</file>
         <file>Style/Theme.qml</file>
+        <file>Style/AppMenuItem.qml</file>
         <file>Views/qmldir</file>
         <file>Views/StartPage.qml</file>
         <file>Views/ProjectHomePage.qml</file>

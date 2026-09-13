@@ -88,6 +88,16 @@ ApplicationWindow {
         mid: "#2a2a2a"
         dark: "#1e1e1e"
         shadow: "#000000"
+
+        // The "Disabled" QPalette group — left unset, Qt derives it from
+        // the "Active" colors above using an algorithm tuned for a light
+        // palette, which read poorly (too close to the enabled color, or
+        // just wrong-looking) once the app went dark. Explicit here so a
+        // disabled control (e.g. "Analyses" with no project open) reads
+        // as clearly unavailable rather than merely a bit dimmer.
+        disabled.windowText: Theme.disabledTextColor
+        disabled.buttonText: Theme.disabledTextColor
+        disabled.text: Theme.disabledTextColor
     }
 
     // In-window (not native/OS) menu bar — consistent across platforms,
@@ -96,29 +106,58 @@ ApplicationWindow {
     menuBar: MenuBar {
         objectName: "mainMenuBar"
 
+        // A clear line under the whole bar, separating it from the page
+        // content below — reported unclear otherwise ("menubar should be
+        // clear... have maybe a line below it", 2026-09-14).
+        background: Rectangle {
+            color: palette.window
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: palette.mid
+            }
+        }
+
+        // Each top-level entry (Project/Analyses/Help) gets its own
+        // border too, same "clear" request — Fusion's default MenuBarItem
+        // otherwise blends into the bar until hovered. Only `background`
+        // is overridden; `contentItem` stays Fusion's own default, which
+        // already renders `text` in the right enabled/disabled color once
+        // the palette `disabled` group above is set.
+        delegate: MenuBarItem {
+            id: menuBarItem
+            background: Rectangle {
+                color: menuBarItem.highlighted ? palette.highlight : "transparent"
+                border.color: palette.mid
+                border.width: 1
+            }
+        }
+
         Menu {
             objectName: "projectMenu"
             title: "Project"
 
-            MenuItem {
+            AppMenuItem {
                 objectName: "newProjectMenuItem"
                 text: "New Project"
                 onTriggered: Router.createProjectPageRequested()
             }
-            MenuItem {
+            AppMenuItem {
                 objectName: "openProjectMenuItem"
                 text: "Open Project…"
                 onTriggered: openProjectDialog.open()
             }
             MenuSeparator {}
-            MenuItem {
+            AppMenuItem {
                 objectName: "closeProjectMenuItem"
                 text: "Close Project"
                 enabled: window.currentProject !== null
                 onTriggered: Router.closeProjectRequested()
             }
             MenuSeparator {}
-            MenuItem {
+            AppMenuItem {
                 objectName: "exitMenuItem"
                 text: "Exit"
                 onTriggered: Qt.quit()
@@ -128,8 +167,13 @@ ApplicationWindow {
         Menu {
             objectName: "analysesMenu"
             title: "Analyses"
+            // The whole top-level entry, not just its children — with no
+            // project open there's nothing this menu can do at all, so it
+            // shouldn't even open ("I actually want the entire menu item
+            // disabled (also in color)", 2026-09-14).
+            enabled: window.currentProject !== null
 
-            MenuItem {
+            AppMenuItem {
                 objectName: "newAnalysisMenuItem"
                 text: "New"
                 enabled: window.currentProject !== null
@@ -144,35 +188,35 @@ ApplicationWindow {
                 // A fixed 5 slots, not a Repeater over `runsList` — see
                 // `recentRun`'s own comment for why. Each slot hides
                 // itself once there's no Nth-most-recent run to show.
-                MenuItem {
+                AppMenuItem {
                     objectName: "openAnalysisMenuItem_0"
                     readonly property var run: window.recentRun(0)
                     visible: run !== null
                     text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
                     onTriggered: Router.analysisSelected(run.id)
                 }
-                MenuItem {
+                AppMenuItem {
                     objectName: "openAnalysisMenuItem_1"
                     readonly property var run: window.recentRun(1)
                     visible: run !== null
                     text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
                     onTriggered: Router.analysisSelected(run.id)
                 }
-                MenuItem {
+                AppMenuItem {
                     objectName: "openAnalysisMenuItem_2"
                     readonly property var run: window.recentRun(2)
                     visible: run !== null
                     text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
                     onTriggered: Router.analysisSelected(run.id)
                 }
-                MenuItem {
+                AppMenuItem {
                     objectName: "openAnalysisMenuItem_3"
                     readonly property var run: window.recentRun(3)
                     visible: run !== null
                     text: run ? (run.start_date_display + "  —  " + run.out_dir_display) : ""
                     onTriggered: Router.analysisSelected(run.id)
                 }
-                MenuItem {
+                AppMenuItem {
                     objectName: "openAnalysisMenuItem_4"
                     readonly property var run: window.recentRun(4)
                     visible: run !== null
@@ -186,12 +230,12 @@ ApplicationWindow {
             objectName: "helpMenu"
             title: "Help"
 
-            MenuItem {
+            AppMenuItem {
                 objectName: "aboutMenuItem"
                 text: "About"
                 onTriggered: aboutDialog.open()
             }
-            MenuItem {
+            AppMenuItem {
                 objectName: "userGuideMenuItem"
                 text: "User Guide"
                 onTriggered: {
