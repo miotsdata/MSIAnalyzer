@@ -326,6 +326,10 @@ Item {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
+                    HoverHandler {
+                        objectName: "featureModeButtonHover"
+                        cursorShape: Qt.PointingHandCursor
+                    }
                 }
                 Button {
                     id: obsModeButton
@@ -344,6 +348,10 @@ Item {
                         font.bold: obsModeButton.highlighted
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
+                    }
+                    HoverHandler {
+                        objectName: "obsModeButtonHover"
+                        cursorShape: Qt.PointingHandCursor
                     }
                 }
             }
@@ -368,6 +376,10 @@ Item {
                         // feature once the order changes.
                         visualSection.selectedFeatureIndex = 0
                     }
+                    HoverHandler {
+                        objectName: "sortModeComboHover"
+                        cursorShape: Qt.PointingHandCursor
+                    }
                 }
             }
             ComboBox {
@@ -378,6 +390,10 @@ Item {
                 model: visualSection.featureLabels
                 currentIndex: visualSection.selectedFeatureIndex
                 onActivated: (index) => visualSection.selectedFeatureIndex = index
+                HoverHandler {
+                    objectName: "featureComboHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
 
             Label {
@@ -393,6 +409,10 @@ Item {
                 model: visualSection.obsColumnLabels
                 currentIndex: visualSection.selectedObsIndex
                 onActivated: (index) => visualSection.selectedObsIndex = index
+                HoverHandler {
+                    objectName: "obsColumnComboHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
 
             Label {
@@ -435,6 +455,10 @@ Item {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
+                    HoverHandler {
+                        objectName: "rawLayerButtonHover"
+                        cursorShape: Qt.PointingHandCursor
+                    }
                 }
                 Button {
                     id: ticLayerButton
@@ -454,6 +478,10 @@ Item {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
+                    HoverHandler {
+                        objectName: "ticLayerButtonHover"
+                        cursorShape: Qt.PointingHandCursor
+                    }
                 }
             }
 
@@ -470,6 +498,10 @@ Item {
                 model: ["viridis", "magma", "inferno", "plasma", "cividis", "gray"]
                 currentIndex: model.indexOf(visualSection.colormap)
                 onActivated: (index) => visualSection.colormap = model[index]
+                HoverHandler {
+                    objectName: "colormapComboHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
 
             Label {
@@ -494,6 +526,10 @@ Item {
                         visualSection.draftVmin = visualSection.autoRange.vmin
                         visualSection.draftVmax = visualSection.autoRange.vmax
                     }
+                }
+                HoverHandler {
+                    objectName: "autoScaleCheckBoxHover"
+                    cursorShape: Qt.PointingHandCursor
                 }
             }
             ColumnLayout {
@@ -586,6 +622,10 @@ Item {
                        && (visualSection.draftVmin !== visualSection.vmin
                            || visualSection.draftVmax !== visualSection.vmax)
                 onClicked: visualSection.applyColorRange()
+                HoverHandler {
+                    objectName: "applyColorRangeButtonHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
 
             // Discrete obs column (e.g. `polarity`) — no color scale, just
@@ -667,6 +707,9 @@ Item {
                     // both sufficient and cycle-free.
                     Component.onCompleted: checked = !visualSection.isHidden(modelData.name)
                     onToggled: visualSection.toggleSample(modelData.name)
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
                 }
             }
         }

@@ -48,6 +48,10 @@ Page {
                 // same as it already did when this button only appeared
                 // on failure.
                 onClicked: if (project) Router.showProjectHomeRequested(project)
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
         }
 

@@ -72,6 +72,10 @@ Page {
                         objectName: "newAnalysisButton"
                         text: "New Analysis"
                         onClicked: Router.newAnalysisPageRequested(project)
+
+                        HoverHandler {
+                            cursorShape: Qt.PointingHandCursor
+                        }
                     }
                 }
 

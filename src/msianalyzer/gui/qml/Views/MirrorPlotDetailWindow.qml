@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 import QtWebEngine
+import "qrc:/Style"
 
 // The full interactive (Plotly) mirror plot — matched/unmatched
 // coloring, hover tooltips, connector lines, "Empirical"/"Library" side
@@ -30,6 +31,37 @@ Window {
     height: 650
     minimumWidth: 600
     minimumHeight: 400
+
+    // A separate top-level Window (loaded via a Loader, not a visual
+    // child of the ApplicationWindow) doesn't inherit Main.qml's palette
+    // override — left unset, it fell back to Qt's own default (light)
+    // palette regardless of the app's current theme, e.g. the metadata
+    // table's value labels and the ComboBoxes stayed light/mismatched
+    // even in dark mode. Mirrors Main.qml's palette block exactly, so it
+    // reacts live to Theme.isDark the same way the main window does.
+    color: palette.window
+    palette {
+        window: Theme.backgroundColor
+        windowText: Theme.textColor
+        base: Theme.fieldColor
+        alternateBase: Theme.secondaryColor
+        text: Theme.textColor
+        button: Theme.controlColor
+        buttonText: Theme.textColor
+        toolTipBase: Theme.controlColor
+        toolTipText: Theme.textColor
+        placeholderText: Theme.placeholderTextColor
+        highlight: Theme.primaryColor
+        highlightedText: Theme.highlightedTextColor
+        light: Theme.lightColor
+        midlight: Theme.midlightColor
+        mid: Theme.borderColor
+        dark: Theme.darkColor
+        shadow: Theme.shadowColor
+        disabled.windowText: Theme.disabledTextColor
+        disabled.buttonText: Theme.disabledTextColor
+        disabled.text: Theme.disabledTextColor
+    }
 
     property string analysisDbPath: ""
     property int annotationId: -1
@@ -116,6 +148,10 @@ Window {
                     detailWindow.empSource = model[index]
                     detailWindow.refresh()
                 }
+                HoverHandler {
+                    objectName: "detailEmpSourceComboHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
             Label { text: "Library:" }
             ComboBox {
@@ -126,6 +162,10 @@ Window {
                 onActivated: (index) => {
                     detailWindow.libSource = model[index]
                     detailWindow.refresh()
+                }
+                HoverHandler {
+                    objectName: "detailLibSourceComboHover"
+                    cursorShape: Qt.PointingHandCursor
                 }
             }
             Item { Layout.fillWidth: true }

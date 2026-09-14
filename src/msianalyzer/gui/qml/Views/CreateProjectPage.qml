@@ -40,6 +40,10 @@ Page {
                 objectName: "browseFolderButton"
                 text: "Browse..."
                 onClicked: createProjectFolderDialog.open()
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
         }
 
@@ -51,6 +55,10 @@ Page {
                      && createProjectPathInput.text.trim() !== ""
 
             onClicked: Router.createProjectRequested(createProjectNameInput.text.trim(), createProjectPathInput.text.trim())
+
+            HoverHandler {
+                cursorShape: Qt.PointingHandCursor
+            }
         }
     }
 

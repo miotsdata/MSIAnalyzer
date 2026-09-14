@@ -372,6 +372,10 @@ Page {
                 objectName: "backToProjectButton"
                 text: "Back to project"
                 onClicked: if (project) Router.showProjectHomeRequested(project)
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
         }
 
@@ -398,6 +402,10 @@ Page {
                 checked: tabBar.currentIndex === 0
                 highlighted: checked
                 onClicked: tabBar.currentIndex = 0
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
             Repeater {
                 model: ConfigSchema.groups
@@ -408,6 +416,10 @@ Page {
                     checked: tabBar.currentIndex === index + 1
                     highlighted: checked
                     onClicked: tabBar.currentIndex = index + 1
+
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
                 }
             }
         }
@@ -455,6 +467,10 @@ Page {
                         Button {
                             text: "Browse..."
                             onClicked: outDirDialog.open()
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
                         }
                     }
 
@@ -465,11 +481,19 @@ Page {
                             objectName: "addMzmlFilesButton"
                             text: "Add mzML files..."
                             onClicked: bulkMzmlDialog.open()
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
                         }
                         Button {
                             objectName: "addXmlFilesButton"
                             text: "Add XML files..."
                             onClicked: bulkXmlDialog.open()
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
                         }
                     }
                     Label {
@@ -509,6 +533,10 @@ Page {
                                     Layout.preferredHeight: 16
                                     enabled: index > 0
                                     onClicked: newAnalysisPage.swapField(index, index - 1, "mzml")
+
+                                    HoverHandler {
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
                                 }
                                 Button {
                                     objectName: "moveMzmlDownButton_" + index
@@ -517,6 +545,10 @@ Page {
                                     Layout.preferredHeight: 16
                                     enabled: index < sampleRows.length - 1
                                     onClicked: newAnalysisPage.swapField(index, index + 1, "mzml")
+
+                                    HoverHandler {
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
                                 }
                             }
                             Button {
@@ -524,6 +556,10 @@ Page {
                                 onClicked: {
                                     mzmlDialogTarget.rowIndex = index
                                     mzmlDialog.open()
+                                }
+
+                                HoverHandler {
+                                    cursorShape: Qt.PointingHandCursor
                                 }
                             }
                             Label {
@@ -545,6 +581,10 @@ Page {
                                     Layout.preferredHeight: 16
                                     enabled: index > 0
                                     onClicked: newAnalysisPage.swapField(index, index - 1, "xml")
+
+                                    HoverHandler {
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
                                 }
                                 Button {
                                     objectName: "moveXmlDownButton_" + index
@@ -553,6 +593,10 @@ Page {
                                     Layout.preferredHeight: 16
                                     enabled: index < sampleRows.length - 1
                                     onClicked: newAnalysisPage.swapField(index, index + 1, "xml")
+
+                                    HoverHandler {
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
                                 }
                             }
                             Button {
@@ -561,11 +605,19 @@ Page {
                                     xmlDialogTarget.rowIndex = index
                                     xmlDialog.open()
                                 }
+
+                                HoverHandler {
+                                    cursorShape: Qt.PointingHandCursor
+                                }
                             }
                             Button {
                                 objectName: "removeSampleRowButton_" + index
                                 text: "Remove"
                                 onClicked: newAnalysisPage.removeSampleRow(index)
+
+                                HoverHandler {
+                                    cursorShape: Qt.PointingHandCursor
+                                }
                             }
                         }
                     }
@@ -575,6 +627,10 @@ Page {
                         objectName: "addSampleButton"
                         text: "Add Sample"
                         onClicked: newAnalysisPage.addSampleRow()
+
+                        HoverHandler {
+                            cursorShape: Qt.PointingHandCursor
+                        }
                     }
 
                     RowLayout {
@@ -589,6 +645,10 @@ Page {
                             objectName: "addDbFilesButton"
                             text: "Add db files..."
                             onClicked: bulkDbDialog.open()
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
                         }
                     }
                     Label {
@@ -621,6 +681,10 @@ Page {
                                 objectName: "removeDbOnlyPathButton_" + index
                                 text: "Remove"
                                 onClicked: newAnalysisPage.removeDbOnlyPath(index)
+
+                                HoverHandler {
+                                    cursorShape: Qt.PointingHandCursor
+                                }
                             }
                         }
                     }
@@ -694,6 +758,10 @@ Page {
                                     property string helpText: modelData.help
                                     ToolTip.visible: hovered
                                     ToolTip.text: helpText
+
+                                    HoverHandler {
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
                                 }
 
                                 CheckBox {
@@ -701,6 +769,10 @@ Page {
                                     visible: modelData.kind === "bool"
                                     checked: modelData.default === true
                                     Layout.fillWidth: true
+
+                                    HoverHandler {
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
                                 }
 
                                 TextField {
@@ -725,6 +797,10 @@ Page {
                                     Button {
                                         text: "Browse..."
                                         onClicked: libraryPathDialog.open()
+
+                                        HoverHandler {
+                                            cursorShape: Qt.PointingHandCursor
+                                        }
                                     }
                                 }
                             }
@@ -741,6 +817,10 @@ Page {
             enabled: (sampleRows.length > 0 || dbOnlyPaths.length > 0)
                      && outDirField.text.trim() !== "" && allSampleRowsFilled()
             onClicked: Router.runAnalysisRequested(project, collectConfig())
+
+            HoverHandler {
+                cursorShape: Qt.PointingHandCursor
+            }
         }
     }
 

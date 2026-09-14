@@ -378,6 +378,9 @@ Item {
                         ms1Section.selectedSampleId = ms1Section.samples[index].sample_id
                         ms1Section.featureDetail = null
                     }
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
                 }
             }
 

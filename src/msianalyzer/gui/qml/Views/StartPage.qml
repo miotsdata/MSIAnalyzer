@@ -19,6 +19,10 @@ Page {
             Layout.alignment: Qt.AlignHCenter
 
             onClicked: projectFolderDialog.open()
+
+            HoverHandler {
+                cursorShape: Qt.PointingHandCursor
+            }
         }
 
         Button {
@@ -29,6 +33,10 @@ Page {
             Layout.alignment: Qt.AlignHCenter
 
             onClicked: Router.createProjectPageRequested()
+
+            HoverHandler {
+                cursorShape: Qt.PointingHandCursor
+            }
         }
     }
 
