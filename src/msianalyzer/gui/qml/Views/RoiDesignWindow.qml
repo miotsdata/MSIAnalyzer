@@ -84,12 +84,61 @@ Window {
 
     property var savedRois: []
     function refreshSavedRois() {
-        if (roiWindow.analysis && roiWindow.analysis.analysisDbPath && roiWindow.selectedSample) {
+        // Reads samples[selectedSampleIndex] directly rather than going
+        // through the `selectedSample` binding above — when this runs from
+        // onSelectedSampleIndexChanged, selectedSampleIndex is guaranteed
+        // to already hold the new value (it's the property that just
+        // changed), whereas relying on `selectedSample` here previously
+        // raced against that binding's own re-evaluation and could still
+        // read the *previous* sample's rows (confirmed: switching samples
+        // kept showing the old sample's ROI list).
+        var sample = (roiWindow.samples.length > roiWindow.selectedSampleIndex)
+                     ? roiWindow.samples[roiWindow.selectedSampleIndex] : null
+        if (roiWindow.analysis && roiWindow.analysis.analysisDbPath && sample) {
             roiWindow.savedRois = AnalysisBridge.getSampleRois(
-                roiWindow.analysis.analysisDbPath, roiWindow.selectedSample.name)
+                roiWindow.analysis.analysisDbPath, sample.name)
         } else {
             roiWindow.savedRois = []
         }
+    }
+
+    // The analysis-wide name/color catalog (AnalysisBridge.getRois) —
+    // every ROI ever registered, on any sample. Used only to compute
+    // `otherRois` below; `savedRois` above (read from this sample's own
+    // h5ad, not the catalog) remains the source of truth for what's
+    // actually drawn *on this sample*.
+    property var catalogRois: []
+    // Every call site calls this *after* refreshSavedRois(), so
+    // recomputing otherRois here (rather than via its own reactive
+    // binding — see otherRois' own comment for why that didn't work)
+    // always sees both freshly updated.
+    function refreshCatalogRois() {
+        if (roiWindow.analysis && roiWindow.analysis.analysisDbPath) {
+            roiWindow.catalogRois = AnalysisBridge.getRois(roiWindow.analysis.analysisDbPath)
+        } else {
+            roiWindow.catalogRois = []
+        }
+        roiWindow._recomputeOtherRois()
+    }
+    // Catalog entries that this sample doesn't have yet — "Other ROIs in
+    // analyses" below lists these with a one-click "Draw for this
+    // sample" action (same name/color, straight into drawing mode) so a
+    // named ROI drawn on one sample is easy to add to another instead of
+    // looking like it's simply missing here.
+    // A plain property, explicitly recomputed by `_recomputeOtherRois()`
+    // after every `refreshSavedRois()`/`refreshCatalogRois()` pair, rather
+    // than a computed `{...}`-block binding — that reactive form did not
+    // reliably re-evaluate here when `savedRois`/`catalogRois` changed
+    // (confirmed directly: instrumented and saw it evaluate exactly once,
+    // before either had real data). Matches this file's existing style
+    // for savedRois/catalogRois themselves, which are also plain
+    // properties updated by explicit function calls, not bindings.
+    property var otherRois: []
+    function _recomputeOtherRois() {
+        var savedNames = roiWindow.savedRois.map(function (r) { return r.name })
+        roiWindow.otherRois = roiWindow.catalogRois.filter(function (r) {
+            return savedNames.indexOf(r.name) === -1
+        })
     }
 
     function resetDraft() {
@@ -108,41 +157,20 @@ Window {
     onSelectedSampleIndexChanged: {
         roiWindow.resetDraft()
         roiWindow.refreshSavedRois()
+        roiWindow.refreshCatalogRois()
     }
     onVisibleChanged: {
         if (roiWindow.visible) {
-            // Grounded in the actual h5ad data every time, not in
-            // whatever sample happened to be selected before — resetting
-            // to a fixed index (0) unconditionally on every reopen made a
-            // just-saved ROI on any *other* sample look "missing" (the
-            // window silently switched to a different, likely empty,
-            // sample); remembering the previous index instead only
-            // worked for as long as this exact window instance survived,
-            // which doesn't hold across e.g. navigating away from Visual
-            // Inspection and back (that destroys and recreates the whole
-            // section, this window included). Scanning every sample's
-            // h5ad fresh on each open and defaulting to the first one
-            // that actually has a saved ROI works regardless of any of
-            // that — it's a fact read off disk, not a remembered value.
-            roiWindow.selectedSampleIndex = roiWindow._pickSampleIndexWithRois()
+            // Always the first sample — which named ROIs exist elsewhere
+            // in the analysis but not on the sample currently shown is
+            // now surfaced directly ("Other ROIs in analyses" below,
+            // with a one-click way to add one here), so there's no need
+            // to guess which sample to open on.
+            roiWindow.selectedSampleIndex = 0
             roiWindow.resetDraft()
             roiWindow.refreshSavedRois()
+            roiWindow.refreshCatalogRois()
         }
-    }
-
-    // Reads every sample's own `.h5ad` (via the same AnalysisBridge.
-    // getSampleRois `refreshSavedRois` uses) to find one that actually
-    // carries at least one saved ROI, so opening the window reliably
-    // lands on a sample with something to show instead of always
-    // defaulting to the first sample in the list regardless of content.
-    function _pickSampleIndexWithRois() {
-        if (!roiWindow.analysis || !roiWindow.analysis.analysisDbPath) return 0
-        for (var i = 0; i < roiWindow.samples.length; i++) {
-            var rois = AnalysisBridge.getSampleRois(
-                roiWindow.analysis.analysisDbPath, roiWindow.samples[i].name)
-            if (rois.length > 0) return i
-        }
-        return 0
     }
 
     // "Add ROI" — reveals the name/color step, before any drawing starts.
@@ -158,6 +186,19 @@ Window {
         if (!roiWindow.draftName) return
         roiWindow.draftState = "drawing"
         roiWindow.draftVertices = []
+    }
+    // "Draw for this sample" on an "Other ROIs in analyses" row — reuses
+    // an existing catalog name/color and jumps straight into drawing,
+    // skipping the naming step entirely (the name/color are already
+    // fixed; saveRoi's own "existing name keeps its registered color"
+    // rule means passing this color back is just for display consistency
+    // while drawing, not a re-registration).
+    function startDrawingExisting(name, colorHex) {
+        roiWindow.draftState = "drawing"
+        roiWindow.draftName = name
+        roiWindow.draftColor = colorHex
+        roiWindow.draftVertices = []
+        roiWindow.saveError = ""
     }
     function addVertex(col, row) {
         roiWindow.draftVertices = roiWindow.draftVertices.concat([[col, row]])
@@ -182,6 +223,7 @@ Window {
         if (result.ok) {
             roiWindow.resetDraft()
             roiWindow.refreshSavedRois()
+            roiWindow.refreshCatalogRois()
         } else {
             roiWindow.saveError = result.error
         }
@@ -192,6 +234,7 @@ Window {
             roiWindow.analysis.analysisDbPath,
             roiWindow.samples.map(function (s) { return s.name }), name)
         roiWindow.refreshSavedRois()
+        roiWindow.refreshCatalogRois()
     }
 
     ColumnLayout {
@@ -290,6 +333,51 @@ Window {
                             text: "✕"
                             onClicked: roiWindow.deleteSavedRoi(modelData.name)
                             HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        }
+                    }
+                }
+
+                Item { Layout.preferredHeight: 8 }
+
+                // Catalog entries (name + color, from the analysis-wide
+                // `rois` table) not yet drawn on *this* sample — a named
+                // ROI drawn elsewhere in the analysis shows up here
+                // instead of just looking absent, with a one-click way
+                // to add it to this sample under the same name/color.
+                // Hidden once naming/drawing starts, same as "Add ROI".
+                ColumnLayout {
+                    id: otherRoisSection
+                    objectName: "otherRoisSection"
+                    Layout.fillWidth: true
+                    visible: roiWindow.draftState === "idle" && roiWindow.otherRois.length > 0
+
+                    Label { text: "Other ROIs in analyses"; font.bold: true }
+                    Repeater {
+                        id: otherRoisRepeater
+                        objectName: "otherRoisRepeater"
+                        model: roiWindow.otherRois
+
+                        delegate: ColumnLayout {
+                            objectName: "otherRoiRow_" + modelData.name
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Rectangle {
+                                    width: 14; height: 14; radius: 2
+                                    color: modelData.color
+                                    border.color: palette.mid
+                                }
+                                Label { text: modelData.name; Layout.fillWidth: true }
+                            }
+                            Button {
+                                objectName: "drawForSampleButton_" + modelData.name
+                                text: "Draw for this sample"
+                                Layout.fillWidth: true
+                                onClicked: roiWindow.startDrawingExisting(modelData.name, modelData.color)
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                            }
                         }
                     }
                 }

@@ -383,17 +383,13 @@ def test_reopening_the_window_shows_previously_saved_rois(
     assert len(_as_list(overlay.property("savedRois"))) == 1
 
 
-def test_reopening_selects_the_sample_with_saved_rois(
+def test_window_always_opens_on_the_first_sample(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
-    """Reported bug, root cause: the window used to reset back to sample
-    index 0 on every reopen — if the ROI was drawn on any other sample,
-    that silently swapped in a different (likely ROI-less) sample's list,
-    looking exactly like the just-saved ROI had disappeared. Fixed by
-    scanning every sample's own h5ad on open and defaulting to the first
-    one that actually has a saved ROI, rather than remembering a QML
-    property value (which wouldn't survive this window being torn down
-    and recreated, e.g. by navigating away from Visual Inspection)."""
+    """The window always opens on the first sample, full stop — no
+    guessing which sample to land on based on where ROIs happen to exist.
+    "Other ROIs in analyses" (see below) is what surfaces cross-sample ROI
+    status instead."""
     out_dir = Path(visual_analysis_model.outDir)
     _write_grid_h5ad(out_dir / "s1.h5ad")
     _write_grid_h5ad(out_dir / "s2.h5ad")
@@ -402,7 +398,6 @@ def test_reopening_selects_the_sample_with_saved_rois(
     root = view.rootObject()
     window = _open_roi_design_window(view, root, find_visual_child, qtbot)
 
-    # Switch to the second sample before drawing.
     window.setProperty("selectedSampleIndex", 1)
     qtbot.wait(30)
     assert window.property("selectedSample")["name"] == "s2"
@@ -426,37 +421,91 @@ def test_reopening_selects_the_sample_with_saved_rois(
     qtbot.wait(100)
     qtbot.waitUntil(lambda: window.property("visible") is True, timeout=2000)
 
-    # Still on s2, and its ROI is still there.
-    assert window.property("selectedSample")["name"] == "s2"
-    saved = _as_list(window.property("savedRois"))
-    assert [r["name"] for r in saved] == ["kidney"]
-
-    reread = ad.read_h5ad(out_dir / "s1.h5ad")
-    assert "roi_kidney" not in reread.obs.columns
+    # Back to s1, regardless of "kidney" living on s2.
+    assert window.property("selectedSample")["name"] == "s1"
+    assert _as_list(window.property("savedRois")) == []
 
 
-def test_a_brand_new_window_still_selects_the_sample_with_saved_rois(
+def test_other_rois_lists_catalog_entries_missing_from_this_sample(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
-    """No shared in-memory state at all here — the ROI is written directly
-    to s2's h5ad (bypassing the GUI entirely, as if drawn in an earlier
-    app session), then a completely fresh view/window opens ROI Design
-    for the first time. It must still land on s2, proving the sample
-    selection is derived from the h5ad data itself, not anything
-    remembered from a previous window instance."""
+    from msianalyzer.core import analysis_db
     from msianalyzer.core.plotting import roi as roi_module
 
     out_dir = Path(visual_analysis_model.outDir)
     _write_grid_h5ad(out_dir / "s1.h5ad")
     _write_grid_h5ad(out_dir / "s2.h5ad")
     roi_module.save_roi_to_sample(
-        out_dir / "s2.h5ad", "kidney", "#00ff00", [[1, 1], [3, 1], [3, 3], [1, 3]]
+        out_dir / "s1.h5ad", "liver", "#ff0000", [[1, 1], [3, 1], [3, 3], [1, 3]]
     )
+    # "Other ROIs in analyses" is sourced from the analysis-wide catalog
+    # table (what AnalysisBridge.saveRoi would also register), not from
+    # scanning every sample's h5ad directly.
+    analysis_db.register_roi(visual_analysis_model.analysisDbPath, "liver", "#ff0000")
 
     view = analysis_view(visual_analysis_model)
     root = view.rootObject()
     window = _open_roi_design_window(view, root, find_visual_child, qtbot)
 
-    assert window.property("selectedSample")["name"] == "s2"
-    saved = _as_list(window.property("savedRois"))
-    assert [r["name"] for r in saved] == ["kidney"]
+    # On s1 (has "liver"): it's in "ROIs on this sample", not "Other ROIs".
+    assert [r["name"] for r in _as_list(window.property("savedRois"))] == ["liver"]
+    assert _as_list(window.property("otherRois")) == []
+
+    # Switch to s2 (doesn't have it yet): the reverse.
+    window.setProperty("selectedSampleIndex", 1)
+    qtbot.wait(30)
+    assert _as_list(window.property("savedRois")) == []
+    other = _as_list(window.property("otherRois"))
+    assert [r["name"] for r in other] == ["liver"]
+    assert other[0]["color"] == "#ff0000"
+
+    draw_button = find_visual_child(window.contentItem(), "drawForSampleButton_liver")
+    assert draw_button is not None
+
+
+def test_draw_for_this_sample_starts_drawing_with_existing_name_and_color(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    from msianalyzer.core import analysis_db
+    from msianalyzer.core.plotting import roi as roi_module
+
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad")
+    _write_grid_h5ad(out_dir / "s2.h5ad")
+    roi_module.save_roi_to_sample(
+        out_dir / "s1.h5ad", "liver", "#ff0000", [[1, 1], [3, 1], [3, 3], [1, 3]]
+    )
+    analysis_db.register_roi(visual_analysis_model.analysisDbPath, "liver", "#ff0000")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+    window.setProperty("selectedSampleIndex", 1)  # s2, doesn't have "liver" yet
+    qtbot.wait(30)
+
+    draw_button = find_visual_child(window.contentItem(), "drawForSampleButton_liver")
+    _click(window, draw_button, qtbot)
+
+    # Straight into drawing, no naming step — same name/color as the
+    # catalog entry, no vertices yet.
+    assert window.property("draftState") == "drawing"
+    assert window.property("draftName") == "liver"
+    assert window.property("draftColor").name() == "#ff0000"
+    assert _as_list(window.property("draftVertices")) == []
+
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+    _tap_grid_point(window, canvas, 1, 1, qtbot)
+    _tap_grid_point(window, canvas, 3, 1, qtbot)
+    _tap_grid_point(window, canvas, 3, 3, qtbot)
+    _tap_grid_point(window, canvas, 1, 3, qtbot)
+    _tap_grid_point(window, canvas, 1, 1, qtbot)
+    qtbot.wait(100)
+
+    assert window.property("saveError") == ""
+    reread = ad.read_h5ad(out_dir / "s2.h5ad")
+    assert "roi_liver" in reread.obs.columns
+    assert reread.uns["rois"]["liver"]["color"] == "#ff0000"
+
+    # Now on this sample's own list, no longer in "Other ROIs".
+    assert [r["name"] for r in _as_list(window.property("savedRois"))] == ["liver"]
+    assert _as_list(window.property("otherRois")) == []
