@@ -897,3 +897,50 @@ def test_switching_back_to_feature_mode_restores_feature_controls(
     raw_button = find_visual_child(root, "rawLayerButton")
     assert feature_combo.property("visible") is True
     assert raw_button.property("visible") is True
+
+
+def test_show_rois_checkbox_toggles_the_overlay_on_each_tile(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    from msianalyzer.core.plotting import roi as roi_module
+
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_sample_h5ad(out_dir / "s1.h5ad")
+    _write_sample_h5ad(out_dir / "s2.h5ad")
+    # The 2x2 grid _write_sample_h5ad builds has (x, y) in {0, 1}x{0, 1} —
+    # a square spanning grid-index 0..2 covers every pixel's center.
+    roi_module.save_roi_to_sample(
+        out_dir / "s1.h5ad", "liver", "#ff0000", [[0, 0], [2, 0], [2, 2], [0, 2]]
+    )
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    checkbox = find_visual_child(root, "showRoisCheckBox")
+    assert checkbox is not None
+
+    overlay_s1 = find_visual_child(root, "roiOverlay_s1")
+    assert overlay_s1.property("visible") is False
+
+    center = checkbox.mapToScene(checkbox.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    section = find_visual_child(root, "visualSection")
+    assert section.property("showRois") is True
+    assert overlay_s1.property("visible") is True
+
+    s1_rois = _as_list(overlay_s1.property("savedRois"))
+    assert [r["name"] for r in s1_rois] == ["liver"]
+
+    # s2 never had an ROI saved on it — its overlay is visible (the toggle
+    # is global) but has nothing to draw.
+    overlay_s2 = find_visual_child(root, "roiOverlay_s2")
+    assert overlay_s2.property("visible") is True
+    assert _as_list(overlay_s2.property("savedRois")) == []
+
+    # Toggling back off hides both.
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+    assert overlay_s1.property("visible") is False

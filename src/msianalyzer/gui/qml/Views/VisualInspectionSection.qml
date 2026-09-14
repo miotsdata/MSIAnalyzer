@@ -79,6 +79,17 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            CheckBox {
+                id: showRoisCheckBox
+                objectName: "showRoisCheckBox"
+                text: "Show ROIs"
+                checked: visualSection.showRois
+                onToggled: visualSection.showRois = checked
+                HoverHandler {
+                    objectName: "showRoisCheckBoxHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
             Item { Layout.fillWidth: true }
         }
 
