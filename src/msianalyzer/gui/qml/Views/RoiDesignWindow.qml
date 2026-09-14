@@ -111,10 +111,38 @@ Window {
     }
     onVisibleChanged: {
         if (roiWindow.visible) {
-            roiWindow.selectedSampleIndex = 0
+            // Grounded in the actual h5ad data every time, not in
+            // whatever sample happened to be selected before — resetting
+            // to a fixed index (0) unconditionally on every reopen made a
+            // just-saved ROI on any *other* sample look "missing" (the
+            // window silently switched to a different, likely empty,
+            // sample); remembering the previous index instead only
+            // worked for as long as this exact window instance survived,
+            // which doesn't hold across e.g. navigating away from Visual
+            // Inspection and back (that destroys and recreates the whole
+            // section, this window included). Scanning every sample's
+            // h5ad fresh on each open and defaulting to the first one
+            // that actually has a saved ROI works regardless of any of
+            // that — it's a fact read off disk, not a remembered value.
+            roiWindow.selectedSampleIndex = roiWindow._pickSampleIndexWithRois()
             roiWindow.resetDraft()
             roiWindow.refreshSavedRois()
         }
+    }
+
+    // Reads every sample's own `.h5ad` (via the same AnalysisBridge.
+    // getSampleRois `refreshSavedRois` uses) to find one that actually
+    // carries at least one saved ROI, so opening the window reliably
+    // lands on a sample with something to show instead of always
+    // defaulting to the first sample in the list regardless of content.
+    function _pickSampleIndexWithRois() {
+        if (!roiWindow.analysis || !roiWindow.analysis.analysisDbPath) return 0
+        for (var i = 0; i < roiWindow.samples.length; i++) {
+            var rois = AnalysisBridge.getSampleRois(
+                roiWindow.analysis.analysisDbPath, roiWindow.samples[i].name)
+            if (rois.length > 0) return i
+        }
+        return 0
     }
 
     // "Add ROI" — reveals the name/color step, before any drawing starts.

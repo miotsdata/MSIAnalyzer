@@ -338,3 +338,125 @@ def test_saving_against_analysis_db_predating_rois_table_creates_it(
     with sqlite3.connect(visual_analysis_model.analysisDbPath) as con:
         rows = con.execute("SELECT name FROM rois").fetchall()
     assert rows == [("liver",)]
+
+
+def test_reopening_the_window_shows_previously_saved_rois(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    """Reported bug: draw + save an ROI, close the window, reopen it (via
+    Visual Inspection's "Draw ROI" button again) — the ROI must still show
+    up, both in the saved-ROI list and as an overlay on the image."""
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad")
+    _write_grid_h5ad(out_dir / "s2.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+    _start_drawing(window, "liver", qtbot)
+    _tap_grid_point(window, canvas, 1, 1, qtbot)
+    _tap_grid_point(window, canvas, 3, 1, qtbot)
+    _tap_grid_point(window, canvas, 3, 3, qtbot)
+    _tap_grid_point(window, canvas, 1, 3, qtbot)
+    _tap_grid_point(window, canvas, 1, 1, qtbot)
+    qtbot.wait(100)
+    assert window.property("saveError") == ""
+    assert len(_as_list(window.property("savedRois"))) == 1
+
+    # Close the window (as if the user clicked the OS close button).
+    window.setProperty("visible", False)
+    qtbot.wait(50)
+
+    # Reopen it via Visual Inspection's "Draw ROI" button again.
+    button = find_visual_child(root, "openRoiDesignButton")
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button.mapToScene(
+        button.boundingRect().center()).toPoint())
+    qtbot.wait(100)
+    qtbot.waitUntil(lambda: window.property("visible") is True, timeout=2000)
+
+    saved = _as_list(window.property("savedRois"))
+    assert [r["name"] for r in saved] == ["liver"]
+
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+    overlay = canvas.findChild(QQuickItem, "roiOverlay")
+    assert len(_as_list(overlay.property("savedRois"))) == 1
+
+
+def test_reopening_selects_the_sample_with_saved_rois(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    """Reported bug, root cause: the window used to reset back to sample
+    index 0 on every reopen — if the ROI was drawn on any other sample,
+    that silently swapped in a different (likely ROI-less) sample's list,
+    looking exactly like the just-saved ROI had disappeared. Fixed by
+    scanning every sample's own h5ad on open and defaulting to the first
+    one that actually has a saved ROI, rather than remembering a QML
+    property value (which wouldn't survive this window being torn down
+    and recreated, e.g. by navigating away from Visual Inspection)."""
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad")
+    _write_grid_h5ad(out_dir / "s2.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    # Switch to the second sample before drawing.
+    window.setProperty("selectedSampleIndex", 1)
+    qtbot.wait(30)
+    assert window.property("selectedSample")["name"] == "s2"
+
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+    _start_drawing(window, "kidney", qtbot)
+    _tap_grid_point(window, canvas, 1, 1, qtbot)
+    _tap_grid_point(window, canvas, 3, 1, qtbot)
+    _tap_grid_point(window, canvas, 3, 3, qtbot)
+    _tap_grid_point(window, canvas, 1, 3, qtbot)
+    _tap_grid_point(window, canvas, 1, 1, qtbot)
+    qtbot.wait(100)
+    assert window.property("saveError") == ""
+
+    window.setProperty("visible", False)
+    qtbot.wait(50)
+
+    button = find_visual_child(root, "openRoiDesignButton")
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button.mapToScene(
+        button.boundingRect().center()).toPoint())
+    qtbot.wait(100)
+    qtbot.waitUntil(lambda: window.property("visible") is True, timeout=2000)
+
+    # Still on s2, and its ROI is still there.
+    assert window.property("selectedSample")["name"] == "s2"
+    saved = _as_list(window.property("savedRois"))
+    assert [r["name"] for r in saved] == ["kidney"]
+
+    reread = ad.read_h5ad(out_dir / "s1.h5ad")
+    assert "roi_kidney" not in reread.obs.columns
+
+
+def test_a_brand_new_window_still_selects_the_sample_with_saved_rois(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    """No shared in-memory state at all here — the ROI is written directly
+    to s2's h5ad (bypassing the GUI entirely, as if drawn in an earlier
+    app session), then a completely fresh view/window opens ROI Design
+    for the first time. It must still land on s2, proving the sample
+    selection is derived from the h5ad data itself, not anything
+    remembered from a previous window instance."""
+    from msianalyzer.core.plotting import roi as roi_module
+
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad")
+    _write_grid_h5ad(out_dir / "s2.h5ad")
+    roi_module.save_roi_to_sample(
+        out_dir / "s2.h5ad", "kidney", "#00ff00", [[1, 1], [3, 1], [3, 3], [1, 3]]
+    )
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    assert window.property("selectedSample")["name"] == "s2"
+    saved = _as_list(window.property("savedRois"))
+    assert [r["name"] for r in saved] == ["kidney"]
