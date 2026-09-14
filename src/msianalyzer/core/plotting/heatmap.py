@@ -65,6 +65,35 @@ def feature_value_range(
     return float(finite.min()), float(finite.max())
 
 
+def pixel_grid_indices(
+    adata: ad.AnnData,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Per-pixel (x_index, y_index) into the grid formed by the sorted set
+    of unique x/y values in `adata.obsm["spatial"]` — the same grid
+    `_reconstruct_grid` paints values onto, exposed standalone so ROI
+    polygon/mask code (`core/plotting/roi.py`) can test membership against
+    exactly the coordinate space the heatmap raster uses (1 image pixel ==
+    1 spatial pixel, no vertical flip — row 0 is the smallest y).
+
+    Args:
+        adata: One sample's AnnData, already loaded.
+
+    Returns:
+        `(x_index, y_index, unique_x, unique_y)` — `x_index`/`y_index` are
+        parallel to `adata.obs` row order (same length, same order):
+        `x_index[i]`/`y_index[i]` is pixel *i*'s column/row in the grid.
+        `unique_x`/`unique_y` are ascending, `searchsorted`-ready.
+    """
+    xy = np.asarray(adata.obsm["spatial"], dtype=float)
+    x, y = xy[:, 0], xy[:, 1]
+
+    unique_x = np.unique(x)
+    unique_y = np.unique(y)
+    x_index = np.searchsorted(unique_x, x)
+    y_index = np.searchsorted(unique_y, y)
+    return x_index, y_index, unique_x, unique_y
+
+
 def _reconstruct_grid(adata: ad.AnnData, values: np.ndarray) -> np.ndarray:
     """Map per-pixel `values` (in `adata.obs` row order) onto the grid
     formed by the sorted set of unique x and unique y values in
@@ -75,14 +104,7 @@ def _reconstruct_grid(adata: ad.AnnData, values: np.ndarray) -> np.ndarray:
     Returns an `(n_unique_y, n_unique_x)` array, row 0 at the smallest y
     (no vertical flip — the QML `Image` element flips as needed).
     """
-    xy = np.asarray(adata.obsm["spatial"], dtype=float)
-    x, y = xy[:, 0], xy[:, 1]
-
-    unique_x = np.unique(x)
-    unique_y = np.unique(y)
-    x_index = np.searchsorted(unique_x, x)
-    y_index = np.searchsorted(unique_y, y)
-
+    x_index, y_index, unique_x, unique_y = pixel_grid_indices(adata)
     grid = np.full((unique_y.size, unique_x.size), np.nan, dtype=float)
     grid[y_index, x_index] = values
     return grid

@@ -11,6 +11,7 @@ import pytest
 from msianalyzer.core.analysis_db import (
     analysis_db_path,
     attach_raw,
+    delete_roi_catalog_entry,
     find_nearest_feature,
     init_analysis_db,
     is_command_already_run,
@@ -21,9 +22,11 @@ from msianalyzer.core.analysis_db import (
     load_feature_representative_annotations,
     load_features,
     load_ms2_annotations_for_feature,
+    load_rois,
     load_samples,
     load_summary_counts,
     log_command,
+    register_roi,
     register_sample,
     save_features,
     write_metadata,
@@ -836,3 +839,68 @@ def test_concurrent_workers_do_not_corrupt_the_analysis_db(tmp_path: Path):
         assert con.execute(
             "SELECT COUNT(*) FROM commands WHERE command_name = 'detect_ms1_centroids'"
         ).fetchone()[0] == 32
+
+
+# ---------------------------------------------------------------------------
+# ROI catalog
+# ---------------------------------------------------------------------------
+
+
+def test_rois_table_created(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    with sqlite3.connect(db) as con:
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    assert "rois" in tables
+
+
+def test_register_roi_and_load_rois(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    register_roi(db, "liver", "#ff0000")
+    register_roi(db, "kidney", "#00ff00")
+
+    df = load_rois(db)
+
+    assert list(df["name"]) == ["kidney", "liver"]  # ordered by name
+    assert list(df["color"]) == ["#00ff00", "#ff0000"]
+
+
+def test_load_rois_empty_when_none_registered(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_rois(db).empty
+
+
+def test_register_roi_duplicate_name_raises(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    register_roi(db, "liver", "#ff0000")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        register_roi(db, "liver", "#00ff00")
+
+
+def test_delete_roi_catalog_entry(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    register_roi(db, "liver", "#ff0000")
+
+    removed = delete_roi_catalog_entry(db, "liver")
+
+    assert removed is True
+    assert load_rois(db).empty
+
+
+def test_delete_roi_catalog_entry_missing_name_returns_false(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert delete_roi_catalog_entry(db, "never_existed") is False

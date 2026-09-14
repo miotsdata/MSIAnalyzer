@@ -10,6 +10,7 @@ from msianalyzer.core.plotting.heatmap import (
     list_obs_columns,
     obs_categories,
     obs_value_range,
+    pixel_grid_indices,
     render_feature_heatmap,
     render_obs_categories_heatmap,
     render_obs_heatmap,
@@ -36,6 +37,38 @@ def _make_grid_adata(
                 np.array(layer_values, dtype=np.float32).reshape(-1, 1)
             )
     return adata
+
+
+def test_pixel_grid_indices_matches_reconstruct_grid_scatter():
+    # 3 of the 4 grid positions present, values in obs row order — the
+    # same shape render_feature_heatmap's internal _reconstruct_grid
+    # scatters via grid[y_index, x_index] = values; pixel_grid_indices is
+    # just that computation exposed standalone, so scattering by hand with
+    # its output must reproduce the exact same grid.
+    coords = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+    obs = pd.DataFrame(index=["a", "b", "c"])
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.array([1.0, 2.0, 3.0], dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array(coords, dtype=float)
+
+    x_index, y_index, unique_x, unique_y = pixel_grid_indices(adata)
+
+    assert list(unique_x) == [0.0, 1.0]
+    assert list(unique_y) == [0.0, 1.0]
+    assert x_index.shape == (3,)
+    assert y_index.shape == (3,)
+
+    values = np.array([1.0, 2.0, 3.0])
+    grid = np.full((unique_y.size, unique_x.size), np.nan)
+    grid[y_index, x_index] = values
+
+    rgba = render_feature_heatmap(adata, mz=100.0, layer="raw", colormap="gray")
+    # The one uncovered cell (x=1,y=1) renders pure black regardless of
+    # colormap/vmin/vmax (_colorize_grid's NaN convention) — same cell
+    # pixel_grid_indices leaves untouched above.
+    assert np.isnan(grid[1, 1])
+    assert tuple(rgba[1, 1]) == (0, 0, 0, 255)
 
 
 def test_render_feature_heatmap_reconstructs_grid_and_applies_colormap():

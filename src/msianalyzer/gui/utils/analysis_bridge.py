@@ -5,11 +5,14 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 from PySide6.QtCore import QObject, Signal, Slot
 
 from msianalyzer.core import analysis_db
+from msianalyzer.core.plotting import roi
+from msianalyzer.core.plotting.heatmap import category_color
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
 from msianalyzer.core.plotting.plotter import Plotter
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
@@ -607,3 +610,202 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return []
         return _dataframe_to_records(analysis_db.load_feature_list(analysis_db_path))
+
+    # -----------------------------------------------------------------
+    # ROI Design
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _sample_h5ad_path(analysis_db_path: str, sample_name: str) -> Path:
+        """Where one sample's `.h5ad` lives — same convention as
+        `HeatmapImageProvider._load_adata`, factored out here since every
+        ROI slot below needs it (and a drifted duplicate would silently
+        defeat `HeatmapImageProvider.invalidate`'s cache eviction)."""
+        return Path(analysis_db_path).parent / f"{sample_name}.h5ad"
+
+    @staticmethod
+    def _merged_h5ad_path(analysis_db_path: str) -> Path:
+        return Path(analysis_db_path).parent / "merged.h5ad"
+
+    @Slot(str, result=list)
+    def getRois(self, analysis_db_path: str) -> list:
+        """The analysis-wide ROI catalog — every registered name/color,
+        for ROI Design's name picker and a "Show ROIs" legend.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+
+        Returns:
+            Records (`id`, `name`, `color`, `created_at`) from
+            `analysis_db.load_rois`, ordered by name. Empty when the db
+            path doesn't exist or there are no ROIs yet.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        return _dataframe_to_records(analysis_db.load_rois(analysis_db_path))
+
+    @Slot(str, result=str)
+    def nextRoiColor(self, analysis_db_path: str) -> str:
+        """A suggested default color for a brand-new ROI —
+        `heatmap.category_color` at the catalog's current row count, so
+        successive new ROIs cycle through the same tab20 palette discrete
+        `obs` categories already use. Purely a suggestion: ROI Design seeds
+        its color picker from this but the user can override it before
+        saving (see `saveRoi`'s "existing name wins" rule for what actually
+        gets persisted).
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+
+        Returns:
+            `"#rrggbb"`.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return category_color(0)
+        existing = analysis_db.load_rois(analysis_db_path)
+        return category_color(len(existing))
+
+    @Slot(str, str, result=list)
+    def getSampleRois(self, analysis_db_path: str, sample_name: str) -> list:
+        """One sample's saved ROI borders — for ROI Design's "already
+        drawn" list and Visual Inspection's read-only "Show ROIs" overlay.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_name: Which sample to read.
+
+        Returns:
+            `[{"name", "color", "vertices": [[col, row], ...]}, ...]`, from
+            that sample's own `.h5ad` (`roi.load_sample_rois` — not the
+            analysis-wide catalog, since geometry is per-sample). `[]` if
+            the sample's h5ad doesn't exist or has no ROIs.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        h5ad_path = self._sample_h5ad_path(analysis_db_path, sample_name)
+        if not h5ad_path.exists():
+            return []
+        rois = roi.load_sample_rois(h5ad_path)
+        return [
+            {"name": name, "color": info["color"], "vertices": info["vertices"]}
+            for name, info in rois.items()
+        ]
+
+    @Slot(str, str, str, str, list, result=dict)
+    def saveRoi(
+        self, analysis_db_path: str, sample_name: str, name: str, color: str,
+        vertices: list,
+    ) -> dict:
+        """Save one ROI on one sample: writes the polygon + per-pixel mask
+        into that sample's own `.h5ad` (`roi.save_roi_to_sample`), keeps
+        `merged.h5ad` in sync if it exists (`roi.sync_roi_to_merged`), and
+        registers `name`/`color` in the analysis-wide catalog the first
+        time this name is used.
+
+        `name` may already exist in the catalog (drawing the same named
+        ROI on a second sample) — in that case its registered `color`
+        wins over whatever `color` this call was passed, keeping the
+        name's color consistent across every sample it's drawn on.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_name: Which sample's `.h5ad` to write into.
+            name: The ROI's name.
+            color: `"#rrggbb"` — only takes effect if `name` is new.
+            vertices: `[[col, row], ...]`, grid-index space, >= 3 points.
+
+        Returns:
+            `{"ok": True, "pixel_count": int}` on success, or
+            `{"ok": False, "error": "<message>"}` (e.g. fewer than 3
+            vertices, sample h5ad missing) — surfaced by ROI Design as an
+            inline error rather than a silent no-op.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {"ok": False, "error": "No analysis database."}
+        h5ad_path = self._sample_h5ad_path(analysis_db_path, sample_name)
+        if not h5ad_path.exists():
+            return {"ok": False, "error": f"Sample {sample_name!r} has no .h5ad file."}
+
+        # `create_analysis_schema` is idempotent (every statement is
+        # `CREATE TABLE IF NOT EXISTS`) — this is a no-op for an analysis
+        # database that already has the `rois` table, and adds it for free
+        # on the first ROI ever saved against an analysis run before this
+        # feature existed (there is no migration system; every existing
+        # analysis DB predates `rois`).
+        analysis_db.init_analysis_db(analysis_db_path).close()
+
+        existing = analysis_db.load_rois(analysis_db_path)
+        existing_row = existing[existing["name"] == name] if not existing.empty else existing
+        effective_color = existing_row["color"].iloc[0] if len(existing_row) else color
+
+        try:
+            pixel_count = roi.save_roi_to_sample(h5ad_path, name, effective_color, vertices)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+        if existing_row.empty:
+            try:
+                analysis_db.register_roi(analysis_db_path, name, effective_color)
+            except sqlite3.IntegrityError:
+                pass  # raced with another save of the same new name — fine, row exists now
+
+        # Recomputed rather than threaded through save_roi_to_sample's
+        # return value (which is just the pixel count) — a second, cheap
+        # read+mask against the just-written file, kept separate so
+        # save_roi_to_sample's own signature/tests stay merged.h5ad-agnostic.
+        sample_adata_mask = roi.polygon_pixel_mask(ad.read_h5ad(h5ad_path), vertices)
+        roi.sync_roi_to_merged(
+            self._merged_h5ad_path(analysis_db_path), sample_name, name,
+            effective_color, vertices, sample_adata_mask,
+        )
+        self.heatmap_provider.invalidate(sample_name)
+        return {"ok": True, "pixel_count": pixel_count}
+
+    @Slot(str, str, str, result=bool)
+    def deleteRoiFromSample(self, analysis_db_path: str, sample_name: str, name: str) -> bool:
+        """Remove one ROI from one sample only (and, if it exists,
+        `merged.h5ad`) — the catalog entry and every other sample's own
+        copy are untouched; use `deleteRoiEverywhere` to also drop the
+        catalog row across every sample.
+
+        Returns:
+            True if the sample actually had this ROI.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return False
+        h5ad_path = self._sample_h5ad_path(analysis_db_path, sample_name)
+        if not h5ad_path.exists():
+            return False
+        removed = roi.delete_roi_from_sample(h5ad_path, name)
+        if removed:
+            roi.sync_roi_deletion_to_merged(
+                self._merged_h5ad_path(analysis_db_path), sample_name, name
+            )
+            self.heatmap_provider.invalidate(sample_name)
+        return removed
+
+    @Slot(str, list, str, result=dict)
+    def deleteRoiEverywhere(self, analysis_db_path: str, sample_names: list, name: str) -> dict:
+        """Remove one ROI's catalog entry and its per-sample data from
+        every sample in `sample_names` — "delete this ROI" in ROI Design's
+        management list, which only has the analysis' full sample list on
+        hand, not which samples actually carry this ROI.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_names: Every sample name to check/clean — normally
+                every sample of the analysis, not just the one currently
+                open in ROI Design.
+            name: The ROI to remove.
+
+        Returns:
+            `{"catalog_removed": bool, "samples_removed": [names...]}`.
+        """
+        removed_samples = [
+            sample_name for sample_name in sample_names
+            if self.deleteRoiFromSample(analysis_db_path, sample_name, name)
+        ]
+        catalog_removed = False
+        if analysis_db_path and Path(analysis_db_path).exists():
+            catalog_removed = analysis_db.delete_roi_catalog_entry(analysis_db_path, name)
+        return {"catalog_removed": catalog_removed, "samples_removed": removed_samples}

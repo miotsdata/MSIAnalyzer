@@ -21,5 +21,9 @@
         <file>Views/MS1SpectraSection.qml</file>
         <file>Views/VisualInspectionSection.qml</file>
         <file>Views/ZoomableImage.qml</file>
+        <file>Views/HeatmapControlsPanel.qml</file>
+        <file>Views/RoiOverlay.qml</file>
+        <file>Views/RoiDrawingCanvas.qml</file>
+        <file>Views/RoiDesignWindow.qml</file>
     </qresource>
 </RCC>

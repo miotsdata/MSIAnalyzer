@@ -77,6 +77,20 @@ class HeatmapImageProvider(QQuickImageProvider):
             self._cache.popitem(last=False)
         return adata
 
+    def invalidate(self, sample_name: str) -> None:
+        """Evict `sample_name`'s cached AnnData, if present — call this
+        after any write to that sample's `.h5ad` (e.g.
+        `AnalysisBridge.saveRoi`/`deleteRoiFromSample`) so the next heatmap
+        tile request re-reads the file instead of serving the stale
+        in-memory obs/uns this LRU cache is still holding.
+
+        A no-op if the sample was never cached, or no analysis is set.
+        """
+        if not self._analysis_db_path:
+            return
+        h5ad_path = Path(self._analysis_db_path).parent / f"{sample_name}.h5ad"
+        self._cache.pop(str(h5ad_path), None)
+
     def getFeatureValueRange(
         self, sample_names: list[str], mz: float, layer: str
     ) -> dict:

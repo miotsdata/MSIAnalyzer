@@ -78,7 +78,11 @@ def test_visual_layer_button_click_updates_data_layer(
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    # dataLayer/inspectionMode/vmin/etc. moved onto HeatmapControlsPanel.qml
+    # (objectName "controlsFlickable", its root) when the controls panel
+    # was extracted out of VisualInspectionSection.qml for reuse by ROI
+    # Design — "section" here means "the controls state", not the page item.
+    section = find_visual_child(root, "controlsFlickable")
     assert section.property("dataLayer") == "TIC"
 
     raw_button = find_visual_child(root, "rawLayerButton")
@@ -202,8 +206,17 @@ def test_visual_grid_is_fixed_to_one_column(
     assert find_visual_child(root, "rowsSpinBox") is None
     assert find_visual_child(root, "colsSpinBox") is None
 
-    grid = find_visual_child(root, "heatmapGrid")
-    assert grid.property("columns") == 1
+    # heatmapGrid is a plain Column (single-column stacking is simply what
+    # it does, not a "columns: 1" setting to assert on like the GridLayout
+    # it replaced) — assert the actual visible behavior instead: two
+    # tiles stack directly above/below each other (same x, different y).
+    tile_s1 = find_visual_child(root, "heatmapTile_s1")
+    tile_s2 = find_visual_child(root, "heatmapTile_s2")
+    # Both share the same parent (the Column) — compare their own x/y
+    # directly rather than via mapToItem, which also folds in the
+    # scrolling Flickable's current content offset.
+    assert tile_s1.x() == pytest.approx(tile_s2.x())
+    assert tile_s1.y() != pytest.approx(tile_s2.y())
 
     flickable = find_visual_child(root, "heatmapGridFlickable")
     assert flickable is not None
@@ -263,7 +276,7 @@ def test_feature_labels_default_sorted_by_mz(
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     labels = section.property("featureLabels").toVariant()
     assert labels == [
         "100.0000: Zebra compound",
@@ -285,7 +298,7 @@ def test_sort_by_name_puts_annotated_alphabetically_then_unannotated_last(
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     section.setProperty("sortMode", "name")
 
     labels = section.property("featureLabels").toVariant()
@@ -331,7 +344,7 @@ def test_moving_vmin_slider_does_not_re_render_until_apply_clicked(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _disable_autoscale(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     original_vmin = section.property("vmin")
 
     section.setProperty("draftVmin", original_vmin + 500)
@@ -360,7 +373,7 @@ def test_apply_button_disabled_when_draft_matches_applied(
     apply_button = find_visual_child(root, "applyColorRangeButton")
     assert apply_button.property("enabled") is False
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     section.setProperty("draftVmax", section.property("vmax") + 10)
     qtbot.wait(50)
     assert apply_button.property("enabled") is True
@@ -381,7 +394,7 @@ def test_vmin_vmax_value_labels_show_the_draft_value(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _disable_autoscale(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     section.setProperty("draftVmin", 1.5)
     section.setProperty("draftVmax", 7.25)
     qtbot.wait(50)
@@ -406,7 +419,7 @@ def test_vmax_slider_ceiling_does_not_move_while_dragging(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _disable_autoscale(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     vmax_slider = find_visual_child(root, "vmaxSlider")
     ceiling_before = vmax_slider.property("to")
 
@@ -526,7 +539,7 @@ def test_raw_tic_buttons_show_distinct_selected_color(
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     assert section.property("dataLayer") == "TIC"
 
     raw_button = find_visual_child(root, "rawLayerButton")
@@ -554,7 +567,7 @@ def test_switching_layer_resets_to_autoscale(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _disable_autoscale(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     assert section.property("autoScale") is False
 
     raw_button = find_visual_child(root, "rawLayerButton")
@@ -578,7 +591,7 @@ def test_disabling_autoscale_seeds_manual_range_from_auto_range(
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     # Simulate a real backend response (no h5ad files exist for this
     # fixture, so the real autoRange call would default to {0, 1} — the
     # bridge/provider's own real-data computation is covered by their
@@ -603,7 +616,7 @@ def test_vmin_vmax_labels_show_auto_range_while_autoscale_is_on(
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     section.setProperty("autoRange", {"vmin": 0.5, "vmax": 42.75})
     qtbot.wait(50)
 
@@ -650,7 +663,7 @@ def test_obs_mode_button_switches_selector_and_hides_layer_toggle(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _switch_to_obs_mode(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     assert section.property("inspectionMode") == "obs"
 
     feature_combo = find_visual_child(root, "featureCombo")
@@ -729,7 +742,7 @@ def test_obs_mode_defaults_selection_to_tic(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _switch_to_obs_mode(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     assert section.property("selectedObsColumn") == "tic"
 
 
@@ -746,7 +759,7 @@ def test_selecting_numeric_obs_column_shows_color_scale_controls(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _switch_to_obs_mode(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     assert section.property("isSelectedObsNumeric") is True
 
     colormap_combo = find_visual_child(root, "colormapCombo")
@@ -768,7 +781,7 @@ def test_selecting_categorical_obs_column_hides_color_scale_and_shows_legend(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _switch_to_obs_mode(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     assert section.property("isSelectedObsNumeric") is False
 
     colormap_combo = find_visual_child(root, "colormapCombo")
@@ -799,7 +812,7 @@ def test_obs_category_colors_stable_when_sample_hidden(
     _open_visual_tab(view, root, find_visual_child, qtbot)
     _switch_to_obs_mode(view, root, find_visual_child, qtbot)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     legend_before = sorted(
         c["category"] for c in _as_list(section.property("obsCategoryLegend"))
     )
@@ -877,7 +890,7 @@ def test_switching_back_to_feature_mode_restores_feature_controls(
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(50)
 
-    section = find_visual_child(root, "visualSection")
+    section = find_visual_child(root, "controlsFlickable")
     assert section.property("inspectionMode") == "feature"
 
     feature_combo = find_visual_child(root, "featureCombo")

@@ -30,6 +30,15 @@ Flickable {
         else if (zoom > maxZoom) zoom = maxZoom
     }
 
+    // An insertion point for an overlay (ROI borders/draft polygon, see
+    // RoiOverlay.qml) that must track the Image's own pan/zoom transform
+    // exactly. Declaring children here — e.g. `ZoomableImage { RoiOverlay
+    // { ... } }` — places them inside this Flickable's own scrolling
+    // content, positioned/sized to match the Image, so they get correct
+    // pan/zoom behavior for free with no manual mapToItem bookkeeping.
+    // Additive: existing usages with no such children are unaffected.
+    default property alias overlayContent: overlayHolder.data
+
     Image {
         id: image
         objectName: "zoomableImageContent"
@@ -63,6 +72,21 @@ Flickable {
         // pixel per spatial coordinate) so synchronous rendering doesn't
         // meaningfully block the UI.
         asynchronous: false
+    }
+
+    // Exactly tracks the Image's own position/size — overlay children
+    // placed here (via `overlayContent` above) sit in the same coordinate
+    // frame as the image, so `(col + 0.5) * effectiveScale` (forwarded
+    // below) lands exactly on the right raster pixel with no separate
+    // offset math.
+    Item {
+        id: overlayHolder
+        objectName: "zoomableImageOverlayHolder"
+        x: image.x
+        y: image.y
+        width: image.width
+        height: image.height
+        property alias effectiveScale: root.effectiveScale
     }
 
     WheelHandler {

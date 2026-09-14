@@ -79,6 +79,42 @@ def test_request_image_null_without_analysis_db_path():
     assert image.isNull()
 
 
+def test_invalidate_forces_a_fresh_read_after_the_file_changes(tmp_path):
+    path = tmp_path / "s1.h5ad"
+    _write_sample_h5ad(path, values=(0.0, 10.0, 5.0, 15.0))
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    # Populate the cache.
+    provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
+    assert str(path) in provider._cache
+
+    # Mutate the file on disk directly (simulating a save_roi_to_sample-style
+    # write) — without invalidation the cached AnnData would still be served.
+    _write_sample_h5ad(path, values=(100.0, 100.0, 100.0, 100.0))
+
+    provider.invalidate("s1")
+
+    assert str(path) not in provider._cache
+    image = provider.requestImage("s1|100.0|raw|viridis|0|100", None, None)
+    # All-100 values at vmin=0/vmax=100 -> every pixel at the top of the
+    # colormap, i.e. every pixel the same color (the old cached 0..15
+    # spread would have produced a gradient instead).
+    colors = {image.pixelColor(x, y).getRgb() for x in range(2) for y in range(2)}
+    assert len(colors) == 1
+
+
+def test_invalidate_is_a_no_op_when_sample_never_cached(tmp_path):
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    provider.invalidate("never_requested")  # must not raise
+
+
+def test_invalidate_is_a_no_op_without_analysis_db_path():
+    provider = HeatmapImageProvider()
+    provider.invalidate("s1")  # must not raise
+
+
 def test_request_image_null_for_missing_sample(tmp_path):
     provider = HeatmapImageProvider()
     provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))

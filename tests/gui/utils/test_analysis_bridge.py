@@ -752,3 +752,174 @@ def test_get_feature_detail_empty_when_no_features(tmp_path):
 def test_get_feature_detail_empty_for_missing_db(tmp_path):
     bridge = AnalysisBridge()
     assert bridge.getFeatureDetail(str(tmp_path / "nope.db"), 100.0, 5) == {}
+
+
+# ---------------------------------------------------------------------------
+# ROI Design
+# ---------------------------------------------------------------------------
+
+
+def _write_roi_sample_h5ad(path):
+    import anndata as ad
+    import pandas as pd
+    from scipy.sparse import csr_matrix
+
+    obs = pd.DataFrame(index=["a", "b", "c", "d"])
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array(
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
+    )
+    adata.write_h5ad(path)
+
+
+_ROI_VERTICES = [[0, 0], [2, 0], [2, 2], [0, 2]]  # covers the whole 2x2 grid
+
+
+def test_save_roi_writes_h5ad_and_registers_catalog_entry(tmp_path):
+    import anndata as ad
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    result = bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+
+    assert result == {"ok": True, "pixel_count": 4}
+    reread = ad.read_h5ad(tmp_path / "s1.h5ad")
+    assert reread.obs["roi_liver"].sum() == 4
+    catalog = bridge.getRois(str(db_path))
+    assert catalog == [{"id": 1, "name": "liver", "color": "#ff0000", "created_at": catalog[0]["created_at"]}]
+
+
+def test_save_roi_reuses_existing_catalog_color_when_name_exists(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+    _write_roi_sample_h5ad(tmp_path / "s2.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+    result = bridge.saveRoi(str(db_path), "s2", "liver", "#0000ff", _ROI_VERTICES)
+
+    assert result["ok"] is True
+    catalog = bridge.getRois(str(db_path))
+    assert len(catalog) == 1
+    assert catalog[0]["color"] == "#ff0000"  # first save's color wins, not "#0000ff"
+
+
+def test_save_roi_rejects_fewer_than_3_vertices(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    result = bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", [[0, 0], [1, 1]])
+
+    assert result["ok"] is False
+    assert bridge.getRois(str(db_path)) == []
+
+
+def test_save_roi_missing_sample_h5ad_returns_error(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    result = bridge.saveRoi(str(db_path), "nope", "liver", "#ff0000", _ROI_VERTICES)
+
+    assert result["ok"] is False
+
+
+def test_save_roi_invalidates_heatmap_provider_cache(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+    bridge.getFeatureValueRange(["s1"], 100.0, "raw")  # populates the cache
+    assert str(tmp_path / "s1.h5ad") in bridge.heatmap_provider._cache
+
+    bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+
+    assert str(tmp_path / "s1.h5ad") not in bridge.heatmap_provider._cache
+
+
+def test_get_sample_rois_reads_back_saved_roi(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+
+    rois = bridge.getSampleRois(str(db_path), "s1")
+
+    assert len(rois) == 1
+    assert rois[0]["name"] == "liver"
+    assert rois[0]["color"] == "#ff0000"
+
+
+def test_get_sample_rois_empty_for_sample_without_h5ad(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    assert bridge.getSampleRois(str(db_path), "nope") == []
+
+
+def test_delete_roi_from_sample_removes_it(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+
+    removed = bridge.deleteRoiFromSample(str(db_path), "s1", "liver")
+
+    assert removed is True
+    assert bridge.getSampleRois(str(db_path), "s1") == []
+
+
+def test_delete_roi_everywhere_removes_catalog_and_every_sample(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+    _write_roi_sample_h5ad(tmp_path / "s2.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+    bridge.saveRoi(str(db_path), "s2", "liver", "#ff0000", _ROI_VERTICES)
+
+    result = bridge.deleteRoiEverywhere(str(db_path), ["s1", "s2"], "liver")
+
+    assert result["catalog_removed"] is True
+    assert set(result["samples_removed"]) == {"s1", "s2"}
+    assert bridge.getRois(str(db_path)) == []
+    assert bridge.getSampleRois(str(db_path), "s1") == []
+    assert bridge.getSampleRois(str(db_path), "s2") == []
+
+
+def test_next_roi_color_cycles_by_catalog_size(tmp_path):
+    from msianalyzer.core.plotting.heatmap import category_color
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    assert bridge.nextRoiColor(str(db_path)) == category_color(0)
+
+    bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+
+    assert bridge.nextRoiColor(str(db_path)) == category_color(1)
+
+
+def test_next_roi_color_missing_db_returns_first_palette_color(tmp_path):
+    from msianalyzer.core.plotting.heatmap import category_color
+
+    bridge = AnalysisBridge()
+    assert bridge.nextRoiColor(str(tmp_path / "nope.db")) == category_color(0)

@@ -21,6 +21,7 @@ precursor_purity     per-MS2 precursor purity (precursor_frac) vs. its parent MS
 feature_ms2_consensus per-feature "best MS2 scan" pick
 annotation_libraries one row per spectral library used to annotate
 ms2_annotations      one row per (MS2 scan, library candidate) comparison
+rois                 analysis-wide ROI name/color catalog (geometry lives per-sample in h5ad)
 """
 
 from __future__ import annotations
@@ -414,6 +415,21 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         FROM ms2_annotations
         WHERE inchikey IS NOT NULL
         GROUP BY feature_id, inchikey
+    """)
+
+    # --- ROI catalog (GUI's "ROI Design" window) --------------------------
+    # Analysis-wide name/color registry only — geometry is independent per
+    # sample and lives solely in that sample's own h5ad (uns["rois"], see
+    # core/plotting/roi.py); this table exists so the same ROI name renders
+    # in the same color on every sample it's drawn on, and so the GUI can
+    # list/manage ROI names without opening every sample's h5ad.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS rois (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL UNIQUE,
+            color      TEXT    NOT NULL,
+            created_at TEXT    NOT NULL
+        )
     """)
 
 
@@ -943,3 +959,74 @@ def load_feature_categories(db_path: Path | str) -> pd.DataFrame:
         [no_ms2, annotated], ["no_ms2", "annotated"], default="non_annotated"
     )
     return df[["feature_id", "mz", "category"]]
+
+
+# ---------------------------------------------------------------------------
+# ROI catalog
+# ---------------------------------------------------------------------------
+
+
+@log_call(source="db_path")
+def register_roi(db_path: Path | str, name: str, color: str) -> int:
+    """Insert a new ROI catalog row and return its id.
+
+    Args:
+        db_path: The analysis database.
+        name: ROI name — must not already exist (`UNIQUE(name)`); the GUI
+            checks `load_rois` before calling this, but the DB constraint
+            is the real guard.
+        color: `"#rrggbb"`.
+
+    Returns:
+        The new `rois.id`.
+
+    Raises:
+        sqlite3.IntegrityError: `name` already exists.
+    """
+    with connect(db_path) as con:
+        cur = safe_execute(
+            con,
+            "INSERT INTO rois (name, color, created_at) VALUES (?, ?, ?)",
+            (name, color, datetime.now().astimezone().isoformat()),
+            table="rois",
+            logger=logger,
+            source=db_path,
+        )
+        con.commit()
+        return int(cur.lastrowid)
+
+
+@log_call(source="db_path")
+def load_rois(db_path: Path | str) -> pd.DataFrame:
+    """Every ROI catalog entry — for a ROI-name picker / management list.
+
+    Returns:
+        A DataFrame with `id`, `name`, `color`, `created_at`, ordered by
+        `name`. Empty when there are no ROIs yet, or `db_path` doesn't
+        resolve to a database with this table.
+    """
+    sql = "SELECT id, name, color, created_at FROM rois ORDER BY name"
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def delete_roi_catalog_entry(db_path: Path | str, name: str) -> bool:
+    """Remove one ROI's catalog row (name/color registration only — does
+    NOT touch any sample's h5ad; see `core/plotting/roi.py` for the
+    per-sample and `merged.h5ad` deletion, which callers must do
+    separately, e.g. `AnalysisBridge.deleteRoiEverywhere`).
+
+    Returns:
+        True if a row was actually deleted.
+    """
+    with connect(db_path) as con:
+        cur = safe_execute(
+            con, "DELETE FROM rois WHERE name = ?", (name,),
+            table="rois", logger=logger, source=db_path,
+        )
+        con.commit()
+        return cur.rowcount > 0
