@@ -15,6 +15,7 @@ import logging
 from msianalyzer.gui import resources_rc
 from msianalyzer.gui.utils.application import Application  # noqa: F401  (registers qrc resources on import)
 from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
+from msianalyzer.gui.utils import single_instance
 
 from msianalyzer.core.utils import configure_logging
 
@@ -97,11 +98,32 @@ def main() -> int:
     # WebEngineView (Annotations mirror plots, MS1 spectra).
     QtWebEngineQuick.initialize()
     app = QGuiApplication(sys.argv)
+
+    # A second launch pings the first instance (see single_instance.py)
+    # and exits here immediately, before building any UI — `server` must
+    # stay alive for the whole `app.exec()` below, so it's a local, not
+    # discarded.
+    server = single_instance.acquire()
+    if server is None:
+        return 0
+
     apply_font_scale()
 
     # Add bindings
     application = Application()
     engine = build_engine(app, application)
+
+    def _activate_existing_window() -> None:
+        roots = engine.rootObjects()
+        if not roots:
+            return
+        window = roots[0]
+        window.show()
+        window.raise_()
+        window.requestActivate()
+
+    single_instance.connect_activation(server, _activate_existing_window)
+
     return app.exec()
 
 
