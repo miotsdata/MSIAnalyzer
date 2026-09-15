@@ -12,11 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # requires-python = "==3.13" in pyproject.toml is a strict PEP 440
-      # exact match — only 3.13.0 satisfies it, not later 3.13.x patches.
       - uses: pdm-project/setup-pdm@v4
         with:
-          python-version: "3.13.0"
+          python-version: "3.13"
           cache: true
 
       # The GUI's runtime deps (PySide6 + QtWebEngine) need real shared
