@@ -1,0 +1,10 @@
+#!/bin/bash
+# packaging/appimage/AppRun — AppImage entry point.
+#
+# The PyInstaller onedir bundle (exe + its _internal/ sibling directory)
+# is copied wholesale into usr/opt/msianalyzer-gui/ rather than reshaped
+# into a conventional AppDir/usr/bin + usr/lib layout — the bundle's exe
+# looks up _internal/ relative to its own location, so keeping that pair
+# intact avoids fighting PyInstaller's own path resolution.
+HERE="$(dirname "$(readlink -f "${0}")")"
+exec "${HERE}/usr/opt/msianalyzer-gui/msianalyzer-gui" "$@"

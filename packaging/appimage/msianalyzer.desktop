@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MSIAnalyzer
+Comment=App to analyze MSI data
+Exec=msianalyzer-gui
+Icon=msianalyzer
+Categories=Science;
+Terminal=false

@@ -18,6 +18,9 @@ lib/
 lib64/
 parts/
 sdist/
+*.AppImage
+packaging/appimage/AppDir/
+packaging/.tools/
 var/
 wheels/
 share/python-wheels/
@@ -31,6 +34,9 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+#   Ours under packaging/ is a real, hand-tuned build config, not an
+#   auto-generated throwaway — keep it tracked.
+!packaging/pyinstaller/*.spec
 
 # Installer logs
 pip-log.txt
