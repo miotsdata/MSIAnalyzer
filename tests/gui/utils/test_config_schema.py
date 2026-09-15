@@ -2,19 +2,22 @@ import pytest
 
 from msianalyzer.core.config.config import GROUPS
 from msianalyzer.gui.utils.config_schema import (
+    ConfigSchemaProvider,
     _classify,
     _parse_docstring,
     _prettify_label,
     build_config_schema,
+    build_target_list_schema,
 )
 
 
-def test_schema_covers_every_group_except_io():
+def test_schema_covers_every_group_except_io_and_target_list():
     schema = build_config_schema()
     keys = [g["key"] for g in schema]
 
     assert "io" not in keys
-    assert set(keys) == set(GROUPS) - {"io"}
+    assert "target_list" not in keys
+    assert set(keys) == set(GROUPS) - {"io", "target_list"}
 
 
 def test_schema_field_covers_every_dataclass_field():
@@ -187,3 +190,36 @@ def test_peak_group_field_order_has_filter_mad_options_before_height_threshold()
     assert names.index("peak_height_threshold") == len(names) - 1
     assert names.index("filter_mad") < names.index("filter_mad_log")
     assert names.index("filter_mad") < names.index("filter_mad_nmads")
+
+
+def test_build_target_list_schema_covers_paths_polarity_and_match_ppm():
+    schema = build_target_list_schema()
+
+    assert schema["description"] != ""
+    assert set(schema["fields"]) == {"paths", "polarity", "match_ppm"}
+    for field in schema["fields"].values():
+        assert field["label"] != ""
+        assert field["help"] != ""
+    assert schema["fields"]["polarity"]["default"] == "positive"
+    assert schema["fields"]["match_ppm"]["default"] == 10.0
+    assert schema["fields"]["paths"]["default"] is None
+
+
+def test_build_target_list_schema_excludes_adducts():
+    # adducts is a multi-select, covered separately by
+    # ConfigSchemaProvider.positiveAdducts/negativeAdducts.
+    schema = build_target_list_schema()
+    assert "adducts" not in schema["fields"]
+
+
+def test_config_schema_provider_exposes_polarity_filtered_adduct_lists():
+    provider = ConfigSchemaProvider()
+
+    assert "[M+H]+" in provider.positiveAdducts
+    assert "[M-H]-" in provider.negativeAdducts
+    assert not set(provider.positiveAdducts) & set(provider.negativeAdducts)
+
+
+def test_config_schema_provider_target_list_schema_matches_module_function():
+    provider = ConfigSchemaProvider()
+    assert provider.targetListSchema == build_target_list_schema()

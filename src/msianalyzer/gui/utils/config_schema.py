@@ -3,9 +3,12 @@
 `NewAnalysisPage.qml` needs one tab per config group, with a control per
 field. Rather than hand-writing ~70 near-identical QML field blocks, this
 module introspects the `Config` dataclasses themselves and produces a plain,
-QML-friendly schema the page renders generically. `io` (`IOConfig`) is
-excluded — it gets a bespoke tab (sample-pair pickers, output folder), not a
-row-per-field rendering.
+QML-friendly schema the page renders generically. `io` (`IOConfig`) and
+`target_list` (`TargetListConfig`) are excluded — `io` gets a bespoke tab
+(sample-pair pickers, output folder); `target_list` gets a bespoke tab
+because its `adducts` field needs a polarity-filtered multi-select control,
+not the single-control-per-field shape this generic schema produces (see
+`ConfigSchemaProvider.positiveAdducts`/`negativeAdducts` below).
 """
 
 from __future__ import annotations
@@ -18,7 +21,10 @@ import typing
 
 from PySide6.QtCore import Property, QObject
 
-from msianalyzer.core.config.config import GROUPS, GROUP_TITLES
+from msianalyzer.core.annotation.target_list import adducts_for_polarity
+from msianalyzer.core.config.config import GROUPS, GROUP_TITLES, TargetListConfig
+
+_BESPOKE_GROUPS = ("io", "target_list")
 
 _UNION_ORIGINS = (typing.Union, types.UnionType)
 
@@ -169,7 +175,10 @@ def _classify(annotation: object) -> str:
 
 
 def build_config_schema() -> list[dict]:
-    """Build the form schema for every `Config` group except `io`.
+    """Build the form schema for every `Config` group except the bespoke ones.
+
+    `io` and `target_list` are excluded (see module docstring) — both get
+    hand-written QML tabs instead of a generic, row-per-field rendering.
 
     Returns:
         One entry per group, in `GROUPS` order: `{"key", "title",
@@ -197,7 +206,7 @@ def build_config_schema() -> list[dict]:
     """
     schema: list[dict] = []
     for group_key, group_type in GROUPS.items():
-        if group_key == "io":
+        if group_key in _BESPOKE_GROUPS:
             continue
 
         group_summary, field_help = _parse_docstring(group_type)
@@ -273,6 +282,33 @@ def coerce_config_values(config_dict: dict) -> dict:
     return result
 
 
+def build_target_list_schema() -> dict:
+    """Build the bespoke form metadata for `TargetListConfig`.
+
+    Unlike every other group, `target_list`'s tab is hand-written QML (see
+    module docstring), but its labels/help text/defaults still come from
+    `TargetListConfig`'s docstring and field defaults, same as the generic
+    groups — only the *rendering* is bespoke, not where the text lives.
+
+    Returns:
+        `{"description", "fields": {name: {"label", "help", "default"}}}`
+        for `paths`/`polarity`/`match_ppm` (`adducts` is covered separately
+        by `ConfigSchemaProvider.positiveAdducts`/`negativeAdducts`, since
+        it's a multi-select rather than a single control).
+    """
+    summary, field_help = _parse_docstring(TargetListConfig)
+    fields = {}
+    for f in dataclasses.fields(TargetListConfig):
+        if f.name == "adducts":
+            continue
+        fields[f.name] = {
+            "label": _prettify_label(f.name),
+            "help": field_help.get(f.name, ""),
+            "default": f.default if f.default is not dataclasses.MISSING else None,
+        }
+    return {"description": summary, "fields": fields}
+
+
 class ConfigSchemaProvider(QObject):
     """QML-facing wrapper around `build_config_schema()`.
 
@@ -285,7 +321,22 @@ class ConfigSchemaProvider(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._groups = build_config_schema()
+        self._target_list_schema = build_target_list_schema()
+        self._positive_adducts = [a.label for a in adducts_for_polarity("positive")]
+        self._negative_adducts = [a.label for a in adducts_for_polarity("negative")]
 
     @Property(list, constant=True)
     def groups(self) -> list[dict]:
         return self._groups
+
+    @Property(dict, constant=True)
+    def targetListSchema(self) -> dict:
+        return self._target_list_schema
+
+    @Property(list, constant=True)
+    def positiveAdducts(self) -> list[str]:
+        return self._positive_adducts
+
+    @Property(list, constant=True)
+    def negativeAdducts(self) -> list[str]:
+        return self._negative_adducts

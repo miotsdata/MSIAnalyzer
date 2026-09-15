@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtTest import QSignalSpy
 
@@ -351,3 +351,147 @@ def test_run_click_emits_config_with_mixed_mzml_and_db_only_samples(
     assert config_dict["io"]["mzml_paths"] == ["/data/sample1.mzML", None]
     assert config_dict["io"]["xml_paths"] == ["/data/sample1.xml", None]
     assert config_dict["io"]["db_paths"] == [None, "/data/already_parsed.db"]
+
+
+# ---------------------------------------------------------------------- #
+# Target list matching tab (bespoke — polarity-filtered adducts multiselect)
+# ---------------------------------------------------------------------- #
+
+
+def _open_target_list_tab(view, root, find_visual_child, qtbot):
+    tab_button = find_visual_child(root, "tabButton_target_list")
+    center = tab_button.mapToScene(tab_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+
+def test_target_list_tab_button_exists(new_analysis_view, project, find_visual_child):
+    _, root, _ = _make_page(new_analysis_view, project)
+    assert find_visual_child(root, "tabButton_target_list") is not None
+
+
+def test_target_list_tab_defaults_to_positive_polarity_and_adducts(
+    new_analysis_view, project, find_visual_child, qtbot
+):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_target_list_tab(view, root, find_visual_child, qtbot)
+
+    polarity_combo = find_visual_child(root, "field_target_list_polarity")
+    assert polarity_combo is not None
+    assert polarity_combo.property("currentText") == "positive"
+
+    positive_checkbox = find_visual_child(root, "field_target_list_adduct_[M+H]+")
+    assert positive_checkbox is not None
+    assert positive_checkbox.property("checked") is False
+    # Negative-mode adducts aren't offered while polarity is positive.
+    assert find_visual_child(root, "field_target_list_adduct_[M-H]-") is None
+
+
+def test_target_list_switching_polarity_swaps_adduct_options_and_clears_selection(
+    new_analysis_view, project, find_visual_child, qtbot
+):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_target_list_tab(view, root, find_visual_child, qtbot)
+
+    positive_checkbox = find_visual_child(root, "field_target_list_adduct_[M+H]+")
+    center = positive_checkbox.mapToScene(positive_checkbox.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+    assert positive_checkbox.property("checked") is True
+
+    polarity_combo = find_visual_child(root, "field_target_list_polarity")
+    polarity_combo.setProperty("currentIndex", 1)
+    qtbot.wait(50)
+
+    assert polarity_combo.property("currentText") == "negative"
+    # The old (positive) checkbox is gone entirely, and the new selection
+    # was cleared rather than carrying over a now-invalid adduct label.
+    assert find_visual_child(root, "field_target_list_adduct_[M+H]+") is None
+    negative_checkbox = find_visual_child(root, "field_target_list_adduct_[M-H]-")
+    assert negative_checkbox is not None
+    assert negative_checkbox.property("checked") is False
+
+
+def test_target_list_paths_field_is_read_only(
+    new_analysis_view, project, find_visual_child, qtbot
+):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_target_list_tab(view, root, find_visual_child, qtbot)
+
+    control = find_visual_child(root, "field_target_list_paths")
+    assert control is not None
+    assert control.property("readOnly") is True
+
+
+def test_target_list_paths_dialog_is_independent_from_library_path_dialog(
+    new_analysis_view, project
+):
+    # A shared file dialog hardcoded to one field would silently overwrite
+    # it when reused for a second path_list-shaped field (the bug the
+    # bespoke target_list tab was built to avoid) — assert the two dialogs
+    # are genuinely distinct objects.
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    target_list_dialog = root.findChild(QObject, "targetListPathsDialog")
+    library_dialog = root.findChild(QObject, "libraryPathDialog")
+    assert target_list_dialog is not None
+    assert library_dialog is not None
+    assert target_list_dialog is not library_dialog
+
+
+def test_run_click_emits_target_list_config_with_defaults(
+    new_analysis_view, project, application, qtbot
+):
+    view, root, model = _make_page(new_analysis_view, project)
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/sample1.mzML")
+    root.setSampleField(0, "xml", "/data/sample1.xml")
+
+    application.core_bridge.run_analysis = MagicMock()
+    spy = QSignalSpy(application.router.runAnalysisRequested)
+    button_center = run_button.mapToScene(run_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    _, config_dict = spy.at(0)
+
+    assert config_dict["target_list"]["paths"] is None
+    assert config_dict["target_list"]["polarity"] == "positive"
+    assert config_dict["target_list"]["adducts"] is None
+    assert config_dict["target_list"]["match_ppm"] == 10.0
+
+
+def test_run_click_emits_target_list_config_with_selected_adducts_and_path(
+    new_analysis_view, project, application, qtbot, find_visual_child
+):
+    view, root, model = _make_page(new_analysis_view, project)
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/sample1.mzML")
+    root.setSampleField(0, "xml", "/data/sample1.xml")
+
+    _open_target_list_tab(view, root, find_visual_child, qtbot)
+
+    path_field = find_visual_child(root, "field_target_list_paths")
+    path_field.setProperty("text", "/data/targets.csv")
+
+    checkbox = find_visual_child(root, "field_target_list_adduct_[M+H]+")
+    center = checkbox.mapToScene(checkbox.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    application.core_bridge.run_analysis = MagicMock()
+    spy = QSignalSpy(application.router.runAnalysisRequested)
+    button_center = run_button.mapToScene(run_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    _, config_dict = spy.at(0)
+
+    assert config_dict["target_list"]["paths"] == "/data/targets.csv"
+    assert config_dict["target_list"]["polarity"] == "positive"
+    assert config_dict["target_list"]["adducts"] == ["[M+H]+"]
+    assert config_dict["target_list"]["match_ppm"] == 10.0

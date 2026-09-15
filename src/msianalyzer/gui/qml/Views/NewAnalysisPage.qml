@@ -16,6 +16,22 @@ Page {
     // separate list rather than folded into sampleRows because these
     // samples have no mzML/XML pair at all, just one path.
     property var dbOnlyPaths: []
+    // target_list.adducts, picked from a polarity-filtered multi-select
+    // (see the bespoke target-list tab below) rather than typed in —
+    // cleared whenever polarity changes, since the two label sets are
+    // disjoint and a stale selection would just get rejected by
+    // TargetListConfig.__post_init__ anyway.
+    property var targetListSelectedAdducts: []
+
+    function toggleTargetListAdduct(label, checked) {
+        var arr = targetListSelectedAdducts.slice()
+        var idx = arr.indexOf(label)
+        if (checked && idx === -1)
+            arr.push(label)
+        else if (!checked && idx !== -1)
+            arr.splice(idx, 1)
+        targetListSelectedAdducts = arr
+    }
 
     // Native dialogs (GTK/KDE portal on Linux): FolderDialog gets
     // create-folder support, FileDialog gets working multi-select — the
@@ -263,6 +279,14 @@ Page {
             "out_dir": outDirField.text
         }
 
+        configDict["target_list"] = {
+            "paths": parseFieldValue("path_list", targetListPathsField),
+            "polarity": targetListPolarityCombo.currentText,
+            "adducts": targetListSelectedAdducts.length > 0
+                ? targetListSelectedAdducts : null,
+            "match_ppm": parseFloat(targetListMatchPpmField.text)
+        }
+
         for (var g = 0; g < ConfigSchema.groups.length; g++) {
             var group = ConfigSchema.groups[g]
             var groupDict = {}
@@ -407,15 +431,32 @@ Page {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            Button {
+                // Bespoke tab (not from the generic ConfigSchema.groups
+                // Repeater below) — target_list.adducts needs a
+                // polarity-filtered multi-select, which the generic
+                // one-control-per-field renderer can't produce. See
+                // gui/utils/config_schema.py's module docstring.
+                objectName: "tabButton_target_list"
+                text: "target list matching"
+                checkable: true
+                checked: tabBar.currentIndex === 1
+                highlighted: checked
+                onClicked: tabBar.currentIndex = 1
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
             Repeater {
                 model: ConfigSchema.groups
                 delegate: Button {
                     objectName: "tabButton_" + modelData.key
                     text: modelData.title
                     checkable: true
-                    checked: tabBar.currentIndex === index + 1
+                    checked: tabBar.currentIndex === index + 2
                     highlighted: checked
-                    onClicked: tabBar.currentIndex = index + 1
+                    onClicked: tabBar.currentIndex = index + 2
 
                     HoverHandler {
                         cursorShape: Qt.PointingHandCursor
@@ -691,7 +732,180 @@ Page {
                 }
             }
 
-            // --- Generic, schema-driven tabs (every group but io) ---
+            // --- Target list matching tab (bespoke): adducts needs a
+            // polarity-filtered multi-select, which the generic
+            // one-control-per-field renderer (below) can't produce. See
+            // gui/utils/config_schema.py's module docstring.
+            Flickable {
+                id: targetListFlickable
+                objectName: "groupTab_target_list"
+                clip: true
+                contentWidth: width
+                contentHeight: targetListColumn.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
+
+                ColumnLayout {
+                    id: targetListColumn
+                    width: targetListFlickable.width
+                    spacing: 8
+
+                    readonly property var adductOptions:
+                        targetListPolarityCombo.currentText === "negative"
+                        ? ConfigSchema.negativeAdducts : ConfigSchema.positiveAdducts
+
+                    Label {
+                        objectName: "groupDescription_target_list"
+                        text: ConfigSchema.targetListSchema.description
+                        color: Theme.mutedTextColor
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                        Layout.bottomMargin: 8
+                    }
+
+                    RowLayout {
+                        objectName: "fieldRow_target_list_paths"
+                        Layout.fillWidth: true
+
+                        Label {
+                            text: ConfigSchema.targetListSchema.fields.paths.label
+                            Layout.preferredWidth: 260
+                        }
+                        ToolButton {
+                            objectName: "field_target_list_paths_help"
+                            text: "?"
+                            implicitWidth: 22
+                            implicitHeight: 22
+                            property string helpText: ConfigSchema.targetListSchema.fields.paths.help
+                            ToolTip.visible: hovered
+                            ToolTip.text: helpText
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+                        TextField {
+                            id: targetListPathsField
+                            objectName: "field_target_list_paths"
+                            readOnly: true
+                            Layout.fillWidth: true
+                        }
+                        Button {
+                            text: "Browse..."
+                            onClicked: targetListPathsDialog.open()
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        objectName: "fieldRow_target_list_polarity"
+                        Layout.fillWidth: true
+
+                        Label {
+                            text: ConfigSchema.targetListSchema.fields.polarity.label
+                            Layout.preferredWidth: 260
+                        }
+                        ToolButton {
+                            objectName: "field_target_list_polarity_help"
+                            text: "?"
+                            implicitWidth: 22
+                            implicitHeight: 22
+                            property string helpText: ConfigSchema.targetListSchema.fields.polarity.help
+                            ToolTip.visible: hovered
+                            ToolTip.text: helpText
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+                        ComboBox {
+                            id: targetListPolarityCombo
+                            objectName: "field_target_list_polarity"
+                            Layout.fillWidth: true
+                            model: ["positive", "negative"]
+                            currentIndex: 0
+                            // The two adduct label sets are disjoint, so a
+                            // selection made under the old polarity is
+                            // never valid under the new one.
+                            onCurrentTextChanged: newAnalysisPage.targetListSelectedAdducts = []
+                        }
+                    }
+
+                    ColumnLayout {
+                        objectName: "fieldRow_target_list_adducts"
+                        Layout.fillWidth: true
+                        spacing: 4
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                text: "Adducts"
+                                Layout.preferredWidth: 260
+                            }
+                            Label {
+                                text: "(none selected = every standard adduct for the selected polarity)"
+                                color: Theme.mutedTextColor
+                                font.pixelSize: Theme.captionPixelSize
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                            }
+                        }
+                        Flow {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 260
+                            spacing: 4
+
+                            Repeater {
+                                model: targetListColumn.adductOptions
+                                delegate: CheckBox {
+                                    objectName: "field_target_list_adduct_" + modelData
+                                    text: modelData
+                                    checked: newAnalysisPage.targetListSelectedAdducts.indexOf(modelData) !== -1
+                                    onToggled: newAnalysisPage.toggleTargetListAdduct(modelData, checked)
+
+                                    HoverHandler {
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        objectName: "fieldRow_target_list_match_ppm"
+                        Layout.fillWidth: true
+
+                        Label {
+                            text: ConfigSchema.targetListSchema.fields.match_ppm.label
+                            Layout.preferredWidth: 260
+                        }
+                        ToolButton {
+                            objectName: "field_target_list_match_ppm_help"
+                            text: "?"
+                            implicitWidth: 22
+                            implicitHeight: 22
+                            property string helpText: ConfigSchema.targetListSchema.fields.match_ppm.help
+                            ToolTip.visible: hovered
+                            ToolTip.text: helpText
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+                        TextField {
+                            id: targetListMatchPpmField
+                            objectName: "field_target_list_match_ppm"
+                            Layout.fillWidth: true
+                            text: String(ConfigSchema.targetListSchema.fields.match_ppm.default)
+                        }
+                    }
+                }
+            }
+
+            // --- Generic, schema-driven tabs (every group but io and
+            // target_list) ---
             Repeater {
                 model: ConfigSchema.groups
                 delegate: Flickable {
@@ -837,6 +1051,26 @@ Page {
             var field = findByObjectName(newAnalysisPage, "field_annotate_library_path")
             if (field)
                 field.text = paths.join("; ")
+        }
+    }
+
+    FileDialog {
+        // Its own dialog, deliberately not reusing libraryPathDialog above
+        // — a shared dialog hardcoded to write into one specific field is
+        // exactly the kind of thing that silently corrupts a second
+        // path-list field (see ADR 26 / target-list-annotation-feature
+        // memory). Writes directly to targetListPathsField by id rather
+        // than a hardcoded findByObjectName lookup, for the same reason.
+        id: targetListPathsDialog
+        objectName: "targetListPathsDialog"
+        options: newAnalysisPage.useNativeDialogs ? 0 : FileDialog.DontUseNativeDialog
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["Target list (*.csv *.txt)", "All files (*)"]
+        onAccepted: {
+            var paths = []
+            for (var i = 0; i < selectedFiles.length; i++)
+                paths.push(Router.toLocalPath(selectedFiles[i]))
+            targetListPathsField.text = paths.join("; ")
         }
     }
 }
