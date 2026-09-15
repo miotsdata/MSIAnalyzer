@@ -21,13 +21,18 @@ from msianalyzer.core.analysis_db import (
 from msianalyzer.core.report.summary import (
     AssocPuritySample,
     AssociatedPuritySummary,
+    BasePeakIntensitySample,
+    BasePeakIntensitySummary,
     Ms2Summary,
     RecheckSummary,
     annotation_summary,
     associated_purity,
+    base_peak_intensity,
     build_summary_report,
     collect_stats,
     feature_membership,
+    figure_base_peak_intensity,
+    figure_base_peak_intensity_per_sample,
     figure_ms2_association_per_sample,
     figure_overlap_upset,
     figure_per_sample,
@@ -56,7 +61,12 @@ def _raw_db(
     n_ms2: int,
     n_pixels: int,
     pixel_ms1_ids: Sequence[int] | None = None,
+    ms2_intensity_arrays: Sequence[Sequence[float]] | None = None,
 ) -> Path:
+    """``ms2_intensity_arrays``, when given, must have length ``n_ms2`` —
+    one raw ``intensity_array`` per scan (an empty sequence produces an
+    empty, still non-NULL blob — the "no peaks" case). Omitted, every MS2
+    scan shares one hardcoded ``[1.0, 2.0, 3.0]`` blob, same as before."""
     from msianalyzer.core.parser.mzml_parser import array_to_blob, init_raw_db
 
     blob = array_to_blob(np.array([1.0, 2.0, 3.0]))
@@ -67,11 +77,25 @@ def _raw_db(
             "VALUES (?,?,?,?,?)",
             [(i, float(i), "+", blob, blob) for i in range(1, n_ms1 + 1)],
         )
-        con.executemany(
-            "INSERT INTO ms2_scans (scan_id, rt, filter_string, mz_array, "
-            "intensity_array) VALUES (?,?,?,?,?)",
-            [(1000 + i, float(i), "ms2", blob, blob) for i in range(1, n_ms2 + 1)],
-        )
+        if ms2_intensity_arrays is not None:
+            assert len(ms2_intensity_arrays) == n_ms2
+            ms2_rows = []
+            for i, vals in enumerate(ms2_intensity_arrays, start=1):
+                ivals = np.asarray(vals, dtype=float)
+                mz_blob = array_to_blob(np.arange(ivals.size, dtype=float))
+                i_blob = array_to_blob(ivals)
+                ms2_rows.append((1000 + i, float(i), "ms2", mz_blob, i_blob))
+            con.executemany(
+                "INSERT INTO ms2_scans (scan_id, rt, filter_string, mz_array, "
+                "intensity_array) VALUES (?,?,?,?,?)",
+                ms2_rows,
+            )
+        else:
+            con.executemany(
+                "INSERT INTO ms2_scans (scan_id, rt, filter_string, mz_array, "
+                "intensity_array) VALUES (?,?,?,?,?)",
+                [(1000 + i, float(i), "ms2", blob, blob) for i in range(1, n_ms2 + 1)],
+            )
         if n_pixels:
             con.execute(
                 "CREATE TABLE spatial_pixels ("
@@ -256,6 +280,64 @@ def test_associated_purity_scopes_to_associated_ms2(tmp_path):
     assert by_name["s2"].frac_values == [0.7]
 
 
+def test_base_peak_intensity_scopes_to_all_ms2_regardless_of_association(tmp_path):
+    adb, raw_map = _analysis_db(tmp_path)
+    b = base_peak_intensity(adb, raw_map)
+    # 6 MS2 in s1 + 4 in s2 = 10 total, all with peaks — vs. only 3
+    # associated (see test_associated_purity_scopes_to_associated_ms2) —
+    # the key behavioral contrast with associated_purity.
+    assert b.n_total == 10
+    assert b.n_valid == 10
+    assert b.n_excluded == 0
+    assert b.values == [3.0] * 10  # every scan shares the [1,2,3] fixture blob
+    by_name = {p.name: p for p in b.per_sample}
+    assert by_name["s1"].n_total == 6
+    assert by_name["s2"].n_total == 4
+
+
+def test_base_peak_intensity_excludes_empty_intensity_arrays(tmp_path):
+    raw = _raw_db(
+        tmp_path / "s1.db", n_ms1=1, n_ms2=3, n_pixels=0,
+        ms2_intensity_arrays=[[10.0, 50.0], [], [5.0]],
+    )
+    adb = tmp_path / "analysis.db"
+    init_analysis_db(adb).close()
+    sid = register_sample(adb, name="s1", raw_db_path=raw)
+
+    b = base_peak_intensity(adb, {sid: str(raw)})
+    assert b.n_total == 3
+    assert b.n_valid == 2
+    assert b.n_excluded == 1
+    assert b.values == [50.0, 5.0]
+    p = b.per_sample[0]
+    assert p.n_total == 3
+    assert p.n_valid == 2
+
+
+def test_base_peak_intensity_computes_max_not_tic_or_sum(tmp_path):
+    raw = _raw_db(
+        tmp_path / "s1.db", n_ms1=1, n_ms2=1, n_pixels=0,
+        ms2_intensity_arrays=[[1.0, 2.0, 100.0, 3.0]],
+    )
+    adb = tmp_path / "analysis.db"
+    init_analysis_db(adb).close()
+    sid = register_sample(adb, name="s1", raw_db_path=raw)
+
+    b = base_peak_intensity(adb, {sid: str(raw)})
+    assert b.values == [100.0]  # max, not sum (106.0) or count (4)
+
+
+def test_base_peak_intensity_handles_missing_raw_db(tmp_path):
+    adb = tmp_path / "analysis.db"
+    init_analysis_db(adb).close()
+    register_sample(adb, name="s1", raw_db_path=tmp_path / "does_not_exist.db")
+
+    b = base_peak_intensity(adb)
+    assert b.n_total == 0
+    assert b.n_valid == 0
+    assert b.per_sample[0].n_total == 0
+
+
 def test_unassociated_recheck(tmp_path):
     adb, _ = _analysis_db(tmp_path)
     r = unassociated_recheck(adb)
@@ -318,12 +400,18 @@ def _empty_assoc_purity() -> AssociatedPuritySummary:
     return AssociatedPuritySummary(0.8, 0, 0, [], [], [])
 
 
+def _empty_bpi() -> BasePeakIntensitySummary:
+    return BasePeakIntensitySummary(0, 0, 0, [], [])
+
+
 def test_figures_return_figures_and_tolerate_empty():
     assert isinstance(figure_per_sample([]), go.Figure)
     assert isinstance(figure_overlap_upset([], []), go.Figure)
     assert isinstance(figure_ms2_association_per_sample([]), go.Figure)
     assert isinstance(figure_purity(_empty_assoc_purity()), go.Figure)
     assert isinstance(figure_purity_per_sample(_empty_assoc_purity()), go.Figure)
+    assert isinstance(figure_base_peak_intensity(_empty_bpi()), go.Figure)
+    assert isinstance(figure_base_peak_intensity_per_sample(_empty_bpi()), go.Figure)
     assert isinstance(
         figure_unassociated_recheck(RecheckSummary(10.0, 0, 0, 0, 0, [])),
         go.Figure,
@@ -356,6 +444,71 @@ def test_figure_purity_per_sample_handles_zero_variance_sample():
         ],
     )
     fig = figure_purity_per_sample(assoc)
+    assert len(fig.data) == 1
+    assert np.max(fig.data[0].y) > 0  # a spike, not a crash
+
+
+def test_figure_base_peak_intensity_is_log10_scaled():
+    values = [10.0, 100.0, 1_000.0, 10_000.0, 100_000.0]
+    summary = BasePeakIntensitySummary(
+        n_total=5, n_valid=5, n_excluded=0, values=values, per_sample=[],
+    )
+    fig = figure_base_peak_intensity(summary)
+    np.testing.assert_allclose(sorted(fig.data[0].x), sorted(np.log10(values)))
+    assert fig.layout.xaxis.title.text == "log10(base peak intensity)"
+
+
+def test_figure_base_peak_intensity_drops_nonpositive_values():
+    summary = BasePeakIntensitySummary(
+        n_total=3, n_valid=3, n_excluded=0,
+        values=[0.0, 10.0, 100.0], per_sample=[],
+    )
+    fig = figure_base_peak_intensity(summary)
+    assert len(fig.data[0].x) == 2  # 0.0 can't be log10'd — dropped, not crashed
+
+
+def test_figure_base_peak_intensity_per_sample_is_overlaid_density_on_data_driven_grid():
+    s1 = BasePeakIntensitySample(
+        sample_id=1, name="s1", n_total=3, n_valid=3, values=[100.0, 300.0, 900.0],
+    )
+    s2 = BasePeakIntensitySample(
+        sample_id=2, name="s2", n_total=3, n_valid=3, values=[1e5, 3e5, 9e5],
+    )
+    summary = BasePeakIntensitySummary(
+        n_total=6, n_valid=6, n_excluded=0,
+        values=s1.values + s2.values, per_sample=[s1, s2],
+    )
+    fig = figure_base_peak_intensity_per_sample(summary)
+    assert len(fig.data) == 2
+    assert all(trace.mode == "lines" for trace in fig.data)
+    # grid spans the dataset's actual log10 range, not a fixed [0, 1]
+    grid = np.asarray(fig.data[0].x)
+    assert grid.min() < np.log10(200)
+    assert grid.max() > np.log10(5e5)
+
+
+def test_figure_base_peak_intensity_per_sample_skips_samples_with_fewer_than_two_values():
+    s1 = BasePeakIntensitySample(sample_id=1, name="s1", n_total=1, n_valid=1, values=[100.0])
+    s2 = BasePeakIntensitySample(
+        sample_id=2, name="s2", n_total=2, n_valid=2, values=[100.0, 200.0],
+    )
+    summary = BasePeakIntensitySummary(
+        n_total=3, n_valid=3, n_excluded=0,
+        values=s1.values + s2.values, per_sample=[s1, s2],
+    )
+    fig = figure_base_peak_intensity_per_sample(summary)
+    assert len(fig.data) == 1
+    assert fig.data[0].name.startswith("s2")
+
+
+def test_figure_base_peak_intensity_per_sample_handles_zero_variance_sample():
+    s1 = BasePeakIntensitySample(
+        sample_id=1, name="s1", n_total=3, n_valid=3, values=[500.0, 500.0, 500.0],
+    )
+    summary = BasePeakIntensitySummary(
+        n_total=3, n_valid=3, n_excluded=0, values=s1.values, per_sample=[s1],
+    )
+    fig = figure_base_peak_intensity_per_sample(summary)
     assert len(fig.data) == 1
     assert np.max(fig.data[0].y) > 0  # a spike, not a crash
 
@@ -495,6 +648,9 @@ def test_collect_stats(tmp_path):
     assert stats.mad_filter is None  # filter_spectra logged with empty arguments
     assert stats.associated_purity.n_associated == 3
     assert stats.associated_purity.n_ge_cutoff == 1
+    # all 10 raw MS2 scans, not just the 3 associated ones
+    assert stats.base_peak_intensity.n_total == 10
+    assert stats.base_peak_intensity.n_valid == 10
 
     d = stats.to_dict()
     ap = d["associated_purity"]
@@ -502,6 +658,10 @@ def test_collect_stats(tmp_path):
     assert "frac_values" not in ap and "frac_values_all" not in ap
     assert all("frac_values" not in ps for ps in ap["per_sample"])
     assert ap["pct_ge_cutoff"] == pytest.approx(33.33, abs=0.1)
+    bpi = d["base_peak_intensity"]
+    assert bpi["n_values"] == 10
+    assert "values" not in bpi
+    assert all("values" not in ps for ps in bpi["per_sample"])
     assert d["recheck"]["n_would_associate"] == 1
     assert stats.annotation is None  # no library in the base fixture
     assert d["annotation"] is None
@@ -519,6 +679,7 @@ def test_build_summary_report_writes_files(tmp_path):
     assert "pre-filter centroid list" in text  # the recheck sentence
     assert "feed the library search" in text  # the associated-purity sentence
     assert "precursor_frac" in text
+    assert "base peak intensity" in text.lower()
     # the unscored-purity intro and its plot were dropped from the report
     assert "unscored for" not in text
     assert "laser flyback" not in text
@@ -526,14 +687,23 @@ def test_build_summary_report_writes_files(tmp_path):
     assert "<nav class='toc'>" in text
     assert "href='#overview'" in text
     assert "href='#per-sample-counts'" in text
+    assert "href='#ms2-intensity'" in text
     assert "href='#precursor-purity'" in text
     assert "href='#mad-filter'" not in text  # filter_spectra args were empty
+    # section order: MS2 association -> MS2 intensity -> precursor purity
+    assert (
+        text.index("href='#ms2-association'")
+        < text.index("href='#ms2-intensity'")
+        < text.index("href='#precursor-purity'")
+    )
     # figure titles are promoted to real HTML, not left inside the plotly
     # layout (where they can collide with a wrapped top-anchored legend)
     assert "<h3 class='fig-title'>Per-sample counts</h3>" in text
 
     payload = json.loads((out / "summary.json").read_text())
     assert payload["n_features"] == 3
+    assert payload["base_peak_intensity"]["n_valid"] == 10
+    assert "values" not in payload["base_peak_intensity"]
     assert payload["ms2"]["n_total"] == 6
     assert payload["recheck"]["assoc_ppm"] == 10.0
     assert len(payload["per_sample_ms2"]) == 2

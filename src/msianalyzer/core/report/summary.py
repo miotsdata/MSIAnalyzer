@@ -37,6 +37,8 @@ __all__ = [
     "PerSampleMs2",
     "AssocPuritySample",
     "AssociatedPuritySummary",
+    "BasePeakIntensitySample",
+    "BasePeakIntensitySummary",
     "MadFilterSample",
     "MadFilterSummary",
     "RecheckSummary",
@@ -49,6 +51,7 @@ __all__ = [
     "ms2_summary",
     "per_sample_ms2",
     "associated_purity",
+    "base_peak_intensity",
     "mad_filter_summary",
     "unassociated_recheck",
     "annotation_summary",
@@ -59,6 +62,8 @@ __all__ = [
     "figure_unassociated_recheck",
     "figure_purity",
     "figure_purity_per_sample",
+    "figure_base_peak_intensity",
+    "figure_base_peak_intensity_per_sample",
     "figure_annotation_yield",
     "figure_annotation_score",
     "figure_annotation_ambiguity",
@@ -243,6 +248,41 @@ class AssociatedPuritySummary:
 
 
 @dataclass
+class BasePeakIntensitySample:
+    """Base peak intensity (max of `intensity_array`) for one sample's MS2 scans.
+
+    Population: every row of the sample's raw ``ms2_scans`` — unlike
+    :class:`AssocPuritySample`, not gated by association/annotation status.
+    """
+
+    sample_id: int
+    name: str
+    n_total: int
+    n_valid: int
+    values: list[float] = field(default_factory=list)
+
+
+@dataclass
+class BasePeakIntensitySummary:
+    """Base peak intensity distribution across every sample's raw MS2 scans.
+
+    Scope is intentionally the *whole* raw MS2 population, not the
+    associated-only scope :class:`AssociatedPuritySummary` uses — base peak
+    intensity is a raw-acquisition property meaningful for every scan
+    regardless of downstream association/annotation. Scans whose
+    ``intensity_array`` decodes to zero peaks are excluded from ``values``/
+    ``n_valid``, not treated as a real zero-intensity data point;
+    ``n_excluded`` counts them.
+    """
+
+    n_total: int
+    n_valid: int
+    n_excluded: int
+    values: list[float]
+    per_sample: list[BasePeakIntensitySample]
+
+
+@dataclass
 class MadFilterSample:
     """MAD peak-intensity filter outcome for one sample.
 
@@ -372,6 +412,7 @@ class SummaryStats:
     ms2: Ms2Summary
     per_sample_ms2: list[PerSampleMs2]
     associated_purity: AssociatedPuritySummary
+    base_peak_intensity: BasePeakIntensitySummary
     mad_filter: "MadFilterSummary | None"
     recheck: RecheckSummary
     annotation: "AnnotationSummary | None"
@@ -386,6 +427,11 @@ class SummaryStats:
         for ps in ap["per_sample"]:
             ps.pop("frac_values", None)
         ap["pct_ge_cutoff"] = round(self.associated_purity.pct_ge_cutoff, 2)
+        bpi = d["base_peak_intensity"]
+        bpi["n_values"] = len(self.base_peak_intensity.values)
+        bpi.pop("values", None)
+        for ps in bpi["per_sample"]:
+            ps.pop("values", None)
         d["overlap_combos"] = [
             {"samples": list(s), "n_features": n} for s, n in self.overlap_combos
         ]
@@ -655,6 +701,71 @@ def associated_purity(
         n_ge_cutoff=sum(1 for v in assoc_frac if v >= cutoff),
         frac_values=assoc_frac,
         frac_values_all=all_frac,
+        per_sample=per_sample,
+    )
+
+
+@log_call(source="analysis_db_path")
+def base_peak_intensity(
+    analysis_db_path: Path | str,
+    raw_db_paths: dict[int, str | Path] | None = None,
+) -> BasePeakIntensitySummary:
+    """Base peak intensity (max of ``intensity_array``) for every MS2 scan.
+
+    Population: every row of each sample's raw ``ms2_scans`` table — unlike
+    :func:`associated_purity`, not gated by association/annotation status.
+    Base peak intensity is a raw-acquisition property meaningful for every
+    scan regardless of downstream grouping/filtering. Scans whose
+    ``intensity_array`` decodes to zero peaks are excluded (an empty array
+    is "no data", not a zero-intensity data point); ``n_peaks`` is not used
+    for this because it may be NULL/stale — the decoded array length is the
+    ground truth.
+
+    ``raw_db_paths`` optionally overrides where each ``sample_id``'s raw
+    database lives; by default ``samples.raw_db_path`` is used.
+    """
+    from ..parser.mzml_parser import blob_to_array
+
+    analysis_db_path = Path(analysis_db_path)
+    with sqlite3.connect(analysis_db_path) as con:
+        samples = con.execute(
+            "SELECT sample_id, name, raw_db_path FROM samples ORDER BY sample_id"
+        ).fetchall()
+
+    per_sample: list[BasePeakIntensitySample] = []
+    for sample_id, name, raw_db_path in samples:
+        path = (
+            raw_db_paths.get(sample_id, raw_db_path)
+            if raw_db_paths is not None
+            else raw_db_path
+        )
+        n_total = 0
+        values: list[float] = []
+        if path and Path(path).exists():
+            with sqlite3.connect(str(path)) as rcon:
+                rows = rcon.execute("SELECT intensity_array FROM ms2_scans").fetchall()
+            n_total = len(rows)
+            for (blob,) in rows:
+                arr = np.asarray(blob_to_array(blob), dtype=float)
+                if arr.size:
+                    values.append(float(arr.max()))
+        per_sample.append(
+            BasePeakIntensitySample(
+                sample_id=int(sample_id),
+                name=str(name),
+                n_total=n_total,
+                n_valid=len(values),
+                values=values,
+            )
+        )
+
+    all_values = [v for p in per_sample for v in p.values]
+    n_total = sum(p.n_total for p in per_sample)
+    return BasePeakIntensitySummary(
+        n_total=n_total,
+        n_valid=len(all_values),
+        n_excluded=n_total - len(all_values),
+        values=all_values,
         per_sample=per_sample,
     )
 
@@ -1263,6 +1374,104 @@ def figure_purity_per_sample(assoc: AssociatedPuritySummary) -> go.Figure:
     return fig
 
 
+def _log10_positive(values: Sequence[float]) -> np.ndarray:
+    """log10 of the strictly-positive values in `values` (drops <= 0, which
+    cannot be log-transformed and is vanishingly rare degenerate data)."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[arr > 0]
+    return np.log10(arr) if arr.size else arr
+
+
+def _shared_log_grid(values: Sequence[float], n: int = 200) -> np.ndarray:
+    """Shared log10(intensity) grid spanning `values`, padded 5% each side;
+    falls back to a +/-0.5 decade window when the range is zero."""
+    arr = _log10_positive(values)
+    if arr.size == 0:
+        return np.array([])
+    lo, hi = float(arr.min()), float(arr.max())
+    if hi == lo:
+        lo, hi = lo - 0.5, hi + 0.5
+    else:
+        pad = 0.05 * (hi - lo)
+        lo, hi = lo - pad, hi + pad
+    return np.linspace(lo, hi, n)
+
+
+def figure_base_peak_intensity(summary: BasePeakIntensitySummary) -> go.Figure:
+    """Base peak intensity (max of `intensity_array`) histogram, log10 x-axis.
+
+    Population is every MS2 scan with at least one peak, across every
+    sample — see :func:`base_peak_intensity`. Bins are computed in log10
+    space (not a log-scaled axis over linear bins), since base peak
+    intensity spans orders of magnitude and linear binning would produce
+    misleading, uneven bins once log-displayed.
+    """
+    log_values = _log10_positive(summary.values)
+    if log_values.size == 0:
+        return _empty("Base peak intensity")
+    fig = go.Figure()
+    fig.add_histogram(
+        x=log_values, nbinsx=40, histnorm="percent", marker_color=_C_OK,
+        hovertemplate="log10 intensity %{x:.2f}<br>%{y:.1f}%% of MS2<extra></extra>",
+    )
+    fig.update_layout(
+        title=(
+            f"Base peak intensity (max of intensity_array) — "
+            f"{_fmt(summary.n_valid)} of {_fmt(summary.n_total)} MS2 scans "
+            f"(log10 scale, {_fmt(summary.n_excluded)} excluded — empty spectrum)"
+        ),
+        xaxis=dict(title="log10(base peak intensity)"),
+        yaxis=dict(title="% of MS2"),
+        margin=_MARGIN_TOP,
+    )
+    return fig
+
+
+def figure_base_peak_intensity_per_sample(summary: BasePeakIntensitySummary) -> go.Figure:
+    """Overlaid base peak intensity density per sample, log10 x-axis.
+
+    Grid spans the dataset's actual log10(intensity) range (padded 5%), not
+    a fixed [0, 1] domain like :func:`figure_purity_per_sample` — base peak
+    intensity is unbounded raw ion-count data spanning orders of magnitude.
+    Samples with fewer than two positive values are skipped.
+    """
+    grid = _shared_log_grid(summary.values)
+    if grid.size == 0:
+        return _empty("Base peak intensity, by sample")
+
+    ps = [(p, _log10_positive(p.values)) for p in summary.per_sample]
+    ps = [(p, v) for p, v in ps if v.size >= 2]
+    if not ps:
+        return _empty("Base peak intensity, by sample")
+
+    fig = go.Figure()
+    for i, (p, log_vals) in enumerate(ps):
+        color = _SAMPLE_PALETTE[i % len(_SAMPLE_PALETTE)]
+        if np.ptp(log_vals) == 0:
+            density = np.zeros_like(grid)
+            density[np.argmin(np.abs(grid - log_vals[0]))] = 1.0
+        else:
+            density = gaussian_kde(log_vals)(grid)
+        fig.add_scatter(
+            x=grid, y=density, mode="lines",
+            name=f"{p.name} (n={_fmt(log_vals.size)})",
+            line=dict(color=color, width=2),
+            fill="tozeroy", fillcolor=_rgba(color, 0.15),
+            hovertemplate=f"{p.name}<br>log10 intensity %{{x:.2f}}<extra></extra>",
+        )
+    fig.update_layout(
+        title=(
+            "Base peak intensity density, by sample (log10 scale) — "
+            "click a legend entry to toggle, double-click to isolate"
+        ),
+        xaxis=dict(title="log10(base peak intensity)"),
+        yaxis=dict(title="density"),
+        legend=_LEGEND_TOP,
+        margin=_MARGIN_TOP,
+    )
+    return fig
+
+
 # --- annotation (Stage B) figures -----------------------------------------
 
 
@@ -1405,6 +1614,7 @@ def collect_stats(
         ms2=ms2_summary(analysis_db_path),
         per_sample_ms2=per_sample_ms2(analysis_db_path),
         associated_purity=associated_purity(analysis_db_path, cutoff=purity_cutoff),
+        base_peak_intensity=base_peak_intensity(analysis_db_path, raw_db_paths),
         mad_filter=mad_filter_summary(analysis_db_path),
         recheck=unassociated_recheck(analysis_db_path),
         annotation=annotation_summary(analysis_db_path),
@@ -1451,6 +1661,22 @@ def _assoc_purity_sentence(a: AssociatedPuritySummary) -> str:
         f"that feed the library search), <b>{a.pct_ge_cutoff:.0f}%</b> have "
         f"<code>precursor_frac</code> &ge; {a.cutoff:g} — the precursor dominates "
         f"its isolation window in that pixel's own MS1.</p>"
+    )
+
+
+def _base_peak_intensity_sentence(b: BasePeakIntensitySummary) -> str:
+    if b.n_valid == 0:
+        return "<p>No MS2 scan carries peak data.</p>"
+    excluded = (
+        f" ({_fmt(b.n_excluded)} excluded — an empty <code>intensity_array</code>)"
+        if b.n_excluded
+        else ""
+    )
+    return (
+        f"<p>Base peak intensity (the maximum value of each MS2 scan's "
+        f"<code>intensity_array</code>) was computed for {_fmt(b.n_valid)} of "
+        f"{_fmt(b.n_total)} MS2 scans{excluded}, across every sample's raw "
+        f"acquisition — independent of association or annotation status.</p>"
     )
 
 
@@ -1619,6 +1845,8 @@ def build_summary_report(
         figure_ms2_association(stats.ms2),
         figure_ms2_association_per_sample(stats.per_sample_ms2),
         figure_unassociated_recheck(stats.recheck),
+        figure_base_peak_intensity(stats.base_peak_intensity),
+        figure_base_peak_intensity_per_sample(stats.base_peak_intensity),
         figure_purity(stats.associated_purity),
         figure_purity_per_sample(stats.associated_purity),
     ]
@@ -1643,6 +1871,7 @@ def build_summary_report(
     ]
     (
         b_per_sample, b_overlap, b_ms2, b_ms2_per_sample, b_recheck,
+        b_intensity, b_intensity_per_sample,
         b_purity, b_purity_per_sample,
     ) = blocks[: len(core_figures)]
     ann_blocks = blocks[len(core_figures):]
@@ -1683,6 +1912,14 @@ def build_summary_report(
             "MS2 association",
             b_ms2 + b_ms2_per_sample
             + _recheck_sentence(stats.recheck) + b_recheck,
+        )
+    )
+    sections.append(
+        (
+            "ms2-intensity",
+            "MS2 intensity",
+            _base_peak_intensity_sentence(stats.base_peak_intensity)
+            + b_intensity + b_intensity_per_sample,
         )
     )
     sections.append(

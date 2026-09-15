@@ -12,6 +12,8 @@ End-of-run summary: reads a finished analysis database and writes
         - PerSampleMs2
         - AssocPuritySample
         - AssociatedPuritySummary
+        - BasePeakIntensitySample
+        - BasePeakIntensitySummary
         - UnscoredPurity
         - UnscoredSummary
         - RecheckSummary
@@ -24,6 +26,7 @@ End-of-run summary: reads a finished analysis database and writes
         - ms2_summary
         - per_sample_ms2
         - associated_purity
+        - base_peak_intensity
         - purity_unscored
         - unassociated_recheck
         - annotation_summary
@@ -34,6 +37,8 @@ End-of-run summary: reads a finished analysis database and writes
         - figure_unassociated_recheck
         - figure_purity
         - figure_purity_per_sample
+        - figure_base_peak_intensity
+        - figure_base_peak_intensity_per_sample
         - figure_purity_unscored
         - figure_annotation_yield
         - figure_annotation_score
