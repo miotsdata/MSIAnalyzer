@@ -173,6 +173,28 @@ Window {
         }
     }
 
+    // Single entry point for "Draw ROI" — one window reused across
+    // clicks rather than a new one per open. `onVisibleChanged` above
+    // already covers going from closed to open, but a *second* click
+    // while the window is already open never flips `visible`, so it
+    // would otherwise sit on whatever sample/draft state was left over
+    // from before — this covers that case explicitly instead.
+    function openFor(analysisModel, sampleList, controlsPanel) {
+        var wasVisible = roiWindow.visible
+        roiWindow.analysis = analysisModel
+        roiWindow.samples = sampleList
+        roiWindow.controls = controlsPanel
+        roiWindow.visible = true
+        roiWindow.raise()
+        roiWindow.requestActivate()
+        if (wasVisible) {
+            roiWindow.selectedSampleIndex = 0
+            roiWindow.resetDraft()
+            roiWindow.refreshSavedRois()
+            roiWindow.refreshCatalogRois()
+        }
+    }
+
     // "Add ROI" — reveals the name/color step, before any drawing starts.
     function startAddRoi() {
         roiWindow.draftState = "naming"

@@ -257,6 +257,38 @@ def test_details_button_opens_detail_window_for_selected_hit(
     assert detail_window.property("analysisDbPath") == annotated_analysis_model.analysisDbPath
 
 
+def test_details_button_reuses_window_and_refreshes_for_a_different_hit(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # Clicking "Details" again for a different hit, without closing the
+    # first window, must not open a second window — and must not leave
+    # the reused window showing the previous hit's stale content either
+    # (only its title bar is a direct binding on annotationId; the
+    # metadata/plot are only ever loaded by refresh(), which used to run
+    # only on a closed->open visibility transition that a second click
+    # while already open never triggers).
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _select_feature_7(view, root, find_visual_child, qtbot)
+    _click(view, find_visual_child(root, "mirrorPlotDetailsButton"), qtbot)
+
+    detail_window = root.findChild(QObject, "mirrorPlotDetailWindow")
+    assert detail_window.property("annotationId") == 1
+    assert "Caffeine" in detail_window.property("compoundText")
+
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("selectedFeatureId", 9)
+    qtbot.wait(50)
+    _click(view, find_visual_child(root, "mirrorPlotDetailsButton"), qtbot)
+
+    assert root.findChild(QObject, "mirrorPlotDetailWindow") is detail_window
+    assert detail_window.property("visible") is True
+    assert detail_window.property("annotationId") == 2
+    assert "Water" in detail_window.property("compoundText")
+
+
 def test_details_button_disabled_without_a_selected_hit(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):

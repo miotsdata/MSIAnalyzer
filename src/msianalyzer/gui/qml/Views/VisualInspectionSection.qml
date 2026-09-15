@@ -63,16 +63,14 @@ Item {
                 onClicked: {
                     roiDesignWindowLoader.active = true
                     var win = roiDesignWindowLoader.item
-                    win.analysis = visualSection.analysis
-                    win.samples = visualSection.samples
-                    // The same HeatmapControlsPanel instance already
+                    // openFor() reuses the same window across clicks (one
+                    // ROI design window at a time), resetting to the first
+                    // sample even if it was already open. `controls` is
+                    // the same HeatmapControlsPanel instance already
                     // driving this page's grid, not a duplicate — the ROI
                     // window has no feature/obs/colormap controls of its
                     // own, it renders with whatever is already selected here.
-                    win.controls = controls
-                    win.visible = true
-                    win.raise()
-                    win.requestActivate()
+                    win.openFor(visualSection.analysis, visualSection.samples, controls)
                 }
                 HoverHandler {
                     objectName: "openRoiDesignButtonHover"

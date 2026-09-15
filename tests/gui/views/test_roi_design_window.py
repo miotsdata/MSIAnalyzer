@@ -426,6 +426,43 @@ def test_window_always_opens_on_the_first_sample(
     assert _as_list(window.property("savedRois")) == []
 
 
+def test_draw_roi_button_reuses_window_and_resets_when_already_open(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Same "always opens on the first sample" guarantee as a fresh open
+    # (see test_window_always_opens_on_the_first_sample above), but for a
+    # second click while the window is already open — `onVisibleChanged`
+    # never fires there since `visible` doesn't actually change, so this
+    # exercises openFor()'s explicit reset instead of relying on that
+    # signal.
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad")
+    _write_grid_h5ad(out_dir / "s2.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    window.setProperty("selectedSampleIndex", 1)
+    qtbot.wait(30)
+    assert window.property("selectedSample")["name"] == "s2"
+
+    add_button = window.findChild(QQuickItem, "roiAddButton")
+    _click(window, add_button, qtbot)
+    assert window.property("draftState") == "naming"
+
+    # "Draw ROI" again, without closing the window first.
+    button = find_visual_child(root, "openRoiDesignButton")
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button.mapToScene(
+        button.boundingRect().center()).toPoint())
+    qtbot.wait(100)
+
+    assert root.findChild(QObject, "roiDesignWindow") is window
+    assert window.property("visible") is True
+    assert window.property("selectedSample")["name"] == "s1"
+    assert window.property("draftState") == "idle"
+
+
 def test_other_rois_lists_catalog_entries_missing_from_this_sample(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):

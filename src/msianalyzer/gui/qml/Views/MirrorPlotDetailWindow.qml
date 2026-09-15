@@ -120,6 +120,29 @@ Window {
         }
     }
 
+    // Single entry point for "Details" — one window reused across
+    // clicks rather than a new one per hit. `onVisibleChanged` above
+    // already covers going from closed to open, but a *second* click
+    // while the window is already open never flips `visible`, so no
+    // change signal fires there — this covers that case explicitly
+    // instead of leaving the window showing the previous hit's stale
+    // plot under a title bar that (misleadingly) already updated.
+    function showFor(dbPath, id) {
+        var wasVisible = detailWindow.visible
+        detailWindow.analysisDbPath = dbPath
+        detailWindow.annotationId = id
+        detailWindow.visible = true
+        detailWindow.raise()
+        detailWindow.requestActivate()
+        if (wasVisible) {
+            empSourceCombo.currentIndex = 0
+            libSourceCombo.currentIndex = 0
+            detailWindow.empSource = "filtered"
+            detailWindow.libSource = "filtered"
+            detailWindow.refresh()
+        }
+    }
+
     Connections {
         target: AnalysisBridge
         function onMirrorPlotReady(url) {

@@ -531,13 +531,12 @@ Item {
                             onClicked: {
                                 // Lazily constructs mirrorPlotDetailWindowLoader.item on
                                 // first click, not before — see the Loader's own comment.
+                                // showFor() reuses the same window across clicks (one
+                                // mirror plot window at a time) and refreshes its
+                                // content even when it was already open.
                                 mirrorPlotDetailWindowLoader.active = true
                                 var win = mirrorPlotDetailWindowLoader.item
-                                win.analysisDbPath = analysis.analysisDbPath
-                                win.annotationId = annotationsSection.selectedHit.id
-                                win.visible = true
-                                win.raise()
-                                win.requestActivate()
+                                win.showFor(analysis.analysisDbPath, annotationsSection.selectedHit.id)
                             }
                         }
                     }
