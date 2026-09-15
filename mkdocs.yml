@@ -75,6 +75,13 @@ nav:
           - 17 — Mirror plot background worker: developer/adr/0017-mirror-plot-background-worker.md
           - 18 — Reconstruct filtered spectra on demand: developer/adr/0018-reconstruct-filtered-spectra-on-demand.md
           - 19 — Retire feature-density chimeric flag & peak-based purity: developer/adr/0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md
+          - 20 — Already-parsed, db-only samples: developer/adr/0020-already-parsed-db-only-samples.md
+          - 21 — Representative-compound peak-count tolerance: developer/adr/0021-representative-compound-peak-count-tolerance.md
+          - 22 — Distribution & CI strategy: developer/adr/0022-distribution-and-ci-strategy.md
+          - 23 — PyInstaller/AppImage packaging: developer/adr/0023-pyinstaller-appimage-packaging.md
+          - 24 — Single-instance app lock: developer/adr/0024-single-instance-app-lock.md
+          - 25 — Pin plotly below 7: developer/adr/0025-pin-plotly-below-7.md
+      - Distribution & packaging: developer/distribution.md
       - Testing: developer/testing.md
       - Logging: developer/logging.md
       - API reference:

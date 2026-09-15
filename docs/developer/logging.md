@@ -34,6 +34,18 @@ Three handlers:
 `configure_logging` is called once at import in `cli/main.py` (console only), and
 again by `run_command` once the project folder and run id are known.
 
+The GUI (`gui/main.py`'s `main()`) calls `configure_logging(level=logging.DEBUG)`
+with no `debug_log_dir` — so it hits the default,
+`Path(__file__).resolve().parents[2] / "log"`, i.e. **inside the installed
+package itself** (`src/msianalyzer/log/` in a source checkout), not a
+project-relative `logs/` directory like a CLI `run` gets. This is a known
+wart, not a deliberate design: it's why every GUI debug run leaves a file
+there, silently, forever (never gitignored or git-tracked), and why
+`pdm build`'s packaging has to explicitly exclude that directory — see
+[distribution & packaging](distribution.md#packaging-excludes). Worth
+giving the GUI a real project-relative (or user-cache-directory) log
+destination at some point; not changed yet.
+
 ## Verbosity — `msianalyzer run -v` / `-l`
 
 `-v {debug,info,warning,error,critical}` (default `info`) sets the level of the

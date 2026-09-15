@@ -110,6 +110,39 @@ recursing into a live `WebEngineView`'s child tree while searching for an
 unrelated item's children is unsafe (can crash `getWrapperForQObject`) —
 scope any recursive `childItems()` search to the smallest relevant subtree.
 
+## Singleton popup windows: `Loader` + `showFor()`/`openFor()`
+
+`MirrorPlotDetailWindow` and `RoiDesignWindow` (both top-level `Window`s,
+opened from a button click) are each held by a lazy `Loader` with
+`active: false` initially — the first click sets `active = true`, every
+click after that reuses the same `Loader.item` instead of constructing a
+new window. This matters beyond tidiness: enough accumulated top-level
+`QQuickView`/window wrappers in one process is what triggers the
+PySide6/Shiboken wrapper-lifecycle bug noted below and in
+[testing](../testing.md) — reusing one window instead of piling up new
+ones is a real mitigation, not just a size optimization.
+
+Each window exposes a single entry point (`showFor(...)`/`openFor(...)`)
+that the caller always goes through, rather than the caller setting
+properties and toggling `visible` directly. This is deliberate: an earlier
+version relied on `onVisibleChanged` (fired on a closed→open transition)
+to reset/refresh the window's content, which worked for a fresh open but
+silently did nothing on a second click while the window was already
+open — `visible` doesn't actually change in that case, so the signal never
+fires, and the window kept showing the *previous* click's stale content
+under a title bar that (misleadingly, since it's a direct property
+binding) looked updated. `showFor()`/`openFor()` refresh unconditionally
+regardless of the transition, and are what `onVisibleChanged` now delegates
+to for the fresh-open case too. Any future singleton popup window should
+follow the same shape: one `Loader`, one `showFor`-style entry point, no
+caller setting `visible = true` directly.
+
+## Single-instance app lock
+
+A second `msianalyzer-gui` launch doesn't open a second window — it pings
+the running instance (which raises/focuses itself) and exits before
+building any UI. See [ADR 24](../adr/0024-single-instance-app-lock.md).
+
 ## Theme
 
 The GUI is being redesigned page-by-page toward a professional desktop-app

@@ -14,6 +14,9 @@ change it, start with the [user guide](../user-guide/index.md).
     - [Provenance & caching](architecture/provenance.md) — the `commands` table,
       `run_id` vs `analysis_id`, how steps are skipped.
 - **[Decision records](adr/index.md)** — the *why* behind the structure.
+- **[Distribution & packaging](distribution.md)** — the Python package,
+  the Linux AppImage build, and the CI recipe that runs the test suite
+  headless.
 - **[Testing](testing.md)** — TDD approach, the mock-data factory, test layering.
 - **[Logging](logging.md)** — handler setup, INFO vs DEBUG, log format.
 - **[API reference](api_reference/index.md)** — generated from docstrings.
