@@ -1,12 +1,14 @@
 # annotation
 
 MS2 annotation — Stage A (the grouper), Stage A′ (precursor ion purity),
-Stage B (spectral-library matching) and Stage A″ (per-feature consensus).
+Stage B (spectral-library matching) and Stage A″ (per-feature consensus) —
+plus target-list compound matching, MS1-only and independent of these.
 Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
 [ADR 2](../adr/0002-ms2-feature-association-design.md),
 [ADR 8](../adr/0008-precursor-ion-purity.md),
 [ADR 7](../adr/0007-library-annotation-design.md),
-[ADR 9](../adr/0009-consume-purity-and-consensus.md).
+[ADR 9](../adr/0009-consume-purity-and-consensus.md),
+[ADR 26](../adr/0026-target-list-annotation.md).
 
 ## Stage A — `group_ms2`
 
@@ -90,3 +92,25 @@ Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
         - load_library
         - persist_annotations
         - run_annotation
+
+## Target-list matching — `target_list`
+
+::: msianalyzer.core.annotation.target_list
+    options:
+      members:
+        - Adduct
+        - TargetCompound
+        - TargetMatch
+        - InjectedFeature
+        - TargetListMatchResult
+        - TargetListRunSummary
+        - TargetListError
+        - InvalidFormulaError
+        - adducts_for_polarity
+        - adduct_by_label
+        - adduct_mz
+        - normalize_target_list_paths
+        - parse_target_list_file
+        - parse_target_list_files
+        - match_target_list
+        - run_target_list_matching

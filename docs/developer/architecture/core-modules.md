@@ -53,6 +53,30 @@ Private helpers (`_estimate_baseline`, `_merge_peaks_ppm`,
   peak index (nullable `Int64`). Pure; persistence is done by
   `analysis_db.save_features`.
 
+## `annotation/target_list.py`
+
+Match a user-supplied list of target compounds against `features` by
+theoretical m/z — MS1-only, independent of Stage A/B below. See
+[ADR 26](../adr/0026-target-list-annotation.md).
+
+- Adducts: `Adduct` (label/polarity/charge/delta_mass/
+  multiplication_factor), `POSITIVE_ADDUCTS`/`NEGATIVE_ADDUCTS`/`ADDUCTS`,
+  `adducts_for_polarity`, `adduct_by_label`, `adduct_mz(neutral_mass,
+  adduct)`. Deltas derived from `pyteomics.mass.calculate_mass`, not
+  hand-typed constants.
+- Parsing: `TargetCompound`, `parse_target_list_file`/
+  `parse_target_list_files` — CSV/TXT, `name`/`formula`/`inchikey`
+  columns, fails fast on the first invalid formula
+  (`InvalidFormulaError`).
+- Matching (pure, no DB): `match_target_list(compounds, adducts,
+  existing_features, match_ppm, sample_names) -> TargetListMatchResult` —
+  nearest-feature-within-tolerance for each (compound, adduct); anything
+  unmatched is clustered against itself (same approach as
+  `align_mz_across_samples`) into `InjectedFeature`s.
+- Orchestration: `run_target_list_matching(analysis_db_path, config,
+  command_id, sample_names)` — persists compounds/matches, appends
+  injected features, used by `run.py`.
+
 ## `analysis_db.py`
 
 Schema and provenance helpers for `analysis_<id>.db`. See the
@@ -65,9 +89,15 @@ Schema and provenance helpers for `analysis_<id>.db`. See the
 - `register_sample`, `log_command`, `is_command_already_run`, `write_metadata`.
 - `attach_raw(con, raw_db_path, alias)` — `ATTACH DATABASE` for cross-DB reads.
 - `save_features` / `load_features` — round-trip the aligned frame to `features`.
+  `load_feature_ids_and_mzs` / `append_injected_features` (insert-only, unlike
+  `save_features`) / `load_injected_feature_mzs` support target-list matching.
 - `load_feature_compound_scores(db, feature_id=None)` — read the
   `feature_compound_scores` view (best library score per feature × distinct
   compound) into a DataFrame; empty when annotation never ran.
+- `load_feature_representative_annotations` / `load_feature_list` /
+  `load_feature_categories` — a feature's representative compound label,
+  everywhere it's shown: a target-list match wins unconditionally over the
+  MS2 `rank_feature = 1` pick when both exist (see ADR 26).
 
 ## `annotation/group_ms2.py`
 

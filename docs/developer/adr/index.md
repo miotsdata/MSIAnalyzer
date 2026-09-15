@@ -35,3 +35,4 @@ useful).
 | [23](0023-pyinstaller-appimage-packaging.md) | PyInstaller/AppImage packaging for the Linux standalone build | Accepted |
 | [24](0024-single-instance-app-lock.md) | Single-instance app lock | Accepted |
 | [25](0025-pin-plotly-below-7.md) | Pin plotly below 7 | Accepted |
+| [26](0026-target-list-annotation.md) | Target-list compound annotation | Accepted |

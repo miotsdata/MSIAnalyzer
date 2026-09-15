@@ -14,6 +14,7 @@ End-of-run summary: reads a finished analysis database and writes
         - AssociatedPuritySummary
         - BasePeakIntensitySample
         - BasePeakIntensitySummary
+        - TargetListSummary
         - UnscoredPurity
         - UnscoredSummary
         - RecheckSummary
@@ -27,6 +28,7 @@ End-of-run summary: reads a finished analysis database and writes
         - per_sample_ms2
         - associated_purity
         - base_peak_intensity
+        - target_list_summary
         - purity_unscored
         - unassociated_recheck
         - annotation_summary

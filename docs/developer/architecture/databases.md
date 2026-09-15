@@ -146,8 +146,11 @@ each, distinguished by their `command_id`. Indexes: `run_id`, `sample_id`,
 | `mz` | REAL | consensus m/z, not null |
 | `members_json` | TEXT | `{sample_name: original_peak_index or null}`, not null |
 | `command_id` | INTEGER | FK → `commands` (the `align_mz_across_samples` row) |
+| `origin` | TEXT | `'detected'` (default) or `'injected'` — see `target_list_matches` below |
 
-Index: `idx_features_mz (mz)`. Persisted form of `align_mz_across_samples`.
+Index: `idx_features_mz (mz)`. Persisted form of `align_mz_across_samples`,
+plus any `'injected'` rows appended by target-list matching (never deleted
+by `save_features`'s replace-on-realign, unlike `'detected'` rows).
 
 ### `ms2_associations`  (grouper)
 
@@ -305,6 +308,47 @@ feature, and the row it came from.
 
 Rows with `inchikey IS NULL` are excluded. `msianalyzer report` and
 `analysis_db.load_feature_compound_scores(db, feature_id=None)` read it.
+
+### `target_list_compounds`  (target-list matching)
+
+One row per parsed target-list compound. See
+[ADR 26](../adr/0026-target-list-annotation.md).
+
+| column | type | notes |
+|---|---|---|
+| `id` | INTEGER | PK, autoincrement |
+| `name` | TEXT | not null |
+| `formula` | TEXT | not null |
+| `inchikey` | TEXT | nullable — blank rows allowed |
+| `neutral_mass` | REAL | not null, `pyteomics.mass.calculate_mass(formula)` |
+| `source_file` | TEXT | not null |
+| `row_number` | INTEGER | not null, 1-based, header excluded — for error messages |
+| `command_id` | INTEGER | FK → `commands` (the `match_target_list` row) |
+
+### `target_list_matches`  (target-list matching)
+
+One row per (target compound, adduct) that matched a feature — either an
+already-detected one (`match_type = 'existing'`) or one created for it
+(`match_type = 'injected'`, see `features.origin`). Several rows can and
+do share one `feature_id`; none are collapsed.
+
+| column | type | notes |
+|---|---|---|
+| `id` | INTEGER | PK, autoincrement |
+| `target_compound_id` | INTEGER | FK → `target_list_compounds`, not null |
+| `feature_id` | INTEGER | FK → `features`, not null |
+| `adduct_label` | TEXT | e.g. `"[M+H]+"`, not null |
+| `adduct_charge` | INTEGER | not null |
+| `adduct_delta_mass` | REAL | not null |
+| `multiplication_factor` | INTEGER | not null — 1 monomer, 2 dimer, ... |
+| `theoretical_mz` | REAL | not null |
+| `ppm_diff` | REAL | not null — `(feature_mz - theoretical_mz) / theoretical_mz * 1e6` |
+| `match_type` | TEXT | `'existing'` or `'injected'`, not null |
+| `command_id` | INTEGER | FK → `commands` (the `match_target_list` row) |
+
+Index: `idx_tlm_feature (feature_id)`.
+`analysis_db.load_target_list_matches_for_feature(db, feature_id)` reads it
+(the GUI top-hits list, Phase B — see ADR 26).
 
 ---
 

@@ -81,6 +81,7 @@ nav:
           - 23 — PyInstaller/AppImage packaging: developer/adr/0023-pyinstaller-appimage-packaging.md
           - 24 — Single-instance app lock: developer/adr/0024-single-instance-app-lock.md
           - 25 — Pin plotly below 7: developer/adr/0025-pin-plotly-below-7.md
+          - 26 — Target-list compound annotation: developer/adr/0026-target-list-annotation.md
       - Distribution & packaging: developer/distribution.md
       - Testing: developer/testing.md
       - Logging: developer/logging.md
