@@ -10,6 +10,7 @@ import tomllib
 
 import tomli_w
 
+from msianalyzer.core.annotation.target_list import adducts_for_polarity
 from msianalyzer.core.project.project import NotInProjectFolderError, get_project_folder
 from msianalyzer.core.utils.logging_utils import log_call
 
@@ -367,6 +368,73 @@ class AlignMzSamples:
         default=None, metadata={"gui_hidden": True}
     )
     mz_decimals: int = 4
+
+
+@dataclass
+class TargetListConfig:
+    """Match a user-supplied list of target compounds against features by
+    theoretical m/z — independent of, and complementary to, `annotate`'s
+    MS2 spectral-library matching.
+
+    A target compound (name, chemical formula, InChIKey — no m/z of its
+    own) is searched for across `adducts`: for each, its theoretical ion
+    m/z (`core.annotation.target_list.adduct_mz`) is compared against every
+    feature from `align`. Within `match_ppm` of an existing feature, it's
+    attached there; otherwise a new feature is created for it
+    (`features.origin = 'injected'`) so it still gets a real per-sample
+    heatmap (see `core.run.run`'s `target_mz_set` wiring) instead of being
+    silently absent because it never happened to survive peak detection. A
+    feature matched this way is labelled by its target-list identity
+    everywhere in the GUI/report, even when it also has an MS2 annotation
+    (see `analysis_db.load_feature_representative_annotations`) — it was
+    explicitly searched for by name, unlike an automatically-scored MS2
+    hit. See ADR 0026 for the full design.
+
+    Leaving `paths` empty (`None` or `[]`) disables this whole stage —
+    every other setting in this section is then unused.
+
+    Attributes:
+        paths: Path to one target-list CSV/TXT file, or a list of several,
+            e.g. `"targets.csv"` or `["targets_a.csv", "targets_b.txt"]`.
+            Required columns (case-insensitive): `name`, `formula`,
+            `inchikey` (may be blank per row). Leaving this `None` (the
+            default) or an empty list skips target-list matching entirely.
+        polarity: `"positive"` or `"negative"` — which of this run's ion
+            mode `adducts` may be searched. Not auto-detected from the
+            mzML; must be set explicitly, since the two adduct sets are
+            physically incompatible with each other (a `"positive"` run
+            can never actually observe a negative-mode adduct).
+        adducts: Which adduct labels to search, e.g. `["[M+H]+",
+            "[M+Na]+"]` — every one must be valid for `polarity` (see
+            `core.annotation.target_list.adducts_for_polarity`). `None`
+            (the default) searches every standard adduct for `polarity`.
+        match_ppm: How close (in ppm) a target compound's theoretical m/z
+            must be to an existing feature's own m/z to attach to it,
+            rather than being injected as a new synthetic feature. A
+            separate tolerance from `align.align_ppm`/
+            `group_ms2.assoc_ppm`/`annotate.candidate_ppm` — see ADR 0005's
+            "one tolerance per distinct physical comparison" precedent.
+    """
+
+    paths: str | list[str] | None = None
+    polarity: str = "positive"
+    adducts: list[str] | None = None
+    match_ppm: float = 10.0
+
+    def __post_init__(self) -> None:
+        if self.polarity not in ("positive", "negative"):
+            raise ValueError(
+                f"target_list: polarity must be 'positive' or 'negative', "
+                f"got {self.polarity!r}"
+            )
+        if self.adducts:
+            valid = {a.label for a in adducts_for_polarity(self.polarity)}
+            bad = [a for a in self.adducts if a not in valid]
+            if bad:
+                raise ValueError(
+                    f"target_list: adduct(s) {bad!r} are not valid for "
+                    f"polarity {self.polarity!r}; valid adducts: {sorted(valid)}"
+                )
 
 
 @dataclass
@@ -868,6 +936,7 @@ GROUPS: dict[str, type] = {
     "centroid": CentroidConfig,
     "peak": PeakConfig,
     "align": AlignMzSamples,
+    "target_list": TargetListConfig,
     "group_ms2": GroupMs2Config,
     "purity": PurityConfig,
     "annotate": AnnotateConfig,
@@ -885,6 +954,7 @@ GROUP_TITLES: dict[str, str] = {
     "centroid": "detect centroids",
     "peak": "peak threshold",
     "align": "align all mzs",
+    "target_list": "target list matching",
     "group_ms2": "group MS2",
     "purity": "precursor purity",
     "annotate": "annotate MS2",
@@ -900,10 +970,10 @@ class Config:
     """Full configuration for a processing run, grouped by pipeline stage.
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
-    `align`, `group_ms2`, `purity`, `annotate`, `consensus`, `report`,
-    `h5ad`, `normalization`, `analysis`) and provides (de)serialization to
-    and from YAML and TOML. Only `io` is required; the remaining groups fall
-    back to their dataclass defaults.
+    `align`, `target_list`, `group_ms2`, `purity`, `annotate`, `consensus`,
+    `report`, `h5ad`, `normalization`, `analysis`) and provides
+    (de)serialization to and from YAML and TOML. Only `io` is required; the
+    remaining groups fall back to their dataclass defaults.
 
     Attributes:
         version: Config schema version; checked on load.
@@ -912,6 +982,7 @@ class Config:
         centroid: Centroid detection parameters.
         peak: Peak filtering parameters.
         align: Cross-sample m/z alignment parameters.
+        target_list: Target-compound-list matching parameters.
         group_ms2: MS2-to-feature association parameters.
         purity: Precursor-ion-purity parameters.
         annotate: MS2 spectral-library annotation parameters.
@@ -922,7 +993,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 15
+    version: int = 16
 
     def __init__(
         self,
@@ -931,6 +1002,7 @@ class Config:
         centroid: CentroidConfig | None = None,
         peak: PeakConfig | None = None,
         align: AlignMzSamples | None = None,
+        target_list: TargetListConfig | None = None,
         group_ms2: GroupMs2Config | None = None,
         purity: PurityConfig | None = None,
         annotate: AnnotateConfig | None = None,
@@ -945,6 +1017,7 @@ class Config:
         self.centroid: CentroidConfig = centroid or CentroidConfig()
         self.peak: PeakConfig = peak or PeakConfig()
         self.align: AlignMzSamples = align or AlignMzSamples()
+        self.target_list: TargetListConfig = target_list or TargetListConfig()
         self.group_ms2: GroupMs2Config = group_ms2 or GroupMs2Config()
         self.purity: PurityConfig = purity or PurityConfig()
         self.annotate: AnnotateConfig = annotate or AnnotateConfig()

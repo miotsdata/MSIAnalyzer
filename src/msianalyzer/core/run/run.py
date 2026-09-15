@@ -20,6 +20,7 @@ from msianalyzer.core.annotation.annotate import run_annotation
 from msianalyzer.core.annotation.consensus import run_consensus
 from msianalyzer.core.annotation.group_ms2 import run_grouper
 from msianalyzer.core.annotation.precursor_purity import run_precursor_purity
+from msianalyzer.core.annotation.target_list import run_target_list_matching
 from msianalyzer.core.report.summary import build_summary_report
 from msianalyzer.core.config import Config
 from msianalyzer.core.parser import MzmlParser, log_command, parse_raster_xml
@@ -54,6 +55,7 @@ class RunStatus(Enum):
 RUN_STEPS: tuple[str, ...] = (
     "process_samples",
     "align_mz",
+    "match_target_list",
     "group_ms2",
     "precursor_purity",
     "annotate_ms2",
@@ -666,6 +668,49 @@ class Run:
             mzs_df = pd.read_csv(aligned_df_path, index_col=0)
         self._emit_step("align_mz", "completed")
 
+        # --- TARGET-LIST COMPOUND MATCHING (analysis DB) ---
+        # MS1-only (needs only `features`, from align_mz above) — independent
+        # of group_ms2/purity/annotate/consensus below, but must complete
+        # before assemble_adata so an injected feature's exact m/z (see
+        # target_mz_set below) reaches every sample's .h5ad. See ADR 0026.
+        self._emit_step("match_target_list", "started")
+        if config.target_list.paths:
+            if not analysis_db.is_command_already_run(
+                "match_target_list", analysis_id, adb_path
+            ):
+                command_id = analysis_db.log_command(
+                    adb_path,
+                    command_name="match_target_list",
+                    arguments={**vars(config.target_list)},
+                    run_id=analysis_id,
+                )
+                tl_summary = run_target_list_matching(
+                    adb_path,
+                    config.target_list,
+                    command_id=command_id,
+                    sample_names=list(mzs_df.columns),
+                )
+                logger.info(
+                    "run %s: target list — %d compound(s), %d matched to "
+                    "existing features, %d injected",
+                    analysis_id, tl_summary.n_compounds,
+                    tl_summary.n_matched_existing, tl_summary.n_injected_features,
+                )
+            else:
+                logger.debug("Already run match_target_list")
+            self._emit_step("match_target_list", "completed")
+            # Every sample's .h5ad must be able to show an injected
+            # feature's heatmap too — union its m/z in here (read fresh
+            # from the DB, so this is correct whether match_target_list
+            # just ran above or was already-done and skipped).
+            target_mz_set = set(mzs_df.index) | set(
+                analysis_db.load_injected_feature_mzs(adb_path)
+            )
+        else:
+            logger.info("No target list configured; skipping")
+            self._emit_step("match_target_list", "skipped")
+            target_mz_set = set(mzs_df.index)
+
         # --- ASSOCIATE MS2 SCANS WITH FEATURES (analysis DB) ---
         self._emit_step("group_ms2", "started")
         if not analysis_db.is_command_already_run(
@@ -806,7 +851,7 @@ class Run:
             if not out_adata_path.exists():
                 tmp_adata = create_spatial_adata(
                     db_path=db_path,
-                    target_mz_set=mzs_df.index,
+                    target_mz_set=target_mz_set,
                     project_id=analysis_id,
                     **vars(config.h5ad),
                 )

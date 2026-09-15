@@ -68,6 +68,14 @@ class MockAlignConfig:
 
 
 @dataclass
+class MockTargetListConfig:
+    paths: str | list | None = None
+    polarity: str = "positive"
+    adducts: list | None = None
+    match_ppm: float = 10.0
+
+
+@dataclass
 class MockGroupMs2Config:
     assoc_ppm: float = 10.0
     include_unmatched: bool = True
@@ -147,6 +155,7 @@ class DummyConfig:
         self.centroid = MockCentroidConfig()
         self.peak = MockPeakConfig()
         self.align = MockAlignConfig()
+        self.target_list = MockTargetListConfig()
         self.group_ms2 = MockGroupMs2Config()
         self.purity = MockPurityConfig()
         self.annotate = MockAnnotateConfig()
@@ -926,6 +935,8 @@ _FULL_RUN_STAGES_SUCCESS = [
     ("process_samples", "completed"),
     ("align_mz", "started"),
     ("align_mz", "completed"),
+    ("match_target_list", "started"),
+    ("match_target_list", "skipped"),
     ("group_ms2", "started"),
     ("group_ms2", "completed"),
     ("precursor_purity", "started"),
@@ -1067,6 +1078,8 @@ def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
         ("process_samples", "completed"),
         ("align_mz", "started"),
         ("align_mz", "completed"),
+        ("match_target_list", "started"),
+        ("match_target_list", "skipped"),
         ("group_ms2", "started"),
         ("group_ms2", "completed"),
         ("precursor_purity", "skipped"),
@@ -1107,3 +1120,142 @@ def test_run_core_emits_failed_when_sample_processing_raises(mocker, tmp_path):
         run.run_core()
 
     assert events == [("process_samples", "started"), ("process_samples", "failed")]
+
+
+# ---------------------------------------------------------------------------
+# target-list matching wiring (features.origin -> target_mz_set) — ADR 0026
+# ---------------------------------------------------------------------------
+
+
+def test_run_core_folds_injected_feature_mz_into_target_mz_set_passed_to_create_spatial_adata(
+    mocker, tmp_path,
+):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    config.target_list.paths = "targets.csv"
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0]))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+    mock_adb.load_injected_feature_mzs.return_value = [999.0]
+
+    mocker.patch(
+        "msianalyzer.core.run.run.run_target_list_matching",
+        return_value=mocker.MagicMock(
+            n_compounds=1, n_matched_existing=0, n_injected_features=1,
+        ),
+    )
+
+    _patch_run_core_collaborators(mocker, mzs_index=(100.0, 200.0))
+    mock_create_adata = mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
+    )
+
+    mock_executor = mocker.MagicMock()
+    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
+    mocker.patch(
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
+    )
+
+    run.run_core()
+
+    assert mock_create_adata.call_args_list  # sanity: it was actually called
+    for call in mock_create_adata.call_args_list:
+        target_mz_set = call.kwargs["target_mz_set"]
+        assert 999.0 in target_mz_set  # the injected feature's mz
+        assert 100.0 in target_mz_set  # the aligned features' mz
+        assert 200.0 in target_mz_set
+
+
+def test_run_core_skips_match_target_list_when_paths_not_configured(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)  # target_list.paths is None by default
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0]))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    mock_matching = mocker.patch("msianalyzer.core.run.run.run_target_list_matching")
+    _patch_run_core_collaborators(mocker)
+    mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
+    )
+
+    mock_executor = mocker.MagicMock()
+    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
+    mocker.patch(
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
+    )
+
+    run.run_core()
+
+    mock_matching.assert_not_called()
+    mock_adb.load_injected_feature_mzs.assert_not_called()
+
+
+def test_run_core_match_target_list_idempotent_on_rerun_does_not_duplicate_injected_features(
+    mocker, tmp_path,
+):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    config.target_list.paths = "targets.csv"
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0]))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    # match_target_list already ran; everything else still fresh.
+    mock_adb.is_command_already_run.side_effect = (
+        lambda name, *a, **kw: name == "match_target_list"
+    )
+    mock_adb.load_injected_feature_mzs.return_value = [999.0]
+
+    mock_matching = mocker.patch("msianalyzer.core.run.run.run_target_list_matching")
+    _patch_run_core_collaborators(mocker)
+    mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
+    )
+
+    mock_executor = mocker.MagicMock()
+    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
+    mocker.patch(
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
+    )
+
+    run.run_core()
+
+    # not re-run — but the previously-injected feature's mz still reaches
+    # target_mz_set, read fresh from the DB rather than needing a rerun.
+    mock_matching.assert_not_called()
+    mock_adb.load_injected_feature_mzs.assert_called()

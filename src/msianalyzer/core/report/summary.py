@@ -39,6 +39,7 @@ __all__ = [
     "AssociatedPuritySummary",
     "BasePeakIntensitySample",
     "BasePeakIntensitySummary",
+    "TargetListSummary",
     "MadFilterSample",
     "MadFilterSummary",
     "RecheckSummary",
@@ -52,6 +53,7 @@ __all__ = [
     "per_sample_ms2",
     "associated_purity",
     "base_peak_intensity",
+    "target_list_summary",
     "mad_filter_summary",
     "unassociated_recheck",
     "annotation_summary",
@@ -403,6 +405,35 @@ class AnnotationSummary:
 
 
 @dataclass
+class TargetListSummary:
+    """Roll-up of target-list compound matching (`core.annotation.
+    target_list`) — only built when at least one target-list file was
+    configured. Counts only; no figure for v1 (see ADR 0026).
+
+    Attributes:
+        n_files: Target-list files configured.
+        n_compounds: Distinct compound rows parsed across every file.
+        n_adducts: Adducts searched.
+        n_matches: Every (compound, adduct) match, both `match_type`\\ s —
+            a feature with several matching compounds/adducts is not
+            collapsed, so this can exceed `n_distinct_features`.
+        n_matched_existing: Matches attached to an already-detected feature.
+        n_injected_features: New synthetic features created because no
+            existing feature was within `match_ppm`.
+        n_distinct_features: Distinct features with >= 1 target-list match
+            (existing + injected).
+    """
+
+    n_files: int
+    n_compounds: int
+    n_adducts: int
+    n_matches: int
+    n_matched_existing: int
+    n_injected_features: int
+    n_distinct_features: int
+
+
+@dataclass
 class SummaryStats:
     """Everything the report renders."""
 
@@ -413,6 +444,7 @@ class SummaryStats:
     per_sample_ms2: list[PerSampleMs2]
     associated_purity: AssociatedPuritySummary
     base_peak_intensity: BasePeakIntensitySummary
+    target_list: "TargetListSummary | None"
     mad_filter: "MadFilterSummary | None"
     recheck: RecheckSummary
     annotation: "AnnotationSummary | None"
@@ -799,6 +831,48 @@ def per_sample_ms2(analysis_db_path: Path | str) -> list[PerSampleMs2]:
             )
         )
     return out
+
+
+@log_call(source="analysis_db_path")
+def target_list_summary(analysis_db_path: Path | str) -> TargetListSummary | None:
+    """Roll-up of target-list compound matching — `None` if it never ran
+    (no `target_list_compounds` rows), matching `mad_filter_summary`'s
+    "only built when the stage actually ran" convention.
+    """
+    analysis_db_path = Path(analysis_db_path)
+    with sqlite3.connect(analysis_db_path) as con:
+        try:
+            n_compounds, n_files = con.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT source_file) "
+                "FROM target_list_compounds"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if not n_compounds:
+            return None
+        n_matches, n_existing, _n_injected_matches, n_adducts = con.execute(
+            "SELECT COUNT(*), "
+            "       SUM(match_type = 'existing'), "
+            "       SUM(match_type = 'injected'), "
+            "       COUNT(DISTINCT adduct_label) "
+            "FROM target_list_matches"
+        ).fetchone()
+        n_distinct_features = con.execute(
+            "SELECT COUNT(DISTINCT feature_id) FROM target_list_matches"
+        ).fetchone()[0]
+        n_injected_features = con.execute(
+            "SELECT COUNT(*) FROM features WHERE origin = 'injected'"
+        ).fetchone()[0]
+
+    return TargetListSummary(
+        n_files=int(n_files or 0),
+        n_compounds=int(n_compounds or 0),
+        n_adducts=int(n_adducts or 0),
+        n_matches=int(n_matches or 0),
+        n_matched_existing=int(n_existing or 0),
+        n_injected_features=int(n_injected_features or 0),
+        n_distinct_features=int(n_distinct_features or 0),
+    )
 
 
 @log_call(source="analysis_db_path")
@@ -1615,6 +1689,7 @@ def collect_stats(
         per_sample_ms2=per_sample_ms2(analysis_db_path),
         associated_purity=associated_purity(analysis_db_path, cutoff=purity_cutoff),
         base_peak_intensity=base_peak_intensity(analysis_db_path, raw_db_paths),
+        target_list=target_list_summary(analysis_db_path),
         mad_filter=mad_filter_summary(analysis_db_path),
         recheck=unassociated_recheck(analysis_db_path),
         annotation=annotation_summary(analysis_db_path),
@@ -1633,6 +1708,19 @@ def _table_html(counts: Sequence[SampleCounts]) -> str:
         for c in counts
     )
     return f"<table>{head}{rows}</table>"
+
+
+def _target_list_table_html(t: TargetListSummary) -> str:
+    return (
+        f"<p>{_fmt(t.n_compounds)} target compound(s) from {_fmt(t.n_files)} "
+        f"file(s), searched across {_fmt(t.n_adducts)} adduct(s) at "
+        f"&plusmn;<code>match_ppm</code> — {_fmt(t.n_matches)} match(es) "
+        f"across {_fmt(t.n_distinct_features)} feature(s).</p>"
+        "<table><tr><th>matched an existing feature</th>"
+        "<th>new feature injected (not in the filtered peak list)</th></tr>"
+        f"<tr><td>{_fmt(t.n_matched_existing)}</td>"
+        f"<td>{_fmt(t.n_injected_features)}</td></tr></table>"
+    )
 
 
 def _mad_table_html(m: MadFilterSummary) -> str:
@@ -1902,6 +1990,10 @@ def build_summary_report(
         ),
         ("feature-overlap", "Feature overlap", b_overlap),
     ]
+    if stats.target_list is not None:
+        sections.append(
+            ("target-list", "Target list matching", _target_list_table_html(stats.target_list))
+        )
     if stats.mad_filter is not None:
         sections.append(
             ("mad-filter", "MS1 peak filtering (MAD)", _mad_table_html(stats.mad_filter))

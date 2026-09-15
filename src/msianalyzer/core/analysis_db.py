@@ -21,6 +21,8 @@ precursor_purity     per-MS2 precursor purity (precursor_frac) vs. its parent MS
 feature_ms2_consensus per-feature "best MS2 scan" pick
 annotation_libraries one row per spectral library used to annotate
 ms2_annotations      one row per (MS2 scan, library candidate) comparison
+target_list_compounds one row per parsed target-list compound (name/formula/InChIKey)
+target_list_matches  one row per (target compound, adduct) matched to a feature
 rois                 analysis-wide ROI name/color catalog (geometry lives per-sample in h5ad)
 """
 
@@ -169,6 +171,8 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             mz           REAL    NOT NULL,
             members_json TEXT    NOT NULL,
             command_id   INTEGER,
+            origin       TEXT    NOT NULL DEFAULT 'detected'
+                CHECK (origin IN ('detected', 'injected')),
             CONSTRAINT fk_feat_command
             FOREIGN KEY (command_id) REFERENCES commands(id)
         )
@@ -417,6 +421,55 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         GROUP BY feature_id, inchikey
     """)
 
+    # --- target-list compound matching -------------------------------------
+    # Written by core.annotation.target_list.run_target_list_matching. A
+    # target compound (name/formula/InChIKey, no m/z of its own) is matched
+    # by *theoretical* m/z (formula mass + a searched adduct) against
+    # `features` — deliberately its own tables, never merged into
+    # ms2_annotations/rank_feature: a target-list match has no scan, no
+    # spectral score, nothing that machinery's ranking is built around. See
+    # ADR 0026.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS target_list_compounds (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT    NOT NULL,
+            formula      TEXT    NOT NULL,
+            inchikey     TEXT,
+            neutral_mass REAL    NOT NULL,
+            source_file  TEXT    NOT NULL,
+            row_number   INTEGER NOT NULL,
+            command_id   INTEGER,
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    # One row per (target compound, adduct) that matched a feature — either
+    # an already-detected one (match_type='existing') or one created for it
+    # because nothing was close enough (match_type='injected', see
+    # features.origin). Multiple compounds/adducts can and do share one
+    # feature_id — every match is kept, none collapsed to "the" answer.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS target_list_matches (
+            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_compound_id     INTEGER NOT NULL,
+            feature_id             INTEGER NOT NULL,
+            adduct_label           TEXT    NOT NULL,
+            adduct_charge          INTEGER NOT NULL,
+            adduct_delta_mass      REAL    NOT NULL,
+            multiplication_factor  INTEGER NOT NULL,
+            theoretical_mz         REAL    NOT NULL,
+            ppm_diff               REAL    NOT NULL,
+            match_type             TEXT    NOT NULL
+                CHECK (match_type IN ('existing', 'injected')),
+            command_id             INTEGER,
+            FOREIGN KEY (target_compound_id) REFERENCES target_list_compounds(id),
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tlm_feature ON target_list_matches(feature_id)"
+    )
+
     # --- ROI catalog (GUI's "ROI Design" window) --------------------------
     # Analysis-wide name/color registry only — geometry is independent per
     # sample and lives solely in that sample's own h5ad (uns["rois"], see
@@ -657,6 +710,184 @@ def load_features(db_path: Path | str) -> pd.DataFrame:
 
 
 @log_call(source="db_path")
+def load_feature_ids_and_mzs(db_path: Path | str) -> pd.DataFrame:
+    """Every ``(feature_id, mz)`` pair — the minimal shape
+    ``target_list.match_target_list`` searches against, independent of
+    per-sample membership (``load_features``'s shape, which has no
+    ``feature_id`` column at all).
+
+    Returns:
+        A DataFrame with ``feature_id``, ``mz``, ordered by ``mz``. Empty
+        when there are no features.
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(
+                "SELECT feature_id, mz FROM features ORDER BY mz", con
+            )
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame(columns=["feature_id", "mz"])
+
+
+def append_injected_features(
+    db_path: Path | str,
+    features: list,
+    command_id: int | None = None,
+) -> list[int]:
+    """Insert new synthetic features (``origin='injected'``) — never
+    deletes existing rows, unlike :func:`save_features` (which replaces the
+    whole table on an ``align_mz`` re-run). So running target-list matching
+    after alignment never loses real detected features.
+
+    Args:
+        db_path: The analysis database.
+        features: A list of ``target_list.InjectedFeature`` (or anything
+            with ``.mz``/``.members_json`` attributes).
+        command_id: The ``match_target_list`` command this insert belongs to.
+
+    Returns:
+        The new ``feature_id``\\ s, in input order.
+    """
+    ids: list[int] = []
+    with connect(db_path) as con:
+        for f in features:
+            cur = safe_execute(
+                con,
+                "INSERT INTO features (mz, members_json, command_id, origin) "
+                "VALUES (?, ?, ?, 'injected')",
+                (f.mz, f.members_json, command_id),
+                table="features",
+                logger=logger,
+                source=db_path,
+            )
+            ids.append(int(cur.lastrowid))
+        con.commit()
+    return ids
+
+
+def load_injected_feature_mzs(db_path: Path | str) -> list[float]:
+    """Every ``features.mz`` with ``origin = 'injected'``.
+
+    Feeds ``core.run.run``'s ``target_mz_set`` union before
+    ``create_spatial_adata`` runs — read fresh from the DB (not carried
+    over in memory) so it's correct whether target-list matching just ran
+    or was already-done and skipped on this call.
+    """
+    with connect(db_path) as con:
+        try:
+            rows = con.execute(
+                "SELECT mz FROM features WHERE origin = 'injected'"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [float(r[0]) for r in rows]
+
+
+def save_target_list_compounds(
+    db_path: Path | str,
+    compounds: list,
+    command_id: int | None = None,
+) -> list[int]:
+    """Persist parsed target-list compounds.
+
+    Args:
+        compounds: A list of ``target_list.TargetCompound``.
+        command_id: The ``match_target_list`` command this insert belongs to.
+
+    Returns:
+        The new ``target_list_compounds.id``\\ s, in input order.
+    """
+    ids: list[int] = []
+    with connect(db_path) as con:
+        for c in compounds:
+            cur = safe_execute(
+                con,
+                "INSERT INTO target_list_compounds "
+                "(name, formula, inchikey, neutral_mass, source_file, "
+                " row_number, command_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    c.name, c.formula, c.inchikey, c.neutral_mass,
+                    c.source_file, c.row_number, command_id,
+                ),
+                table="target_list_compounds",
+                logger=logger,
+                source=db_path,
+            )
+            ids.append(int(cur.lastrowid))
+        con.commit()
+    return ids
+
+
+def save_target_list_matches(
+    db_path: Path | str,
+    matches: list,
+    command_id: int | None = None,
+) -> None:
+    """Persist target-list matches.
+
+    Args:
+        matches: A list of ``(target_list.TargetMatch, target_compound_id)``
+            pairs — each match paired with its already-resolved
+            ``target_list_compounds.id`` (the caller, ``target_list.
+            run_target_list_matching``, resolves this after
+            :func:`save_target_list_compounds`).
+        command_id: The ``match_target_list`` command this insert belongs to.
+    """
+    rows = [
+        (
+            compound_id, m.feature_id, m.adduct.label, m.adduct.charge,
+            m.adduct.delta_mass, m.adduct.multiplication_factor,
+            m.theoretical_mz, m.ppm_diff, m.match_type, command_id,
+        )
+        for m, compound_id in matches
+    ]
+    with connect(db_path) as con:
+        safe_executemany(
+            con,
+            "INSERT INTO target_list_matches "
+            "(target_compound_id, feature_id, adduct_label, adduct_charge, "
+            " adduct_delta_mass, multiplication_factor, theoretical_mz, "
+            " ppm_diff, match_type, command_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            rows,
+            table="target_list_matches",
+            logger=logger,
+            source=db_path,
+        )
+        con.commit()
+
+
+@log_call(source="db_path")
+def load_target_list_matches_for_feature(
+    db_path: Path | str, feature_id: int
+) -> pd.DataFrame:
+    """Every target-list match for one feature.
+
+    The GUI's top-hits list (Phase B) reads this the same way
+    :func:`load_ms2_annotations_for_feature` reads MS2 candidates.
+
+    Returns:
+        A DataFrame with ``id``, ``compound_name``, ``compound_formula``,
+        ``inchikey``, ``adduct_label``, ``theoretical_mz``, ``ppm_diff``,
+        ``match_type``, ordered by closeness (``ABS(ppm_diff)``). Empty
+        when the feature has no target-list match.
+    """
+    sql = """
+        SELECT tlm.id, tlc.name AS compound_name, tlc.formula AS compound_formula,
+               tlc.inchikey, tlm.adduct_label, tlm.theoretical_mz, tlm.ppm_diff,
+               tlm.match_type
+        FROM target_list_matches tlm
+        JOIN target_list_compounds tlc ON tlc.id = tlm.target_compound_id
+        WHERE tlm.feature_id = ?
+        ORDER BY ABS(tlm.ppm_diff)
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con, params=(int(feature_id),))
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
 def load_feature_compound_scores(
     db_path: Path | str, feature_id: int | None = None
 ) -> pd.DataFrame:
@@ -700,37 +931,77 @@ def load_feature_compound_scores(
             return pd.DataFrame()
 
 
+#: Every feature with >= 1 target-list match, one row each, its compound
+#: name(s)/formula(s)/InChIKey(s) joined with "; " when several distinct
+#: target compounds collapsed onto the same feature. Shared by every
+#: "representative compound per feature" reader below — a feature with a
+#: target-list match displays that identity unconditionally over any MS2
+#: `rank_feature = 1` pick (see ADR 0026: a target compound was explicitly
+#: asked for by name, unlike an automatically-scored MS2 hit).
+_TARGET_REP_CTE = """
+    target_rep AS (
+        SELECT tlm.feature_id,
+               GROUP_CONCAT(DISTINCT tlc.name) AS compound_name,
+               GROUP_CONCAT(DISTINCT tlc.formula) AS compound_formula,
+               GROUP_CONCAT(DISTINCT tlc.inchikey) AS inchikey
+        FROM target_list_matches tlm
+        JOIN target_list_compounds tlc ON tlc.id = tlm.target_compound_id
+        GROUP BY tlm.feature_id
+    )
+"""
+
+
 @log_call(source="db_path")
 def load_feature_representative_annotations(db_path: Path | str) -> pd.DataFrame:
-    """One row per annotated feature — the representative compound it's
-    labelled by everywhere in the GUI/report.
+    """One row per feature that has an MS2 annotation and/or a target-list
+    match — the representative compound it's labelled by everywhere in the
+    GUI/report.
 
-    Reads ``ms2_annotations`` filtered to ``rank_feature = 1`` (stamped at
-    annotate time by ``annotate.assign_feature_ranks`` — see
-    ``AnnotateConfig.representative_score_tolerance`` for how that row is
-    chosen among a feature's candidates: highest ``score``, except a
-    lower-scoring candidate with more ``n_matched_peaks`` wins when within
-    tolerance of the top score). Unlike :func:`load_feature_compound_scores`
-    (every distinct compound that scored anything), this is exactly one row
-    per feature — the GUI Annotations table's backing reader. Empty when
-    annotation never ran.
+    A target-list match (see ``core.annotation.target_list``) wins
+    unconditionally over the MS2 pick when a feature has both — the MS2
+    ``rank_feature = 1`` row (stamped at annotate time by
+    ``annotate.assign_feature_ranks`` — see
+    ``AnnotateConfig.representative_score_tolerance``) is itself untouched,
+    only which identity gets *displayed* changes; its score/peak-count
+    columns still come through even when a target-list name wins, as extra
+    context. ``source`` says which one supplied the name. Unlike
+    :func:`load_feature_compound_scores` (every distinct compound that
+    scored anything), this is exactly one row per feature — the GUI
+    Annotations table's backing reader. Empty when neither annotation nor
+    target-list matching ever ran.
 
     Returns:
         A DataFrame with ``feature_id``, ``mz``, ``compound_name``,
-        ``compound_formula``, ``inchikey``, ``best_score`` (``score``,
-        renamed to match ``load_feature_compound_scores``'s column),
-        ``n_matched_peaks``, ``n_lib_peaks``, ``best_sample_id``,
-        ``best_scan_id``, ``best_library_id``, ordered by ``feature_id``.
+        ``compound_formula``, ``inchikey``, ``source`` (``"target_list"``
+        or ``"ms2"``), ``best_score`` (``score``, renamed to match
+        ``load_feature_compound_scores``'s column — ``None`` for a feature
+        with no MS2 annotation), ``n_matched_peaks``, ``n_lib_peaks``,
+        ``best_sample_id``, ``best_scan_id``, ``best_library_id``, ordered
+        by ``feature_id``.
     """
-    sql = """
-        SELECT a.feature_id, f.mz AS mz, a.compound_name, a.compound_formula,
-               a.inchikey, a.score AS best_score, a.n_matched_peaks,
-               a.n_lib_peaks, a.sample_id AS best_sample_id,
-               a.scan_id AS best_scan_id, a.library_id AS best_library_id
-        FROM ms2_annotations a
-        JOIN features f ON f.feature_id = a.feature_id
-        WHERE a.rank_feature = 1
-        ORDER BY a.feature_id
+    sql = f"""
+        WITH {_TARGET_REP_CTE},
+        ms2_rep AS (
+            SELECT a.feature_id, a.compound_name, a.compound_formula,
+                   a.inchikey, a.score AS best_score, a.n_matched_peaks,
+                   a.n_lib_peaks, a.sample_id AS best_sample_id,
+                   a.scan_id AS best_scan_id, a.library_id AS best_library_id
+            FROM ms2_annotations a
+            WHERE a.rank_feature = 1
+        )
+        SELECT
+            f.feature_id, f.mz AS mz,
+            COALESCE(tr.compound_name, m.compound_name) AS compound_name,
+            COALESCE(tr.compound_formula, m.compound_formula) AS compound_formula,
+            COALESCE(tr.inchikey, m.inchikey) AS inchikey,
+            CASE WHEN tr.feature_id IS NOT NULL THEN 'target_list' ELSE 'ms2' END AS source,
+            m.best_score, m.n_matched_peaks, m.n_lib_peaks,
+            m.best_sample_id, m.best_scan_id, m.best_library_id
+        FROM features f
+        LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
+        LEFT JOIN ms2_rep m ON m.feature_id = f.feature_id
+        WHERE tr.feature_id IS NOT NULL OR m.feature_id IS NOT NULL
+        ORDER BY f.feature_id
     """
     with connect(db_path) as con:
         try:
@@ -898,19 +1169,20 @@ def load_feature_list(db_path: Path | str) -> pd.DataFrame:
     """Every feature, with its representative compound name if any.
 
     For the Visual Inspection section's feature selector: features get
-    labelled by compound name when annotated, else by bare m/z. Joins on
-    `ms2_annotations.rank_feature = 1` — the representative row picked at
-    annotate time (see `annotate.assign_feature_ranks` /
-    `AnnotateConfig.representative_score_tolerance`), not necessarily
-    whichever compound has the single highest raw `score`.
+    labelled by compound name when annotated, else by bare m/z. A
+    target-list match wins over the MS2 `rank_feature = 1` pick when a
+    feature has both (see `load_feature_representative_annotations`).
 
     Returns:
         A DataFrame with `feature_id`, `mz`, `compound_name` (`None` when
         unannotated), ordered by `mz`. Empty when there are no features.
     """
-    sql = """
-        SELECT f.feature_id, f.mz, best.compound_name
+    sql = f"""
+        WITH {_TARGET_REP_CTE}
+        SELECT f.feature_id, f.mz,
+               COALESCE(tr.compound_name, best.compound_name) AS compound_name
         FROM features f
+        LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
         LEFT JOIN ms2_annotations best
             ON best.feature_id = f.feature_id AND best.rank_feature = 1
         ORDER BY f.mz
@@ -925,23 +1197,27 @@ def load_feature_list(db_path: Path | str) -> pd.DataFrame:
 @log_call(source="db_path")
 def load_feature_categories(db_path: Path | str) -> pd.DataFrame:
     """Every feature's MS1-spectrum coloring category, for the GUI's MS1
-    Spectra section: `"no_ms2"` (never got an MS2 scan at all),
-    `"annotated"` (has a library match), or `"non_annotated"` (has MS2 but
-    no library match).
+    Spectra section: `"target_list"` (has a target-list match — regardless
+    of MS2 status, since it was explicitly searched for by name),
+    `"no_ms2"` (never got an MS2 scan at all), `"annotated"` (has a library
+    match), or `"non_annotated"` (has MS2 but no library match).
 
     Returns:
         A DataFrame with `feature_id`, `mz`, `category`, ordered by `mz`
         (ascending — callers that nearest-match spectrum peaks against
         this rely on that order). Empty when there are no features.
     """
-    sql = """
+    sql = f"""
+        WITH {_TARGET_REP_CTE}
         SELECT f.feature_id, f.mz,
                COALESCE(ms2.n_ms2, 0) AS n_ms2,
-               best.compound_name
+               best.compound_name,
+               tr.feature_id IS NOT NULL AS has_target
         FROM features f
         LEFT JOIN feature_ms2_summary ms2 ON ms2.feature_id = f.feature_id
         LEFT JOIN ms2_annotations best
             ON best.feature_id = f.feature_id AND best.rank_feature = 1
+        LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
         ORDER BY f.mz
     """
     with connect(db_path) as con:
@@ -953,10 +1229,13 @@ def load_feature_categories(db_path: Path | str) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["feature_id", "mz", "category"])
 
-    no_ms2 = df["n_ms2"] == 0
-    annotated = df["compound_name"].notna()
+    has_target = df["has_target"].astype(bool)
+    no_ms2 = (df["n_ms2"] == 0) & ~has_target
+    annotated = df["compound_name"].notna() & ~has_target
     df["category"] = np.select(
-        [no_ms2, annotated], ["no_ms2", "annotated"], default="non_annotated"
+        [has_target, no_ms2, annotated],
+        ["target_list", "no_ms2", "annotated"],
+        default="non_annotated",
     )
     return df[["feature_id", "mz", "category"]]
 

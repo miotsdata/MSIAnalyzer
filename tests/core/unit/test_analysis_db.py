@@ -10,6 +10,7 @@ import pytest
 
 from msianalyzer.core.analysis_db import (
     analysis_db_path,
+    append_injected_features,
     attach_raw,
     delete_roi_catalog_entry,
     find_nearest_feature,
@@ -17,19 +18,30 @@ from msianalyzer.core.analysis_db import (
     is_command_already_run,
     load_feature_categories,
     load_feature_compound_scores,
+    load_feature_ids_and_mzs,
     load_feature_list,
     load_feature_ms2_count,
     load_feature_representative_annotations,
     load_features,
+    load_injected_feature_mzs,
     load_ms2_annotations_for_feature,
     load_rois,
     load_samples,
     load_summary_counts,
+    load_target_list_matches_for_feature,
     log_command,
     register_roi,
     register_sample,
     save_features,
+    save_target_list_compounds,
+    save_target_list_matches,
     write_metadata,
+)
+from msianalyzer.core.annotation.target_list import (
+    Adduct,
+    InjectedFeature,
+    TargetCompound,
+    TargetMatch,
 )
 from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
@@ -904,3 +916,243 @@ def test_delete_roi_catalog_entry_missing_name_returns_false(tmp_path: Path):
     init_analysis_db(db).close()
 
     assert delete_roi_catalog_entry(db, "never_existed") is False
+
+
+# ---------------------------------------------------------------------------
+# target-list matching (features.origin, target_list_compounds/matches,
+# representative-label precedence) — see ADR 0026
+# ---------------------------------------------------------------------------
+
+
+def test_features_table_has_origin_column_defaulting_to_detected(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (mz, members_json) VALUES (100.0, '{}')"
+        )
+        origin = con.execute("SELECT origin FROM features").fetchone()[0]
+    assert origin == "detected"
+
+
+def test_append_injected_features_does_not_delete_existing_detected_features(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    aligned = align_mz_across_samples([np.array([100.0])], sample_names=["A"])
+    save_features(db, aligned)
+
+    ids = append_injected_features(
+        db, [InjectedFeature(mz=500.0, members_json='{"A": null}')]
+    )
+
+    with sqlite3.connect(db) as con:
+        rows = con.execute(
+            "SELECT feature_id, mz, origin FROM features ORDER BY mz"
+        ).fetchall()
+    assert len(rows) == 2
+    assert rows[0][1:] == (100.0, "detected")
+    assert rows[1] == (ids[0], 500.0, "injected")
+
+
+def test_load_injected_feature_mzs_returns_only_origin_injected_rows(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (mz, members_json, origin) "
+            "VALUES (100.0, '{}', 'detected')"
+        )
+        con.commit()
+    append_injected_features(db, [InjectedFeature(mz=500.0, members_json="{}")])
+
+    assert load_injected_feature_mzs(db) == [500.0]
+
+
+def test_load_feature_ids_and_mzs_returns_feature_id_and_mz(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(1, 100.0), (2, 200.0)],
+        )
+        con.commit()
+
+    df = load_feature_ids_and_mzs(db)
+
+    assert list(df.columns) == ["feature_id", "mz"]
+    assert df["mz"].tolist() == [100.0, 200.0]
+
+
+def _make_compound(name="Glucose", formula="C6H12O6", row_number=1) -> TargetCompound:
+    return TargetCompound(
+        name=name, formula=formula, inchikey="WQZGKKKJIJFFOK-GASJEMHNSA-N",
+        neutral_mass=180.0634, source_file="targets.csv", row_number=row_number,
+    )
+
+
+def test_save_target_list_compounds_returns_ids_in_input_order(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    compounds = [_make_compound("A", row_number=1), _make_compound("B", row_number=2)]
+
+    ids = save_target_list_compounds(db, compounds)
+
+    assert len(ids) == 2
+    assert ids[0] != ids[1]
+    with sqlite3.connect(db) as con:
+        names = con.execute(
+            "SELECT name FROM target_list_compounds ORDER BY id"
+        ).fetchall()
+    assert [n[0] for n in names] == ["A", "B"]
+
+
+def test_save_target_list_matches_multiple_rows_same_feature_id_all_persisted(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    compounds = [_make_compound("A", "C6H12O6", 1), _make_compound("B", "C6H12O6", 2)]
+    compound_ids = save_target_list_compounds(db, compounds)
+    adduct = Adduct("[M+H]+", "positive", 1, 1.0072764668)
+    matches = [
+        (
+            TargetMatch(
+                compound=c, adduct=adduct, theoretical_mz=181.07, feature_id=1,
+                feature_mz=181.07, ppm_diff=0.0, match_type="existing",
+            ),
+            cid,
+        )
+        for c, cid in zip(compounds, compound_ids)
+    ]
+
+    save_target_list_matches(db, matches)
+
+    with sqlite3.connect(db) as con:
+        n = con.execute(
+            "SELECT COUNT(*) FROM target_list_matches WHERE feature_id = 1"
+        ).fetchone()[0]
+    assert n == 2
+
+
+def test_load_target_list_matches_for_feature_returns_joined_compound_info(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    compound = _make_compound()
+    (compound_id,) = save_target_list_compounds(db, [compound])
+    adduct = Adduct("[M+H]+", "positive", 1, 1.0072764668)
+    match = TargetMatch(
+        compound=compound, adduct=adduct, theoretical_mz=181.07, feature_id=1,
+        feature_mz=181.07, ppm_diff=0.0, match_type="existing",
+    )
+    save_target_list_matches(db, [(match, compound_id)])
+
+    df = load_target_list_matches_for_feature(db, 1)
+
+    assert len(df) == 1
+    assert df.iloc[0]["compound_name"] == "Glucose"
+    assert df.iloc[0]["adduct_label"] == "[M+H]+"
+
+
+def test_load_target_list_matches_for_feature_empty_for_unmatched_feature(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    assert load_target_list_matches_for_feature(db, 999).empty
+
+
+def _seed_target_list_match(db: Path, feature_id: int, name: str = "Glucose") -> None:
+    compound = _make_compound(name)
+    (compound_id,) = save_target_list_compounds(db, [compound])
+    adduct = Adduct("[M+H]+", "positive", 1, 1.0072764668)
+    match = TargetMatch(
+        compound=compound, adduct=adduct, theoretical_mz=181.07,
+        feature_id=feature_id, feature_mz=181.07, ppm_diff=0.0, match_type="existing",
+    )
+    save_target_list_matches(db, [(match, compound_id)])
+
+
+def test_load_feature_representative_annotations_prefers_target_list_over_ms2_rank_feature_one(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_representative_scenario(db)  # feature 76, MS2 rank_feature=1 -> "Lactic acid"
+    _seed_target_list_match(db, feature_id=76, name="User's target compound")
+
+    df = load_feature_representative_annotations(db)
+
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["feature_id"] == 76
+    assert row["compound_name"] == "User's target compound"
+    assert row["source"] == "target_list"
+    # MS2 score still carried through as context, not discarded
+    assert row["best_score"] == pytest.approx(0.8572)
+
+
+def test_load_feature_representative_annotations_includes_feature_with_target_list_match_and_no_ms2_at_all(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    _seed_target_list_match(db, feature_id=1)
+
+    df = load_feature_representative_annotations(db)
+
+    assert len(df) == 1
+    assert df.iloc[0]["source"] == "target_list"
+    assert df.iloc[0]["compound_name"] == "Glucose"
+    assert pd.isna(df.iloc[0]["best_score"])  # no MS2 row backs this feature
+
+
+def test_load_feature_list_prefers_target_list_name_over_ms2(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_representative_scenario(db)
+    _seed_target_list_match(db, feature_id=76, name="User's target compound")
+
+    df = load_feature_list(db)
+
+    assert df.iloc[0]["compound_name"] == "User's target compound"
+
+
+def test_load_feature_categories_labels_target_list_features(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, ?)",
+            [
+                (1, 100.0, "{}"),  # no MS2, no target list
+                (2, 200.0, "{}"),  # target-list match, no MS2 at all
+            ],
+        )
+        con.commit()
+    _seed_target_list_match(db, feature_id=2)
+
+    df = load_feature_categories(db)
+    by_id = {r["feature_id"]: r["category"] for _, r in df.iterrows()}
+
+    assert by_id[1] == "no_ms2"
+    assert by_id[2] == "target_list"
