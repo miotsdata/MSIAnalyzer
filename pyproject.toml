@@ -24,6 +24,20 @@ msianalyzer-gui = "msianalyzer.gui.main:main"
 [tool.pdm]
 distribution = true
 
+[tool.pdm.build]
+# `configure_logging`'s default debug_log_dir is `src/msianalyzer/log`
+# (next to the package, for dev convenience — see
+# core/utils/logging_utils.py) — never gitignored/tracked, but every
+# debug run leaves a file there, and pdm-backend packages everything
+# under the package directory by default. Without this exclude, a
+# build silently ships whatever debug logs happen to be on the
+# machine building it (374 of them, one 15MB, found in a real build).
+# tests/core/examples' real instrument data (.raw/.mzML + generated
+# .db/.h5ad results, hundreds of MB) bloats the sdist the same way —
+# never shipped in the wheel (pdm-backend excludes tests/ from it by
+# default), only relevant to `pdm build`'s sdist output.
+excludes = ["src/msianalyzer/log/**", "tests/core/examples/**"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
