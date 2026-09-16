@@ -273,6 +273,31 @@ class AnalysisBridge(QObject):
         """
         return self.heatmap_provider.getObsCategories(sample_names, obs_column)
 
+    @Slot(str)
+    def ensureSchemaCurrent(self, analysis_db_path: str) -> None:
+        """Bring an existing analysis database's schema up to date —
+        called once by `AnalysisPage.qml` whenever an analysis workspace
+        opens, so an analysis run before a schema change (e.g. ADR 33's
+        `idx_ann_rank_feature_1` index) benefits from it without needing a
+        full re-run.
+
+        Just `analysis_db.init_analysis_db` (`connect` + `create_analysis_schema`
+        + `commit`) — every statement in `create_analysis_schema` is
+        `CREATE TABLE`/`CREATE INDEX IF NOT EXISTS`, so this is a cheap,
+        safe no-op on an already-current schema and only ever adds
+        structure, never touches data. `connect`'s own "callers issue no
+        DDL" note is about concurrent per-sample worker processes racing a
+        schema lock *during a pipeline run* — irrelevant here, this only
+        ever runs against an already-finished analysis from a single GUI
+        connection.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return
+        analysis_db.init_analysis_db(analysis_db_path).close()
+
     @Slot(str, result=dict)
     def getSummary(self, analysis_db_path: str) -> dict:
         """Headline counts for the Summary section.

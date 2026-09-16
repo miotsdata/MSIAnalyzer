@@ -8,6 +8,19 @@ Page {
     objectName: "analysisPage"
 
     property var analysis
+    // `analysis` can still be unset at Component.onCompleted time for a
+    // page reached via StackView.push({"analysis": ...}) — same timing
+    // quirk noted on summaryLoader's own Qt.binding below — so this reacts
+    // to the property actually landing rather than assuming it's already
+    // there. Brings an analysis run before a schema change (e.g. ADR 33's
+    // index) up to date the moment its workspace is opened, without
+    // needing a full re-run; safe/idempotent, see
+    // AnalysisBridge.ensureSchemaCurrent's own docstring.
+    onAnalysisChanged: {
+        if (analysisPage.analysis && analysisPage.analysis.analysisDbPath) {
+            AnalysisBridge.ensureSchemaCurrent(analysisPage.analysis.analysisDbPath)
+        }
+    }
     // Set by Annotations' "Inspect visually" right-click just before
     // switching to the Visual Inspection tab (see annotationsLoader.onLoaded
     // below) — a one-shot handoff, not persistent workspace state: cleared

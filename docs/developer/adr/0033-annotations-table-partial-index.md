@@ -60,9 +60,7 @@ needed at all for that join.
 - New analyses get this automatically — `create_analysis_schema` runs once
   at `Run.run_core` start (`init_analysis_db`), and every index statement
   here is already idempotent (`IF NOT EXISTS`).
-- **An already-run analysis does not get this retroactively.** Per this
-  project's established no-migration-system convention (see ADR 10, ADR 19
-  and others: a schema/behavior change needs a re-run to take effect,
-  there is no separate migration step), an existing analysis DB keeps
-  using the old query plan until it's re-run. Worth re-running an existing
-  slow analysis once, if the Annotations tab's load time matters for it.
+- **An already-run analysis does not get this retroactively from a
+  re-run alone** — but does get it automatically the next time its GUI
+  workspace is opened, without a re-run: see
+  [ADR 37](0037-retroactive-schema-refresh-on-analysis-open.md).

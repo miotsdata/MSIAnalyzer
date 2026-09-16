@@ -46,3 +46,4 @@ useful).
 | [34](0034-async-annotation-feature-fetch.md) | Fetch the Annotations table / feature list on a background thread | Accepted |
 | [35](0035-split-search-fields.md) | Split compound search into separate name and m/z fields | Accepted; supersedes 29 |
 | [36](0036-fixed-layout-space-for-toggled-content.md) | Reserve fixed layout space instead of swapping visible siblings | Accepted |
+| [37](0037-retroactive-schema-refresh-on-analysis-open.md) | Retroactively refresh an analysis DB's schema when its workspace opens | Accepted |

@@ -4,6 +4,30 @@ from PySide6.QtCore import Qt
 from PySide6.QtQuick import QQuickItem
 
 
+def test_opening_analysis_page_retroactively_adds_a_missing_index(
+    analysis_view, analysis_model, qtbot
+):
+    # Simulates an analysis run before ADR 33's index existed — dropping
+    # it by hand stands in for that older schema. AnalysisPage.qml's own
+    # onAnalysisChanged calls AnalysisBridge.ensureSchemaCurrent the
+    # moment the workspace opens, no re-run needed.
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.execute("DROP INDEX idx_ann_rank_feature_1")
+        con.commit()
+
+    analysis_view(analysis_model)
+    qtbot.wait(50)
+
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        indexes = {
+            r[0]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+    assert "idx_ann_rank_feature_1" in indexes
+
+
 def test_header_shows_project_analysis_and_date(analysis_view, analysis_model):
     # The nav rail moved up next to the title ("in one row I have title,
     # the various sections that I can click, and back to project button")

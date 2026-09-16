@@ -28,6 +28,65 @@ _ZERO_SUMMARY = {
 }
 
 
+def test_ensure_schema_current_adds_a_missing_index_to_an_old_db(tmp_path):
+    # Simulates an analysis run before ADR 33's index existed: create a
+    # normal (already-current) db, then drop the index by hand to stand
+    # in for that older schema.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute("DROP INDEX idx_ann_rank_feature_1")
+        con.commit()
+        indexes_before = {
+            r[0]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+    assert "idx_ann_rank_feature_1" not in indexes_before
+
+    bridge = AnalysisBridge()
+    bridge.ensureSchemaCurrent(str(db_path))
+
+    with sqlite3.connect(db_path) as con:
+        indexes_after = {
+            r[0]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+    assert "idx_ann_rank_feature_1" in indexes_after
+
+
+def test_ensure_schema_current_is_a_no_op_on_an_already_current_db(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 300.5, '{}')"
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    bridge.ensureSchemaCurrent(str(db_path))
+
+    # Existing data untouched — a DDL-only pass never mutates rows.
+    with sqlite3.connect(db_path) as con:
+        rows = con.execute("SELECT compound_name FROM ms2_annotations").fetchall()
+    assert rows == [("Caffeine",)]
+
+
+def test_ensure_schema_current_missing_db_is_a_no_op(tmp_path):
+    bridge = AnalysisBridge()
+    bridge.ensureSchemaCurrent(str(tmp_path / "does_not_exist.db"))  # must not raise
+
+
+def test_ensure_schema_current_empty_path_is_a_no_op():
+    bridge = AnalysisBridge()
+    bridge.ensureSchemaCurrent("")  # must not raise
+
+
 def test_get_summary_missing_db_returns_zero_dict(tmp_path):
     bridge = AnalysisBridge()
     assert bridge.getSummary(str(tmp_path / "does_not_exist.db")) == _ZERO_SUMMARY
