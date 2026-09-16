@@ -396,6 +396,17 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_ann_inchikey ON ms2_annotations(inchikey)"
     )
+    # Partial index on exactly the predicate `load_feature_representative_annotations`'s
+    # `ms2_rep` CTE and `load_feature_list`'s join both filter on — one row
+    # per feature that has an MS2 representative, not the full (much
+    # larger) candidate table. Without it, `WHERE rank_feature = 1` is a
+    # full-table scan of `ms2_annotations` (one row per scored candidate
+    # per scan per feature per library), the dominant cost behind the GUI
+    # Annotations table being slow to load. See ADR 33.
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ann_rank_feature_1 "
+        "ON ms2_annotations(feature_id) WHERE rank_feature = 1"
+    )
 
     # Convenience view: for every (feature, distinct compound) the best
     # library score and the row it came from. Pure aggregation over

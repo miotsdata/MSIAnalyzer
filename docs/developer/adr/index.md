@@ -42,3 +42,4 @@ useful).
 | [30](0030-colorbar-legend.md) | Colorbar legend for the vmin/vmax color scale | Accepted |
 | [31](0031-per-sample-progress-callback.md) | Per-sample progress callback for `process_samples` | Accepted |
 | [32](0032-inspect-visually-cross-tab-handoff.md) | "Inspect visually": cross-tab handoff between Annotations and Visual Inspection | Accepted |
+| [33](0033-annotations-table-partial-index.md) | Partial index for `ms2_annotations.rank_feature` | Accepted |

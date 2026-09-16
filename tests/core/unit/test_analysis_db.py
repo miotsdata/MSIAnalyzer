@@ -159,6 +159,36 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
     init_analysis_db(db).close()
 
 
+def test_ms2_annotations_has_partial_index_on_rank_feature(tmp_path: Path):
+    # load_feature_representative_annotations' `ms2_rep` CTE filters
+    # `ms2_annotations` with a bare `WHERE rank_feature = 1` over the whole
+    # table — without an index on that column, SQLite has no way to avoid
+    # a full scan of every candidate row (one per scored candidate per scan
+    # per feature per library, not just one per feature). See ADR 33.
+    db = tmp_path / "analysis.db"
+    conn = init_analysis_db(db)
+    try:
+        indexes = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' "
+                "AND tbl_name = 'ms2_annotations'"
+            ).fetchall()
+        }
+        assert "idx_ann_rank_feature_1" in indexes
+
+        # The query planner actually uses it for the exact predicate the
+        # real queries filter on — not just that the index exists.
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN "
+            "SELECT feature_id FROM ms2_annotations WHERE rank_feature = 1"
+        ).fetchall()
+        plan_text = " ".join(str(cell) for row in plan for cell in row)
+        assert "idx_ann_rank_feature_1" in plan_text
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # samples
 # ---------------------------------------------------------------------------
