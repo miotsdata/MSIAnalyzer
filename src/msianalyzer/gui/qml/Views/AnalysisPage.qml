@@ -8,6 +8,13 @@ Page {
     objectName: "analysisPage"
 
     property var analysis
+    // Set by Annotations' "Inspect visually" right-click just before
+    // switching to the Visual Inspection tab (see annotationsLoader.onLoaded
+    // below) — a one-shot handoff, not persistent workspace state: cleared
+    // back to NaN via visualLoader's pendingInspectHandled once applied, so
+    // a later plain click on the Visual Inspection nav button doesn't
+    // re-apply a stale feature selection from a previous "Inspect visually".
+    property real pendingInspectMz: NaN
 
     ColumnLayout {
         anchors.fill: parent
@@ -182,14 +189,39 @@ Page {
                     objectName: "annotationsSectionLoader"
                     active: sectionStack.currentIndex === 2
                     source: "qrc:/Views/AnnotationsSection.qml"
-                    onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
+                    onLoaded: {
+                        item.analysis = Qt.binding(function () { return analysisPage.analysis })
+                        // "Inspect visually" — set the handoff before
+                        // switching tabs; visualLoader below picks it up
+                        // via its own pendingInspectMz binding once
+                        // sectionStack.currentIndex flips its `active` on.
+                        item.inspectVisuallyRequested.connect(function (mz) {
+                            analysisPage.pendingInspectMz = mz
+                            sectionStack.currentIndex = 3
+                        })
+                    }
                 }
                 Loader {
                     id: visualLoader
                     objectName: "visualSectionLoader"
                     active: sectionStack.currentIndex === 3
                     source: "qrc:/Views/VisualInspectionSection.qml"
-                    onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
+                    onLoaded: {
+                        item.analysis = Qt.binding(function () { return analysisPage.analysis })
+                        // Connected before pendingInspectMz is assigned
+                        // below, not after — assigning a binding evaluates
+                        // it immediately, and (when a request is actually
+                        // pending) that synchronously emits
+                        // pendingInspectHandled from inside
+                        // VisualInspectionSection's own onPendingInspectMzChanged
+                        // before this function would otherwise get back to
+                        // its next line — connecting first ensures this
+                        // handler already exists to catch it.
+                        item.pendingInspectHandled.connect(function () {
+                            analysisPage.pendingInspectMz = NaN
+                        })
+                        item.pendingInspectMz = Qt.binding(function () { return analysisPage.pendingInspectMz })
+                    }
                 }
             }
 

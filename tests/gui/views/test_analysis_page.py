@@ -286,6 +286,44 @@ def test_summary_section_empty_state_for_empty_db(analysis_view, analysis_model,
     assert empty_label.property("visible") is True
 
 
+def test_inspect_visually_switches_to_visual_tab_with_feature_selected(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # End-to-end: right-click an annotated row in Annotations, "Inspect
+    # visually", land on Visual Inspection already showing that same
+    # feature — the cross-tab handoff (AnalysisPage.pendingInspectMz)
+    # between AnnotationsSection and VisualInspectionSection.
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+
+    annotations_button = find_visual_child(root, "navButton_2")
+    center = annotations_button.mapToScene(
+        annotations_button.boundingRect().center()
+    ).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    row = find_visual_child(root, "annotationRow_7")
+    assert row is not None
+    menu_item = row.findChild(object, "inspectVisuallyMenuItem_7")
+    assert menu_item is not None
+    menu_item.click()
+    qtbot.wait(50)
+
+    stack = root.findChild(QQuickItem, "sectionStack")
+    assert stack.property("currentIndex") == 3
+
+    controls = find_visual_child(root, "controlsFlickable")
+    assert controls.property("inspectionMode") == "feature"
+    assert controls.property("selectedFeature")["mz"] == 123.4567
+
+    # One-shot: the handoff is cleared once applied, not left dangling on
+    # AnalysisPage for a later plain tab switch to re-apply.
+    import math
+
+    assert math.isnan(root.property("pendingInspectMz"))
+
+
 def test_summary_section_shows_seeded_counts(
     analysis_view, analysis_model, find_visual_child, qtbot
 ):

@@ -8,6 +8,12 @@ Item {
     id: annotationsSection
     objectName: "annotationsSection"
 
+    // Right-click a row -> "Inspect visually" -> jumps the workspace to
+    // the Visual Inspection tab, already on this feature. Handled by the
+    // owning AnalysisPage (which owns sectionStack, not this section) —
+    // see its own annotationsLoader.onLoaded comment.
+    signal inspectVisuallyRequested(real mz)
+
     property var analysis
     // Bumped after a successful "Predict formula" run to force rows/
     // topHits to re-fetch — a predicted formula can change a feature's
@@ -320,8 +326,26 @@ Item {
 
                             MouseArea {
                                 anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: annotationsSection.selectedFeatureId = modelData.feature_id
+                                onClicked: (mouse) => {
+                                    if (mouse.button === Qt.RightButton) {
+                                        annotationRowContextMenu.popup()
+                                    } else {
+                                        annotationsSection.selectedFeatureId = modelData.feature_id
+                                    }
+                                }
+                            }
+
+                            Menu {
+                                id: annotationRowContextMenu
+                                objectName: "annotationRowContextMenu_" + modelData.feature_id
+
+                                MenuItem {
+                                    objectName: "inspectVisuallyMenuItem_" + modelData.feature_id
+                                    text: "Inspect visually"
+                                    onTriggered: annotationsSection.inspectVisuallyRequested(modelData.mz)
+                                }
                             }
 
                             RowLayout {

@@ -39,6 +39,25 @@ Item {
         }
     }
 
+    // Set by AnalysisPage right after (re-)constructing this section for
+    // an "Inspect visually" jump from Annotations — see
+    // AnalysisPage.qml's visualLoader.onLoaded. NaN (the default) means
+    // no pending request. A one-shot handoff, not persistent state:
+    // pendingInspectHandled tells the owner to clear it once applied, so
+    // a later plain tab switch to Visual Inspection doesn't re-apply it.
+    property real pendingInspectMz: NaN
+    signal pendingInspectHandled()
+
+    onPendingInspectMzChanged: {
+        if (isNaN(visualSection.pendingInspectMz)) return
+        controls.inspectionMode = "feature"
+        var idx = controls.sortedFeatures.findIndex(function (f) {
+            return f.mz === visualSection.pendingInspectMz
+        })
+        if (idx >= 0) controls.selectedFeatureIndex = idx
+        visualSection.pendingInspectHandled()
+    }
+
     Label {
         objectName: "visualEmptyStateLabel"
         visible: controls.features.length === 0 && controls.obsColumns.length === 0
