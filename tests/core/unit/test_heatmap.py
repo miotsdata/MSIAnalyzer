@@ -11,6 +11,7 @@ from msianalyzer.core.plotting.heatmap import (
     obs_categories,
     obs_value_range,
     pixel_grid_indices,
+    render_colorbar,
     render_feature_heatmap,
     render_obs_categories_heatmap,
     render_obs_heatmap,
@@ -178,6 +179,27 @@ def test_render_feature_heatmap_picks_nearest_mz_column():
     black = tuple(int(c * 255) for c in matplotlib.colormaps["gray"](0.0))
     assert tuple(rgba[0, 0]) == white
     assert tuple(rgba[1, 1]) == black
+
+
+def test_render_colorbar_shape_and_endpoints_match_the_colormap():
+    rgba = render_colorbar("gray", width=10, height=4)
+
+    assert rgba.shape == (4, 10, 4)
+    assert rgba.dtype == np.uint8
+
+    black = tuple(int(c * 255) for c in matplotlib.colormaps["gray"](0.0))
+    white = tuple(int(c * 255) for c in matplotlib.colormaps["gray"](1.0))
+    # Left edge is the colormap's low end, right edge its high end, every
+    # row identical (a flat gradient, not spatial data).
+    assert tuple(rgba[0, 0]) == black
+    assert tuple(rgba[0, -1]) == white
+    np.testing.assert_array_equal(rgba[0], rgba[-1])
+
+
+def test_render_colorbar_defaults_to_a_256x16_strip():
+    rgba = render_colorbar("viridis")
+
+    assert rgba.shape == (16, 256, 4)
 
 
 def test_list_obs_columns_classifies_numeric_and_discrete():

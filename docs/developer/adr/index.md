@@ -39,3 +39,4 @@ useful).
 | [27](0027-formula-prediction.md) | On-demand molecular-formula prediction | Accepted |
 | [28](0028-gui-launch-directory-independence.md) | GUI launch-directory independence | Accepted |
 | [29](0029-compound-search-syntax.md) | Compound search syntax (Annotate + Visual Inspection) | Accepted |
+| [30](0030-colorbar-legend.md) | Colorbar legend for the vmin/vmax color scale | Accepted |

@@ -157,6 +157,40 @@ def test_visual_heatmap_tile_actually_loads_an_image(
     assert image.property("sourceSize").height() == 2
 
 
+def test_colorbar_legend_image_actually_loads_and_reflects_colormap(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Same real Image/URL round trip as
+    # test_visual_heatmap_tile_actually_loads_an_image — the colorbar id
+    # (`colorbar|<colormap>`) also contains a "|", so it's exposed to the
+    # exact same percent-encoding hazard, not just requestImage's own unit
+    # tests (which hand it an already-decoded id).
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_sample_h5ad(out_dir / "s1.h5ad")
+    _write_sample_h5ad(out_dir / "s2.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    legend_image = find_visual_child(root, "colorbarLegendImage")
+    assert legend_image is not None
+    assert legend_image.property("visible") is True
+
+    qtbot.waitUntil(
+        lambda: legend_image.property("sourceSize").width() > 0, timeout=2000
+    )
+    assert legend_image.property("sourceSize").width() == 256
+    assert legend_image.property("sourceSize").height() == 16
+
+    section = find_visual_child(root, "controlsFlickable")
+    # "|" is percent-encoded ("%7C") by the time it reaches `source` as a
+    # URL — same as every other image://heatmap/... id in this app.
+    assert legend_image.property("source").toString().endswith(
+        "colorbar%7C" + section.property("colormap")
+    )
+
+
 def test_visual_heatmap_tile_preserves_aspect_ratio_and_is_crisp(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
@@ -877,6 +911,9 @@ def test_selecting_numeric_obs_column_shows_color_scale_controls(
     assert colormap_combo.property("visible") is True
     assert autoscale_checkbox.property("visible") is True
 
+    legend_image = find_visual_child(root, "colorbarLegendImage")
+    assert legend_image.property("visible") is True
+
 
 def test_selecting_categorical_obs_column_hides_color_scale_and_shows_legend(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
@@ -898,6 +935,9 @@ def test_selecting_categorical_obs_column_hides_color_scale_and_shows_legend(
     autoscale_checkbox = find_visual_child(root, "autoScaleCheckBox")
     assert colormap_combo.property("visible") is False
     assert autoscale_checkbox.property("visible") is False
+
+    legend_image = find_visual_child(root, "colorbarLegendImage")
+    assert legend_image.property("visible") is False
 
     legend = _as_list(section.property("obsCategoryLegend"))
     assert sorted(c["category"] for c in legend) == ["negative", "positive"]

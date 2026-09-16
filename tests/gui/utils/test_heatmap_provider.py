@@ -36,6 +36,20 @@ def test_request_image_renders_valid_heatmap(tmp_path):
     assert image.format() == QImage.Format.Format_RGBA8888
 
 
+def test_request_image_renders_colorbar_without_any_sample_or_analysis(tmp_path):
+    # No setAnalysisDbPath call at all — the colorbar legend has no sample
+    # data behind it (see render_colorbar), so it must not go through
+    # _load_adata the way every other id shape does.
+    provider = HeatmapImageProvider()
+
+    image = provider.requestImage("colorbar|viridis", None, None)
+
+    assert not image.isNull()
+    assert image.width() == 256
+    assert image.height() == 16
+    assert image.format() == QImage.Format.Format_RGBA8888
+
+
 def test_request_image_handles_percent_encoded_id(tmp_path):
     # QML's Image element treats `source` as a URL: assigning
     # "image://heatmap/name|mz|..." percent-encodes "|" (not valid raw in

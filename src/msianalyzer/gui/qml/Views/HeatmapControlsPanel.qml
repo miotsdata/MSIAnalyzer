@@ -652,6 +652,30 @@ Flickable {
             }
         }
 
+        // The colorbar legend — literal "min"/"max" labels, not the
+        // numeric bounds (those are already shown above by
+        // vminValueLabel/vmaxValueLabel). Same colormap resolution as the
+        // tiles themselves (image://heatmap/colorbar|<colormap>, backed by
+        // render_colorbar — the exact matplotlib.colormaps[...] call
+        // render_feature_heatmap/render_obs_heatmap use for the tiles),
+        // so the legend always matches what's actually on screen.
+        RowLayout {
+            Layout.fillWidth: true
+            visible: controlsFlickable.showsColorScale
+            spacing: 6
+
+            Label { text: "min"; color: Theme.mutedTextColor }
+            Image {
+                objectName: "colorbarLegendImage"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 14
+                fillMode: Image.Stretch
+                cache: false
+                source: "image://heatmap/colorbar|" + controlsFlickable.colormap
+            }
+            Label { text: "max"; color: Theme.mutedTextColor }
+        }
+
         // Discrete obs column (e.g. `polarity`) — no color scale, just
         // a fixed-palette legend. Every tile colors by this same
         // ordered category list (controlsFlickable.obsCategoryLegend),

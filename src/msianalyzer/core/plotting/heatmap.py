@@ -136,6 +136,30 @@ def _colorize_grid(
     return np.ascontiguousarray(rgba_uint8)
 
 
+def render_colorbar(colormap: str, width: int = 256, height: int = 16) -> np.ndarray:
+    """A flat gradient strip for one colormap, low->high left-to-right —
+    the Visual Inspection color-scale legend ("min"/"max" labels either
+    side, see `HeatmapControlsPanel.qml`). Same colormap resolution
+    (`matplotlib.colormaps[colormap]`) and RGBA `uint8` construction as
+    `_colorize_grid`, so the legend always matches what the tiles
+    themselves actually render with — no sample/AnnData involved, unlike
+    every other render function here.
+
+    Args:
+        colormap: Any registered Matplotlib colormap name.
+        width: Strip width in pixels.
+        height: Strip height in pixels — the gradient is uniform vertically,
+            just tiled to this many rows.
+
+    Returns:
+        An `(height, width, 4)` `uint8` array (RGBA).
+    """
+    cmap = matplotlib.colormaps[colormap]
+    row = cmap(np.linspace(0.0, 1.0, width))
+    rgba_uint8 = (row * 255).astype(np.uint8)
+    return np.ascontiguousarray(np.tile(rgba_uint8, (height, 1, 1)))
+
+
 def render_feature_heatmap(
     adata: ad.AnnData,
     mz: float,

@@ -15,6 +15,7 @@ from msianalyzer.core.plotting.heatmap import (
     list_obs_columns,
     obs_categories,
     obs_value_range,
+    render_colorbar,
     render_feature_heatmap,
     render_obs_categories_heatmap,
     render_obs_heatmap,
@@ -28,17 +29,20 @@ _CACHE_SIZE = 4
 class HeatmapImageProvider(QQuickImageProvider):
     """Serves Visual Inspection's spatial heatmaps as `image://heatmap/...`.
 
-    Two request-id shapes, dispatched on whether the second field starts
-    with `"obs:"`:
+    Three request-id shapes:
       - Feature: `sampleName|mz|layer|colormap|vmin|vmax`, `vmin`/`vmax`
         either a float or the literal `auto` (autoscale to that sample's
         data).
-      - `obs` column: `sampleName|obs:columnName|colormap|vmin|vmax` for a
-        numeric column (same `vmin`/`vmax` convention as above), or
+      - `obs` column (second field starts with `"obs:"`):
+        `sampleName|obs:columnName|colormap|vmin|vmax` for a numeric
+        column (same `vmin`/`vmax` convention as above), or
         `sampleName|obs:columnName|categoriesCsv` for a discrete one —
         `categoriesCsv` is the full, comma-joined category order every
         tile colors by (see `render_obs_categories_heatmap`), normally
         produced once by `getObsCategories` and reused for every tile.
+      - Colorbar legend (first field is the literal `"colorbar"`, no
+        sample involved): `colorbar|colormap` — a flat gradient strip for
+        the color-scale legend under vmin/vmax, see `render_colorbar`.
 
     Resolving `sampleName` to a `.h5ad` path needs the current analysis'
     database path, set once via `setAnalysisDbPath` when the Visual
@@ -216,6 +220,15 @@ class HeatmapImageProvider(QQuickImageProvider):
             # with spaces or other reserved characters need this too.
             parts = unquote(id).split("|")
             sample_name, target = parts[0], parts[1]
+
+            if sample_name == "colorbar":
+                rgba = render_colorbar(target)
+                height, width, _ = rgba.shape
+                image = QImage(
+                    rgba.data, width, height, width * 4, QImage.Format.Format_RGBA8888
+                )
+                return image.copy()
+
             adata = self._load_adata(sample_name)
             if adata is None:
                 return QImage()
