@@ -191,7 +191,14 @@ class Run:
             raise ValueError("Neither config_file nor config was provided.")
 
         project_path = Path(self.config.io.project_folder) / ".msianalyzer.yml"
-        self.project = Project.load()
+        # Explicit start_path, not cwd-derived — the calling process's cwd
+        # (the GUI's launch directory, not necessarily inside any project)
+        # has no bearing on which project this run belongs to; that's
+        # already known from the config. Relying on the default cwd walk
+        # here made a run fail outright whenever the GUI was launched from
+        # outside the project folder tree, before ever reaching the
+        # `os.chdir` below.
+        self.project = Project.load(self.config.io.project_folder)
         self.start_date = datetime.datetime.now()
         self.project.runs[self.id] = self.to_dict()
         self.project.export(project_path)

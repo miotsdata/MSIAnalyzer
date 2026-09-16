@@ -37,3 +37,4 @@ useful).
 | [25](0025-pin-plotly-below-7.md) | Pin plotly below 7 | Accepted |
 | [26](0026-target-list-annotation.md) | Target-list compound annotation | Accepted |
 | [27](0027-formula-prediction.md) | On-demand molecular-formula prediction | Accepted |
+| [28](0028-gui-launch-directory-independence.md) | GUI launch-directory independence | Accepted |

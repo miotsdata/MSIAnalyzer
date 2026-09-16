@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, Signal
@@ -50,6 +51,13 @@ class CoreBridge(QObject):
         except FileNotFoundError:
             self.invalidProjectPath.emit(f"{path} does not exists.")
         else:
+            # The open project's folder becomes the process's cwd for as
+            # long as it stays open — matches the mental model of "running
+            # from inside the project" the core pipeline (and the CLI it
+            # was originally built for) already assumes in a few places
+            # (e.g. `Project.load()`'s cwd-relative project-folder walk),
+            # regardless of where the GUI itself was launched from.
+            os.chdir(path)
             self.projectLoaded.emit(project)
 
     def create_project(self, name, path):
@@ -66,6 +74,7 @@ class CoreBridge(QObject):
             self.invalidCreateProjectPath.emit(str(e))
             return None
 
+        os.chdir(path)  # see load_project's own comment on why
         self.projectLoaded.emit(project)
         return project
 
