@@ -2,13 +2,15 @@
 
 MS2 annotation — Stage A (the grouper), Stage A′ (precursor ion purity),
 Stage B (spectral-library matching) and Stage A″ (per-feature consensus) —
-plus target-list compound matching, MS1-only and independent of these.
-Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
+plus target-list compound matching and on-demand formula prediction, both
+MS1-only and independent of these. Narrative:
+[MS2 annotation](../../user-guide/ms2-annotation.md),
 [ADR 2](../adr/0002-ms2-feature-association-design.md),
 [ADR 8](../adr/0008-precursor-ion-purity.md),
 [ADR 7](../adr/0007-library-annotation-design.md),
 [ADR 9](../adr/0009-consume-purity-and-consensus.md),
-[ADR 26](../adr/0026-target-list-annotation.md).
+[ADR 26](../adr/0026-target-list-annotation.md),
+[ADR 27](../adr/0027-formula-prediction.md).
 
 ## Stage A — `group_ms2`
 
@@ -114,3 +116,13 @@ Narrative: [MS2 annotation](../../user-guide/ms2-annotation.md),
         - parse_target_list_files
         - match_target_list
         - run_target_list_matching
+
+## On-demand formula prediction — `formula_prediction`
+
+::: msianalyzer.core.annotation.formula_prediction
+    options:
+      members:
+        - FormulaPredictionSettings
+        - PredictedFormula
+        - predict_formulas_for_feature
+        - run_formula_prediction

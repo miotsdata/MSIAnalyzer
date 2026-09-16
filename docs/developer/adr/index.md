@@ -36,3 +36,4 @@ useful).
 | [24](0024-single-instance-app-lock.md) | Single-instance app lock | Accepted |
 | [25](0025-pin-plotly-below-7.md) | Pin plotly below 7 | Accepted |
 | [26](0026-target-list-annotation.md) | Target-list compound annotation | Accepted |
+| [27](0027-formula-prediction.md) | On-demand molecular-formula prediction | Accepted |
