@@ -368,31 +368,52 @@ class AnalysisBridge(QObject):
     @Slot(str, int, int, result=list)
     def getFeatureTopHits(self, analysis_db_path: str, feature_id: int, top_n: int) -> list:
         """Top-N annotation hits for one feature — best row per distinct
-        compound, including which sample each hit came from.
+        compound (MS2), plus, if the feature has any, its top-N predicted
+        formulas (see ADR 27) appended after them, regardless of which
+        adduct produced each one.
 
-        Same "best per compound" selection as the MS1 spectra section's
-        `getFeatureDetail`'s `top_hits` (kept as a standalone method here
-        since the Annotations section starts from a picked feature
-        directly, not a clicked spectrum point).
+        Same "best per compound" MS2 selection as the MS1 spectra
+        section's `getFeatureDetail`'s `top_hits` (kept as a standalone
+        method here since the Annotations section starts from a picked
+        feature directly, not a clicked spectrum point).
 
         Args:
             analysis_db_path: The analysis' SQLite database.
             feature_id: The feature to fetch hits for.
-            top_n: How many hits to return, user-selectable.
+            top_n: How many hits to return per kind, user-selectable.
 
         Returns:
             Records from `analysis_db.load_ms2_annotations_for_feature`
-            (so each includes `id`, `sample_name`, `library_name`, `score`,
-            etc.), kept to the top-scoring row per `inchikey` and capped at
-            `top_n`. Empty when the feature has no annotation rows.
+            (`kind: "ms2"`, kept to the top-scoring row per `inchikey`,
+            capped at `top_n`), followed by records from
+            `analysis_db.load_top_predicted_formulas_for_feature`
+            (`kind: "predicted"`, `id` negated so it can never collide
+            with a real `ms2_annotations.id` — this project has no
+            "annotation" for a predicted row, it's a mass-decomposition
+            guess, not a scored match). Empty when the feature has
+            neither.
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return []
-        df = analysis_db.load_ms2_annotations_for_feature(analysis_db_path, feature_id)
-        if df.empty:
-            return []
-        best_per_compound = df.drop_duplicates(subset="inchikey", keep="first")
-        return _dataframe_to_records(best_per_compound.head(max(top_n, 0)))
+
+        hits: list = []
+        ms2_df = analysis_db.load_ms2_annotations_for_feature(analysis_db_path, feature_id)
+        if not ms2_df.empty:
+            best_per_compound = ms2_df.drop_duplicates(subset="inchikey", keep="first")
+            best_per_compound = best_per_compound.head(max(top_n, 0)).copy()
+            best_per_compound["kind"] = "ms2"
+            hits.extend(_dataframe_to_records(best_per_compound))
+
+        predicted_df = analysis_db.load_top_predicted_formulas_for_feature(
+            analysis_db_path, feature_id, top_n
+        )
+        if not predicted_df.empty:
+            predicted_df = predicted_df.copy()
+            predicted_df["id"] = -predicted_df["id"]
+            predicted_df["kind"] = "predicted"
+            hits.extend(_dataframe_to_records(predicted_df))
+
+        return hits
 
     def _write_spectrum_html(self, html: str) -> str:
         self._spectrum_counter += 1

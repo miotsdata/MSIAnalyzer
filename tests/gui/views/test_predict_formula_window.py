@@ -119,6 +119,50 @@ def test_select_all_unannotated_selects_only_unannotated(
     assert selected == [2]
 
 
+def test_select_all_unannotated_button_toggles_off_on_a_second_click(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # A mis-click used to have no way back — this is the fix: clicking
+    # again deselects exactly what the first click selected.
+    _seed_unannotated_feature(annotated_analysis_model.analysisDbPath)
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    window = _open_predict_formula_window(view, root, find_visual_child, qtbot)
+
+    select_button = window.findChild(QQuickItem, "predictSelectAllUnannotatedButton")
+    assert select_button.property("text") == "Select all unannotated"
+
+    _click(window, select_button, qtbot)
+    assert window.property("selectedFeatureIds").toVariant() == [2]
+    assert select_button.property("text") == "Deselect all unannotated"
+
+    _click(window, select_button, qtbot)
+    assert window.property("selectedFeatureIds").toVariant() == []
+    assert select_button.property("text") == "Select all unannotated"
+
+
+def test_select_all_unannotated_preserves_a_manually_picked_annotated_feature(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # Union, not replace — hand-picking an annotated feature (e.g. a
+    # low-scoring MS2 hit worth double-checking) first must survive
+    # clicking "select all unannotated" afterward, and survive the
+    # toggle-off too.
+    _seed_unannotated_feature(annotated_analysis_model.analysisDbPath)
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    window = _open_predict_formula_window(view, root, find_visual_child, qtbot)
+
+    _click(window, find_visual_child(window.contentItem(), "predictFeatureCheck_7"), qtbot)
+    select_button = window.findChild(QQuickItem, "predictSelectAllUnannotatedButton")
+    _click(window, select_button, qtbot)
+
+    assert sorted(window.property("selectedFeatureIds").toVariant()) == [2, 7]
+
+    _click(window, select_button, qtbot)
+    assert window.property("selectedFeatureIds").toVariant() == [7]
+
+
 def test_run_button_disabled_until_features_and_adducts_selected(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):
@@ -185,6 +229,39 @@ def test_predicting_shows_loading_overlay_and_clears_on_finished(
 
     assert window.property("predicting") is False
     assert overlay.property("visible") is False
+
+
+def test_finished_signal_refreshes_the_windows_own_feature_list(
+    analysis_view, annotated_analysis_model, application, find_visual_child, qtbot
+):
+    # A feature just predicted for used to keep showing "(unannotated)"
+    # in this window's own picker list until it was closed and reopened
+    # — features was only ever fetched once, in showFor().
+    _seed_unannotated_feature(annotated_analysis_model.analysisDbPath)
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    window = _open_predict_formula_window(view, root, find_visual_child, qtbot)
+
+    before = {f["feature_id"]: f["compound_name"] for f in window.property("features")}
+    assert before[2] is None
+
+    # Simulate the prediction that just "finished" having written a row
+    # for feature 2 (the worker itself is mocked out in these tests).
+    with sqlite3.connect(annotated_analysis_model.analysisDbPath) as con:
+        con.execute(
+            "INSERT INTO predicted_formulas "
+            "(feature_id, adduct, formula, mass_error, mass_error_ppm, rank) "
+            "VALUES (2, '[M+H]+', 'C6H12O6', 0.00003, 0.2, 1)"
+        )
+        con.commit()
+
+    application.analysis_bridge.formulaPredictionFinished.emit(
+        annotated_analysis_model.analysisDbPath
+    )
+    qtbot.wait(50)
+
+    after = {f["feature_id"]: f["compound_name"] for f in window.property("features")}
+    assert after[2] == "C6H12O6 + [M+H]+"
 
 
 def test_failed_signal_shows_error_and_clears_predicting(

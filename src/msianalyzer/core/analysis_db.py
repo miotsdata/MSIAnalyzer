@@ -1005,16 +1005,58 @@ def load_predicted_formulas_for_feature(
 
 
 @log_call(source="db_path")
+def load_top_predicted_formulas_for_feature(
+    db_path: Path | str, feature_id: int, top_n: int
+) -> pd.DataFrame:
+    """The `top_n` best predicted-formula candidates for one feature,
+    ranked globally by closeness (`ABS(mass_error_ppm)`) — **not** grouped
+    or capped per adduct the way `load_predicted_formulas_for_feature`'s
+    own `rank` column is. Backs the Annotations top-hits panel: "top N
+    predictions, regardless of adduct" (see `AnalysisBridge.
+    getFeatureTopHits`), as distinct from the per-adduct candidate list
+    `load_predicted_formulas_for_feature`/the target-list picker use.
+
+    Returns:
+        A DataFrame with ``id``, ``adduct``, ``formula``, ``mass_error``,
+        ``mass_error_ppm``, ordered by ascending ``ABS(mass_error_ppm)``,
+        at most ``top_n`` rows. Empty when the feature has no predicted
+        formula.
+    """
+    sql = """
+        SELECT id, adduct, formula, mass_error, mass_error_ppm
+        FROM predicted_formulas
+        WHERE feature_id = ?
+        ORDER BY ABS(mass_error_ppm)
+        LIMIT ?
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(
+                sql, con, params=(int(feature_id), max(int(top_n), 0))
+            )
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
 def load_all_features_for_prediction(db_path: Path | str) -> pd.DataFrame:
     """Every feature with its current representative identity (if any) —
     backs the "Predict formula" window's feature picker, so the user can
     select any mix of unannotated and annotated-but-unconvincing features.
 
+    Same three-tier precedence as `load_feature_representative_annotations`
+    (target_list > ms2 > predicted) — a feature already carrying only a
+    predicted formula from an earlier run shows that formula here too
+    (as `"<formula> + <adduct>"`), not a blank/unannotated row, so the
+    picker reflects what just happened after a run instead of looking
+    unchanged. It stays fully re-selectable regardless — this list is
+    for picking *candidates to (re-)predict*, not just unlabelled ones.
+
     Returns:
         A DataFrame with ``feature_id``, ``mz``, ``compound_name`` (`None`
-        if nothing matched yet), ``best_score`` (`None` for a target-list-
-        only or unannotated feature), ordered by ``mz``. Empty when there
-        are no features.
+        if nothing matched yet), ``best_score`` (`None` for a target-
+        list-, predicted-, or un-annotated feature), ordered by ``mz``.
+        Empty when there are no features.
     """
     sql = f"""
         WITH {_TARGET_REP_CTE},
@@ -1022,13 +1064,18 @@ def load_all_features_for_prediction(db_path: Path | str) -> pd.DataFrame:
             SELECT feature_id, compound_name, score AS best_score
             FROM ms2_annotations
             WHERE rank_feature = 1
-        )
+        ),
+        {_PREDICTED_REP_CTE}
         SELECT f.feature_id, f.mz,
-               COALESCE(tr.compound_name, m.compound_name) AS compound_name,
+               COALESCE(
+                   tr.compound_name, m.compound_name,
+                   pr.formula || ' + ' || pr.adduct
+               ) AS compound_name,
                m.best_score
         FROM features f
         LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
         LEFT JOIN ms2_rep m ON m.feature_id = f.feature_id
+        LEFT JOIN predicted_rep pr ON pr.feature_id = f.feature_id
         ORDER BY f.mz
     """
     with connect(db_path) as con:

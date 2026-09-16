@@ -80,7 +80,14 @@ Item {
     }
 
     function refreshBasicPlot() {
+        // A predicted-formula hit (ADR 27) has no MS2 scan behind it at
+        // all — getBasicMirrorPlotImage is keyed on ms2_annotations.id,
+        // which its negative id was deliberately built to never match
+        // (see getFeatureTopHits); skip the round trip entirely rather
+        // than asking the bridge to fail gracefully for a case we
+        // already know the answer to.
         annotationsSection.basicPlotImage = (annotationsSection.selectedHit
+                                              && annotationsSection.selectedHit.kind === "ms2"
                                               && analysis && analysis.analysisDbPath)
             ? AnalysisBridge.getBasicMirrorPlotImage(
                   analysis.analysisDbPath, annotationsSection.selectedHit.id)
@@ -93,23 +100,32 @@ Item {
     // "all the stats are written better (list, clear)" — a flat
     // label/value pair list (statsRepeater below lays it out as a
     // 2-column grid), built straight from the already-fetched
-    // `selectedHit` — no extra bridge round trip needed.
+    // `selectedHit` — no extra bridge round trip needed. A predicted
+    // hit (ADR 27) has no score/coverage/peak-count/sample/library — it
+    // was never a scored MS2 match, just a mass-decomposition guess —
+    // so it gets its own, much shorter, set of rows instead.
     readonly property var statsRows: {
         var h = annotationsSection.selectedHit
         if (!h)
             return []
-        var pairs = [
-            ["Compound", (h.compound_name || h.inchikey || "?")
-                         + (h.compound_formula ? " (" + h.compound_formula + ")" : "")],
-            ["InChIKey", h.inchikey || "?"],
-            ["Sample", h.sample_name || "?"],
-            ["Library", h.library_name || "?"],
-            ["Score", Number(h.score).toFixed(3)
-                      + "  (dot product " + Number(h.dot_product_score).toFixed(3) + ")"],
-            ["Coverage", "library " + Number(h.lib_coverage).toFixed(2)
-                         + "  ·  empirical " + Number(h.emp_coverage).toFixed(2)],
-            ["Matched peaks", h.n_matched_peaks + " / " + h.n_lib_peaks],
-        ]
+        var pairs = h.kind === "predicted"
+            ? [
+                ["Formula", h.formula || "?"],
+                ["Adduct", h.adduct || "?"],
+                ["Mass error", Number(h.mass_error_ppm).toFixed(2) + " ppm"],
+              ]
+            : [
+                ["Compound", (h.compound_name || h.inchikey || "?")
+                             + (h.compound_formula ? " (" + h.compound_formula + ")" : "")],
+                ["InChIKey", h.inchikey || "?"],
+                ["Sample", h.sample_name || "?"],
+                ["Library", h.library_name || "?"],
+                ["Score", Number(h.score).toFixed(3)
+                          + "  (dot product " + Number(h.dot_product_score).toFixed(3) + ")"],
+                ["Coverage", "library " + Number(h.lib_coverage).toFixed(2)
+                             + "  ·  empirical " + Number(h.emp_coverage).toFixed(2)],
+                ["Matched peaks", h.n_matched_peaks + " / " + h.n_lib_peaks],
+              ]
         var flat = []
         for (var i = 0; i < pairs.length; i++) {
             flat.push(pairs[i][0] + ":")
@@ -458,11 +474,16 @@ Item {
                                         color: annotationsSection.selectedHit
                                                && annotationsSection.selectedHit.id === modelData.id
                                                ? palette.highlightedText : palette.text
-                                        text: (index + 1) + ". "
-                                              + (modelData.compound_name || modelData.inchikey || "?")
-                                              + " (score <b>" + Number(modelData.score).toFixed(3) + "</b>)"
-                                              + "  ·  " + (modelData.sample_name || "?")
-                                              + (modelData.library_name ? "  ·  " + modelData.library_name : "")
+                                        text: modelData.kind === "predicted"
+                                              ? (index + 1) + ". <b>" + modelData.formula + "</b>"
+                                                + "  ·  " + modelData.adduct
+                                                + "  ·  " + Number(modelData.mass_error_ppm).toFixed(2) + " ppm"
+                                                + "  <i>(predicted, no MS2)</i>"
+                                              : (index + 1) + ". "
+                                                + (modelData.compound_name || modelData.inchikey || "?")
+                                                + " (score <b>" + Number(modelData.score).toFixed(3) + "</b>)"
+                                                + "  ·  " + (modelData.sample_name || "?")
+                                                + (modelData.library_name ? "  ·  " + modelData.library_name : "")
                                     }
                                 }
                             }
@@ -552,7 +573,11 @@ Item {
                         ToolButton {
                             objectName: "mirrorPlotDetailsButton"
                             text: "🔍 Details"
+                            // A predicted hit (ADR 27) has no MS2 scan —
+                            // nothing for the interactive Plotly window
+                            // to show.
                             enabled: !!annotationsSection.selectedHit
+                                     && annotationsSection.selectedHit.kind === "ms2"
 
                             HoverHandler {
                                 cursorShape: Qt.PointingHandCursor
@@ -574,13 +599,17 @@ Item {
                     Label {
                         objectName: "basicPlotEmptyLabel"
                         visible: !annotationsSection.selectedHit
-                        text: "No hit selected."
+                                 || annotationsSection.selectedHit.kind === "predicted"
+                        text: !annotationsSection.selectedHit
+                              ? "No hit selected."
+                              : "No MS2 spectrum — predicted formula only (ADR 27)."
                         color: Theme.mutedTextColor
                     }
 
                     Image {
                         objectName: "basicPlotImage"
                         visible: !!annotationsSection.selectedHit
+                                 && annotationsSection.selectedHit.kind === "ms2"
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         fillMode: Image.PreserveAspectFit

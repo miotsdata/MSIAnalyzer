@@ -28,6 +28,7 @@ from msianalyzer.core.analysis_db import (
     load_metadata_value,
     load_ms2_annotations_for_feature,
     load_predicted_formulas_for_feature,
+    load_top_predicted_formulas_for_feature,
     load_rois,
     load_samples,
     load_summary_counts,
@@ -1271,6 +1272,25 @@ def test_load_all_features_for_prediction_shows_status_columns(tmp_path: Path):
     assert by_id[76]["best_score"] == pytest.approx(0.8572)
 
 
+def test_load_all_features_for_prediction_shows_predicted_formula_label(tmp_path: Path):
+    # A feature already carrying only a predicted formula from an
+    # earlier run must show it here too — not a blank/unannotated row —
+    # so the "Predict formula" picker reflects what just happened.
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    save_predicted_formulas(db, [_make_predicted(1, adduct="[M+H]+", formula="C6H12O6")])
+
+    df = load_all_features_for_prediction(db)
+
+    assert df.iloc[0]["compound_name"] == "C6H12O6 + [M+H]+"
+    assert pd.isna(df.iloc[0]["best_score"])
+
+
 def test_representative_annotations_predicted_tier_only_when_no_target_or_ms2(
     tmp_path: Path,
 ):
@@ -1393,3 +1413,34 @@ def test_load_feature_list_shows_predicted_formula_label(tmp_path: Path):
     df = load_feature_list(db)
 
     assert df.iloc[0]["compound_name"] == "C6H12O6 + [M+H]+"
+
+
+def test_load_top_predicted_formulas_ranks_globally_not_per_adduct(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    save_predicted_formulas(
+        db,
+        [
+            _make_predicted(1, adduct="[M+H]+", formula="C6H12O6", mass_error_ppm=0.2, rank=1),
+            _make_predicted(1, adduct="[M+H]+", formula="C7H16OS2", mass_error_ppm=4.6, rank=2),
+            _make_predicted(1, adduct="[M+Na]+", formula="C6H12O6", mass_error_ppm=1.2, rank=1),
+        ],
+    )
+
+    top2 = load_top_predicted_formulas_for_feature(db, 1, top_n=2)
+
+    # Globally-closest 2 across both adducts, not "1 per adduct".
+    assert list(top2["formula"]) == ["C6H12O6", "C6H12O6"]
+    assert list(top2["adduct"]) == ["[M+H]+", "[M+Na]+"]
+
+
+def test_load_top_predicted_formulas_empty_for_unknown_feature(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_top_predicted_formulas_for_feature(db, 999, top_n=5).empty

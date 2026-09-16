@@ -186,6 +186,7 @@ def test_get_feature_top_hits_for_feature(tmp_path):
     assert rows[0]["library_name"] == "my_library"
     assert rows[0]["compound_name"] == "Caffeine"
     assert rows[0]["id"] == 1  # the ms2_annotations row id, for getMirrorPlotUrl
+    assert rows[0]["kind"] == "ms2"
 
 
 def test_get_feature_top_hits_capped_at_top_n(tmp_path):
@@ -220,6 +221,73 @@ def test_get_feature_top_hits_empty_for_unknown_feature(tmp_path):
 
     bridge = AnalysisBridge()
     assert bridge.getFeatureTopHits(str(db_path), 999, 5) == []
+
+
+def test_get_feature_top_hits_includes_predicted_formulas_for_unannotated_feature(
+    tmp_path,
+):
+    from msianalyzer.core.analysis_db import save_predicted_formulas
+    from msianalyzer.core.annotation.formula_prediction import PredictedFormula
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (2, 181.07, '{}')"
+        )
+        con.commit()
+    save_predicted_formulas(
+        db_path,
+        [
+            PredictedFormula(
+                feature_id=2, adduct="[M+H]+", formula="C6H12O6",
+                mass_error=0.00003, mass_error_ppm=0.2, rank=1,
+            ),
+            PredictedFormula(
+                feature_id=2, adduct="[M+Na]+", formula="C7H16OS2",
+                mass_error=0.0008, mass_error_ppm=4.6, rank=1,
+            ),
+        ],
+    )
+
+    bridge = AnalysisBridge()
+    rows = bridge.getFeatureTopHits(str(db_path), 2, 5)
+
+    assert len(rows) == 2
+    assert all(r["kind"] == "predicted" for r in rows)
+    assert rows[0]["formula"] == "C6H12O6"  # closest ppm error first
+    assert rows[0]["adduct"] == "[M+H]+"
+    # Negative, distinct id space — never collides with a real
+    # ms2_annotations.id, which is always a positive AUTOINCREMENT PK.
+    assert rows[0]["id"] < 0
+
+
+def test_get_feature_top_hits_ms2_then_predicted_when_a_feature_has_both(tmp_path):
+    from msianalyzer.core.analysis_db import save_predicted_formulas
+    from msianalyzer.core.annotation.formula_prediction import PredictedFormula
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)  # ms2_annotations row for feature 7 -> "Caffeine"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 123.4567, '{}')"
+        )
+        con.commit()
+    save_predicted_formulas(
+        db_path,
+        [
+            PredictedFormula(
+                feature_id=7, adduct="[M+H]+", formula="C99H99O99",
+                mass_error=0.0, mass_error_ppm=1.0, rank=1,
+            ),
+        ],
+    )
+
+    bridge = AnalysisBridge()
+    rows = bridge.getFeatureTopHits(str(db_path), 7, 5)
+
+    assert [r["kind"] for r in rows] == ["ms2", "predicted"]
 
 
 def _request_mirror_plot_sync(bridge, qtbot, *args, timeout=5000) -> str:

@@ -91,13 +91,40 @@ Window {
         predictWindow.selectedAdducts = arr
     }
 
-    function selectAllUnannotated() {
+    readonly property var unannotatedFeatureIds: {
         var ids = []
         for (var i = 0; i < predictWindow.features.length; i++) {
             if (!predictWindow.features[i].compound_name)
                 ids.push(predictWindow.features[i].feature_id)
         }
-        predictWindow.selectedFeatureIds = ids
+        return ids
+    }
+    // Drives the button's own label — "select" vs "deselect" — so it's
+    // clear which way one more click will go.
+    readonly property bool allUnannotatedSelected:
+        predictWindow.unannotatedFeatureIds.length > 0
+        && predictWindow.unannotatedFeatureIds.every(function (id) {
+            return predictWindow.selectedFeatureIds.indexOf(id) !== -1
+        })
+
+    // A toggle, not a one-way action — a mis-click used to have no way
+    // back short of unchecking every row by hand. Adds/removes exactly
+    // the unannotated ids (a union/subtraction, not a wholesale
+    // replace), so any feature picked by hand elsewhere in the list
+    // survives either direction.
+    function toggleSelectAllUnannotated() {
+        var targetIds = predictWindow.unannotatedFeatureIds
+        if (predictWindow.allUnannotatedSelected) {
+            predictWindow.selectedFeatureIds = predictWindow.selectedFeatureIds.filter(
+                function (id) { return targetIds.indexOf(id) === -1 })
+        } else {
+            var merged = predictWindow.selectedFeatureIds.slice()
+            for (var i = 0; i < targetIds.length; i++) {
+                if (merged.indexOf(targetIds[i]) === -1)
+                    merged.push(targetIds[i])
+            }
+            predictWindow.selectedFeatureIds = merged
+        }
     }
 
     // Single entry point — one window reused across clicks, refreshed
@@ -119,6 +146,11 @@ Window {
         function onFormulaPredictionFinished(dbPath) {
             if (dbPath === predictWindow.analysisDbPath) {
                 predictWindow.predicting = false
+                // Refreshes the picker's own list too, not just
+                // AnnotationsSection's — otherwise a feature just
+                // predicted for still shows "(unannotated)" here until
+                // the window is closed and reopened.
+                predictWindow.features = AnalysisBridge.getFeaturesForPrediction(dbPath)
                 predictWindow.predictionFinished()
             }
         }
@@ -229,8 +261,10 @@ Window {
             }
             Button {
                 objectName: "predictSelectAllUnannotatedButton"
-                text: "Select all unannotated"
-                onClicked: predictWindow.selectAllUnannotated()
+                text: predictWindow.allUnannotatedSelected
+                      ? "Deselect all unannotated" : "Select all unannotated"
+                enabled: predictWindow.unannotatedFeatureIds.length > 0
+                onClicked: predictWindow.toggleSelectAllUnannotated()
 
                 HoverHandler {
                     cursorShape: Qt.PointingHandCursor
