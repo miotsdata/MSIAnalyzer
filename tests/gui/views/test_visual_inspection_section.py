@@ -23,6 +23,13 @@ def _open_visual_tab(view, root, find_visual_child, qtbot):
     center = nav_button.mapToScene(nav_button.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(50)
+    # `features` is fetched on a background thread now (see ADR 33) —
+    # every caller of this helper needs the real list in place before
+    # asserting against it, and needs the worker thread to have actually
+    # finished before the view is torn down at fixture teardown, or a
+    # stray late signal can land during a *later*, unrelated test.
+    controls = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)
 
 
 def _scroll_controls_panel_to(root, find_visual_child, item):
@@ -365,17 +372,34 @@ def test_search_field_updates_search_query(
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    search_field = find_visual_child(root, "featureSearchField")
+    search_field = find_visual_child(root, "featureNameSearchField")
     # Real key events, not setProperty("text", ...) — see
-    # test_search_field_updates_search_query in test_annotations_section.py
+    # test_name_search_field_updates_name_query in test_annotations_section.py
     # for why (the field's `text` carries a declarative binding back to
-    # `searchQuery`, which a plain setProperty write races).
+    # `nameQuery`, which a plain setProperty write races).
     center = search_field.mapToScene(search_field.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     for ch in "zebra":
         qtbot.keyClick(view, ord(ch.upper()))
 
-    assert section.property("searchQuery").lower() == "zebra"
+    assert section.property("nameQuery").lower() == "zebra"
+
+
+def test_mz_search_field_updates_mz_query(
+    analysis_view, sortable_features_model, find_visual_child, qtbot
+):
+    view = analysis_view(sortable_features_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    search_field = find_visual_child(root, "featureMzSearchField")
+    center = search_field.mapToScene(search_field.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    for ch in "150":
+        qtbot.keyClick(view, ord(ch))
+
+    assert section.property("mzQuery") == "150"
 
 
 def test_search_by_name_substring_filters_to_matching_feature(
@@ -386,7 +410,7 @@ def test_search_by_name_substring_filters_to_matching_feature(
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    section.setProperty("searchQuery", "zebra")
+    section.setProperty("nameQuery", "zebra")
 
     labels = section.property("featureLabels").toVariant()
     assert labels == ["100.0000: Zebra compound"]
@@ -400,7 +424,7 @@ def test_search_by_mz_range_filters_to_matching_feature(
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    section.setProperty("searchQuery", "140-160")
+    section.setProperty("mzQuery", "140-160")
 
     labels = section.property("featureLabels").toVariant()
     assert labels == ["m/z 150.0000"]
@@ -414,10 +438,30 @@ def test_search_by_single_mz_matches_within_tolerance(
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    section.setProperty("searchQuery", "200.0")
+    section.setProperty("mzQuery", "200.0")
 
     labels = section.property("featureLabels").toVariant()
     assert labels == ["200.0000: Apple compound"]
+
+
+def test_name_and_mz_search_combine_with_and_not_or(
+    analysis_view, sortable_features_model, find_visual_child, qtbot
+):
+    # "Zebra compound" is at mz 100.0, "Apple compound" at mz 200.0 — a
+    # name query matching only Zebra combined with an mz query matching
+    # only Apple must match neither (AND, not OR).
+    view = analysis_view(sortable_features_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    section.setProperty("nameQuery", "zebra")
+    section.setProperty("mzQuery", "190-210")
+    assert section.property("featureLabels").toVariant() == []
+
+    section.setProperty("mzQuery", "90-110")
+    labels = section.property("featureLabels").toVariant()
+    assert labels == ["100.0000: Zebra compound"]
 
 
 def test_search_with_no_matches_shows_empty_label_and_hides_combo(
@@ -428,7 +472,7 @@ def test_search_with_no_matches_shows_empty_label_and_hides_combo(
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    section.setProperty("searchQuery", "nonexistent compound")
+    section.setProperty("nameQuery", "nonexistent compound")
 
     assert section.property("featureLabels").toVariant() == []
     empty_label = find_visual_child(root, "featureSearchEmptyLabel")
@@ -445,10 +489,10 @@ def test_clearing_search_shows_every_feature_again(
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    section.setProperty("searchQuery", "zebra")
+    section.setProperty("nameQuery", "zebra")
     assert len(section.property("featureLabels").toVariant()) == 1
 
-    section.setProperty("searchQuery", "")
+    section.setProperty("nameQuery", "")
     assert len(section.property("featureLabels").toVariant()) == 3
 
 

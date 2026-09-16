@@ -20,6 +20,7 @@ from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
+from msianalyzer.gui.utils.table_query_worker import TableQueryWorker
 
 logger = logging.getLogger(__name__)
 
@@ -141,12 +142,23 @@ class AnalysisBridge(QObject):
       block the GUI thread. Offloaded to `FormulaPredictionWorker`;
       `PredictFormulaWindow.qml` calls `predictFormulas` and listens for
       these instead of using a return value.
+    - `annotationTableReady`/`featureListReady`: `requestAnnotationTable`/
+      `requestFeatureList` are fire-and-forget too, for the same reason —
+      both queries filter `ms2_annotations` (which can hold many rows;
+      one per scored candidate per scan per feature per library), and ran
+      long enough on a real analysis to freeze the GUI outright (see
+      ADR 33 for the query-side half of that fix; this is the other half).
+      Offloaded to `TableQueryWorker`. `AnnotationsSection.qml`/
+      `HeatmapControlsPanel.qml` call these and listen for the `*Ready`
+      signals instead of using a return value.
     """
 
     spectrumPointClicked = Signal(float)
     mirrorPlotReady = Signal(str)
     formulaPredictionFinished = Signal(str)  # analysis_db_path
     formulaPredictionFailed = Signal(str, str)  # analysis_db_path, message
+    annotationTableReady = Signal(list)
+    featureListReady = Signal(list)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -180,6 +192,11 @@ class AnalysisBridge(QObject):
         # Same "kept alive while running, replacing it discards a stale
         # result" pattern as _mirror_plot_worker above.
         self._formula_prediction_worker: FormulaPredictionWorker | None = None
+        # Same pattern again, one worker slot each — a new request (e.g.
+        # the user reopening a tab) discards whatever the previous one
+        # was still fetching.
+        self._annotation_table_worker: TableQueryWorker | None = None
+        self._feature_list_worker: TableQueryWorker | None = None
 
     @Slot(float)
     def onSpectrumPointClicked(self, mz: float) -> None:
@@ -273,25 +290,49 @@ class AnalysisBridge(QObject):
             return dict(_EMPTY_SUMMARY)
         return analysis_db.load_summary_counts(analysis_db_path)
 
-    @Slot(str, result=list)
-    def getAnnotationTable(self, analysis_db_path: str) -> list:
-        """One row per feature — its representative compound hit.
+    @Slot(str)
+    def requestAnnotationTable(self, analysis_db_path: str) -> None:
+        """Start fetching one row per feature (its representative compound
+        hit) on a background thread; the result arrives via
+        `annotationTableReady(rows)`.
+
+        Fire-and-forget rather than a return value — see the class
+        docstring for why. Used by the Annotations section's table, which
+        shows a loading state (`LoadingOverlay`, via `AnalysisPage.qml`'s
+        `currentSectionReady`) until `annotationTableReady` fires.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
 
-        Returns:
-            Records from `analysis_db.load_feature_representative_annotations`
-            — not necessarily the single highest-`score` compound, see
-            `AnnotateConfig.representative_score_tolerance`. Empty when
-            annotation never ran (or the db path doesn't exist).
+        `annotationTableReady`'s rows come from
+        `analysis_db.load_feature_representative_annotations` — not
+        necessarily the single highest-`score` compound, see
+        `AnnotateConfig.representative_score_tolerance`. Empty when
+        annotation never ran (or the db path doesn't exist).
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
-            return []
-        df = analysis_db.load_feature_representative_annotations(analysis_db_path)
-        if df.empty:
-            return []
-        return _dataframe_to_records(df)
+            self.annotationTableReady.emit([])
+            return
+        worker = TableQueryWorker(
+            analysis_db.load_feature_representative_annotations, analysis_db_path, self
+        )
+        worker.succeeded.connect(self._onAnnotationTableSucceeded)
+        worker.failed.connect(self._onAnnotationTableFailed)
+        self._annotation_table_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _onAnnotationTableSucceeded(self, df: pd.DataFrame) -> None:
+        if self.sender() is not self._annotation_table_worker:
+            return  # superseded by a newer request — discard
+        self.annotationTableReady.emit([] if df.empty else _dataframe_to_records(df))
+
+    @Slot(str)
+    def _onAnnotationTableFailed(self, message: str) -> None:
+        if self.sender() is not self._annotation_table_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("annotation table load failed: %s", message)
+        self.annotationTableReady.emit([])
 
     @Slot(str, result=list)
     def getFeaturesForPrediction(self, analysis_db_path: str) -> list:
@@ -703,20 +744,43 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             "top_hits": top_hits,
         }
 
-    @Slot(str, result=list)
-    def getFeatureList(self, analysis_db_path: str) -> list:
-        """Every feature for the Visual Inspection section's feature selector.
+    @Slot(str)
+    def requestFeatureList(self, analysis_db_path: str) -> None:
+        """Start fetching every feature for the Visual Inspection section's
+        feature selector on a background thread; the result arrives via
+        `featureListReady(features)`.
+
+        Fire-and-forget rather than a return value — see the class
+        docstring for why. Used by `HeatmapControlsPanel.qml`, which shows
+        a loading state until `featureListReady` fires.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
 
-        Returns:
-            Records (`feature_id`, `mz`, `compound_name`) from
-            `analysis_db.load_feature_list`, ordered by `mz`.
+        `featureListReady`'s features (`feature_id`, `mz`, `compound_name`)
+        come from `analysis_db.load_feature_list`, ordered by `mz`.
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
-            return []
-        return _dataframe_to_records(analysis_db.load_feature_list(analysis_db_path))
+            self.featureListReady.emit([])
+            return
+        worker = TableQueryWorker(analysis_db.load_feature_list, analysis_db_path, self)
+        worker.succeeded.connect(self._onFeatureListSucceeded)
+        worker.failed.connect(self._onFeatureListFailed)
+        self._feature_list_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _onFeatureListSucceeded(self, df: pd.DataFrame) -> None:
+        if self.sender() is not self._feature_list_worker:
+            return  # superseded by a newer request — discard
+        self.featureListReady.emit([] if df.empty else _dataframe_to_records(df))
+
+    @Slot(str)
+    def _onFeatureListFailed(self, message: str) -> None:
+        if self.sender() is not self._feature_list_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("feature list load failed: %s", message)
+        self.featureListReady.emit([])
 
     # -----------------------------------------------------------------
     # ROI Design

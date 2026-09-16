@@ -38,8 +38,36 @@ Flickable {
     // nothing to do there.
     property bool showSampleVisibility: true
 
-    property var features: (controlsFlickable.analysis && controlsFlickable.analysis.analysisDbPath)
-                            ? AnalysisBridge.getFeatureList(controlsFlickable.analysis.analysisDbPath) : []
+    // `features` used to be a synchronous property binding straight onto
+    // AnalysisBridge.getFeatureList — a direct blocking SQL query on the
+    // GUI thread. Fetched on a background thread instead
+    // (requestFeatureList / featureListReady, same fire-and-forget
+    // pattern as requestMirrorPlot — see ADR 33 for the full reasoning,
+    // shared with AnnotationsSection.qml's identical change).
+    // `featuresLoading` gates AnalysisPage.qml's LoadingOverlay via
+    // currentSectionReady.
+    property var features: []
+    property bool featuresLoading: false
+
+    function refreshFeatures() {
+        if (controlsFlickable.analysis && controlsFlickable.analysis.analysisDbPath) {
+            controlsFlickable.featuresLoading = true
+            AnalysisBridge.requestFeatureList(controlsFlickable.analysis.analysisDbPath)
+        } else {
+            controlsFlickable.features = []
+            controlsFlickable.featuresLoading = false
+        }
+    }
+
+    onAnalysisChanged: controlsFlickable.refreshFeatures()
+
+    Connections {
+        target: AnalysisBridge
+        function onFeatureListReady(receivedFeatures) {
+            controlsFlickable.features = receivedFeatures
+            controlsFlickable.featuresLoading = false
+        }
+    }
 
     // "feature" (an m/z column, the original mode) or "obs" (a per-pixel
     // `adata.obs` column, e.g. `tic`/`rt` — not tied to any one feature).
@@ -101,15 +129,19 @@ Flickable {
     // unannotated feature by m/z, at the end).
     property string sortMode: "mz"
 
-    // Search by compound name (contains) or m/z (a single value within a
-    // small tolerance, or an explicit "min-max" range) — same syntax as
-    // Annotate's search box, see SearchQuery.matches. Applied before
+    // Two separate fields (ADR 35) — name (contains) and m/z (a single
+    // value within a small tolerance, or an explicit "min-max" range),
+    // same syntax as Annotate's fields, see SearchQuery.matchesName/
+    // matchesMz. Both must match when both are non-empty. Applied before
     // sorting; feature-mode only, an obs column has no name/mz to search.
-    property string searchQuery: ""
-    onSearchQueryChanged: controlsFlickable.selectedFeatureIndex = 0
+    property string nameQuery: ""
+    property string mzQuery: ""
+    onNameQueryChanged: controlsFlickable.selectedFeatureIndex = 0
+    onMzQueryChanged: controlsFlickable.selectedFeatureIndex = 0
 
     readonly property var filteredFeatures: controlsFlickable.features.filter(function (f) {
-        return SearchQuery.matches(controlsFlickable.searchQuery, f.compound_name, f.mz)
+        return SearchQuery.matchesName(controlsFlickable.nameQuery, f.compound_name)
+            && SearchQuery.matchesMz(controlsFlickable.mzQuery, f.mz)
     })
 
     property var sortedFeatures: {
@@ -373,13 +405,22 @@ Flickable {
             visible: controlsFlickable.inspectionMode === "feature"
         }
         TextField {
-            id: featureSearchField
-            objectName: "featureSearchField"
+            id: featureNameSearchField
+            objectName: "featureNameSearchField"
             Layout.fillWidth: true
             visible: controlsFlickable.inspectionMode === "feature"
-            placeholderText: "Search name or m/z…"
-            text: controlsFlickable.searchQuery
-            onTextChanged: controlsFlickable.searchQuery = text
+            placeholderText: "Search name…"
+            text: controlsFlickable.nameQuery
+            onTextChanged: controlsFlickable.nameQuery = text
+        }
+        TextField {
+            id: featureMzSearchField
+            objectName: "featureMzSearchField"
+            Layout.fillWidth: true
+            visible: controlsFlickable.inspectionMode === "feature"
+            placeholderText: "Search m/z…"
+            text: controlsFlickable.mzQuery
+            onTextChanged: controlsFlickable.mzQuery = text
         }
         RowLayout {
             visible: controlsFlickable.inspectionMode === "feature"
@@ -402,28 +443,50 @@ Flickable {
                 }
             }
         }
-        Label {
-            objectName: "featureSearchEmptyLabel"
-            visible: controlsFlickable.inspectionMode === "feature"
-                     && controlsFlickable.features.length > 0
-                     && controlsFlickable.sortedFeatures.length === 0
-            text: "No features match your search."
-            color: Theme.mutedTextColor
-            wrapMode: Text.Wrap
+        // Same always-reserve-the-space wrapper as AnnotationsSection.qml's
+        // panels use (see its own comment on the same pattern) — an
+        // invisible item claims zero space in QtQuick.Layouts regardless
+        // of fill properties, so swapping which sibling is visible here
+        // used to reflow whatever's below. A fixed preferredHeight (not
+        // fillHeight) matches how this row already behaved before —
+        // neither the label nor the combo ever stretched to fill leftover
+        // space, they just took their own natural height.
+        Item {
             Layout.fillWidth: true
-        }
-        ComboBox {
-            id: featureCombo
-            objectName: "featureCombo"
-            Layout.fillWidth: true
+            Layout.preferredHeight: featureCombo.implicitHeight
             visible: controlsFlickable.inspectionMode === "feature"
-                     && controlsFlickable.sortedFeatures.length > 0
-            model: controlsFlickable.featureLabels
-            currentIndex: controlsFlickable.selectedFeatureIndex
-            onActivated: (index) => controlsFlickable.selectedFeatureIndex = index
-            HoverHandler {
-                objectName: "featureComboHover"
-                cursorShape: Qt.PointingHandCursor
+
+            Label {
+                objectName: "featureSearchEmptyLabel"
+                visible: controlsFlickable.inspectionMode === "feature"
+                         && controlsFlickable.features.length > 0
+                         && controlsFlickable.sortedFeatures.length === 0
+                text: "No features match your search."
+                color: Theme.mutedTextColor
+                wrapMode: Text.Wrap
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+            }
+            ComboBox {
+                id: featureCombo
+                objectName: "featureCombo"
+                anchors.fill: parent
+                // Kept explicit here (not just on the wrapper above) —
+                // every other control in this panel manages its own
+                // visibility directly rather than delegating to a parent,
+                // and this keeps `featureCombo.visible` itself reporting
+                // false in obs mode (not just "not actually on screen
+                // because its parent is hidden"), which existing callers
+                // already read it as meaning.
+                visible: controlsFlickable.inspectionMode === "feature"
+                         && controlsFlickable.sortedFeatures.length > 0
+                model: controlsFlickable.featureLabels
+                currentIndex: controlsFlickable.selectedFeatureIndex
+                onActivated: (index) => controlsFlickable.selectedFeatureIndex = index
+                HoverHandler {
+                    objectName: "featureComboHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
             }
         }
 

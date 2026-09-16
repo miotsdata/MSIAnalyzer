@@ -21,10 +21,39 @@ Item {
     // ADR 27), which a plain property binding on analysisDbPath alone
     // wouldn't notice (the path itself doesn't change).
     property int refreshToken: 0
-    property var rows: {
-        annotationsSection.refreshToken  // read-only dependency, see refreshToken's comment
-        return (analysis && analysis.analysisDbPath)
-            ? AnalysisBridge.getAnnotationTable(analysis.analysisDbPath) : []
+
+    // `rows` used to be a synchronous property binding straight onto
+    // AnalysisBridge.getAnnotationTable — a direct blocking SQL query on
+    // the GUI thread, evaluated during this section's own Loader
+    // construction, reported as freezing the app on a real analysis (see
+    // ADR 33 for the query-side half of the fix; this is the other half).
+    // Fetched on a background thread instead (requestAnnotationTable /
+    // annotationTableReady, same fire-and-forget pattern as
+    // requestMirrorPlot) — `rowsLoading` gates AnalysisPage.qml's
+    // existing LoadingOverlay via currentSectionReady, the same mechanism
+    // MS1's plotLoading already uses.
+    property var rows: []
+    property bool rowsLoading: false
+
+    function refreshRows() {
+        if (analysis && analysis.analysisDbPath) {
+            annotationsSection.rowsLoading = true
+            AnalysisBridge.requestAnnotationTable(analysis.analysisDbPath)
+        } else {
+            annotationsSection.rows = []
+            annotationsSection.rowsLoading = false
+        }
+    }
+
+    onAnalysisChanged: annotationsSection.refreshRows()
+    onRefreshTokenChanged: annotationsSection.refreshRows()
+
+    Connections {
+        target: AnalysisBridge
+        function onAnnotationTableReady(receivedRows) {
+            annotationsSection.rows = receivedRows
+            annotationsSection.rowsLoading = false
+        }
     }
 
     // "User can decide to sort for any of these" (feature id, name, m/z) —
@@ -43,14 +72,17 @@ Item {
         }
     }
 
-    // Search by compound name (contains) or m/z (a single value within a
-    // small tolerance, or an explicit "min-max" range) — see
-    // SearchQuery.matches for the exact syntax. Applied before sorting,
-    // never changes `selectedFeatureId`.
-    property string searchQuery: ""
+    // Two separate fields (ADR 34) — name (contains) and m/z (a single
+    // value within a small tolerance, or an explicit "min-max" range),
+    // see SearchQuery.matchesName/matchesMz for the exact syntax. Both
+    // must match when both are non-empty (AND, not OR). Applied before
+    // sorting, never changes `selectedFeatureId`.
+    property string nameQuery: ""
+    property string mzQuery: ""
 
     readonly property var filteredRows: annotationsSection.rows.filter(function (r) {
-        return SearchQuery.matches(annotationsSection.searchQuery, r.compound_name, r.mz)
+        return SearchQuery.matchesName(annotationsSection.nameQuery, r.compound_name)
+            && SearchQuery.matchesMz(annotationsSection.mzQuery, r.mz)
     })
 
     readonly property var sortedRows: {
@@ -199,14 +231,6 @@ Item {
                     font.pixelSize: 14
                     Layout.fillWidth: true
                 }
-                TextField {
-                    id: annotationsSearchField
-                    objectName: "annotationsSearchField"
-                    Layout.preferredWidth: 180
-                    placeholderText: "Search name or m/z…"
-                    text: annotationsSection.searchQuery
-                    onTextChanged: annotationsSection.searchQuery = text
-                }
                 Button {
                     objectName: "openPredictFormulaButton"
                     text: "Predict formula…"
@@ -222,6 +246,28 @@ Item {
                     HoverHandler {
                         cursorShape: Qt.PointingHandCursor
                     }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+
+                TextField {
+                    id: annotationsNameSearchField
+                    objectName: "annotationsNameSearchField"
+                    Layout.fillWidth: true
+                    placeholderText: "Search name…"
+                    text: annotationsSection.nameQuery
+                    onTextChanged: annotationsSection.nameQuery = text
+                }
+                TextField {
+                    id: annotationsMzSearchField
+                    objectName: "annotationsMzSearchField"
+                    Layout.preferredWidth: 100
+                    placeholderText: "m/z…"
+                    text: annotationsSection.mzQuery
+                    onTextChanged: annotationsSection.mzQuery = text
                 }
             }
 
@@ -260,22 +306,34 @@ Item {
                 }
             }
 
-            Label {
-                objectName: "annotationsSearchEmptyLabel"
-                visible: annotationsSection.rows.length > 0 && annotationsSection.sortedRows.length === 0
-                text: "No features match your search."
-                color: Theme.mutedTextColor
-                Layout.fillWidth: true
-                Layout.topMargin: 8
-                horizontalAlignment: Text.AlignHCenter
-            }
-
-            Flickable {
-                id: tableFlickable
-                visible: annotationsSection.sortedRows.length > 0
+            // A plain Item wrapping both the empty-state label and the
+            // real table, not two Layout-managed siblings each toggling
+            // its own `visible` — an invisible item claims zero space in
+            // QtQuick.Layouts regardless of Layout.fillWidth/fillHeight,
+            // so toggling *which sibling* is visible used to reflow
+            // whatever sits below this panel (reported: switching between
+            // "no search matches" and a populated table shifted things
+            // around it). Wrapping both in one always-fillHeight Item
+            // means this panel's own size never changes when its content
+            // does — only what's drawn *inside* that fixed space toggles.
+            Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
+
+                Label {
+                    objectName: "annotationsSearchEmptyLabel"
+                    visible: annotationsSection.rows.length > 0 && annotationsSection.sortedRows.length === 0
+                    text: "No features match your search."
+                    color: Theme.mutedTextColor
+                    anchors.centerIn: parent
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                Flickable {
+                    id: tableFlickable
+                    visible: annotationsSection.sortedRows.length > 0
+                    anchors.fill: parent
+                    clip: true
                 contentWidth: width
                 // Computed from the row count directly, not
                 // `tableColumn.implicitHeight` — that formed a genuine
@@ -387,6 +445,7 @@ Item {
                         }
                     }
                 }
+                }
             }
         }
 
@@ -465,21 +524,28 @@ Item {
                         }
                     }
 
+                    // Same always-reserve-the-space wrapper as tablePanel's
+                    // own Item above, and for the same reason — see its
+                    // comment.
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+
                     Label {
                         objectName: "topHitsEmptyLabel"
                         visible: annotationsSection.topHits.length === 0
                         text: "No annotation hits for this feature."
                         color: Theme.mutedTextColor
                         wrapMode: Text.Wrap
-                        Layout.fillWidth: true
+                        anchors.centerIn: parent
+                        width: parent.width
                     }
 
                     Flickable {
                         id: topHitsFlickable
                         objectName: "topHitsFlickable"
                         visible: annotationsSection.topHits.length > 0
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
+                        anchors.fill: parent
                         clip: true
                         contentWidth: width
                         // Computed directly, not topHitsColumn.implicitHeight
@@ -543,6 +609,7 @@ Item {
                             }
                         }
                     }
+                    }
                 }
 
                 // Row 2 (of 3): the match's stats, as a plain label/value
@@ -562,18 +629,24 @@ Item {
                         font.bold: true
                     }
 
+                    // Same always-reserve-the-space wrapper as tablePanel's
+                    // own Item above.
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+
                     Label {
                         objectName: "statsEmptyLabel"
                         visible: !annotationsSection.selectedHit
                         text: "No hit selected."
                         color: Theme.mutedTextColor
+                        anchors.top: parent.top
                     }
 
                     Flickable {
                         objectName: "statsFlickable"
                         visible: !!annotationsSection.selectedHit
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
+                        anchors.fill: parent
                         clip: true
                         contentWidth: width
                         contentHeight: statsGrid.implicitHeight
@@ -603,6 +676,7 @@ Item {
                                 }
                             }
                         }
+                    }
                     }
                 }
 
@@ -650,6 +724,16 @@ Item {
                         }
                     }
 
+                    // Same always-reserve-the-space wrapper as tablePanel's
+                    // own Item above — this is the panel specifically
+                    // reported: without it, selecting a no-MS2 feature
+                    // (only the small empty-state label, no fillHeight
+                    // Image) shrank this panel and moved its own "Mirror
+                    // plot:" title along with it.
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+
                     Label {
                         objectName: "basicPlotEmptyLabel"
                         visible: !annotationsSection.selectedHit
@@ -658,17 +742,21 @@ Item {
                               ? "No hit selected."
                               : "No MS2 spectrum — predicted formula only (ADR 27)."
                         color: Theme.mutedTextColor
+                        anchors.centerIn: parent
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
                     }
 
                     Image {
                         objectName: "basicPlotImage"
                         visible: !!annotationsSection.selectedHit
                                  && annotationsSection.selectedHit.kind === "ms2"
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
+                        anchors.fill: parent
                         fillMode: Image.PreserveAspectFit
                         cache: false
                         source: annotationsSection.basicPlotImage
+                    }
                     }
                 }
             }

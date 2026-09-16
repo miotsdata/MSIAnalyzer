@@ -302,6 +302,12 @@ def test_inspect_visually_switches_to_visual_tab_with_feature_selected(
     ).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(50)
+    # rows is fetched on a background thread now (see ADR 33) — wait for
+    # it before looking for the row.
+    annotations_section = find_visual_child(root, "annotationsSection")
+    qtbot.waitUntil(
+        lambda: not annotations_section.property("rowsLoading"), timeout=2000
+    )
 
     row = find_visual_child(root, "annotationRow_7")
     assert row is not None
@@ -314,6 +320,10 @@ def test_inspect_visually_switches_to_visual_tab_with_feature_selected(
     assert stack.property("currentIndex") == 3
 
     controls = find_visual_child(root, "controlsFlickable")
+    # features is fetched on a background thread too — applyPendingInspect
+    # (VisualInspectionSection.qml) deliberately waits for featuresLoading
+    # to clear before matching, see that function's own comment.
+    qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)
     assert controls.property("inspectionMode") == "feature"
     assert controls.property("selectedFeature")["mz"] == 123.4567
 

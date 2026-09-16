@@ -12,6 +12,14 @@ def _open_annotations_tab(view, root, find_visual_child, qtbot):
     center = nav_button.mapToScene(nav_button.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(50)
+    # `rows` is fetched on a background thread now (see ADR 33) — every
+    # caller of this helper needs the real data in place before it goes
+    # on to assert against it, and (just as important for test isolation)
+    # needs the worker thread to have actually finished and delivered its
+    # signal before the view gets torn down at fixture teardown, or a
+    # stray late signal can land during a *later*, unrelated test.
+    section = find_visual_child(root, "annotationsSection")
+    qtbot.waitUntil(lambda: not section.property("rowsLoading"), timeout=2000)
 
 
 def _click(view, item, qtbot):
@@ -140,7 +148,7 @@ def test_sorting_does_not_change_current_selection(
     assert section.property("selectedFeatureId") == 7
 
 
-def test_search_field_updates_search_query(
+def test_name_search_field_updates_name_query(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):
     view = analysis_view(annotated_analysis_model)
@@ -148,12 +156,12 @@ def test_search_field_updates_search_query(
     _open_annotations_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "annotationsSection")
-    search_field = find_visual_child(root, "annotationsSearchField")
+    search_field = find_visual_child(root, "annotationsNameSearchField")
     # Real key events, not setProperty("text", ...) — the field's `text`
-    # carries a declarative binding back to `searchQuery`, and a plain
+    # carries a declarative binding back to `nameQuery`, and a plain
     # setProperty write races that binding rather than simulating what a
     # typing user actually triggers (confirmed: setProperty alone left
-    # searchQuery unchanged in this environment). `QTest.keyClicks` itself
+    # nameQuery unchanged in this environment). `QTest.keyClicks` itself
     # only accepts a QWidget in this PySide6 build, not a QQuickItem/
     # QWindow, so each character goes through `keyClick` on the window
     # instead (routes to whichever item currently has focus).
@@ -163,9 +171,25 @@ def test_search_field_updates_search_query(
 
     # Offscreen key events land as uppercase (no real keyboard/shift-state
     # translation) — this test is only about the field wiring to
-    # `searchQuery`, not casing, and search matching is case-insensitive
-    # regardless (see SearchQuery.matches).
-    assert section.property("searchQuery").lower() == "caff"
+    # `nameQuery`, not casing, and search matching is case-insensitive
+    # regardless (see SearchQuery.matchesName).
+    assert section.property("nameQuery").lower() == "caff"
+
+
+def test_mz_search_field_updates_mz_query(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    search_field = find_visual_child(root, "annotationsMzSearchField")
+    _click(view, search_field, qtbot)
+    for ch in "150":
+        qtbot.keyClick(view, ord(ch))
+
+    assert section.property("mzQuery") == "150"
 
 
 def test_search_by_name_substring_filters_to_matching_compound(
@@ -178,7 +202,7 @@ def test_search_by_name_substring_filters_to_matching_compound(
     _open_annotations_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "annotationsSection")
-    section.setProperty("searchQuery", "wat")
+    section.setProperty("nameQuery", "wat")
 
     rows = section.property("sortedRows").toVariant()
     assert [r["feature_id"] for r in rows] == [9]
@@ -196,7 +220,7 @@ def test_search_by_mz_range_filters_to_matching_mz(
     _open_annotations_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "annotationsSection")
-    section.setProperty("searchQuery", "40-60")
+    section.setProperty("mzQuery", "40-60")
 
     rows = section.property("sortedRows").toVariant()
     assert [r["feature_id"] for r in rows] == [9]
@@ -212,8 +236,31 @@ def test_search_by_single_mz_matches_within_tolerance(
     _open_annotations_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "annotationsSection")
-    section.setProperty("searchQuery", "123.4567")  # feature 7's exact mz
+    section.setProperty("mzQuery", "123.4567")  # feature 7's exact mz
 
+    rows = section.property("sortedRows").toVariant()
+    assert [r["feature_id"] for r in rows] == [7]
+
+
+def test_name_and_mz_search_combine_with_and_not_or(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # Feature 7 is "Caffeine" at mz 123.4567; feature 9 is "Water" at mz
+    # 50.0 — a name query matching only 7 combined with an mz query
+    # matching only 9 must match neither (AND, not OR).
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("nameQuery", "caff")
+    section.setProperty("mzQuery", "40-60")
+    assert section.property("sortedRows").toVariant() == []
+
+    # Both narrowing to the same feature does match.
+    section.setProperty("mzQuery", "120-130")
     rows = section.property("sortedRows").toVariant()
     assert [r["feature_id"] for r in rows] == [7]
 
@@ -226,7 +273,7 @@ def test_search_with_no_matches_shows_empty_label_and_no_rows(
     _open_annotations_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "annotationsSection")
-    section.setProperty("searchQuery", "nonexistent compound")
+    section.setProperty("nameQuery", "nonexistent compound")
 
     assert section.property("sortedRows").toVariant() == []
     empty_label = find_visual_child(root, "annotationsSearchEmptyLabel")
@@ -247,10 +294,10 @@ def test_clearing_search_shows_every_row_again(
     _open_annotations_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "annotationsSection")
-    section.setProperty("searchQuery", "wat")
+    section.setProperty("nameQuery", "wat")
     assert len(section.property("sortedRows").toVariant()) == 1
 
-    section.setProperty("searchQuery", "")
+    section.setProperty("nameQuery", "")
     rows = section.property("sortedRows").toVariant()
     assert sorted(r["feature_id"] for r in rows) == [7, 9]
 

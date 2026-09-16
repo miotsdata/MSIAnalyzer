@@ -100,7 +100,7 @@ def _seed_annotated_feature(db_path, *, with_raw_spectra=True):
         con.commit()
 
 
-def test_get_annotation_table_returns_one_row_per_feature(tmp_path):
+def test_get_annotation_table_returns_one_row_per_feature(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path)
@@ -111,7 +111,9 @@ def test_get_annotation_table_returns_one_row_per_feature(tmp_path):
         con.commit()
 
     bridge = AnalysisBridge()
-    rows = bridge.getAnnotationTable(str(db_path))
+    with qtbot.waitSignal(bridge.annotationTableReady, timeout=2000) as spy:
+        bridge.requestAnnotationTable(str(db_path))
+    rows = spy.args[0]
 
     assert len(rows) == 1
     assert rows[0]["feature_id"] == 7
@@ -123,7 +125,7 @@ def test_get_annotation_table_returns_one_row_per_feature(tmp_path):
     assert rows[0]["mz"] == 300.5
 
 
-def test_get_annotation_table_follows_representative_pick_not_raw_score(tmp_path):
+def test_get_annotation_table_follows_representative_pick_not_raw_score(tmp_path, qtbot):
     # Feature 76's real-world case (see docs/developer/adr/0021): a
     # higher-scoring, 1-matched-peak candidate lost representative
     # selection (assign_feature_ranks' tolerance rule) to a lower-scoring,
@@ -158,19 +160,106 @@ def test_get_annotation_table_follows_representative_pick_not_raw_score(tmp_path
         con.commit()
 
     bridge = AnalysisBridge()
-    rows = bridge.getAnnotationTable(str(db_path))
+    with qtbot.waitSignal(bridge.annotationTableReady, timeout=2000) as spy:
+        bridge.requestAnnotationTable(str(db_path))
+    rows = spy.args[0]
 
     assert len(rows) == 1
     assert rows[0]["compound_name"] == "Lactic acid"
     assert rows[0]["n_matched_peaks"] == 3
 
 
-def test_get_annotation_table_empty_without_annotations(tmp_path):
+def test_get_annotation_table_empty_without_annotations(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
 
     bridge = AnalysisBridge()
-    assert bridge.getAnnotationTable(str(db_path)) == []
+    with qtbot.waitSignal(bridge.annotationTableReady, timeout=2000) as spy:
+        bridge.requestAnnotationTable(str(db_path))
+    assert spy.args[0] == []
+
+
+def test_request_annotation_table_empty_path_emits_empty_list(qtbot):
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.annotationTableReady, timeout=2000) as spy:
+        bridge.requestAnnotationTable("")
+    assert spy.args[0] == []
+
+
+def test_request_feature_list_reads_real_db(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 300.5, '{}')"
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.featureListReady, timeout=2000) as spy:
+        bridge.requestFeatureList(str(db_path))
+
+    assert spy.args[0] == [{"feature_id": 7, "mz": 300.5, "compound_name": None}]
+
+
+def test_request_feature_list_empty_path_emits_empty_list(qtbot):
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.featureListReady, timeout=2000) as spy:
+        bridge.requestFeatureList("")
+    assert spy.args[0] == []
+
+
+def test_request_annotation_table_stale_request_is_discarded(tmp_path, qtbot):
+    # Firing a second request before the first's worker thread has
+    # finished must not let the first one's (now-stale) result win — same
+    # pattern (and same test shape) as
+    # test_request_mirror_plot_stale_request_is_discarded.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 300.5, '{}')"
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    received = []
+    bridge.annotationTableReady.connect(received.append)
+
+    bridge.requestAnnotationTable(str(db_path))
+    first_worker = bridge._annotation_table_worker
+    bridge.requestAnnotationTable(str(db_path))
+
+    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+    qtbot.wait(50)  # give a stray first-request signal a chance to (wrongly) arrive too
+
+    assert len(received) == 1
+
+
+def test_request_feature_list_stale_request_is_discarded(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 300.5, '{}')"
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    received = []
+    bridge.featureListReady.connect(received.append)
+
+    bridge.requestFeatureList(str(db_path))
+    first_worker = bridge._feature_list_worker
+    bridge.requestFeatureList(str(db_path))
+
+    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+    qtbot.wait(50)
+
+    assert len(received) == 1
 
 
 def test_get_feature_top_hits_for_feature(tmp_path):

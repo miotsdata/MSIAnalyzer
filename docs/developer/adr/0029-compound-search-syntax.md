@@ -1,6 +1,8 @@
 # 29 — Compound search syntax (Annotate + Visual Inspection)
 
-**Status:** Accepted
+**Status:** Accepted; superseded by [35](0035-split-search-fields.md) (one
+combined box → separate name/m/z fields — the m/z matching logic itself,
+described below, is unchanged)
 
 ## Context
 

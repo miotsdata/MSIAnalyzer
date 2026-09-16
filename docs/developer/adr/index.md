@@ -38,8 +38,11 @@ useful).
 | [26](0026-target-list-annotation.md) | Target-list compound annotation | Accepted |
 | [27](0027-formula-prediction.md) | On-demand molecular-formula prediction | Accepted |
 | [28](0028-gui-launch-directory-independence.md) | GUI launch-directory independence | Accepted |
-| [29](0029-compound-search-syntax.md) | Compound search syntax (Annotate + Visual Inspection) | Accepted |
+| [29](0029-compound-search-syntax.md) | Compound search syntax (Annotate + Visual Inspection) | Accepted; superseded by 35 |
 | [30](0030-colorbar-legend.md) | Colorbar legend for the vmin/vmax color scale | Accepted |
 | [31](0031-per-sample-progress-callback.md) | Per-sample progress callback for `process_samples` | Accepted |
 | [32](0032-inspect-visually-cross-tab-handoff.md) | "Inspect visually": cross-tab handoff between Annotations and Visual Inspection | Accepted |
 | [33](0033-annotations-table-partial-index.md) | Partial index for `ms2_annotations.rank_feature` | Accepted |
+| [34](0034-async-annotation-feature-fetch.md) | Fetch the Annotations table / feature list on a background thread | Accepted |
+| [35](0035-split-search-fields.md) | Split compound search into separate name and m/z fields | Accepted; supersedes 29 |
+| [36](0036-fixed-layout-space-for-toggled-content.md) | Reserve fixed layout space instead of swapping visible siblings | Accepted |

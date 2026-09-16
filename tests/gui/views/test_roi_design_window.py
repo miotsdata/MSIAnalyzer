@@ -64,6 +64,11 @@ def _open_visual_tab(view, root, find_visual_child, qtbot):
     center = nav_button.mapToScene(nav_button.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(50)
+    # `features` is fetched on a background thread now (see ADR 33) — see
+    # test_visual_inspection_section.py's identical helper comment for why
+    # this matters for test isolation, not just correctness here.
+    controls = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)
 
 
 def _open_roi_design_window(view, root, find_visual_child, qtbot):

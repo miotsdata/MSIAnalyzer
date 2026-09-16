@@ -39,6 +39,12 @@ Item {
         }
     }
 
+    // Forwarded from `controls` (HeatmapControlsPanel now fetches
+    // `features` asynchronously — see its own comment) so
+    // AnalysisPage.qml's currentSectionReady can read it straight off
+    // this section without reaching two levels deep.
+    property bool featuresLoading: controls.featuresLoading
+
     // Set by AnalysisPage right after (re-)constructing this section for
     // an "Inspect visually" jump from Annotations — see
     // AnalysisPage.qml's visualLoader.onLoaded. NaN (the default) means
@@ -48,14 +54,31 @@ Item {
     property real pendingInspectMz: NaN
     signal pendingInspectHandled()
 
-    onPendingInspectMzChanged: {
+    // Triggered by both pendingInspectMz itself changing AND
+    // featuresLoading finishing — `controls.features` is fetched
+    // asynchronously now, so at the moment pendingInspectMz first arrives
+    // (right after this section is constructed) the real feature list
+    // usually hasn't landed yet; retrying once featuresLoading goes false
+    // is what actually finds the match. Applying while still loading
+    // would silently find nothing and burn the one-shot request for good.
+    function applyPendingInspect() {
         if (isNaN(visualSection.pendingInspectMz)) return
+        if (controls.featuresLoading) return
         controls.inspectionMode = "feature"
         var idx = controls.sortedFeatures.findIndex(function (f) {
             return f.mz === visualSection.pendingInspectMz
         })
         if (idx >= 0) controls.selectedFeatureIndex = idx
         visualSection.pendingInspectHandled()
+    }
+
+    onPendingInspectMzChanged: visualSection.applyPendingInspect()
+
+    Connections {
+        target: controls
+        function onFeaturesLoadingChanged() {
+            if (!controls.featuresLoading) visualSection.applyPendingInspect()
+        }
     }
 
     Label {

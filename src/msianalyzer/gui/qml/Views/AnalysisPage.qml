@@ -247,7 +247,9 @@ Page {
         case 1: return ms1Loader.status === Loader.Ready
                        && ms1Loader.item && !ms1Loader.item.plotLoading
         case 2: return annotationsLoader.status === Loader.Ready
+                       && annotationsLoader.item && !annotationsLoader.item.rowsLoading
         case 3: return visualLoader.status === Loader.Ready
+                       && visualLoader.item && !visualLoader.item.featuresLoading
         default: return true
         }
     }
