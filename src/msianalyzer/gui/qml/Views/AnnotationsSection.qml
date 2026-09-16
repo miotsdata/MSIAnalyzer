@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "qrc:/Style"
+import "qrc:/Utils/SearchQuery.js" as SearchQuery
 
 Item {
     id: annotationsSection
@@ -36,10 +37,20 @@ Item {
         }
     }
 
+    // Search by compound name (contains) or m/z (a single value within a
+    // small tolerance, or an explicit "min-max" range) — see
+    // SearchQuery.matches for the exact syntax. Applied before sorting,
+    // never changes `selectedFeatureId`.
+    property string searchQuery: ""
+
+    readonly property var filteredRows: annotationsSection.rows.filter(function (r) {
+        return SearchQuery.matches(annotationsSection.searchQuery, r.compound_name, r.mz)
+    })
+
     readonly property var sortedRows: {
         var col = annotationsSection.sortColumn
         var dir = annotationsSection.sortAscending ? 1 : -1
-        var arr = annotationsSection.rows.slice()
+        var arr = annotationsSection.filteredRows.slice()
         arr.sort(function (a, b) {
             var av = a[col]
             var bv = b[col]
@@ -182,6 +193,14 @@ Item {
                     font.pixelSize: 14
                     Layout.fillWidth: true
                 }
+                TextField {
+                    id: annotationsSearchField
+                    objectName: "annotationsSearchField"
+                    Layout.preferredWidth: 180
+                    placeholderText: "Search name or m/z…"
+                    text: annotationsSection.searchQuery
+                    onTextChanged: annotationsSection.searchQuery = text
+                }
                 Button {
                     objectName: "openPredictFormulaButton"
                     text: "Predict formula…"
@@ -235,8 +254,19 @@ Item {
                 }
             }
 
+            Label {
+                objectName: "annotationsSearchEmptyLabel"
+                visible: annotationsSection.rows.length > 0 && annotationsSection.sortedRows.length === 0
+                text: "No features match your search."
+                color: Theme.mutedTextColor
+                Layout.fillWidth: true
+                Layout.topMargin: 8
+                horizontalAlignment: Text.AlignHCenter
+            }
+
             Flickable {
                 id: tableFlickable
+                visible: annotationsSection.sortedRows.length > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true

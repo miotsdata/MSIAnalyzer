@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "qrc:/Style"
+import "qrc:/Utils/SearchQuery.js" as SearchQuery
 
 // Visual Inspection's feature/obs-column/layer/colormap/vmin-vmax/sample-
 // visibility control panel — extracted out of VisualInspectionSection.qml
@@ -100,8 +101,19 @@ Flickable {
     // unannotated feature by m/z, at the end).
     property string sortMode: "mz"
 
+    // Search by compound name (contains) or m/z (a single value within a
+    // small tolerance, or an explicit "min-max" range) — same syntax as
+    // Annotate's search box, see SearchQuery.matches. Applied before
+    // sorting; feature-mode only, an obs column has no name/mz to search.
+    property string searchQuery: ""
+    onSearchQueryChanged: controlsFlickable.selectedFeatureIndex = 0
+
+    readonly property var filteredFeatures: controlsFlickable.features.filter(function (f) {
+        return SearchQuery.matches(controlsFlickable.searchQuery, f.compound_name, f.mz)
+    })
+
     property var sortedFeatures: {
-        var feats = controlsFlickable.features.slice()
+        var feats = controlsFlickable.filteredFeatures.slice()
         if (controlsFlickable.sortMode === "name") {
             var annotated = feats.filter(function (f) { return !!f.compound_name })
             var unannotated = feats.filter(function (f) { return !f.compound_name })
@@ -360,6 +372,15 @@ Flickable {
             font.bold: true
             visible: controlsFlickable.inspectionMode === "feature"
         }
+        TextField {
+            id: featureSearchField
+            objectName: "featureSearchField"
+            Layout.fillWidth: true
+            visible: controlsFlickable.inspectionMode === "feature"
+            placeholderText: "Search name or m/z…"
+            text: controlsFlickable.searchQuery
+            onTextChanged: controlsFlickable.searchQuery = text
+        }
         RowLayout {
             visible: controlsFlickable.inspectionMode === "feature"
             Label { text: "Sort by" }
@@ -381,11 +402,22 @@ Flickable {
                 }
             }
         }
+        Label {
+            objectName: "featureSearchEmptyLabel"
+            visible: controlsFlickable.inspectionMode === "feature"
+                     && controlsFlickable.features.length > 0
+                     && controlsFlickable.sortedFeatures.length === 0
+            text: "No features match your search."
+            color: Theme.mutedTextColor
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+        }
         ComboBox {
             id: featureCombo
             objectName: "featureCombo"
             Layout.fillWidth: true
             visible: controlsFlickable.inspectionMode === "feature"
+                     && controlsFlickable.sortedFeatures.length > 0
             model: controlsFlickable.featureLabels
             currentIndex: controlsFlickable.selectedFeatureIndex
             onActivated: (index) => controlsFlickable.selectedFeatureIndex = index

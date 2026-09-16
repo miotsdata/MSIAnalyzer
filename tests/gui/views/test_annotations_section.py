@@ -140,6 +140,121 @@ def test_sorting_does_not_change_current_selection(
     assert section.property("selectedFeatureId") == 7
 
 
+def test_search_field_updates_search_query(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    search_field = find_visual_child(root, "annotationsSearchField")
+    # Real key events, not setProperty("text", ...) — the field's `text`
+    # carries a declarative binding back to `searchQuery`, and a plain
+    # setProperty write races that binding rather than simulating what a
+    # typing user actually triggers (confirmed: setProperty alone left
+    # searchQuery unchanged in this environment). `QTest.keyClicks` itself
+    # only accepts a QWidget in this PySide6 build, not a QQuickItem/
+    # QWindow, so each character goes through `keyClick` on the window
+    # instead (routes to whichever item currently has focus).
+    _click(view, search_field, qtbot)
+    for ch in "caff":
+        qtbot.keyClick(view, ord(ch.upper()))
+
+    # Offscreen key events land as uppercase (no real keyboard/shift-state
+    # translation) — this test is only about the field wiring to
+    # `searchQuery`, not casing, and search matching is case-insensitive
+    # regardless (see SearchQuery.matches).
+    assert section.property("searchQuery").lower() == "caff"
+
+
+def test_search_by_name_substring_filters_to_matching_compound(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)  # "Water", mz 50.0
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("searchQuery", "wat")
+
+    rows = section.property("sortedRows").toVariant()
+    assert [r["feature_id"] for r in rows] == [9]
+    assert find_visual_child(root, "annotationRow_7") is None
+    assert find_visual_child(root, "annotationRow_9") is not None
+
+
+def test_search_by_mz_range_filters_to_matching_mz(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)  # mz 50.0
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("searchQuery", "40-60")
+
+    rows = section.property("sortedRows").toVariant()
+    assert [r["feature_id"] for r in rows] == [9]
+
+
+def test_search_by_single_mz_matches_within_tolerance(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)  # mz 50.0
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("searchQuery", "123.4567")  # feature 7's exact mz
+
+    rows = section.property("sortedRows").toVariant()
+    assert [r["feature_id"] for r in rows] == [7]
+
+
+def test_search_with_no_matches_shows_empty_label_and_no_rows(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("searchQuery", "nonexistent compound")
+
+    assert section.property("sortedRows").toVariant() == []
+    empty_label = find_visual_child(root, "annotationsSearchEmptyLabel")
+    assert empty_label.property("visible") is True
+    # The whole-panel "no annotated features at all" label must stay
+    # hidden — there ARE annotated features, the search just excluded them.
+    overall_empty_label = find_visual_child(root, "annotationsEmptyStateLabel")
+    assert overall_empty_label.property("visible") is False
+
+
+def test_clearing_search_shows_every_row_again(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("searchQuery", "wat")
+    assert len(section.property("sortedRows").toVariant()) == 1
+
+    section.setProperty("searchQuery", "")
+    rows = section.property("sortedRows").toVariant()
+    assert sorted(r["feature_id"] for r in rows) == [7, 9]
+
+
 def test_selecting_feature_shows_top_hits_with_sample_name(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):

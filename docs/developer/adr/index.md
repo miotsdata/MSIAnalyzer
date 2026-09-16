@@ -38,3 +38,4 @@ useful).
 | [26](0026-target-list-annotation.md) | Target-list compound annotation | Accepted |
 | [27](0027-formula-prediction.md) | On-demand molecular-formula prediction | Accepted |
 | [28](0028-gui-launch-directory-independence.md) | GUI launch-directory independence | Accepted |
+| [29](0029-compound-search-syntax.md) | Compound search syntax (Annotate + Visual Inspection) | Accepted |
