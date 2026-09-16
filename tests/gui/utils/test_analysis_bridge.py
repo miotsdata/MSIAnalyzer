@@ -923,3 +923,130 @@ def test_next_roi_color_missing_db_returns_first_palette_color(tmp_path):
 
     bridge = AnalysisBridge()
     assert bridge.nextRoiColor(str(tmp_path / "nope.db")) == category_color(0)
+
+
+# ---------------------------------------------------------------------------
+# formula prediction (predictFormulas / getFeaturesForPrediction)
+# ---------------------------------------------------------------------------
+
+
+def test_get_features_for_prediction_missing_db_returns_empty(tmp_path):
+    bridge = AnalysisBridge()
+    assert bridge.getFeaturesForPrediction(str(tmp_path / "nope.db")) == []
+
+
+def test_get_features_for_prediction_shows_status_columns(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)  # ms2_annotations row for feature 7 -> "Caffeine"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 123.4567, '{}')"
+        )
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (2, 50.0, '{}')"
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    rows = {r["feature_id"]: r for r in bridge.getFeaturesForPrediction(str(db_path))}
+
+    assert rows[7]["compound_name"] == "Caffeine"
+    assert rows[2]["compound_name"] is None
+
+
+def _predict_formulas_sync(bridge, qtbot, *args, timeout=5000):
+    """`predictFormulas` is fire-and-forget (see the class docstring — the
+    first invocation on a machine can mean a real, multi-second ~420MB
+    download, so it must never block the GUI thread); tests wait for
+    either completion signal and return `(signal_name, args)`."""
+    from unittest.mock import patch
+
+    from msianalyzer.core.annotation.formula_prediction import PredictedFormula
+
+    fake_rows = [
+        PredictedFormula(
+            feature_id=2, adduct="[M+H]+", formula="C6H12O6",
+            mass_error=0.00003, mass_error_ppm=0.2, rank=1,
+        )
+    ]
+    with patch(
+        "msianalyzer.gui.utils.formula_prediction_worker.run_formula_prediction",
+        return_value=fake_rows,
+    ):
+        with qtbot.waitSignal(
+            bridge.formulaPredictionFinished, timeout=timeout, raising=False
+        ) as finished_blocker:
+            bridge.predictFormulas(*args)
+        qtbot.wait(50)
+    return finished_blocker
+
+
+def test_predict_formulas_emits_finished_on_success(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (2, 181.0707, '{}')"
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    blocker = _predict_formulas_sync(
+        bridge, qtbot, str(db_path), [2], {"adducts": ["[M+H]+"]}
+    )
+
+    assert blocker.signal_triggered
+    assert blocker.args == [str(db_path)]
+
+
+def test_predict_formulas_emits_failed_for_invalid_settings(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.formulaPredictionFailed, timeout=5000) as blocker:
+        bridge.predictFormulas(str(db_path), [1], {"adducts": []})  # empty -> invalid
+
+    assert blocker.args[0] == str(db_path)
+    assert "adducts" in blocker.args[1]
+
+
+def test_predict_formulas_stale_request_is_discarded(tmp_path, qtbot):
+    # Same "second request supersedes the first" discard rule as
+    # requestMirrorPlot — only the newer request's completion should
+    # reach QML.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (2, 100.0, '{}')"
+        )
+        con.commit()
+
+    from unittest.mock import patch
+
+    from msianalyzer.core.annotation.formula_prediction import PredictedFormula
+
+    bridge = AnalysisBridge()
+    received = []
+    bridge.formulaPredictionFinished.connect(received.append)
+
+    with patch(
+        "msianalyzer.gui.utils.formula_prediction_worker.run_formula_prediction",
+        return_value=[
+            PredictedFormula(
+                feature_id=2, adduct="[M+H]+", formula="A",
+                mass_error=0.0, mass_error_ppm=1.0, rank=1,
+            )
+        ],
+    ):
+        bridge.predictFormulas(str(db_path), [2], {"adducts": ["[M+H]+"]})
+        first_worker = bridge._formula_prediction_worker
+        bridge.predictFormulas(str(db_path), [2], {"adducts": ["[M+H]+"]})
+
+        qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+        qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+        qtbot.wait(50)
+
+    assert len(received) == 1

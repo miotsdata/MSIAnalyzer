@@ -11,11 +11,13 @@ import pandas as pd
 from PySide6.QtCore import QObject, Signal, Slot
 
 from msianalyzer.core import analysis_db
+from msianalyzer.core.annotation.formula_prediction import FormulaPredictionSettings
 from msianalyzer.core.plotting import roi
 from msianalyzer.core.plotting.heatmap import category_color
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
 from msianalyzer.core.plotting.plotter import Plotter
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
+from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
 
@@ -132,10 +134,19 @@ class AnalysisBridge(QObject):
       to `MirrorPlotWorker` (a `QThread`) instead; QML calls
       `requestMirrorPlot` and listens for `mirrorPlotReady` instead of
       using a return value.
+    - `formulaPredictionFinished`/`formulaPredictionFailed`:
+      `predictFormulas` (see ADR 27) is fire-and-forget for the same
+      reason — the *first* invocation on a machine downloads msbuddy's
+      ~420MB reference database, real multi-second I/O that must not
+      block the GUI thread. Offloaded to `FormulaPredictionWorker`;
+      `PredictFormulaWindow.qml` calls `predictFormulas` and listens for
+      these instead of using a return value.
     """
 
     spectrumPointClicked = Signal(float)
     mirrorPlotReady = Signal(str)
+    formulaPredictionFinished = Signal(str)  # analysis_db_path
+    formulaPredictionFailed = Signal(str, str)  # analysis_db_path, message
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -166,6 +177,9 @@ class AnalysisBridge(QObject):
         # in-flight older (e.g. slower raw-source) request overwrite a
         # newer result.
         self._mirror_plot_worker: MirrorPlotWorker | None = None
+        # Same "kept alive while running, replacing it discards a stale
+        # result" pattern as _mirror_plot_worker above.
+        self._formula_prediction_worker: FormulaPredictionWorker | None = None
 
     @Slot(float)
     def onSpectrumPointClicked(self, mz: float) -> None:
@@ -278,6 +292,78 @@ class AnalysisBridge(QObject):
         if df.empty:
             return []
         return _dataframe_to_records(df)
+
+    @Slot(str, result=list)
+    def getFeaturesForPrediction(self, analysis_db_path: str) -> list:
+        """Every feature, with its current representative identity (if
+        any) — backs the "Predict formula" window's feature picker.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+
+        Returns:
+            Records from `analysis_db.load_all_features_for_prediction`:
+            `feature_id`, `mz`, `compound_name` (`None` when nothing
+            matched yet — the picker's "select all unannotated" reads
+            this), `best_score`. Empty when the db path doesn't exist or
+            there are no features.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        return _dataframe_to_records(analysis_db.load_all_features_for_prediction(analysis_db_path))
+
+    @Slot(str, list, dict)
+    def predictFormulas(
+        self, analysis_db_path: str, feature_ids: list, settings_dict: dict
+    ) -> None:
+        """Start on-demand formula prediction for `feature_ids` on a
+        background thread; completion arrives via
+        `formulaPredictionFinished(analysis_db_path)` or
+        `formulaPredictionFailed(analysis_db_path, message)`.
+
+        Fire-and-forget rather than a return value — see the class
+        docstring for why (the first invocation on a machine can mean a
+        real, multi-second ~420MB download). Used by
+        `PredictFormulaWindow.qml`'s "Run" button, which shows a
+        `LoadingOverlay` until one of those two signals fires.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            feature_ids: Which features to predict for — user-selected in
+                the window's feature picker.
+            settings_dict: `{"adducts", "error_ppm", "top_n", "halogen"}`
+                — see `formula_prediction.FormulaPredictionSettings`.
+        """
+        try:
+            settings = FormulaPredictionSettings(
+                adducts=list(settings_dict["adducts"]),
+                error_ppm=float(settings_dict.get("error_ppm", 10.0)),
+                top_n=int(settings_dict.get("top_n", 5)),
+                halogen=bool(settings_dict.get("halogen", False)),
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            self.formulaPredictionFailed.emit(analysis_db_path, str(e))
+            return
+
+        worker = FormulaPredictionWorker(
+            analysis_db_path, [int(f) for f in feature_ids], settings, self
+        )
+        worker.succeeded.connect(self._onFormulaPredictionSucceeded)
+        worker.failed.connect(self._onFormulaPredictionFailed)
+        self._formula_prediction_worker = worker
+        worker.start()
+
+    @Slot(str, list)
+    def _onFormulaPredictionSucceeded(self, analysis_db_path: str, rows: list) -> None:
+        if self.sender() is not self._formula_prediction_worker:
+            return  # superseded by a newer request — discard
+        self.formulaPredictionFinished.emit(analysis_db_path)
+
+    @Slot(str, str)
+    def _onFormulaPredictionFailed(self, analysis_db_path: str, message: str) -> None:
+        if self.sender() is not self._formula_prediction_worker:
+            return  # superseded by a newer request — discard
+        self.formulaPredictionFailed.emit(analysis_db_path, message)
 
     @Slot(str, int, int, result=list)
     def getFeatureTopHits(self, analysis_db_path: str, feature_id: int, top_n: int) -> list:

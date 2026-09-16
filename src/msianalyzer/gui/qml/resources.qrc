@@ -17,6 +17,7 @@
         <file>Views/SummarySection.qml</file>
         <file>Views/AnnotationsSection.qml</file>
         <file>Views/MirrorPlotDetailWindow.qml</file>
+        <file>Views/PredictFormulaWindow.qml</file>
         <file>Views/MirrorPlotMetadataRow.qml</file>
         <file>Views/MS1SpectraSection.qml</file>
         <file>Views/VisualInspectionSection.qml</file>

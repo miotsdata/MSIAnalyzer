@@ -470,6 +470,36 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_tlm_feature ON target_list_matches(feature_id)"
     )
 
+    # --- predicted formulas (on-demand, GUI-triggered — never a RUN_STEPS
+    # pipeline step) ---------------------------------------------------
+    # Written by core.annotation.formula_prediction.run_formula_prediction,
+    # invoked from the Annotations page's "Predict formula" window for a
+    # user-picked subset of features (unannotated or annotated-but-
+    # unconvincing) — not automatically for every unannotated feature on
+    # every run. See ADR 0027 for why this is deliberately kept out of the
+    # ordinary pipeline (msbuddy's reference database is ~420MB / ~600-
+    # 700MB resident once loaded — a real cost not worth paying on runs
+    # that don't need it). A re-run for a given feature (different
+    # adducts/settings) replaces exactly that feature's prior rows — see
+    # save_predicted_formulas.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS predicted_formulas (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            feature_id      INTEGER NOT NULL,
+            adduct          TEXT    NOT NULL,
+            formula         TEXT    NOT NULL,
+            mass_error      REAL    NOT NULL,
+            mass_error_ppm  REAL    NOT NULL,
+            rank            INTEGER NOT NULL,
+            command_id      INTEGER,
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_predf_feature ON predicted_formulas(feature_id)"
+    )
+
     # --- ROI catalog (GUI's "ROI Design" window) --------------------------
     # Analysis-wide name/color registry only — geometry is independent per
     # sample and lives solely in that sample's own h5ad (uns["rois"], see
@@ -626,6 +656,21 @@ def write_metadata(db_path: Path | str, rows: dict[str, str]) -> None:
             source=db_path,
         )
         con.commit()
+
+
+def load_metadata_value(db_path: Path | str, key: str) -> str | None:
+    """One value from the analysis ``metadata`` table, e.g. ``"analysis_id"``
+    (written by ``run.py`` as ``Run.id`` — used as ``commands.run_id`` for
+    every step of that run). `None` if `key` isn't set or the table doesn't
+    exist (an ad-hoc/test database that never went through a full run).
+    """
+    with connect(db_path) as con:
+        try:
+            cur = con.execute("SELECT value FROM metadata WHERE key = ?", (key,))
+        except sqlite3.OperationalError:
+            return None
+        row = cur.fetchone()
+        return row[0] if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -887,6 +932,112 @@ def load_target_list_matches_for_feature(
             return pd.DataFrame()
 
 
+def save_predicted_formulas(
+    db_path: Path | str,
+    rows: list,
+    command_id: int | None = None,
+) -> None:
+    """Persist predicted formulas, replacing any prior predictions for
+    exactly the touched features.
+
+    Unlike :func:`append_injected_features` (never deletes), a re-run of
+    formula prediction on the same feature with different settings should
+    *update* its guesses, not accumulate duplicates alongside the old
+    ones — so every existing ``predicted_formulas`` row for a
+    ``feature_id`` appearing in ``rows`` is deleted first. Every other
+    feature's predictions (not in this call) are untouched.
+
+    Args:
+        db_path: The analysis database.
+        rows: A list of ``formula_prediction.PredictedFormula``.
+        command_id: The ``predict_formula`` command this insert belongs to.
+    """
+    if not rows:
+        return
+    feature_ids = sorted({r.feature_id for r in rows})
+    with connect(db_path) as con:
+        placeholders = ",".join("?" * len(feature_ids))
+        con.execute(
+            f"DELETE FROM predicted_formulas WHERE feature_id IN ({placeholders})",
+            feature_ids,
+        )
+        safe_executemany(
+            con,
+            "INSERT INTO predicted_formulas "
+            "(feature_id, adduct, formula, mass_error, mass_error_ppm, rank, "
+            " command_id) VALUES (?,?,?,?,?,?,?)",
+            [
+                (
+                    r.feature_id, r.adduct, r.formula, r.mass_error,
+                    r.mass_error_ppm, r.rank, command_id,
+                )
+                for r in rows
+            ],
+            table="predicted_formulas",
+            logger=logger,
+            source=db_path,
+        )
+        con.commit()
+
+
+@log_call(source="db_path")
+def load_predicted_formulas_for_feature(
+    db_path: Path | str, feature_id: int
+) -> pd.DataFrame:
+    """Every predicted-formula candidate for one feature.
+
+    Returns:
+        A DataFrame with ``id``, ``adduct``, ``formula``, ``mass_error``,
+        ``mass_error_ppm``, ``rank``, ordered by ``adduct`` then ``rank``.
+        Empty when the feature has no predicted formula.
+    """
+    sql = """
+        SELECT id, adduct, formula, mass_error, mass_error_ppm, rank
+        FROM predicted_formulas
+        WHERE feature_id = ?
+        ORDER BY adduct, rank
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con, params=(int(feature_id),))
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def load_all_features_for_prediction(db_path: Path | str) -> pd.DataFrame:
+    """Every feature with its current representative identity (if any) —
+    backs the "Predict formula" window's feature picker, so the user can
+    select any mix of unannotated and annotated-but-unconvincing features.
+
+    Returns:
+        A DataFrame with ``feature_id``, ``mz``, ``compound_name`` (`None`
+        if nothing matched yet), ``best_score`` (`None` for a target-list-
+        only or unannotated feature), ordered by ``mz``. Empty when there
+        are no features.
+    """
+    sql = f"""
+        WITH {_TARGET_REP_CTE},
+        ms2_rep AS (
+            SELECT feature_id, compound_name, score AS best_score
+            FROM ms2_annotations
+            WHERE rank_feature = 1
+        )
+        SELECT f.feature_id, f.mz,
+               COALESCE(tr.compound_name, m.compound_name) AS compound_name,
+               m.best_score
+        FROM features f
+        LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
+        LEFT JOIN ms2_rep m ON m.feature_id = f.feature_id
+        ORDER BY f.mz
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame(columns=["feature_id", "mz", "compound_name", "best_score"])
+
+
 @log_call(source="db_path")
 def load_feature_compound_scores(
     db_path: Path | str, feature_id: int | None = None
@@ -950,34 +1101,61 @@ _TARGET_REP_CTE = """
     )
 """
 
+#: Each feature's single best predicted formula (closest ``ABS(
+#: mass_error_ppm)`` across every adduct searched, see
+#: ``core.annotation.formula_prediction``) — the weakest tier of the
+#: representative-identity precedence (target_list > ms2 > predicted),
+#: only ever shown when a feature has neither. Not folded into
+#: ``_TARGET_REP_CTE`` — this one is optional/on-demand per feature
+#: (``predicted_formulas`` may be empty or only cover a hand-picked
+#: subset), unlike target-list matching which runs analysis-wide.
+_PREDICTED_REP_CTE = """
+    predicted_rep AS (
+        SELECT feature_id, formula, adduct FROM (
+            SELECT feature_id, formula, adduct,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY feature_id ORDER BY ABS(mass_error_ppm)
+                   ) AS rn
+            FROM predicted_formulas
+        )
+        WHERE rn = 1
+    )
+"""
+
 
 @log_call(source="db_path")
 def load_feature_representative_annotations(db_path: Path | str) -> pd.DataFrame:
-    """One row per feature that has an MS2 annotation and/or a target-list
-    match — the representative compound it's labelled by everywhere in the
-    GUI/report.
+    """One row per feature that has an MS2 annotation, a target-list match,
+    and/or a predicted formula — the representative compound it's labelled
+    by everywhere in the GUI/report.
 
-    A target-list match (see ``core.annotation.target_list``) wins
-    unconditionally over the MS2 pick when a feature has both — the MS2
-    ``rank_feature = 1`` row (stamped at annotate time by
+    Three-tier precedence: a target-list match (see
+    ``core.annotation.target_list``) wins unconditionally; else the MS2
+    ``rank_feature = 1`` pick (stamped at annotate time by
     ``annotate.assign_feature_ranks`` — see
-    ``AnnotateConfig.representative_score_tolerance``) is itself untouched,
-    only which identity gets *displayed* changes; its score/peak-count
-    columns still come through even when a target-list name wins, as extra
-    context. ``source`` says which one supplied the name. Unlike
+    ``AnnotateConfig.representative_score_tolerance``) wins; else, only if
+    neither of those exists, the feature's best predicted formula (see
+    ``core.annotation.formula_prediction`` — closest ``mass_error_ppm``
+    across every adduct searched) is shown as ``"<formula> + <adduct>"``,
+    e.g. ``"C6H12O6 + [M+H]+"``, with `compound_formula` set to the bare
+    formula and `inchikey`/`best_score`/peak-count columns `None` (a
+    predicted formula has no real compound identity or spectral score —
+    it's a mass-decomposition guess, not an annotation). None of this
+    touches the underlying `ms2_annotations`/`target_list_matches`/
+    `predicted_formulas` rows themselves, only which identity gets
+    *displayed*. ``source`` says which tier supplied the name
+    (``"target_list"``/``"ms2"``/``"predicted"``). Unlike
     :func:`load_feature_compound_scores` (every distinct compound that
     scored anything), this is exactly one row per feature — the GUI
-    Annotations table's backing reader. Empty when neither annotation nor
-    target-list matching ever ran.
+    Annotations table's backing reader. Empty when none of the three ever
+    ran.
 
     Returns:
         A DataFrame with ``feature_id``, ``mz``, ``compound_name``,
-        ``compound_formula``, ``inchikey``, ``source`` (``"target_list"``
-        or ``"ms2"``), ``best_score`` (``score``, renamed to match
-        ``load_feature_compound_scores``'s column — ``None`` for a feature
-        with no MS2 annotation), ``n_matched_peaks``, ``n_lib_peaks``,
-        ``best_sample_id``, ``best_scan_id``, ``best_library_id``, ordered
-        by ``feature_id``.
+        ``compound_formula``, ``inchikey``, ``source``, ``best_score``
+        (``None`` for a target-list- or predicted-sourced row),
+        ``n_matched_peaks``, ``n_lib_peaks``, ``best_sample_id``,
+        ``best_scan_id``, ``best_library_id``, ordered by ``feature_id``.
     """
     sql = f"""
         WITH {_TARGET_REP_CTE},
@@ -988,19 +1166,30 @@ def load_feature_representative_annotations(db_path: Path | str) -> pd.DataFrame
                    a.scan_id AS best_scan_id, a.library_id AS best_library_id
             FROM ms2_annotations a
             WHERE a.rank_feature = 1
-        )
+        ),
+        {_PREDICTED_REP_CTE}
         SELECT
             f.feature_id, f.mz AS mz,
-            COALESCE(tr.compound_name, m.compound_name) AS compound_name,
-            COALESCE(tr.compound_formula, m.compound_formula) AS compound_formula,
+            COALESCE(
+                tr.compound_name, m.compound_name,
+                pr.formula || ' + ' || pr.adduct
+            ) AS compound_name,
+            COALESCE(tr.compound_formula, m.compound_formula, pr.formula) AS compound_formula,
             COALESCE(tr.inchikey, m.inchikey) AS inchikey,
-            CASE WHEN tr.feature_id IS NOT NULL THEN 'target_list' ELSE 'ms2' END AS source,
+            CASE
+                WHEN tr.feature_id IS NOT NULL THEN 'target_list'
+                WHEN m.feature_id IS NOT NULL THEN 'ms2'
+                ELSE 'predicted'
+            END AS source,
             m.best_score, m.n_matched_peaks, m.n_lib_peaks,
             m.best_sample_id, m.best_scan_id, m.best_library_id
         FROM features f
         LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
         LEFT JOIN ms2_rep m ON m.feature_id = f.feature_id
-        WHERE tr.feature_id IS NOT NULL OR m.feature_id IS NOT NULL
+        LEFT JOIN predicted_rep pr ON pr.feature_id = f.feature_id
+        WHERE tr.feature_id IS NOT NULL
+           OR m.feature_id IS NOT NULL
+           OR pr.feature_id IS NOT NULL
         ORDER BY f.feature_id
     """
     with connect(db_path) as con:
@@ -1169,22 +1358,28 @@ def load_feature_list(db_path: Path | str) -> pd.DataFrame:
     """Every feature, with its representative compound name if any.
 
     For the Visual Inspection section's feature selector: features get
-    labelled by compound name when annotated, else by bare m/z. A
-    target-list match wins over the MS2 `rank_feature = 1` pick when a
-    feature has both (see `load_feature_representative_annotations`).
+    labelled by compound name when annotated, by `"<formula> + <adduct>"`
+    when only a predicted formula exists, else by bare m/z. Three-tier
+    precedence (target-list > MS2 > predicted) — see
+    `load_feature_representative_annotations`.
 
     Returns:
         A DataFrame with `feature_id`, `mz`, `compound_name` (`None` when
         unannotated), ordered by `mz`. Empty when there are no features.
     """
     sql = f"""
-        WITH {_TARGET_REP_CTE}
+        WITH {_TARGET_REP_CTE},
+        {_PREDICTED_REP_CTE}
         SELECT f.feature_id, f.mz,
-               COALESCE(tr.compound_name, best.compound_name) AS compound_name
+               COALESCE(
+                   tr.compound_name, best.compound_name,
+                   pr.formula || ' + ' || pr.adduct
+               ) AS compound_name
         FROM features f
         LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
         LEFT JOIN ms2_annotations best
             ON best.feature_id = f.feature_id AND best.rank_feature = 1
+        LEFT JOIN predicted_rep pr ON pr.feature_id = f.feature_id
         ORDER BY f.mz
     """
     with connect(db_path) as con:
@@ -1199,8 +1394,12 @@ def load_feature_categories(db_path: Path | str) -> pd.DataFrame:
     """Every feature's MS1-spectrum coloring category, for the GUI's MS1
     Spectra section: `"target_list"` (has a target-list match — regardless
     of MS2 status, since it was explicitly searched for by name),
-    `"no_ms2"` (never got an MS2 scan at all), `"annotated"` (has a library
-    match), or `"non_annotated"` (has MS2 but no library match).
+    `"annotated"` (has a library match), `"predicted"` (no target-list
+    match and no library match, but has a predicted formula — see
+    `core.annotation.formula_prediction` — from a user explicitly running
+    prediction on it), `"no_ms2"` (never got an MS2 scan and has no
+    predicted formula either), or `"non_annotated"` (has MS2 but no
+    library match, and no predicted formula).
 
     Returns:
         A DataFrame with `feature_id`, `mz`, `category`, ordered by `mz`
@@ -1212,12 +1411,15 @@ def load_feature_categories(db_path: Path | str) -> pd.DataFrame:
         SELECT f.feature_id, f.mz,
                COALESCE(ms2.n_ms2, 0) AS n_ms2,
                best.compound_name,
-               tr.feature_id IS NOT NULL AS has_target
+               tr.feature_id IS NOT NULL AS has_target,
+               pf.feature_id IS NOT NULL AS has_predicted
         FROM features f
         LEFT JOIN feature_ms2_summary ms2 ON ms2.feature_id = f.feature_id
         LEFT JOIN ms2_annotations best
             ON best.feature_id = f.feature_id AND best.rank_feature = 1
         LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
+        LEFT JOIN (SELECT DISTINCT feature_id FROM predicted_formulas) pf
+            ON pf.feature_id = f.feature_id
         ORDER BY f.mz
     """
     with connect(db_path) as con:
@@ -1230,11 +1432,13 @@ def load_feature_categories(db_path: Path | str) -> pd.DataFrame:
         return pd.DataFrame(columns=["feature_id", "mz", "category"])
 
     has_target = df["has_target"].astype(bool)
-    no_ms2 = (df["n_ms2"] == 0) & ~has_target
+    has_predicted = df["has_predicted"].astype(bool)
     annotated = df["compound_name"].notna() & ~has_target
+    predicted = has_predicted & ~has_target & ~annotated
+    no_ms2 = (df["n_ms2"] == 0) & ~has_target & ~predicted
     df["category"] = np.select(
-        [has_target, no_ms2, annotated],
-        ["target_list", "no_ms2", "annotated"],
+        [has_target, annotated, predicted, no_ms2],
+        ["target_list", "annotated", "predicted", "no_ms2"],
         default="non_annotated",
     )
     return df[["feature_id", "mz", "category"]]

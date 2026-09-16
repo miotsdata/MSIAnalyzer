@@ -334,6 +334,12 @@ def visual_analysis_model(analysis_model):
 def analysis_view(application):
     """Factory: build a standalone AnalysisPage view for a given AnalysisModel."""
     views = []
+    # Held here (not inline in setContextProperty) so it outlives each
+    # _make() call — an unparented QObject with no surviving Python
+    # reference is garbage-collected as soon as the call that created it
+    # returns, which left ConfigSchema reading as null in QML (see
+    # new_analysis_view's identical schema_provider for the same fix).
+    schema_provider = ConfigSchemaProvider()
 
     def _make(analysis_model):
         view = QQuickView()
@@ -344,6 +350,10 @@ def analysis_view(application):
         view.engine().rootContext().setContextProperty(
             "AnalysisBridge", application.analysis_bridge
         )
+        # PredictFormulaWindow (opened from AnnotationsSection) reads
+        # ConfigSchema.positiveAdducts/negativeAdducts — same context
+        # property main.py registers globally in the real app.
+        view.engine().rootContext().setContextProperty("ConfigSchema", schema_provider)
         view.engine().addImageProvider(
             "heatmap", application.analysis_bridge.heatmap_provider
         )

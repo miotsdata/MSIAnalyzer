@@ -8,8 +8,17 @@ Item {
     objectName: "annotationsSection"
 
     property var analysis
-    property var rows: (analysis && analysis.analysisDbPath)
-                        ? AnalysisBridge.getAnnotationTable(analysis.analysisDbPath) : []
+    // Bumped after a successful "Predict formula" run to force rows/
+    // topHits to re-fetch — a predicted formula can change a feature's
+    // representative identity (see analysis_db's 3-tier precedence,
+    // ADR 27), which a plain property binding on analysisDbPath alone
+    // wouldn't notice (the path itself doesn't change).
+    property int refreshToken: 0
+    property var rows: {
+        annotationsSection.refreshToken  // read-only dependency, see refreshToken's comment
+        return (analysis && analysis.analysisDbPath)
+            ? AnalysisBridge.getAnnotationTable(analysis.analysisDbPath) : []
+    }
 
     // "User can decide to sort for any of these" (feature id, name, m/z) —
     // clicking a column header sorts by it, clicking the same header again
@@ -148,10 +157,31 @@ Item {
             SplitView.minimumWidth: 240
             spacing: 8
 
-            Label {
-                text: "Annotated features (" + annotationsSection.rows.length + ")"
-                font.bold: true
-                font.pixelSize: 14
+            RowLayout {
+                Layout.fillWidth: true
+
+                Label {
+                    text: "Annotated features (" + annotationsSection.rows.length + ")"
+                    font.bold: true
+                    font.pixelSize: 14
+                    Layout.fillWidth: true
+                }
+                Button {
+                    objectName: "openPredictFormulaButton"
+                    text: "Predict formula…"
+                    enabled: !!(analysis && analysis.analysisDbPath)
+                    onClicked: {
+                        // Lazily constructs predictFormulaWindowLoader.item on
+                        // first click, not before — see the Loader's own comment.
+                        predictFormulaWindowLoader.active = true
+                        var win = predictFormulaWindowLoader.item
+                        win.showFor(analysis.analysisDbPath)
+                    }
+
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
+                }
             }
 
             RowLayout {
@@ -575,6 +605,29 @@ Item {
         active: false
         sourceComponent: MirrorPlotDetailWindow {
             objectName: "mirrorPlotDetailWindow"
+        }
+    }
+
+    // Lazy for the same reason as mirrorPlotDetailWindowLoader above (a
+    // second top-level window nobody asked for yet shouldn't be built
+    // just because the Annotations tab opened).
+    Loader {
+        id: predictFormulaWindowLoader
+        objectName: "predictFormulaWindowLoader"
+        active: false
+        sourceComponent: PredictFormulaWindow {
+            objectName: "predictFormulaWindow"
+        }
+        onLoaded: {
+            // A predicted formula can change a feature's representative
+            // identity (ADR 27's 3-tier precedence) — refresh the table
+            // and, if a feature is currently selected, its top-hits list
+            // too, so the new "predicted" tier shows up without the user
+            // having to reselect anything.
+            item.predictionFinished.connect(function () {
+                annotationsSection.refreshToken += 1
+                annotationsSection.refreshTopHits()
+            })
         }
     }
 }

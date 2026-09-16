@@ -21,10 +21,13 @@ from msianalyzer.core.analysis_db import (
     load_feature_ids_and_mzs,
     load_feature_list,
     load_feature_ms2_count,
+    load_all_features_for_prediction,
     load_feature_representative_annotations,
     load_features,
     load_injected_feature_mzs,
+    load_metadata_value,
     load_ms2_annotations_for_feature,
+    load_predicted_formulas_for_feature,
     load_rois,
     load_samples,
     load_summary_counts,
@@ -33,10 +36,12 @@ from msianalyzer.core.analysis_db import (
     register_roi,
     register_sample,
     save_features,
+    save_predicted_formulas,
     save_target_list_compounds,
     save_target_list_matches,
     write_metadata,
 )
+from msianalyzer.core.annotation.formula_prediction import PredictedFormula
 from msianalyzer.core.annotation.target_list import (
     Adduct,
     InjectedFeature,
@@ -1156,3 +1161,235 @@ def test_load_feature_categories_labels_target_list_features(tmp_path: Path):
 
     assert by_id[1] == "no_ms2"
     assert by_id[2] == "target_list"
+
+
+# ---------------------------------------------------------------------------
+# predicted formulas (core.annotation.formula_prediction)
+# ---------------------------------------------------------------------------
+
+
+def _make_predicted(feature_id, adduct="[M+H]+", formula="C6H12O6",
+                     mass_error_ppm=1.0, rank=1) -> PredictedFormula:
+    return PredictedFormula(
+        feature_id=feature_id, adduct=adduct, formula=formula,
+        mass_error=mass_error_ppm * 1e-4, mass_error_ppm=mass_error_ppm, rank=rank,
+    )
+
+
+def test_save_predicted_formulas_then_load_for_feature(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    rows = [
+        _make_predicted(1, adduct="[M+H]+", formula="C6H12O6", mass_error_ppm=0.5, rank=1),
+        _make_predicted(1, adduct="[M+H]+", formula="C7H16OS2", mass_error_ppm=4.6, rank=2),
+        _make_predicted(1, adduct="[M+Na]+", formula="C6H12O6", mass_error_ppm=1.2, rank=1),
+    ]
+
+    save_predicted_formulas(db, rows, command_id=None)
+    df = load_predicted_formulas_for_feature(db, 1)
+
+    assert len(df) == 3
+    assert set(df["formula"]) == {"C6H12O6", "C7H16OS2"}
+    assert set(df["adduct"]) == {"[M+H]+", "[M+Na]+"}
+
+
+def test_save_predicted_formulas_replaces_only_touched_features(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, ?)",
+            [(1, 100.0, "{}"), (2, 200.0, "{}")],
+        )
+        con.commit()
+    save_predicted_formulas(db, [_make_predicted(1, formula="OLD")])
+    save_predicted_formulas(db, [_make_predicted(2, formula="UNTOUCHED")])
+
+    # Re-run prediction on feature 1 with a different result.
+    save_predicted_formulas(db, [_make_predicted(1, formula="NEW")])
+
+    feature_1 = load_predicted_formulas_for_feature(db, 1)
+    feature_2 = load_predicted_formulas_for_feature(db, 2)
+
+    assert list(feature_1["formula"]) == ["NEW"]
+    assert list(feature_2["formula"]) == ["UNTOUCHED"]
+
+
+def test_save_predicted_formulas_is_a_no_op_for_empty_rows(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    save_predicted_formulas(db, [])  # must not raise
+
+    assert load_predicted_formulas_for_feature(db, 1).empty
+
+
+def test_load_predicted_formulas_empty_for_unknown_feature(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_predicted_formulas_for_feature(db, 999).empty
+
+
+def test_load_metadata_value_returns_none_when_unset(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_metadata_value(db, "analysis_id") is None
+
+
+def test_load_metadata_value_reads_back_written_value(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    write_metadata(db, {"analysis_id": "abc-123"})
+
+    assert load_metadata_value(db, "analysis_id") == "abc-123"
+
+
+def test_load_all_features_for_prediction_shows_status_columns(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, ?)",
+            [(1, 100.0, "{}"), (2, 200.0, "{}")],
+        )
+        con.commit()
+    _seed_representative_scenario(db)  # feature 76 gets an MS2 hit
+
+    df = load_all_features_for_prediction(db)
+    by_id = {r["feature_id"]: r for _, r in df.iterrows()}
+
+    assert pd.isna(by_id[1]["compound_name"])
+    assert pd.isna(by_id[1]["best_score"])
+    assert by_id[76]["compound_name"] == "Lactic acid"
+    assert by_id[76]["best_score"] == pytest.approx(0.8572)
+
+
+def test_representative_annotations_predicted_tier_only_when_no_target_or_ms2(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    save_predicted_formulas(
+        db,
+        [
+            _make_predicted(1, adduct="[M+Na]+", formula="C7H16OS2", mass_error_ppm=4.6),
+            _make_predicted(1, adduct="[M+H]+", formula="C6H12O6", mass_error_ppm=0.2),
+        ],
+    )
+
+    df = load_feature_representative_annotations(db)
+
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["source"] == "predicted"
+    # Best (lowest abs ppm error) candidate wins, regardless of adduct order.
+    assert row["compound_name"] == "C6H12O6 + [M+H]+"
+    assert row["compound_formula"] == "C6H12O6"
+    assert pd.isna(row["inchikey"])
+    assert pd.isna(row["best_score"])
+
+
+def test_representative_annotations_ms2_wins_over_predicted(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_representative_scenario(db)  # feature 76 -> "Lactic acid" via MS2
+    save_predicted_formulas(db, [_make_predicted(76, formula="C99H99O99")])
+
+    df = load_feature_representative_annotations(db)
+
+    assert len(df) == 1
+    assert df.iloc[0]["source"] == "ms2"
+    assert df.iloc[0]["compound_name"] == "Lactic acid"
+
+
+def test_representative_annotations_target_list_wins_over_predicted(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    _seed_target_list_match(db, feature_id=1, name="Glucose (target list)")
+    save_predicted_formulas(db, [_make_predicted(1, formula="C99H99O99")])
+
+    df = load_feature_representative_annotations(db)
+
+    assert len(df) == 1
+    assert df.iloc[0]["source"] == "target_list"
+    assert df.iloc[0]["compound_name"] == "Glucose (target list)"
+
+
+def test_load_feature_categories_labels_predicted_features(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, ?)",
+            [
+                (1, 100.0, "{}"),  # no MS2, no prediction -> no_ms2
+                (2, 200.0, "{}"),  # no MS2, but predicted -> predicted
+            ],
+        )
+        con.commit()
+    save_predicted_formulas(db, [_make_predicted(2)])
+
+    df = load_feature_categories(db)
+    by_id = {r["feature_id"]: r["category"] for _, r in df.iterrows()}
+
+    assert by_id[1] == "no_ms2"
+    assert by_id[2] == "predicted"
+
+
+def test_load_feature_categories_target_list_beats_predicted(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    _seed_target_list_match(db, feature_id=1)
+    save_predicted_formulas(db, [_make_predicted(1)])
+
+    df = load_feature_categories(db)
+
+    assert df.iloc[0]["category"] == "target_list"
+
+
+def test_load_feature_categories_annotated_beats_predicted(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_representative_scenario(db)  # feature 76 -> real MS2 hit ("annotated")
+    save_predicted_formulas(db, [_make_predicted(76)])
+
+    df = load_feature_categories(db)
+
+    assert df.iloc[0]["category"] == "annotated"
+
+
+def test_load_feature_list_shows_predicted_formula_label(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (1, 181.07, '{}')"
+        )
+        con.commit()
+    save_predicted_formulas(db, [_make_predicted(1, adduct="[M+H]+", formula="C6H12O6")])
+
+    df = load_feature_list(db)
+
+    assert df.iloc[0]["compound_name"] == "C6H12O6 + [M+H]+"
