@@ -43,6 +43,17 @@ still a real, working config option — it just isn't exposed as a control in th
 wizard, so the only way to set it is to hand-edit or script a config file
 directly, as shown in [Programmatic use](#programmatic-use) below.
 
+**Load from previous analysis.** The wizard's "Load from previous
+analysis" dropdown (above the tabs) prefills every tab — including the
+sample/db-only file lists and output folder — from an earlier run in the
+same project, so re-running with a couple of settings changed doesn't
+mean refilling the form from scratch. Picking "Start blank" resets
+everything back to the defaults shown below. A field a past run's saved
+config no longer has (removed since) is simply skipped, and a field that
+run predates just keeps its default — nothing here validates the loaded
+config the way starting a real run does, since you're about to review
+every tab anyway.
+
 ## Sections
 
 Sections run in roughly this order during a pipeline execution: `ms1` →

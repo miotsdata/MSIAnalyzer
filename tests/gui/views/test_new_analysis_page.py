@@ -495,3 +495,129 @@ def test_run_click_emits_target_list_config_with_selected_adducts_and_path(
     assert config_dict["target_list"]["polarity"] == "positive"
     assert config_dict["target_list"]["adducts"] == ["[M+H]+"]
     assert config_dict["target_list"]["match_ppm"] == 10.0
+
+
+# ---------------------------------------------------------------------- #
+# Load config from a previous analysis (template picker)
+# ---------------------------------------------------------------------- #
+
+
+def _as_list(value):
+    """A QML `property var` list read back via `.property()`: an array of
+    plain strings comes back as a native Python list already, but an
+    array of objects (dicts) stays wrapped in a QJSValue needing
+    `.toVariant()` — same helper as test_roi_design_window.py's
+    identical need."""
+    return value.toVariant() if hasattr(value, "toVariant") else value
+
+
+def _rich_template_config():
+    """A config dict shaped like Config.to_dict(), with `io`, one generic
+    group, and `target_list` all set away from their schema defaults —
+    so a test can tell "loaded" apart from "coincidentally matches the
+    default" for every tab applyConfig touches."""
+    return {
+        "version": 16,
+        "io": {
+            "project_folder": "/tmp/proj",
+            "mzml_paths": ["/data/s1.mzML", None],
+            "xml_paths": ["/data/s1.xml", None],
+            "db_paths": [None, "/data/already_parsed.db"],
+            "out_dir": "/tmp/proj/custom_output",
+        },
+        "peak": {"filter_mad": False},  # default is True
+        "target_list": {
+            "paths": "/data/targets.csv",
+            "polarity": "negative",
+            "adducts": ["[M-H]-"],
+            "match_ppm": 15.0,
+        },
+    }
+
+
+def _project_with_template_run():
+    from msianalyzer.core.project.project import Project
+
+    p = Project(name="template_test_proj")
+    p.runs["run-1"] = {
+        "id": "run-1",
+        "start_date": "2026-01-01 12:00:00",
+        "end_date": "2026-01-01 12:30:00",
+        "status": "COMPLETED",
+        "config_path": "/tmp/proj/configs/run_1.yaml",
+        "config": _rich_template_config(),
+    }
+    return p
+
+
+def test_apply_config_prefills_io_generic_and_target_list_tabs(
+    new_analysis_view, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, _project_with_template_run())
+
+    root.applyConfig(_rich_template_config())
+
+    rows = _as_list(root.property("sampleRows"))
+    assert rows == [{"mzml": "/data/s1.mzML", "xml": "/data/s1.xml"}]
+    assert _as_list(root.property("dbOnlyPaths")) == ["/data/already_parsed.db"]
+
+    out_dir_field = find_visual_child(root, "outDirField")
+    assert out_dir_field.property("text") == "/tmp/proj/custom_output"
+
+    filter_mad = find_visual_child(root, "field_peak_filter_mad")
+    assert filter_mad.property("checked") is False
+
+    paths_field = find_visual_child(root, "field_target_list_paths")
+    assert paths_field.property("text") == "/data/targets.csv"
+    polarity_combo = find_visual_child(root, "field_target_list_polarity")
+    assert polarity_combo.property("currentText") == "negative"
+    assert _as_list(root.property("targetListSelectedAdducts")) == ["[M-H]-"]
+    ppm_field = find_visual_child(root, "field_target_list_match_ppm")
+    assert ppm_field.property("text") == "15"
+
+
+def test_reset_to_blank_restores_defaults_after_a_load(
+    new_analysis_view, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, _project_with_template_run())
+    root.applyConfig(_rich_template_config())
+
+    root.resetToBlank()
+
+    assert _as_list(root.property("sampleRows")) == []
+    assert _as_list(root.property("dbOnlyPaths")) == []
+
+    out_dir_field = find_visual_child(root, "outDirField")
+    assert out_dir_field.property("text").endswith("/output")
+
+    filter_mad = find_visual_child(root, "field_peak_filter_mad")
+    assert filter_mad.property("checked") is True  # back to schema default
+
+    polarity_combo = find_visual_child(root, "field_target_list_polarity")
+    assert polarity_combo.property("currentText") == "positive"
+    assert _as_list(root.property("targetListSelectedAdducts")) == []
+    paths_field = find_visual_child(root, "field_target_list_paths")
+    assert paths_field.property("text") == ""
+
+
+def test_template_combo_lists_start_blank_and_previous_runs(
+    new_analysis_view, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, _project_with_template_run())
+
+    combo = find_visual_child(root, "templateCombo")
+    assert combo is not None
+    options = combo.property("model")
+    labels = [o["label"] for o in options]
+    assert labels[0] == "Start blank"
+    assert any("COMPLETED" in label for label in labels[1:])
+
+
+def test_template_combo_hidden_when_project_has_no_previous_runs(
+    new_analysis_view, project, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    row = find_visual_child(root, "templateRow")
+    assert row is not None
+    assert row.property("visible") is False

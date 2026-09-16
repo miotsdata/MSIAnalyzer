@@ -252,6 +252,35 @@ Page {
         return null
     }
 
+    // Inverse of parseFieldValue — sets a control's value from a loaded
+    // config's raw value, for the "load from a previous analysis"
+    // template picker (applyConfig below). Same kind-by-kind shape as
+    // parseFieldValue, deliberately the mirror image of it.
+    function applyFieldValue(kind, control, value) {
+        switch (kind) {
+        case "bool":
+            control.checked = value === true
+            return
+        case "optional_bool":
+            control.text = (value === null || value === undefined) ? "" : String(value)
+            return
+        case "int":
+        case "float":
+        case "str":
+        case "optional_int":
+        case "optional_float":
+        case "optional_str":
+            control.text = (value === null || value === undefined) ? "" : String(value)
+            return
+        case "optional_str_list":
+            control.text = (value && value.length > 0) ? value.join(", ") : ""
+            return
+        case "path_list":
+            control.text = Array.isArray(value) ? value.join("; ") : (value || "")
+            return
+        }
+    }
+
     function collectConfig() {
         var mzmlPaths = []
         var xmlPaths = []
@@ -301,6 +330,85 @@ Page {
         }
 
         return configDict
+    }
+
+    // "Load from a previous analysis": prefills every tab from another
+    // run's saved Config.to_dict() (project.runs[id].config, already a
+    // plain dict — see ProjectModel.runs). Deliberately does NOT go
+    // through Config.from_dict (that's strict: an unknown/removed field
+    // raises) — a field the loaded config doesn't have is just left at
+    // its schema default, and a field this form no longer has a control
+    // for is silently skipped, since the user is about to review every
+    // tab anyway, not start a run sight-unseen.
+    function applyConfig(configDict) {
+        var io = configDict.io || {}
+        var mzmlPaths = io.mzml_paths || []
+        var xmlPaths = io.xml_paths || []
+        var dbPaths = io.db_paths || []
+        var rows = []
+        var dbOnly = []
+        for (var i = 0; i < mzmlPaths.length; i++) {
+            if (mzmlPaths[i] !== null && mzmlPaths[i] !== undefined)
+                rows.push({mzml: mzmlPaths[i], xml: xmlPaths[i] || ""})
+            else
+                dbOnly.push(dbPaths[i])
+        }
+        sampleRows = rows
+        dbOnlyPaths = dbOnly
+        outDirField.text = io.out_dir || (project ? project.folder + "/output" : "")
+
+        var tl = configDict.target_list || {}
+        if (tl.paths !== undefined)
+            applyFieldValue("path_list", targetListPathsField, tl.paths)
+        // Polarity before adducts — the combo's own onCurrentTextChanged
+        // clears targetListSelectedAdducts on every polarity change
+        // (built this session, for the manual-edit case), which would
+        // otherwise immediately wipe out an adducts list set first.
+        if (tl.polarity)
+            targetListPolarityCombo.currentIndex = tl.polarity === "negative" ? 1 : 0
+        targetListSelectedAdducts = tl.adducts || []
+        if (tl.match_ppm !== undefined)
+            targetListMatchPpmField.text = String(tl.match_ppm)
+
+        for (var g = 0; g < ConfigSchema.groups.length; g++) {
+            var group = ConfigSchema.groups[g]
+            var groupValues = configDict[group.key]
+            if (!groupValues)
+                continue
+            for (var f = 0; f < group.fields.length; f++) {
+                var field = group.fields[f]
+                if (!(field.name in groupValues))
+                    continue
+                var control = findByObjectName(
+                    newAnalysisPage, "field_" + group.key + "_" + field.name)
+                if (control)
+                    applyFieldValue(field.kind, control, groupValues[field.name])
+            }
+        }
+    }
+
+    // The template picker's "Start blank" entry — resets every tab back
+    // to its schema defaults, undoing whatever applyConfig last loaded.
+    function resetToBlank() {
+        sampleRows = []
+        dbOnlyPaths = []
+        outDirField.text = project ? project.folder + "/output" : ""
+
+        applyFieldValue("path_list", targetListPathsField, null)
+        targetListPolarityCombo.currentIndex = 0
+        targetListSelectedAdducts = []
+        targetListMatchPpmField.text = String(ConfigSchema.targetListSchema.fields.match_ppm.default)
+
+        for (var g = 0; g < ConfigSchema.groups.length; g++) {
+            var group = ConfigSchema.groups[g]
+            for (var f = 0; f < group.fields.length; f++) {
+                var field = group.fields[f]
+                var control = findByObjectName(
+                    newAnalysisPage, "field_" + group.key + "_" + field.name)
+                if (control)
+                    applyFieldValue(field.kind, control, field.default)
+            }
+        }
     }
 
     QtObject {
@@ -396,6 +504,56 @@ Page {
                 objectName: "backToProjectButton"
                 text: "Back to project"
                 onClicked: if (project) Router.showProjectHomeRequested(project)
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
+        }
+
+        // Prefills every tab from a previous run's saved config
+        // (applyConfig) so re-running an existing analysis with a couple
+        // of settings tweaked doesn't mean refilling the whole form —
+        // "Start blank" (the default selection) resets back to schema
+        // defaults instead. Visible above the tab bar regardless of
+        // which tab is open, since it can touch any of them.
+        RowLayout {
+            objectName: "templateRow"
+            Layout.fillWidth: true
+            visible: project && project.runsList && project.runsList.length > 0
+
+            Label { text: "Load from previous analysis:" }
+            ComboBox {
+                id: templateCombo
+                objectName: "templateCombo"
+                Layout.fillWidth: true
+                textRole: "label"
+                valueRole: "id"
+                model: {
+                    var options = [{id: "", label: "Start blank"}]
+                    var runs = (project && project.runsList) ? project.runsList : []
+                    for (var i = 0; i < runs.length; i++) {
+                        options.push({
+                            id: runs[i].id,
+                            label: runs[i].start_date_display + " — " + runs[i].status
+                        })
+                    }
+                    return options
+                }
+                currentIndex: 0
+                // onActivated (a real user pick), not onCurrentIndexChanged
+                // — re-picking the same entry after manual edits should
+                // still re-apply it, which a currentIndex-unchanged
+                // onCurrentIndexChanged binding wouldn't fire for.
+                onActivated: {
+                    if (templateCombo.currentValue === "") {
+                        newAnalysisPage.resetToBlank()
+                        return
+                    }
+                    var run = project.runs[templateCombo.currentValue]
+                    if (run && run.config)
+                        newAnalysisPage.applyConfig(run.config)
+                }
 
                 HoverHandler {
                     cursorShape: Qt.PointingHandCursor
