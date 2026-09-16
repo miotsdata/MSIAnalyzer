@@ -745,6 +745,21 @@ def test_obs_mode_defaults_selection_to_tic(
     section = find_visual_child(root, "controlsFlickable")
     assert section.property("selectedObsColumn") == "tic"
 
+    # The combo's own visible selection, not just the underlying property —
+    # reported bug: data rendered as "tic" correctly, but the combobox
+    # itself visually showed "rt" selected. `obsColumns` (and
+    # `selectedObsIndex`) were already resolved to "tic" back when the
+    # analysis first loaded, well before the combo was ever shown — a
+    # ComboBox doesn't reliably keep an imperative `currentIndex` write
+    # made while still hidden once it's actually realized. The fix
+    # re-asserts it via Qt.callLater on the mode switch, so wait for that
+    # deferred call rather than assuming the shared 50ms wait above was
+    # enough (it usually is, but this is the one assertion that actually
+    # depends on it).
+    obs_combo = find_visual_child(root, "obsColumnCombo")
+    tic_index = obs_combo.property("model").index("tic")
+    qtbot.waitUntil(lambda: obs_combo.property("currentIndex") == tic_index, timeout=2000)
+
 
 def test_selecting_numeric_obs_column_shows_color_scale_controls(
     analysis_view, visual_analysis_model, find_visual_child, qtbot

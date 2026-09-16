@@ -208,6 +208,21 @@ Flickable {
         controlsFlickable.autoScale = true
         controlsFlickable.refreshAutoRange()
         controlsFlickable.refreshObsCategoryLegend()
+        // obsColumnCombo only becomes visible on switching into "obs" mode
+        // — `obsColumns` itself was already fetched (and selectedObsIndex
+        // set to "tic") back when the analysis first loaded, well before
+        // the combo was ever shown, so the earlier resync in
+        // onObsColumnsChanged below doesn't help here: a ComboBox that
+        // was never visible doesn't reliably keep an imperative
+        // currentIndex write made while hidden once its popup/delegate is
+        // actually realized. Re-assert on the transition the user
+        // actually sees (reported: switching to Obs column mode rendered
+        // "tic" correctly but the combo visually showed "rt" selected).
+        if (controlsFlickable.inspectionMode === "obs") {
+            Qt.callLater(function () {
+                obsColumnCombo.currentIndex = controlsFlickable.selectedObsIndex
+            })
+        }
     }
     onSelectedObsColumnChanged: {
         controlsFlickable.autoScale = true
