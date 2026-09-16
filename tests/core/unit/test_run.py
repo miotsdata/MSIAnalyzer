@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -173,6 +174,45 @@ class DummyConfig:
 class DummyObjectWithToDict:
     def to_dict(self):
         return {"key": "value"}
+
+
+def _mock_pool_executor(mocker, results=None, *, exception=None):
+    """Mocks `ProcessPoolExecutor` so `run_core`'s sample loop
+    (`executor.submit(...)` per sample, collected via `as_completed`) gets
+    `results` back without touching a real process pool.
+
+    Real, already-completed `concurrent.futures.Future` objects, not a
+    mocked `as_completed` — `run_core` imports and calls the real
+    `as_completed`, which works against any object implementing the
+    standard `Future` API regardless of what pool (real or none at all)
+    created it, so a hand-built already-done `Future` is a faithful stand-in.
+
+    Args:
+        results: One `SampleResult` per sample, in the same order
+            `run_core` submits them — each `executor.submit(...)` call
+            (one per sample) returns the next one via `side_effect`.
+        exception: If given, every `submit()` call raises this instead
+            (a submission-time failure, standing in for "a sample failed
+            to process" without needing a specific result list).
+
+    Returns:
+        The mock executor, for asserting on `.submit.call_args_list` when
+        a test needs to inspect what was actually submitted.
+    """
+    mock_executor = mocker.MagicMock()
+    if exception is not None:
+        mock_executor.__enter__.return_value.submit.side_effect = exception
+    else:
+        futures = []
+        for r in results:
+            f = Future()
+            f.set_result(r)
+            futures.append(f)
+        mock_executor.__enter__.return_value.submit.side_effect = futures
+    mocker.patch(
+        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
+    )
+    return mock_executor
 
 
 # ==============================================================================
@@ -649,11 +689,7 @@ def test_run_core_executes_successfully(mocker, tmp_path):
         return_value=mock_norm_result,
     )
 
-    mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
-    mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
-    )
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
 
     run.run_core()
 
@@ -753,11 +789,7 @@ def test_run_core_registers_already_parsed_sample_by_its_own_db_stem(mocker, tmp
         return_value=mock_norm_result,
     )
 
-    mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
-    mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
-    )
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
 
     run.run_core()
 
@@ -766,10 +798,11 @@ def test_run_core_registers_already_parsed_sample_by_its_own_db_stem(mocker, tmp
     assert names == ["sample1", "already_parsed"]
 
     # the None placeholders for the already-parsed sample are passed through
-    # to the worker pool as-is (positionally: mzml_paths, xml_paths, ...)
-    map_call = mock_executor.__enter__.return_value.map.call_args
-    assert list(map_call.args[1]) == [tmp_path / "sample1.mzML", None]
-    assert list(map_call.args[2]) == [tmp_path / "sample1.xml", None]
+    # to the worker pool as-is (positionally: worker, mzml, xml, ...) —
+    # one submit() call per sample now, in submission order.
+    submit_calls = mock_executor.__enter__.return_value.submit.call_args_list
+    assert [c.args[1] for c in submit_calls] == [tmp_path / "sample1.mzML", None]
+    assert [c.args[2] for c in submit_calls] == [tmp_path / "sample1.xml", None]
 
 
 def test_run_core_skips_existing_outputs(mocker, tmp_path):
@@ -813,11 +846,7 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
         "msianalyzer.core.run.run.run_tic_normalization"
     )
 
-    mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
-    mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
-    )
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
 
     run.run_core()
 
@@ -1015,15 +1044,105 @@ def test_run_core_emits_on_step_progress_for_every_stage(mocker, tmp_path):
 
     _patch_run_core_collaborators(mocker)
 
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
+
+    run.run_core()
+
+    assert events == _FULL_RUN_STAGES_SUCCESS
+
+
+def test_run_core_emits_sample_progress_as_each_sample_completes(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    progress = []
+    run.on_sample_progress = lambda done, total: progress.append((done, total))
+
+    res1 = SampleResult(
+        out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0, 200.0])
+    )
+    res2 = SampleResult(
+        out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0, 300.0])
+    )
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    _patch_run_core_collaborators(mocker)
+    _mock_pool_executor(mocker, [res1, res2])
+
+    run.run_core()
+
+    # (0, 2) emitted before any sample starts, then one (n, 2) per sample
+    # as it completes — real completion order (both already-done futures
+    # here, so as_completed's own ordering) rather than assuming
+    # submission order, which is exactly the point of switching off
+    # executor.map().
+    assert progress[0] == (0, 2)
+    assert progress[-1] == (2, 2)
+    assert len(progress) == 3
+
+
+def test_run_core_orders_sample_results_by_submission_index_not_completion_order(
+    mocker, tmp_path,
+):
+    # Downstream code (out_db_paths/all_peaks_mzs, built from `results`
+    # right after the executor block) zips positionally against
+    # sample_ids/mzml_paths — as_completed() yielding out of submission
+    # order must not scramble that.
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([1.0]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([2.0]))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    _patch_run_core_collaborators(mocker)
+    mock_align = mocker.patch(
+        "msianalyzer.core.run.run.align_mz_across_samples",
+        return_value=pd.DataFrame(index=[1.0, 2.0]),
+    )
+
+    # res2's future is completed BEFORE res1's — the opposite of
+    # submission order (sample1 submits first) — to prove the fix reorders
+    # by submission index rather than trusting completion order.
+    future1 = Future()
+    future2 = Future()
+    future2.set_result(res2)
+    future1.set_result(res1)
     mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
+    mock_executor.__enter__.return_value.submit.side_effect = [future1, future2]
     mocker.patch(
         "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
     )
 
     run.run_core()
 
-    assert events == _FULL_RUN_STAGES_SUCCESS
+    # `mz_arrays` (all_peaks_mzs) stays in submission order (sample1,
+    # sample2) regardless of which future actually completed first.
+    mz_arrays = mock_align.call_args.kwargs["mz_arrays"]
+    np.testing.assert_array_equal(mz_arrays[0], res1.peaks_mzs)
+    np.testing.assert_array_equal(mz_arrays[1], res2.peaks_mzs)
 
 
 def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
@@ -1065,11 +1184,7 @@ def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
     )
 
-    mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
-    mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
-    )
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
 
     run.run_core()
 
@@ -1110,11 +1225,7 @@ def test_run_core_emits_failed_when_sample_processing_raises(mocker, tmp_path):
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
 
-    mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.side_effect = RuntimeError("boom")
-    mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
-    )
+    _mock_pool_executor(mocker, exception=RuntimeError("boom"))
 
     with pytest.raises(RuntimeError):
         run.run_core()
@@ -1162,11 +1273,7 @@ def test_run_core_folds_injected_feature_mz_into_target_mz_set_passed_to_create_
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
     )
 
-    mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
-    mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
-    )
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
 
     run.run_core()
 
@@ -1203,11 +1310,7 @@ def test_run_core_skips_match_target_list_when_paths_not_configured(mocker, tmp_
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
     )
 
-    mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
-    mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
-    )
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
 
     run.run_core()
 
@@ -1247,11 +1350,7 @@ def test_run_core_match_target_list_idempotent_on_rerun_does_not_duplicate_injec
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
     )
 
-    mock_executor = mocker.MagicMock()
-    mock_executor.__enter__.return_value.map.return_value = [res1, res2]
-    mocker.patch(
-        "msianalyzer.core.run.run.ProcessPoolExecutor", return_value=mock_executor
-    )
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
 
     run.run_core()
 

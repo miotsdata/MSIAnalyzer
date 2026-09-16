@@ -19,6 +19,7 @@ class CoreBridge(QObject):
     invalidConfig = Signal(str)
     runStarted = Signal(str)
     runStepChanged = Signal(str, str)
+    runSampleProgress = Signal(int, int)
     runCompleted = Signal(str)
     runFailed = Signal(str)
 
@@ -108,6 +109,7 @@ class CoreBridge(QObject):
 
         worker = RunWorker(run, config, str(config_path), self)
         worker.stepChanged.connect(self.runStepChanged)
+        worker.sampleProgress.connect(self.runSampleProgress)
         worker.finished_ok.connect(self.runCompleted)
         worker.failed.connect(self.runFailed)
         self._run_worker = worker

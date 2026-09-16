@@ -5,7 +5,7 @@ import logging
 import os
 import sqlite3
 import uuid
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
@@ -107,6 +107,12 @@ class Run:
             each stage in `RUN_STEPS`, `status` one of `"started"`,
             `"completed"`, `"skipped"`, `"failed"`. Not persisted (excluded
             from `to_dict`) — purely a runtime hook, e.g. for the GUI.
+        on_sample_progress: Optional callback invoked as
+            `on_sample_progress(done, total)` as each sample finishes
+            during the `"process_samples"` stage — the one stage `on_step`
+            alone can't give any finer progress than "started"/"completed"
+            for, since it's usually the longest-running one. Not persisted,
+            same as `on_step`.
     """
 
     def __init__(self, config_file: str | Path | None = None):
@@ -118,6 +124,7 @@ class Run:
         self.config_path: str | None = None
         self.project: Project | None = None
         self.on_step: Callable[[str, str], None] | None = None
+        self.on_sample_progress: Callable[[int, int], None] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise the run to a plain, YAML-friendly dict.
@@ -132,7 +139,7 @@ class Run:
         """
         d: dict[str, Any] = {}
         for key, value in vars(self).items():
-            if key in ("project", "on_step"):
+            if key in ("project", "on_step", "on_sample_progress"):
                 continue
             if isinstance(value, datetime.datetime):
                 d[key] = str(value)
@@ -156,6 +163,7 @@ class Run:
         config: Config | None = None,
         config_path: str | Path | None = None,
         on_step: Callable[[str, str], None] | None = None,
+        on_sample_progress: Callable[[int, int], None] | None = None,
     ) -> None:
         """Load configuration, register the run, and execute the pipeline.
 
@@ -173,11 +181,15 @@ class Run:
                 given and `config_path` is not; otherwise None.
             on_step: Optional per-stage progress callback, see `RUN_STEPS`
                 and the `Run.on_step` attribute.
+            on_sample_progress: Optional per-sample progress callback
+                during `"process_samples"`, see the `Run.on_sample_progress`
+                attribute.
 
         Raises:
             ValueError: If neither `config_file` nor `config` is provided.
         """
         self.on_step = on_step
+        self.on_sample_progress = on_sample_progress
 
         if config is not None:
             self.config = config
@@ -538,6 +550,16 @@ class Run:
         if self.on_step is not None:
             self.on_step(step, status)
 
+    def _emit_sample_progress(self, done: int, total: int) -> None:
+        """Invoke `self.on_sample_progress(done, total)` when a callback is set.
+
+        Args:
+            done: Number of samples finished so far.
+            total: Total number of samples this run is processing.
+        """
+        if self.on_sample_progress is not None:
+            self.on_sample_progress(done, total)
+
     @log_call
     def run_core(self) -> None:
         """Run the pipeline across all samples and assemble outputs.
@@ -601,13 +623,15 @@ class Run:
             analysis_db_path=adb_path,
         )
 
+        total_samples = len(config.io.mzml_paths)
         logger.info(
             "run %s: processing %d sample(s) with %s worker(s)",
             analysis_id,
-            len(config.io.mzml_paths),
+            total_samples,
             config.h5ad.n_workers or "os.cpu_count()",
         )
         self._emit_step("process_samples", "started")
+        self._emit_sample_progress(0, total_samples)
         try:
             with worker_logging() as (log_queue, initializer):
                 with ProcessPoolExecutor(
@@ -615,15 +639,37 @@ class Run:
                     initializer=initializer,
                     initargs=(log_queue,),
                 ) as executor:
-                    results = list(
-                        executor.map(
-                            worker,
-                            config.io.mzml_paths,
-                            config.io.xml_paths,
-                            sample_ids,
-                            raw_db_paths,
+                    # submit()+as_completed(), not map() — map() yields
+                    # results back in submission order regardless of which
+                    # sample actually finishes first, so consuming it via
+                    # list(...) blocks on sample 1 even if sample 3
+                    # finished first, and gives no way to observe progress
+                    # as samples complete. as_completed() yields each
+                    # future the moment it's actually done; parallelism is
+                    # identical either way (every sample is still submitted
+                    # to the same pool up front) — only the order results
+                    # are collected in changes. Original submission order
+                    # still matters downstream (out_db_paths/all_peaks_mzs
+                    # below are zipped positionally against sample_ids), so
+                    # each result is written back to its own index rather
+                    # than appended in completion order.
+                    futures = {
+                        executor.submit(worker, mzml, xml, sample_id, raw_db_path): i
+                        for i, (mzml, xml, sample_id, raw_db_path) in enumerate(
+                            zip(
+                                config.io.mzml_paths,
+                                config.io.xml_paths,
+                                sample_ids,
+                                raw_db_paths,
+                            )
                         )
-                    )
+                    }
+                    results: list[SampleResult | None] = [None] * total_samples
+                    done = 0
+                    for future in as_completed(futures):
+                        results[futures[future]] = future.result()
+                        done += 1
+                        self._emit_sample_progress(done, total_samples)
         except Exception:
             logger.error(
                 "run %s: a sample failed to process — aborting the run "

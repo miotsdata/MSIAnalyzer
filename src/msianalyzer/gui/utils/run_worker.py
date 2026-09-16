@@ -19,6 +19,7 @@ class RunWorker(QThread):
     """
 
     stepChanged = Signal(str, str)
+    sampleProgress = Signal(int, int)
     finished_ok = Signal(str)
     failed = Signal(str)
 
@@ -40,6 +41,9 @@ class RunWorker(QThread):
                 config=self._config,
                 config_path=self._config_path,
                 on_step=lambda step, status: self.stepChanged.emit(step, status),
+                on_sample_progress=lambda done, total: self.sampleProgress.emit(
+                    done, total
+                ),
             )
         except Exception as e:
             logger.exception("run %s: failed", self._run.id)

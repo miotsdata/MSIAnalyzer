@@ -36,6 +36,74 @@ def test_step_changed_updates_matching_row(
     assert other_status.property("text") == "pending"
 
 
+def test_progress_bar_hidden_for_pending_step(
+    running_analysis_view, project, find_visual_child
+):
+    _, root, _ = _make_page(running_analysis_view, project)
+
+    # Searched from the row, not `root` — see find_visual_child's own
+    # docstring: a search from a large subtree (many Repeater delegates,
+    # each now a full QQC2 ProgressBar with its own background/contentItem
+    # children, not just a plain Label) is a known PySide6 wrapper-lifecycle
+    # fragility in this environment, not something specific to this test.
+    row = find_visual_child(root, "stepRow_align_mz")
+    bar = find_visual_child(row, "stepProgressBar_align_mz")
+    assert bar is not None
+    assert bar.property("visible") is False
+
+
+def test_non_sample_step_shows_indeterminate_progress_bar_while_started(
+    running_analysis_view, project, application, find_visual_child, qtbot
+):
+    _, root, _ = _make_page(running_analysis_view, project)
+
+    application.core_bridge.runStepChanged.emit("align_mz", "started")
+    qtbot.wait(50)
+
+    row = find_visual_child(root, "stepRow_align_mz")
+    bar = find_visual_child(row, "stepProgressBar_align_mz")
+    assert bar.property("visible") is True
+    assert bar.property("indeterminate") is True
+
+
+def test_process_samples_step_shows_real_progress_and_count_while_started(
+    running_analysis_view, project, application, find_visual_child, qtbot
+):
+    _, root, _ = _make_page(running_analysis_view, project)
+
+    application.core_bridge.runStepChanged.emit("process_samples", "started")
+    application.core_bridge.runSampleProgress.emit(1, 3)
+    qtbot.wait(50)
+
+    row = find_visual_child(root, "stepRow_process_samples")
+    bar = find_visual_child(row, "stepProgressBar_process_samples")
+    assert bar.property("visible") is True
+    assert bar.property("indeterminate") is False
+    assert bar.property("value") == 1
+    assert bar.property("to") == 3
+
+    status = find_visual_child(row, "stepStatus_process_samples")
+    assert status.property("text") == "started (1/3)"
+
+
+def test_process_samples_progress_bar_hidden_once_completed(
+    running_analysis_view, project, application, find_visual_child, qtbot
+):
+    _, root, _ = _make_page(running_analysis_view, project)
+
+    application.core_bridge.runStepChanged.emit("process_samples", "started")
+    application.core_bridge.runSampleProgress.emit(3, 3)
+    application.core_bridge.runStepChanged.emit("process_samples", "completed")
+    qtbot.wait(50)
+
+    row = find_visual_child(root, "stepRow_process_samples")
+    bar = find_visual_child(row, "stepProgressBar_process_samples")
+    assert bar.property("visible") is False
+
+    status = find_visual_child(row, "stepStatus_process_samples")
+    assert status.property("text") == "completed"
+
+
 def test_back_button_is_always_available(running_analysis_view, project):
     _, root, _ = _make_page(running_analysis_view, project)
 

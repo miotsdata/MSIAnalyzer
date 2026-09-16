@@ -185,6 +185,29 @@ def test_run_analysis_forwards_run_started_and_step_changed(tmp_path, mocker, qt
     assert step_spy.args == ["process_samples", "started"]
 
 
+def test_run_analysis_forwards_sample_progress(tmp_path, mocker, qtbot):
+    (tmp_path / "configs").mkdir()
+    bridge = CoreBridge()
+
+    mocker.patch.object(
+        Run, "start", lambda self, **kwargs: kwargs["on_sample_progress"](1, 2)
+    )
+
+    config_dict = {
+        "io": {
+            "mzml_paths": [str(tmp_path / "a.mzML")],
+            "xml_paths": [str(tmp_path / "a.xml")],
+            "out_dir": str(tmp_path / "out"),
+            "db_paths": [],
+        }
+    }
+
+    with qtbot.waitSignal(bridge.runSampleProgress, timeout=2000) as progress_spy:
+        bridge.run_analysis(config_dict, str(tmp_path))
+
+    assert progress_spy.args == [1, 2]
+
+
 def test_run_analysis_forces_project_folder_and_version(tmp_path, mocker, qtbot):
     (tmp_path / "configs").mkdir()
     bridge = CoreBridge()
