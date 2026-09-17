@@ -88,3 +88,25 @@ apply — no formula/range placeholder).
   carrying its own `ToolTip`.
 - Converting the remaining ~75 fields' docstrings to the structured
   format is follow-up work, not done here.
+
+**Follow-up (2026-09-17, same day):** two real problems found once the
+user actually opened the dialog in the running app:
+
+- **Text rendered black-on-dark.** The `fieldHelpDialogText` element had
+  no `color:` binding — a plain `Text` doesn't inherit the app's palette
+  the way `Controls` do, so it fell back to Qt Quick's own default
+  (black), unreadable against `Theme`'s dark background. Fixed with an
+  explicit `color: Theme.textColor` binding.
+- **The "convert a first batch, do the rest later" staging was the
+  wrong call** — reported back as "this is a huge mistake that you
+  shouldn't have made." Every remaining GUI-visible field across every
+  `Config` dataclass (`ms1`, `centroid`, `peak`, `align.align_ppm`/
+  `mz_decimals`, `target_list.paths`/`polarity`/`match_ppm`, the rest of
+  `group_ms2`/`purity`/`annotate`, `consensus`, `report`, `h5ad`,
+  `analysis`, `normalization` — everything with a "?" button in the New
+  Analysis form) was converted to the structured format in the same
+  sitting, not staged. `align.sample_names` (marked `gui_hidden`, no
+  help button at all) and `target_list.adducts` (rendered as a checkbox
+  grid, no help button either) are the only fields left with a plain
+  one-paragraph docstring, since neither has anywhere in the GUI to
+  show it.

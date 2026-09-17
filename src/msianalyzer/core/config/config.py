@@ -182,25 +182,49 @@ class MS1Config:
 
     Attributes:
         chunk_size: How many scans are read from the raw database and
-            averaged into the running total at once. Purely a
-            memory/speed knob — smaller keeps peak memory use down on very
-            large runs at the cost of more, slightly slower database
-            reads; it never changes the resulting averaged spectrum.
-        bin_width: Width, in Da, of each bin on the shared m/z axis, e.g.
-            `0.0001` (the default) means every m/z value is rounded to the
-            nearest 0.0001 Da before averaging. Smaller preserves more mass
-            resolution but produces a larger, slower-to-process spectrum
-            (and can under-average true replicate peaks that jitter by more
-            than the bin width); coarser is faster but can blur together
-            two real, close-mass peaks.
+            averaged into the running total at once — a pure memory/speed
+            knob, it never changes the resulting averaged spectrum.
+
+            Range: **1** and up. Default **2000**. Near **1**: minimal
+            peak memory use, at the cost of many more, slightly slower
+            database reads. High (thousands+): fewer reads, faster
+            overall, but peak memory use grows with it.
+
+            **Interaction:** None.
+        bin_width: Width, in Da, of each bin on the shared m/z axis —
+            every m/z value is rounded to the nearest `bin_width` before
+            averaging.
+
+            Range: greater than **0**. Default **0.0001**. Near **0**:
+            preserves the most mass resolution, but produces a larger,
+            slower-to-process spectrum, and can under-average true
+            replicate peaks that jitter by more than the bin width.
+            Larger (e.g. **0.001**+): faster, smaller spectrum, but can
+            blur together two real, close-mass peaks.
+
+            **Interaction:** None.
         min_mz: Lower edge, in Da, of the m/z range kept in the averaged
             spectrum — anything below this (e.g. very-low-mass background
-            ions) is discarded. Default `70.0`.
+            ions) is discarded.
+
+            Range: **0** and up, below `max_mz`. Default **70.0**. Lower:
+            keeps more low-mass background ions that are rarely of
+            interest. Higher: discards more of the low end — fine as
+            long as it stays below every mass you actually care about.
+
+            **Interaction:** Must stay below `max_mz`. Narrowing both to
+            the mass range you actually care about (e.g. `100`-`500` for
+            small metabolites) reduces memory and downstream processing
+            time with no loss of relevant peaks.
         max_mz: Upper edge, in Da, of the m/z range kept in the averaged
-            spectrum. Default `900.0`. Narrowing `min_mz`/`max_mz` to the
-            mass range you actually care about (e.g. `100`–`500` for small
-            metabolites) reduces memory and downstream processing time with
-            no loss of relevant peaks.
+            spectrum.
+
+            Range: above `min_mz`. Default **900.0**. Lower: discards
+            more of the high end. Higher: keeps a wider mass range, at
+            the cost of memory/processing time.
+
+            **Interaction:** Must stay above `min_mz` — see that field's
+            own note on narrowing both together.
     """
 
     chunk_size: int = 2000
@@ -222,43 +246,81 @@ class CentroidConfig:
     Attributes:
         prominence_factor: How much a local maximum must stand out from its
             immediate surroundings (not just the baseline) to count as a
-            peak, as a multiple of the baseline value — e.g. `0.1` (the
-            default) requires the peak to rise at least 10% of the local
-            baseline above its neighboring valleys. Raise it to ignore
-            small shoulders/ripples on the side of a bigger peak; lower it
-            to pick up smaller, real but subtle features.
+            peak, as a multiple of the baseline value.
+
+            Range: **0** and up. Default **0.1** (the peak must rise at
+            least 10% of the local baseline above its neighboring
+            valleys). Lower: picks up smaller, real but subtle features.
+            Higher: ignores small shoulders/ripples on the side of a
+            bigger peak.
+
+            **Interaction:** None.
         baseline_factor: A candidate peak must exceed `baseline +
-            baseline_factor * baseline` to be kept at all, e.g. with the
-            default `100`, a peak must reach 101× the estimated noise
-            level. This is the main knob for "how far above the noise
-            floor" — raise it on noisy data to suppress false peaks, lower
-            it if genuine low-intensity peaks are being missed.
-        baseline_method: `"local"` (default) estimates a separate baseline
-            for each region of the spectrum via a rolling window
+            baseline_factor * baseline` to be kept at all — the main knob
+            for how far above the noise floor a peak must sit.
+
+            `threshold = baseline * (1 + baseline_factor)`
+
+            Range: **0** and up. Default **100** (a peak must reach 101x
+            the estimated noise level). Lower: keeps more low-intensity
+            peaks, at the risk of noise. Higher: suppresses more false
+            peaks on noisy data, at the risk of missing genuine
+            low-intensity ones.
+
+            **Interaction:** None.
+        baseline_method: `"local"` estimates a separate baseline for each
+            region of the spectrum via a rolling window
             (`local_window`/`smooth_sigma`) — better when noise level
             varies across the mass range. `"global"` uses one single
             baseline value for the whole spectrum — simpler and faster,
-            reasonable when noise is roughly uniform across the mass range.
+            reasonable when noise is roughly uniform across the mass
+            range. Default `"local"`.
+
+            **Interaction:** `local_window` and `smooth_sigma` only take
+            effect when this is `"local"`.
         baseline_percentile: Which percentile of non-zero intensities is
-            treated as "baseline" — e.g. the default `10` uses the
-            intensity below which the lowest 10% of non-zero points fall,
-            a robust noise-floor estimate that isn't thrown off by the
-            handful of very tall real peaks.
-        local_window: Width, in bins (see `ms1.bin_width`), of the rolling
-            window used to estimate a local baseline. Only used when
-            `baseline_method` is `"local"`. Wider smooths out more
-            local variation (more stable baseline, but less able to track
-            genuine changes in background level across the spectrum);
-            narrower tracks local changes more closely but is noisier.
+            treated as "baseline" — a robust noise-floor estimate that
+            isn't thrown off by a handful of very tall real peaks.
+
+            Range: **0**-**100**. Default **10** (the intensity below
+            which the lowest 10% of non-zero points fall). Lower: a
+            stricter (lower) baseline, so more peaks pass. Higher: a
+            more conservative (higher) baseline, so fewer peaks pass.
+
+            **Interaction:** None.
+        local_window: Width, in bins (see `ms1.bin_width`), of the
+            rolling window used to estimate a local baseline.
+
+            Range: **1** and up. Default **501**. Narrower: tracks local
+            changes more closely, but noisier. Wider: smooths out more
+            local variation (more stable baseline, but less able to
+            track genuine changes in background level across the
+            spectrum).
+
+            **Interaction:** Only used when `baseline_method` is
+            `"local"`.
         smooth_sigma: Gaussian smoothing width, in bins, applied to the
             local baseline curve after estimation — softens sharp jumps
-            between neighboring windows. Only used when `baseline_method`
-            is `"local"`.
+            between neighboring windows.
+
+            Range: **0** and up. Default **10**. Near **0**: little to no
+            smoothing, the baseline tracks every jump. Higher: smoother
+            baseline, less responsive to local changes.
+
+            **Interaction:** Only used when `baseline_method` is
+            `"local"`.
         merge_ppm: If two detected peaks land within this many ppm of each
             other, they're merged into one — cleans up a single real peak
-            that got split into two adjacent local maxima by noise. Not the
-            same as `align.align_ppm`, which merges peaks *across*
-            different samples rather than within one.
+            that got split into two adjacent local maxima by noise.
+
+            Range: **0** and up. Default **5**. Near **0**: almost
+            nothing merges, close-but-distinct peaks stay separate.
+            Higher: more aggressive merging, risks combining two
+            genuinely distinct nearby peaks.
+
+            **Interaction:** Not the same as `align.align_ppm`, which
+            merges peaks *across* different samples rather than within
+            one.
     """
 
     prominence_factor: float = 0.1
@@ -281,34 +343,46 @@ class PeakConfig:
     sample the same way.
 
     Attributes:
-        filter_mad: When `True` (the default), the cutoff is computed
-            per-sample from the median and median-absolute-deviation (MAD)
-            of the peak intensities — adapts automatically to how noisy or
-            intense a given sample happens to be. When `False`, every
-            sample instead uses the single fixed `peak_height_threshold`
-            value — simpler and fully predictable, but only appropriate
-            when every sample in the run has comparable intensity scale
-            (e.g. all acquired in the same batch with the same instrument
-            settings).
+        filter_mad: When `True`, the cutoff is computed per-sample from
+            the median and median-absolute-deviation (MAD) of the peak
+            intensities — adapts automatically to how noisy or intense a
+            given sample happens to be. When `False`, every sample
+            instead uses the single fixed `peak_height_threshold` value —
+            simpler and fully predictable, but only appropriate when
+            every sample in the run has comparable intensity scale (e.g.
+            all acquired in the same batch with the same instrument
+            settings). Default `True`.
+
+            **Interaction:** Governs whether `filter_mad_log`/`filter_mad_nmads`
+            (when `True`) or `peak_height_threshold` (when `False`)
+            actually apply.
         filter_mad_log: Compute the median/MAD in log10 intensity space
-            rather than on raw intensities. Recommended (and the default,
-            `True`) for MS data, whose intensities span several orders of
-            magnitude — a log-space MAD isn't dominated by a handful of
-            very tall peaks the way a linear-space one would be. Only used
-            when `filter_mad` is `True`.
-        filter_mad_nmads: How many MADs above the median sets the cutoff,
-            e.g. the default `2.5` keeps peaks at or above `median + 2.5 ×
-            MAD`. Raise it (e.g. to `3.5`–`4`) to keep only the most
-            confident peaks on a noisy dataset; lower it (e.g. to `1.5`) to
-            retain more borderline peaks when sensitivity matters more than
-            precision. Only used when `filter_mad` is `True`.
+            rather than on raw intensities — recommended for MS data,
+            whose intensities span several orders of magnitude; a
+            log-space MAD isn't dominated by a handful of very tall peaks
+            the way a linear-space one would be. Default `True`.
+
+            **Interaction:** Only used when `filter_mad` is `True`.
+        filter_mad_nmads: How many MADs above the median sets the cutoff.
+
+            `cutoff = median + filter_mad_nmads * MAD`
+
+            Range: **0** and up. Default **2.5**. Lower (e.g. **1.5**):
+            retains more borderline peaks, when sensitivity matters more
+            than precision. Higher (e.g. **3.5**-**4**): keeps only the
+            most confident peaks, on a noisy dataset.
+
+            **Interaction:** Only used when `filter_mad` is `True`.
         peak_height_threshold: Flat, absolute intensity cutoff — any peak
-            below this value is dropped, e.g. `1000.0` (the default) drops
-            every peak with intensity under 1000 counts. Only used when
-            `filter_mad` is `False`; because it's an absolute number rather
-            than adaptive, the right value here depends entirely on your
-            instrument and acquisition settings, so check a sample's own
-            intensity scale before relying on this.
+            below this value is dropped.
+
+            Range: **0** and up. Default **1000.0**. Because it's an
+            absolute number rather than adaptive, the right value depends
+            entirely on your instrument and acquisition settings — check
+            a sample's own intensity scale before relying on this. Lower:
+            keeps more low-intensity peaks. Higher: drops more.
+
+            **Interaction:** Only used when `filter_mad` is `False`.
     """
 
     filter_mad: bool = True
@@ -338,15 +412,21 @@ class AlignMzSamples:
     Attributes:
         align_ppm: How close two peaks from different samples must be (in
             parts per million of their m/z) to be treated as the same
-            feature. Example: at 5.0 ppm, a peak at m/z 400 in sample A and
-            one at m/z 400.002 in sample B (a difference of 5 ppm) are just
-            barely grouped together; 400.003 is not. Too tight and the same
-            real compound gets split into several near-duplicate features
-            across samples; too loose and distinct, close-mass compounds
-            get merged into one. Should usually be a bit looser than
+            feature.
+
+            Range: **0** and up. Default **5.0**. Example: at 5.0 ppm, a
+            peak at m/z 400 in sample A and one at m/z 400.002 in sample B
+            (5 ppm apart) are just barely grouped together; 400.003 is
+            not. Too tight (near **0**): the same real compound gets
+            split into several near-duplicate features across samples.
+            Too loose (higher): distinct, close-mass compounds get
+            merged into one.
+
+            **Interaction:** Should usually be a bit looser than
             `centroid.merge_ppm` (peaks within one sample are already
             merged at that tolerance) since it also has to absorb
-            run-to-run calibration drift.
+            run-to-run calibration drift. `group_ms2.assoc_ppm` should in
+            turn usually be looser than this.
         sample_names: Optional column/label name for each sample in the
             aligned feature table, in the same order as `io.mzml_paths`
             (e.g. `["control_1", "control_2", "treated_1"]` instead of the
@@ -356,11 +436,15 @@ class AlignMzSamples:
             names); settable only by hand-editing or scripting a config
             file.
         mz_decimals: Number of decimal places a feature's consensus m/z is
-            rounded to before being stored and displayed (e.g. `4` shows
-            `400.1234`). Mainly cosmetic — it does not change which peaks
-            get grouped together (that's `align_ppm`'s job) — but too few
-            decimals can make two genuinely different, close-mass features
+            rounded to before being stored and displayed.
+
+            Range: **0** and up. Default **4** (shows `400.1234`). Mainly
+            cosmetic — it does not change which peaks get grouped
+            together (that's `align_ppm`'s job) — but too few decimals
+            can make two genuinely different, close-mass features
             display as identical values in tables and plots.
+
+            **Interaction:** None.
     """
 
     align_ppm: float = 5.0
@@ -397,23 +481,38 @@ class TargetListConfig:
         paths: Path to one target-list CSV/TXT file, or a list of several,
             e.g. `"targets.csv"` or `["targets_a.csv", "targets_b.txt"]`.
             Required columns (case-insensitive): `name`, `formula`,
-            `inchikey` (may be blank per row). Leaving this `None` (the
-            default) or an empty list skips target-list matching entirely.
+            `inchikey` (may be blank per row).
+
+            **Interaction:** Leaving this `None` (the default) or an
+            empty list disables target-list matching entirely — every
+            other setting in this section is then unused.
         polarity: `"positive"` or `"negative"` — which of this run's ion
             mode `adducts` may be searched. Not auto-detected from the
             mzML; must be set explicitly, since the two adduct sets are
             physically incompatible with each other (a `"positive"` run
-            can never actually observe a negative-mode adduct).
+            can never actually observe a negative-mode adduct). Default
+            `"positive"`.
+
+            **Interaction:** Changing this clears any already-selected
+            `adducts` in the New Analysis form, since the two adduct
+            sets are disjoint.
         adducts: Which adduct labels to search, e.g. `["[M+H]+",
             "[M+Na]+"]` — every one must be valid for `polarity` (see
             `core.annotation.target_list.adducts_for_polarity`). `None`
             (the default) searches every standard adduct for `polarity`.
         match_ppm: How close (in ppm) a target compound's theoretical m/z
             must be to an existing feature's own m/z to attach to it,
-            rather than being injected as a new synthetic feature. A
-            separate tolerance from `align.align_ppm`/
-            `group_ms2.assoc_ppm`/`annotate.candidate_ppm` — see ADR 0005's
-            "one tolerance per distinct physical comparison" precedent.
+            rather than being injected as a new synthetic feature.
+
+            Range: **0** and up. Default **10.0**. Lower: fewer existing
+            features qualify, more targets get injected as new synthetic
+            features. Higher: more existing features qualify, at the
+            risk of attaching a target to an unrelated nearby feature.
+
+            **Interaction:** A separate tolerance from `align.align_ppm`/
+            `group_ms2.assoc_ppm`/`annotate.candidate_ppm` — see
+            ADR 0005's "one tolerance per distinct physical comparison"
+            precedent.
     """
 
     paths: str | list[str] | None = None
@@ -451,29 +550,49 @@ class GroupMs2Config:
 
     Attributes:
         assoc_ppm: How close (in ppm) an MS2 scan's precursor m/z must be
-            to a feature's m/z to be associated with it. Should be a bit
-            looser than `align.align_ppm` — e.g. if `align_ppm` is `5.0`,
-            something like `10.0` (the default) — because it has to cover
-            both the feature's own width across samples and the extra
-            imprecision of a single survey-scan precursor reading. A
-            warning is logged at run time if this ends up tighter than
-            `align.align_ppm`.
-        include_unmatched: When `True` (default), MS2 scans whose precursor
-            matched no feature at all are still kept in the database (with
-            a NULL feature id) instead of being silently dropped — useful
-            for auditing why a scan didn't associate. Set `False` to
-            discard them and keep the association table smaller.
+            to a feature's m/z to be associated with it.
+
+            Range: **0** and up. Default **10.0**. Should usually be a
+            bit looser than `align.align_ppm` (e.g. if `align_ppm` is
+            `5.0`, something like `10.0`) because it has to cover both
+            the feature's own width across samples and the extra
+            imprecision of a single survey-scan precursor reading.
+            Tighter: fewer scans associate, some real matches missed.
+            Looser: more scans associate, at the risk of attaching a
+            scan to the wrong nearby feature.
+
+            **Interaction:** A warning is logged at run time if this
+            ends up tighter than `align.align_ppm`.
+        include_unmatched: When `True`, MS2 scans whose precursor matched
+            no feature at all are still kept in the database (with a
+            NULL feature id) instead of being silently dropped — useful
+            for auditing why a scan didn't associate. Default `True`.
+
+            **Interaction:** Set `False` to discard unmatched scans and
+            keep the association table smaller; has no effect on scans
+            that did match a feature.
         default_isolation_half_width: Half-width, in Da, of the isolation
             window assumed around a scan's precursor when the raw file
             itself doesn't record isolation-window offsets. Only matters
-            for instruments/methods that omit this metadata; e.g. `0.5`
-            (the default) assumes a ±0.5 Da window.
+            for instruments/methods that omit this metadata.
+
+            Range: **0** and up. Default **0.5** (a +/-0.5 Da window).
+
+            **Interaction:** None.
         flat_fragmentation_min_peaks: Minimum number of surviving fragment
             peaks (after the `flat_fragmentation_min_rel_intensity` cutoff)
             a scan needs before the `flat_fragmentation` QC check even
-            runs. Below this, e.g. the default `3`, there simply aren't
-            enough peaks to compute a trustworthy coefficient of variation,
-            so the scan is left unflagged either way.
+            runs.
+
+            Range: **1** and up. Default **3**. Below this, there simply
+            aren't enough peaks to compute a trustworthy coefficient of
+            variation, so the scan is left unflagged either way. Lower:
+            the CV check runs on sparser spectra, less statistically
+            reliable. Higher: more sparse spectra get skipped from the
+            check entirely (left unflagged by default).
+
+            **Interaction:** Gates whether
+            `flat_fragmentation_cv_threshold` gets applied at all.
         flat_fragmentation_cv_threshold: A scan is flagged
             `flat_fragmentation` — likely noise or an isobaric
             co-isolation smear rather than a genuine fragmentation
@@ -501,10 +620,17 @@ class GroupMs2Config:
             dropped, so it stays visible for inspection/reporting.
         flat_fragmentation_min_rel_intensity: Peaks below this fraction of
             a scan's own base peak are dropped before both the peak count
-            and the coefficient of variation above are computed, e.g. the
-            default `0.01` drops anything under 1% of the scan's tallest
-            peak. Independent of `AnnotateConfig.noise_threshold` — this
-            check runs before annotation even starts.
+            and the coefficient of variation are computed.
+
+            Range: **0**-**1**. Default **0.01** (drops anything under
+            1% of the scan's tallest peak). Lower: keeps more small
+            peaks in the CV computation, more sensitive to noise. Higher:
+            drops more small peaks, coarser but more robust CV estimate.
+
+            **Interaction:** Independent of `AnnotateConfig.noise_threshold`
+            — this check runs before annotation even starts. Feeds
+            directly into `flat_fragmentation_min_peaks`/
+            `flat_fragmentation_cv_threshold`.
     """
 
     assoc_ppm: float = 10.0
@@ -562,27 +688,55 @@ class PurityConfig:
             unaffected — it's computed by `group_ms2` regardless of this
             setting.
         default_half_window_da: Half-width, in Da, of the isolation window
-            assumed when a scan's raw metadata doesn't record one. Default
-            `0.5` (a ±0.5 Da window).
+            assumed when a scan's raw metadata doesn't record one.
+
+            Range: **0** and up. Default **0.5** (a +/-0.5 Da window).
+
+            **Interaction:** None.
         precursor_confirm_ppm: Half-width, in ppm, of a band placed exactly
-            on the recorded `precursor_mz`, used to compute `purity_score
-            = I(that band) / I(whole isolation window)` — the fraction of
-            the window's above-baseline ion current that sits on the
-            precursor.
+            on the recorded `precursor_mz`, used to compute `purity_score`.
+
+            `purity_score = I(that band) / I(whole isolation window)` —
+            the fraction of the window's above-baseline ion current that
+            sits on the precursor.
+
+            Range: **0** and up. Default **25.0**. Narrower: a stricter
+            definition of "on the precursor" — `purity_score` reads
+            lower (more signal counted as elsewhere). Wider: a looser
+            definition — `purity_score` reads higher.
+
+            **Interaction:** Feeds directly into `purity_score`, and so
+            into `precursor_confirm_min_frac`/`annotate.min_purity_score`/
+            `consensus.min_purity_score`, all of which threshold it.
         precursor_confirm_min_frac: The `precursor_confirmed` flag is set
-            when `purity_score` (see above) is at least this value —
-            e.g. the default `0.01` only requires the precursor band to
-            carry 1%+ of the window's ion current, a deliberately lenient
-            bar (it's a sanity check that *some* signal is where it should
-            be, not a purity threshold — use `annotate.min_purity_score`/
-            `consensus.min_purity_score` elsewhere for that).
+            when `purity_score` (see above) is at least this value — a
+            deliberately lenient sanity check that *some* signal is where
+            it should be, not a purity threshold.
+
+            Range: **0**-**1**. Default **0.01** (only requires the
+            precursor band to carry 1%+ of the window's ion current).
+            Lower: nearly every scan gets confirmed. Higher: fewer scans
+            get confirmed, closer to a real purity bar.
+
+            **Interaction:** Not the same knob as `annotate.min_purity_score`/
+            `consensus.min_purity_score` — use those elsewhere for an
+            actual purity threshold; this only confirms the precursor
+            exists at all.
         precursor_snap_ppm: If the recorded precursor m/z isn't exactly on
             a real local intensity maximum in the parent MS1 (common with
             some instrument/converter combinations), snap it to the
             nearest one within this many ppm and store the result as
-            `precursor_mz_snapped` — a no-op when the recorded value is
-            already on a peak. Set to `0` to disable snapping entirely and
-            always trust the recorded value as-is. Default `15.0`.
+            `precursor_mz_snapped`.
+
+            Range: **0** and up. Default **15.0**. Set to **0** to
+            disable snapping entirely and always trust the recorded
+            value as-is. Narrower: only very close peaks get snapped to.
+            Wider: snaps to peaks further away, at the risk of jumping to
+            an unrelated nearby ion.
+
+            **Interaction:** A no-op when the recorded value is already
+            on a peak. Association itself is not re-run from the snapped
+            value — it's a refined value for downstream QC only.
         fragmentation_factor_mz_tol_da: Half-width, in Da, of the m/z
             window around a scan's recorded precursor mass that still
             counts as un-fragmented precursor, not a real fragment.
@@ -609,12 +763,16 @@ class PurityConfig:
             report-only threshold that decides how many scans count as
             "low fragmentation" in the summary.
         n_workers: How many samples to score in parallel, one worker
-            process per sample. `None` or `0` (the default is `None`) uses
-            `os.cpu_count()`; `1` forces a fully serial run (useful for
+            process per sample.
+
+            Range: `None`/**0** (the default, uses `os.cpu_count()`) or
+            **1** and up (**1** forces a fully serial run, useful for
             debugging). Automatically capped at the number of samples in
-            the run. Each worker holds one whole sample's scan index in
-            memory, so lower this if you're running low on RAM with many
-            large samples.
+            the run. Lower: less RAM used, slower. Higher: faster, more
+            RAM used — each worker holds one whole sample's scan index in
+            memory.
+
+            **Interaction:** None.
     """
 
     enabled: bool = True
@@ -659,78 +817,134 @@ class AnnotateConfig:
             fold in.
         noise_threshold: Before scoring, both the empirical scan and each
             library candidate are scaled so their tallest peak is `1.0`,
-            then any peak below this fraction of that is dropped as noise.
-            Example: the default `0.01` drops any peak under 1% of the
-            spectrum's own base peak. Raise it (e.g. `0.05`) to score only
-            on the strongest, most confident peaks; lower it (e.g.
-            `0.001`) to keep more small peaks, at the risk of scoring on
+            then any peak below this fraction of that is dropped as
             noise.
+
+            Range: **0**-**1**. Default **0.01** (drops any peak under
+            1% of the spectrum's own base peak). Lower (e.g. **0.001**):
+            keeps more small peaks, at the risk of scoring on noise.
+            Higher (e.g. **0.05**): scores only on the strongest, most
+            confident peaks.
+
+            **Interaction:** None.
         candidate_ppm: How close a library spectrum's precursor m/z must be
             to a feature's own m/z (in ppm) to even be considered a
             candidate for that feature, before any spectral scoring
-            happens. Wider (e.g. `20.0`) considers more candidates per
-            feature (slower, but won't miss a real match with an
-            unusually large calibration offset); narrower (e.g. `5.0`) is
-            faster and stricter.
+            happens.
+
+            Range: **0** and up. Default **10.0**. Narrower (e.g.
+            **5.0**): faster and stricter. Wider (e.g. **20.0**):
+            considers more candidates per feature (slower, but won't
+            miss a real match with an unusually large calibration
+            offset).
+
+            **Interaction:** None.
         fragment_ppm: How close two fragment peaks (one from the scan, one
             from the library candidate) must be, in ppm, to be counted as
             "the same peak" during scoring — the tolerance the reverse dot
             product itself uses when lining up the two spectra's peaks
             against each other.
+
+            Range: **0** and up. Default **10.0**. Narrower: stricter
+            peak matching, real matches with slight calibration drift
+            can be missed. Wider: more forgiving matching, at the risk
+            of pairing up two genuinely different fragments.
+
+            **Interaction:** None.
         mz_power: Exponent applied to each peak's m/z when weighting it in
             the dot product (the MSDial-style weighting scheme). Together
             with `int_power`, controls whether high-mass or high-intensity
-            peaks dominate the similarity score. Leave at the default
-            (`2.0`) unless you're deliberately reproducing a specific
-            published scoring convention that uses different exponents.
+            peaks dominate the similarity score.
+
+            Range: unbounded, typically **0**-**3**. Default **2.0**.
+            Leave at the default unless you're deliberately reproducing
+            a specific published scoring convention that uses different
+            exponents.
+
+            **Interaction:** Works together with `int_power` — both feed
+            the same weighted dot product.
         int_power: Exponent applied to each peak's intensity when weighting
-            it in the dot product — see `mz_power`. Default `0.5` (i.e.
-            weighting by the square root of intensity, which softens the
-            influence of one very tall peak dominating the whole score).
+            it in the dot product — see `mz_power`.
+
+            Range: unbounded, typically **0**-**2**. Default **0.5**
+            (weighting by the square root of intensity, which softens
+            the influence of one very tall peak dominating the whole
+            score).
+
+            **Interaction:** Works together with `mz_power` — see that
+            field.
         score_weight_dot: Exponent applied to the raw spectral-similarity
             score (`dot_product_score`) when it's combined with
             `lib_coverage`/`emp_coverage` into the final stored `score`
-            (see `spectral_match.reverse_dot_product`). Default `1.0`
-            (full weight).
+            (see `spectral_match.reverse_dot_product`).
+
+            Range: **0** and up. Default **1.0** (full weight). Lower:
+            the raw spectral shape matters less to the final score.
+            Higher: it dominates more.
+
+            **Interaction:** Combines with `score_weight_lib_coverage`/
+            `score_weight_emp_coverage` into the final `score` — see
+            `score_weight_emp_coverage`'s own note on the classic
+            formula these three reproduce at their defaults.
         score_weight_lib_coverage: Exponent applied to `lib_coverage` — the
             fraction of the *library* candidate's own peaks that were
-            actually matched in the scan. Default `0.5`.
+            actually matched in the scan.
+
+            Range: **0** and up. Default **0.5**.
+
+            **Interaction:** See `score_weight_emp_coverage`'s own note —
+            the three score-weight fields together reproduce the classic
+            `dot_product_score * sqrt(lib_coverage * emp_coverage)`
+            formula at their defaults.
         score_weight_emp_coverage: Exponent applied to `emp_coverage` — the
             fraction of the *empirical scan's* own peaks that were matched
-            in the library candidate. Default `0.5`. Together the three
-            defaults reproduce the classic `dot_product_score *
-            sqrt(lib_coverage * emp_coverage)` formula. Lower this
-            (down to `0` to drop the term entirely) if real
-            sample-background or matrix peaks that aren't in any library
-            are dragging down otherwise-good matches (you'd see a high dot
-            product and high library coverage, but low empirical
-            coverage, on those hits). Note: `dot_product_score`,
-            `lib_coverage`, `emp_coverage` and `coverage_score` are always
-            stored unweighted regardless of these settings, so a config
-            change here only shows up in `score` after a re-run.
+            in the library candidate.
+
+            Range: **0** and up. Default **0.5**. Together the three
+            score-weight defaults reproduce the classic
+            `dot_product_score * sqrt(lib_coverage * emp_coverage)`
+            formula. Lower this (down to **0** to drop the term
+            entirely) if real sample-background or matrix peaks that
+            aren't in any library are dragging down otherwise-good
+            matches (a high dot product and high library coverage, but
+            low empirical coverage, on those hits).
+
+            **Interaction:** `dot_product_score`, `lib_coverage`,
+            `emp_coverage` and `coverage_score` are always stored
+            unweighted regardless of these settings, so a config change
+            here only shows up in `score` after a re-run.
         min_matched_peaks: The minimum number of shared fragment peaks a
-            candidate must have with the scan to be stored at all, e.g. the
-            default `1` keeps any candidate sharing even a single peak.
-            Raise this (e.g. to `3`) to only keep candidates with
-            reasonably substantial spectral overlap, cutting down on
-            spurious single-peak "matches."
+            candidate must have with the scan to be stored at all.
+
+            Range: **1** and up. Default **1** (keeps any candidate
+            sharing even a single peak). Higher (e.g. **3**): only keeps
+            candidates with reasonably substantial spectral overlap,
+            cutting down on spurious single-peak "matches."
+
+            **Interaction:** None.
         representative_score_tolerance: When a feature has multiple
-            candidate rows within this many `score` points of the top one
-            (default `0.05`), the one with the most `n_matched_peaks`
-            becomes the feature's representative row (`rank_feature ==
-            1`) — the compound name shown for it everywhere (GUI
-            Annotations table, Visual Inspection's feature labels, the
-            report's "top features" list) — instead of automatically
-            whichever merely scored a hair higher. A real case this
-            addresses: a library entry with only 1 characteristic
-            fragment can score higher than a richer 3+-peak match from a
-            different library entry purely because it was matched in a
-            "cleaner" (fewer unrelated peaks) scan, not because it's a
-            more confident identification. Only changes *which row is
-            picked as representative* — `score` itself, and every other
-            row's rank, are untouched. Set to `0` to disable (plain
-            highest-`score`-wins, ties broken arbitrarily, the old
-            behavior).
+            candidate rows within this many `score` points of the top
+            one, the one with the most `n_matched_peaks` becomes the
+            feature's representative row (`rank_feature == 1`) — the
+            compound name shown for it everywhere (GUI Annotations
+            table, Visual Inspection's feature labels, the report's "top
+            features" list) — instead of automatically whichever merely
+            scored a hair higher.
+
+            Range: **0** and up. Default **0.05**. Set to **0** to
+            disable (plain highest-`score`-wins, ties broken arbitrarily,
+            the old behavior). Higher: more candidates get pulled into
+            the tie-break, favoring peak count over a marginal score
+            edge.
+
+            **Interaction:** Only changes *which row is picked as
+            representative* — `score` itself, and every other row's
+            rank, are untouched. A real case this addresses: a library
+            entry with only 1 characteristic fragment can score higher
+            than a richer 3+-peak match from a different library entry
+            purely because it was matched in a "cleaner" (fewer
+            unrelated peaks) scan, not because it's a more confident
+            identification.
         min_purity_score: When set, scans whose precursor purity
             (`purity_score` from the `purity` stage) is known and below
             this value are skipped entirely during library matching —
@@ -762,21 +976,34 @@ class AnnotateConfig:
             library candidate on every stored row, so a later mirror plot
             never needs to re-open the raw per-sample database or the
             library file itself (either of which can be on a slow or
-            unreliable network mount). The noise-filtered, normalised view
-            actually used for scoring is reconstructed on demand from these
-            raw arrays plus this run's own `noise_threshold` rather than
-            stored a second time (see ADR 0018) — it's fully derivable, so
-            storing both would just waste space. Set `False` only if
+            unreliable network mount). Default `True`.
+
+            **Interaction:** The noise-filtered, normalised view actually
+            used for scoring is reconstructed on demand from these raw
+            arrays plus this run's own `noise_threshold` rather than
+            stored a second time (see ADR 0018) — it's fully derivable,
+            so storing both would just waste space. Set `False` only if
             database size is a real concern and you don't need mirror
             plots for this run.
         batch_size: Number of features handed to each worker process at a
-            time. A pure performance/memory-chunking knob — it doesn't
+            time — a pure performance/memory-chunking knob, it doesn't
             change any result, only how work is split across processes.
+
+            Range: **1** and up. Default **200**. Lower: smaller chunks,
+            more scheduling overhead, finer-grained progress reporting.
+            Higher: larger chunks, less overhead, coarser progress
+            reporting.
+
+            **Interaction:** None.
         n_workers: Number of worker processes used for annotation.
-            `None` (the default) uses `os.cpu_count()` — every available
-            CPU core. Lower this on a shared machine, or if you're running
-            low on memory (each worker holds its own copy of the relevant
-            library data).
+
+            Range: `None` (the default, uses `os.cpu_count()` — every
+            available CPU core) or **1** and up. Lower: less RAM/CPU
+            used, slower. Higher: faster, more resource use — each
+            worker holds its own copy of the relevant library data.
+
+            **Interaction:** Lower this on a shared machine, or if
+            you're running low on memory.
     """
 
     library_path: str | list[str] | None = None
@@ -821,34 +1048,51 @@ class ConsensusConfig:
     stage).
 
     Attributes:
-        enabled: Run this stage. Default `True`; set `False` to skip it —
-            `feature_ms2_consensus` is then left empty and any GUI/report
-            view relying on "the best scan for this feature" has nothing
-            to show.
-        target_peaks: The peak-richness term is `peak_term = min(1,
-            n_peaks / target_peaks)` — `target_peaks` is the fragment-peak
-            count at which a scan gets *full credit* (`peak_term = 1.0`);
-            more peaks than that don't earn any extra bonus (capped at
-            1.0), and fewer scale down proportionally. Worked example at
-            the default `target_peaks = 10`: a scan with 10+ peaks scores
-            `peak_term = 1.0`, one with 5 peaks scores `0.5`, one with 2
-            peaks scores `0.2`. This multiplies straight into
-            `consensus_score`, so a sparse, few-peak scan is penalized in
-            the pick even if its library score or purity looked good —
-            raise `target_peaks` to weigh peak richness more heavily in
-            the pick; lower it if your data is naturally low-peak-count and
-            you don't want that to dominate over score/precursor purity.
+        enabled: Run this stage. When off, `feature_ms2_consensus` is
+            left empty and any GUI/report view relying on "the best scan
+            for this feature" has nothing to show. Default `True`.
+
+            **Interaction:** None.
+        target_peaks: The fragment-peak count at which a scan gets *full
+            credit* (`peak_term = 1.0`) in the peak-richness term of
+            `consensus_score`; more peaks than that don't earn any extra
+            bonus, and fewer scale down proportionally.
+
+            `peak_term = min(1, n_peaks / target_peaks)`
+
+            Range: **1** and up. Default **10** (a scan with 10+ peaks
+            scores `peak_term = 1.0`, one with 5 peaks scores `0.5`, one
+            with 2 peaks scores `0.2`). Lower: peak richness matters less
+            relative to score/purity — appropriate if your data is
+            naturally low-peak-count. Higher: peak richness weighs more
+            heavily in the pick.
+
+            **Interaction:** Multiplies straight into `consensus_score`,
+            so a sparse, few-peak scan is penalized in the pick even if
+            its library score or purity looked good.
         neutral_purity_score: Precursor-purity value substituted into the
             score for a scan the purity stage couldn't score (e.g.
-            `purity.enabled = False`). Default `0.5` — a neutral middle
-            value that neither rewards nor penalizes a scan just because
-            purity data is missing for it.
-        min_purity_score: When set (e.g. `0.5`), scans with a *known*
-            `purity_score` below this value are excluded from the pick
-            entirely — they still count toward that feature's `n_ms2`
-            total, they just can't be chosen as the representative scan.
-            `None` (the default) considers every scan regardless of
-            precursor purity.
+            `purity.enabled = False`) — a neutral middle value that
+            neither rewards nor penalizes a scan just because purity data
+            is missing for it.
+
+            Range: **0**-**1**. Default **0.5**. Lower: treats unscored
+            scans more like known-impure ones. Higher: treats unscored
+            scans more like known-pure ones.
+
+            **Interaction:** Only applies to scans with no known
+            `purity_score` — a scan with a real value always uses that
+            instead.
+        min_purity_score: When set, scans with a *known* `purity_score`
+            below this value are excluded from the pick entirely — they
+            still count toward that feature's `n_ms2` total, they just
+            can't be chosen as the representative scan.
+
+            Range: **0**-**1**, or `None` (the default) to consider every
+            scan regardless of precursor purity.
+
+            **Interaction:** A scan with no known `purity_score` is never
+            excluded by this — only `neutral_purity_score` affects it.
     """
 
     enabled: bool = True
@@ -871,29 +1115,44 @@ class ReportConfig:
     the analysis database by hand.
 
     Attributes:
-        enabled: Build the report. Default `True`; set `False` to skip it
-            on a quick/exploratory run where you don't need the HTML
-            summary.
+        enabled: Build the report. When off, skips the HTML/JSON summary
+            entirely — useful on a quick/exploratory run where you don't
+            need it. Default `True`.
+
+            **Interaction:** None.
         overlap_top_n: Maximum number of sample-combination bars drawn in
-            the feature-overlap UpSet plot, largest (most shared features)
-            first — e.g. the default `30` shows only the 30 largest
-            combinations, which keeps the plot readable when there are
-            many samples (a run with `n` samples has up to `2^n - 1`
-            possible combinations). Excess combinations are simply omitted
-            from the plot, not merged into an "other" bucket.
-        purity_score_cutoff: `purity_score` value (e.g. `0.8`, the default)
-            below which a scan counts as "low purity" for the report's
-            summary count, and where the reference line is drawn on the
-            purity-score histogram — purely a reporting/visualization
-            threshold, it does not affect `annotate.min_purity_score` or
+            the feature-overlap UpSet plot, largest (most shared
+            features) first.
+
+            Range: **1** and up. Default **30**. A run with `n` samples
+            has up to `2^n - 1` possible combinations; excess
+            combinations are simply omitted from the plot, not merged
+            into an "other" bucket. Lower: a smaller, more readable plot
+            on runs with many samples. Higher: shows more combinations,
+            can get crowded.
+
+            **Interaction:** None.
+        purity_score_cutoff: `purity_score` value below which a scan
+            counts as "low purity" for the report's summary count, and
+            where the reference line is drawn on the purity-score
+            histogram.
+
+            Range: **0**-**1**. Default **0.8**.
+
+            **Interaction:** Purely a reporting/visualization threshold —
+            it does not affect `annotate.min_purity_score` or
             `consensus.min_purity_score`, which are set independently.
-        fragmentation_factor_cutoff: `fragmentation_factor` value (e.g.
-            `0.2`, the default) below which a scan counts as "low
-            fragmentation" for the report's summary count — purely a
-            reporting/visualization threshold, same role as
-            `purity_score_cutoff` above but for the other precursor
-            signal (see `PurityConfig`'s own docstring for the
-            distinction between the two).
+        fragmentation_factor_cutoff: `fragmentation_factor` value below
+            which a scan counts as "low fragmentation" for the report's
+            summary count.
+
+            Range: **0**-**1**. Default **0.2**.
+
+            **Interaction:** Purely a reporting/visualization threshold,
+            same role as `purity_score_cutoff` above but for the other
+            precursor signal — see `PurityConfig`'s own docstring for the
+            distinction between the two. Does not affect any filtering
+            done during the actual run.
     """
 
     enabled: bool = True
@@ -915,25 +1174,41 @@ class H5adConfig:
     Attributes:
         integration_ppm: How wide a window (in ppm around each feature's
             m/z) to sum intensity over when quantifying that feature at
-            each pixel, e.g. the default `5.0` integrates ±5 ppm around the
-            feature's m/z at every pixel. Widening it tolerates more
-            per-pixel mass drift at the risk of picking up a neighboring
-            peak's signal; narrowing it is more mass-specific but can miss
-            signal on pixels with slightly larger drift.
+            each pixel.
+
+            Range: **0** and up. Default **5.0** (integrates +/-5 ppm
+            around the feature's m/z at every pixel). Narrower: more
+            mass-specific, but can miss signal on pixels with slightly
+            larger drift. Wider: tolerates more per-pixel mass drift, at
+            the risk of picking up a neighboring peak's signal.
+
+            **Interaction:** None.
         batch_size: Number of spectra processed per chunk while building
             the object — a memory/speed tuning knob only, doesn't affect
             the result.
-        scan_handling: `"average"` (default) uses the pixel's averaged MS1
-            spectrum (see `ms1`) when quantifying — smooths out per-scan
-            noise, the more robust choice for most data. `"first"` instead
-            uses only the first raw MS1 scan recorded at that pixel —
-            faster and closer to a single instantaneous reading, but
-            noisier; mainly useful when a pixel's averaged spectrum isn't
+
+            Range: **1** and up. Default **1000**. Lower: less peak
+            memory use, more chunking overhead. Higher: less overhead,
+            more peak memory use.
+
+            **Interaction:** None.
+        scan_handling: `"average"` uses the pixel's averaged MS1 spectrum
+            (see `ms1`) when quantifying — smooths out per-scan noise,
+            the more robust choice for most data. `"first"` instead uses
+            only the first raw MS1 scan recorded at that pixel — faster
+            and closer to a single instantaneous reading, but noisier;
+            mainly useful when a pixel's averaged spectrum isn't
             representative for some reason (e.g. only one real scan was
-            ever acquired there).
+            ever acquired there). Default `"average"`.
+
+            **Interaction:** None.
         n_workers: Number of parallel CPU worker processes used while
-            assembling the object. `None` (the default) uses
-            `os.cpu_count()` — every available core.
+            assembling the object.
+
+            Range: `None` (the default, uses `os.cpu_count()` — every
+            available core) or **1** and up.
+
+            **Interaction:** None.
     """
 
     integration_ppm: float = 5.0
@@ -953,11 +1228,13 @@ class AnalysisConfig:
 
     Attributes:
         db_name: File name for the analysis database, written inside
-            `io.out_dir`, e.g. `"my_analysis.db"`. When left `None` (the
-            default), a name is derived automatically from the run id as
-            `analysis_<run_id>.db` — usually fine to leave as-is unless you
-            specifically want a predictable, human-chosen filename (e.g.
-            for a script that always looks for the same path).
+            `io.out_dir`, e.g. `"my_analysis.db"`. When left `None`, a
+            name is derived automatically from the run id as
+            `analysis_<run_id>.db` — usually fine to leave as-is unless
+            you specifically want a predictable, human-chosen filename
+            (e.g. for a script that always looks for the same path).
+
+            **Interaction:** None.
     """
 
     db_name: str | None = None
@@ -985,13 +1262,17 @@ class NormalizationConfig:
     cross-sample analyses.
 
     Attributes:
-        enabled: Run this stage. Default `True`; set `False` to skip it
-            entirely — no `TIC` layer is added to the per-sample `.h5ad`
-            files (only the original `raw` intensities remain) and no
-            `merged.h5ad` is written. Turning this off is reasonable if TIC
-            normalization doesn't make sense for your acquisition method,
-            or simply to save the extra processing time/disk space when
-            you only need raw intensities.
+        enabled: Run this stage. When off, no `TIC` layer is added to the
+            per-sample `.h5ad` files (only the original `raw` intensities
+            remain) and no `merged.h5ad` is written. Turning this off is
+            reasonable if TIC normalization doesn't make sense for your
+            acquisition method, or simply to save the extra processing
+            time/disk space when you only need raw intensities. Default
+            `True`.
+
+            **Interaction:** Downstream views/exports (Visual Inspection's
+            TIC layer, Integration export's TIC option) have nothing to
+            show when this is off.
     """
 
     enabled: bool = True

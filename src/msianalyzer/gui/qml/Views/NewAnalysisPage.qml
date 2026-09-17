@@ -1367,6 +1367,11 @@ Page {
                 textFormat: Text.MarkdownText
                 wrapMode: Text.Wrap
                 text: fieldHelpDialog.helpBody
+                // A plain Text element doesn't pick up the app's palette
+                // the way Controls do — left unset this renders as Qt
+                // Quick's default black, unreadable against Theme's dark
+                // background.
+                color: Theme.textColor
             }
         }
     }
