@@ -15,6 +15,18 @@ jobs:
       - uses: pdm-project/setup-pdm@v4
         with:
           python-version: "3.13"
+          # Pinned to the PDM version pdm.lock was actually generated
+          # with. Left unpinned, this action installs whatever the
+          # latest PDM release is at run time; a later PDM release
+          # tightened lock-target matching (lockfile's recorded
+          # `requires_python = "==3.13"` vs. the runner's exact env
+          # tuple, e.g. `==3.13.15, manylinux_2_39_x86_64, cpython`)
+          # strictly enough to reject this repo's lockfile outright —
+          # confirmed locally: PDM 2.28.0 installs from it with zero
+          # complaints, a newer one (2.29.1+) doesn't. Bump this
+          # together with the next `pdm lock` regeneration, not
+          # independently.
+          version: "2.28.0"
           cache: true
 
       # The GUI's runtime deps (PySide6 + QtWebEngine) need real shared
