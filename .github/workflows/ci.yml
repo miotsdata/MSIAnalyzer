@@ -14,29 +14,15 @@ jobs:
 
       - uses: pdm-project/setup-pdm@v4
         with:
-          # Exact patch, not just "3.13" — pdm.lock's own lock target
-          # (`[[metadata.targets]] requires_python = "==3.13"`) is
-          # checked with *strict* PEP 440 equality against the running
-          # interpreter's full version, and "==3.13" only matches
-          # 3.13.0 (PEP 440 normalizes the missing patch segment to 0),
-          # not any later 3.13.x. That narrow target isn't a mistake in
-          # this repo's own pyproject.toml (`requires-python =
-          # ">=3.13,<3.14"`) — it's forced by libviz==0.1.3's own
-          # published metadata declaring `Requires-Python: ==3.13`
-          # (confirmed via `importlib.metadata`), which makes >=3.13,<3.14
-          # mathematically unresolvable as a lock target while depending
-          # on it. Left as generic "3.13", GitHub's runner image resolves
-          # to whatever the latest 3.13.x patch happens to be (3.13.15 at
-          # the time this broke) instead of 3.13.0, and pdm rejects the
-          # lockfile outright. Revisit once libviz publishes a release
-          # with a proper `requires-python` range (see the
-          # libviz-release-pending-yubikey memory) and this repo's own
-          # `pdm lock` is re-run against it.
-          python-version: "3.13.0"
-          # Also pinned, for the same "match exactly what pdm.lock was
-          # generated with" reason, unrelated to the above — an
-          # independent issue found (and ruled back out) while
-          # investigating this one.
+          # Back to generic "3.13" (not a pinned exact patch) — libviz
+          # 0.1.4 fixed its own overly-strict `requires-python == "3.13"`
+          # metadata (which used to force this repo's own pdm.lock target
+          # down to exactly Python 3.13.0 under strict PEP 440 equality,
+          # breaking on any later 3.13.x patch). See the
+          # libviz-release-pending-yubikey memory for the full history.
+          python-version: "3.13"
+          # Pinned to the PDM version pdm.lock was generated with, so a
+          # future PDM release can't silently start rejecting it again.
           version: "2.28.0"
           cache: true
 
