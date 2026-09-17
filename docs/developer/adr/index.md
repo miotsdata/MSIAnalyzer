@@ -53,3 +53,4 @@ useful).
 | [41](0041-export-menu-image.md) | Export menu: Image export | Accepted |
 | [42](0042-library-path-list-widget-and-cross-boundary-array-fix.md) | `library_path`: list+remove widget, and a Python→QML array bug | Accepted |
 | [43](0043-fragmentation-factor-purity-score-rename.md) | `fragmentation_factor`/`purity_score` rename; flat-fragmentation scans excluded from library matching | Accepted |
+| [44](0044-structured-markdown-field-help.md) | Structured Markdown field help, in a dedicated window | Accepted |

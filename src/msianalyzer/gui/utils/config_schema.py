@@ -72,6 +72,29 @@ def _prettify_label(name: str) -> str:
 _ATTR_LINE = re.compile(r"^(\w+):\s?(.*)$")
 
 
+def _join_paragraphs(lines: list[str]) -> str:
+    """Join one attribute's hand-wrapped docstring lines back into
+    Markdown source.
+
+    Consecutive non-blank lines unwrap into a single paragraph (joined
+    by a space, undoing the ~79-column hand-wrap a docstring is written
+    at); a blank line starts a new paragraph, rejoined with a blank line
+    of its own so `Text.MarkdownText` renders it as a real paragraph
+    break. This is what lets a field's help text be written as several
+    Markdown paragraphs (general description / formula / range /
+    interaction — see the `Config` dataclasses' own docstring convention)
+    and reach the GUI's help window with that structure intact, instead
+    of every line being flattened into one run-on sentence.
+    """
+    paragraphs: list[list[str]] = [[]]
+    for line in lines:
+        if line:
+            paragraphs[-1].append(line)
+        elif paragraphs[-1]:
+            paragraphs.append([])
+    return "\n\n".join(" ".join(p) for p in paragraphs if p).strip()
+
+
 def _parse_docstring(cls: type) -> tuple[str, dict[str, str]]:
     """Pull a one-paragraph summary and per-attribute help text out of a
     `Config` dataclass's Google-style docstring.
@@ -89,8 +112,11 @@ def _parse_docstring(cls: type) -> tuple[str, dict[str, str]]:
         `(summary, {field_name: help_text})`. `summary` is the first
         paragraph only (any further explanatory paragraphs before
         `Attributes:` are dropped — the GUI wants one descriptive
-        sentence, not the full docstring). Fields the docstring doesn't
-        mention are simply absent from the dict.
+        sentence, not the full docstring). Each attribute's text is
+        Markdown source (via `_join_paragraphs`) — a single paragraph for
+        an old-style one-paragraph entry, several for the structured
+        General/Formula/Range/Interaction convention. Fields the
+        docstring doesn't mention are simply absent from the dict.
     """
     doc = inspect.getdoc(cls) or ""
     before, _, after = doc.partition("Attributes:")
@@ -101,20 +127,18 @@ def _parse_docstring(cls: type) -> tuple[str, dict[str, str]]:
     current_name: str | None = None
     current_lines: list[str] = []
     for line in after.splitlines():
-        if not line.strip():
-            continue
         stripped = line.lstrip()
         indent = len(line) - len(stripped)
         match = _ATTR_LINE.match(stripped) if indent <= 4 else None
         if match:
             if current_name is not None:
-                attrs[current_name] = " ".join(current_lines).strip()
+                attrs[current_name] = _join_paragraphs(current_lines)
             current_name, first_line = match.group(1), match.group(2)
             current_lines = [first_line] if first_line else []
         elif current_name is not None:
             current_lines.append(stripped)
     if current_name is not None:
-        attrs[current_name] = " ".join(current_lines).strip()
+        attrs[current_name] = _join_paragraphs(current_lines)
     return summary, attrs
 
 

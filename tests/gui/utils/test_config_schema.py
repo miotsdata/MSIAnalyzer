@@ -145,6 +145,37 @@ def test_parse_docstring_extracts_first_paragraph_only_as_summary():
     assert attrs["bar"] == "Help text for bar, continued on a second line."
 
 
+def test_parse_docstring_preserves_blank_line_paragraph_breaks():
+    class Dummy:
+        """Summary.
+
+        Attributes:
+            foo: General description of foo.
+
+                `formula = a + b`
+
+                Range: **0**-**1**. Near **0**: does nothing. Near **1**:
+                does everything.
+
+                **Interaction:** None.
+            bar: Single-paragraph field, unaffected by the change.
+        """
+
+        foo: int
+        bar: int
+
+    _, attrs = _parse_docstring(Dummy)
+
+    assert attrs["foo"] == (
+        "General description of foo.\n\n"
+        "`formula = a + b`\n\n"
+        "Range: **0**-**1**. Near **0**: does nothing. Near **1**: "
+        "does everything.\n\n"
+        "**Interaction:** None."
+    )
+    assert attrs["bar"] == "Single-paragraph field, unaffected by the change."
+
+
 def test_parse_docstring_handles_missing_attributes_section():
     class Dummy:
         """Just a summary, no Attributes section."""

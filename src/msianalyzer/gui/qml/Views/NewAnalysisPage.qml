@@ -995,8 +995,8 @@ Page {
                             implicitWidth: 22
                             implicitHeight: 22
                             property string helpText: ConfigSchema.targetListSchema.fields.paths.help
-                            ToolTip.visible: hovered
-                            ToolTip.text: helpText
+                            onClicked: newAnalysisPage.openFieldHelp(
+                                ConfigSchema.targetListSchema.fields.paths.label, helpText)
 
                             HoverHandler {
                                 cursorShape: Qt.PointingHandCursor
@@ -1032,8 +1032,8 @@ Page {
                             implicitWidth: 22
                             implicitHeight: 22
                             property string helpText: ConfigSchema.targetListSchema.fields.polarity.help
-                            ToolTip.visible: hovered
-                            ToolTip.text: helpText
+                            onClicked: newAnalysisPage.openFieldHelp(
+                                ConfigSchema.targetListSchema.fields.polarity.label, helpText)
 
                             HoverHandler {
                                 cursorShape: Qt.PointingHandCursor
@@ -1106,8 +1106,8 @@ Page {
                             implicitWidth: 22
                             implicitHeight: 22
                             property string helpText: ConfigSchema.targetListSchema.fields.match_ppm.help
-                            ToolTip.visible: hovered
-                            ToolTip.text: helpText
+                            onClicked: newAnalysisPage.openFieldHelp(
+                                ConfigSchema.targetListSchema.fields.match_ppm.label, helpText)
 
                             HoverHandler {
                                 cursorShape: Qt.PointingHandCursor
@@ -1184,13 +1184,12 @@ Page {
                                     text: "?"
                                     implicitWidth: 22
                                     implicitHeight: 22
-                                    // Attached properties (ToolTip.*) aren't
-                                    // readable via QObject.property() from
-                                    // Python, so the text is also a plain
-                                    // property here for tests to read.
+                                    // Kept as a plain property (not just
+                                    // read off modelData at click time) so
+                                    // tests can still read it directly, as
+                                    // before.
                                     property string helpText: modelData.help
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: helpText
+                                    onClicked: newAnalysisPage.openFieldHelp(modelData.label, helpText)
 
                                     HoverHandler {
                                         cursorShape: Qt.PointingHandCursor
@@ -1327,6 +1326,48 @@ Page {
             for (var i = 0; i < selectedFiles.length; i++)
                 paths.push(Router.toLocalPath(selectedFiles[i]))
             targetListPathsField.text = paths.join("; ")
+        }
+    }
+
+    // A field's help text is Markdown (General description / Formula /
+    // Range / Interaction paragraphs — see the Config dataclasses' own
+    // docstring convention) with real paragraph breaks and **bold**/*em*
+    // markup, which a hover ToolTip can't render usefully. One shared,
+    // read-only dialog for every "?" button on this page — safe to share
+    // (unlike libraryPathDialog/targetListPathsDialog above, which write
+    // into a specific field) since opening it only ever displays whatever
+    // was passed in, never writes anywhere.
+    function openFieldHelp(title, body) {
+        fieldHelpDialog.helpTitle = title
+        fieldHelpDialog.helpBody = body
+        fieldHelpDialog.open()
+    }
+
+    Dialog {
+        id: fieldHelpDialog
+        objectName: "fieldHelpDialog"
+        modal: true
+        standardButtons: Dialog.Close
+        anchors.centerIn: parent
+        width: Math.min(520, newAnalysisPage.width - 80)
+        height: Math.min(420, newAnalysisPage.height - 80)
+
+        property string helpTitle: ""
+        property string helpBody: ""
+
+        title: helpTitle
+
+        ScrollView {
+            anchors.fill: parent
+            clip: true
+
+            Text {
+                objectName: "fieldHelpDialogText"
+                width: fieldHelpDialog.availableWidth
+                textFormat: Text.MarkdownText
+                wrapMode: Text.Wrap
+                text: fieldHelpDialog.helpBody
+            }
         }
     }
 }

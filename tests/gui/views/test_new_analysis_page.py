@@ -308,7 +308,7 @@ def test_field_label_is_prettified_not_the_raw_python_name(
     assert "Peak height threshold" in label_texts
 
 
-def test_field_help_button_tooltip_has_docstring_text(
+def test_field_help_button_has_docstring_text(
     new_analysis_view, project, find_visual_child
 ):
     _, root, _ = _make_page(new_analysis_view, project)
@@ -317,6 +317,66 @@ def test_field_help_button_tooltip_has_docstring_text(
     assert help_button is not None
     assert help_button.property("text") == "?"
     assert "median-absolute-deviation" in help_button.property("helpText")
+
+
+def test_field_help_button_click_opens_dialog_with_markdown_content(
+    new_analysis_view, project, find_visual_child, qtbot
+):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_peak_tab(view, root, find_visual_child, qtbot)
+
+    dialog = root.findChild(QObject, "fieldHelpDialog")
+    assert dialog.property("visible") is False
+
+    help_button = find_visual_child(root, "field_peak_filter_mad_help")
+    center = help_button.mapToScene(help_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert dialog.property("visible") is True
+    assert dialog.property("title") == "Filter MAD"
+    assert "median-absolute-deviation" in dialog.property("helpBody")
+
+
+def test_field_help_dialog_renders_markdown_text(new_analysis_view, project, find_visual_child, qtbot):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_annotate_tab(view, root, find_visual_child, qtbot)
+
+    help_button = find_visual_child(root, "field_annotate_min_purity_score_help")
+    center = help_button.mapToScene(help_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    # Dialog/Popup is a QQuickPopup, not a QQuickItem, so it's unreachable
+    # via find_visual_child's childItems()-walk — its own content (a
+    # plain, non-Repeater Text) is still a normal QObject.findChild hit
+    # from the page root, same as every non-Repeater lookup elsewhere.
+    # (textFormat itself isn't read here — PySide6 has no converter for
+    # the QQuickText::TextFormat enum on a bare .property() read — so this
+    # only confirms the Text exists and carries real Markdown source,
+    # paragraph breaks and bold markers included; the QML source is what
+    # actually pins textFormat: Text.MarkdownText so it renders as such.)
+    text_item = root.findChild(QObject, "fieldHelpDialogText")
+    assert text_item is not None
+    text = text_item.property("text")
+    assert "**Interaction:**" in text
+    assert "\n\n" in text
+
+
+def test_target_list_help_buttons_open_the_shared_help_dialog(
+    new_analysis_view, project, find_visual_child, qtbot
+):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_target_list_tab(view, root, find_visual_child, qtbot)
+
+    dialog = root.findChild(QObject, "fieldHelpDialog")
+    help_button = find_visual_child(root, "field_target_list_match_ppm_help")
+    center = help_button.mapToScene(help_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert dialog.property("visible") is True
+    assert "Match" in dialog.property("title") or "PPM" in dialog.property("title")
 
 
 def _open_peak_tab(view, root, find_visual_child, qtbot):

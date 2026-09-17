@@ -475,19 +475,29 @@ class GroupMs2Config:
             enough peaks to compute a trustworthy coefficient of variation,
             so the scan is left unflagged either way.
         flat_fragmentation_cv_threshold: A scan is flagged
-            `flat_fragmentation` — likely noise or an isobaric co-isolation
-            smear rather than a genuine fragmentation spectrum — when its
-            surviving peaks' coefficient of variation (`std(intensity) /
-            mean(intensity)`) is at or below this value, e.g. the default
-            `0.2`. Real CID/HCD fragmentation decays (one or a few
-            dominant fragments, several much smaller ones, so a *high*
-            CV); many peaks all at roughly the same height (a *low* CV)
-            looks more like chemical/electronic noise. Unlike every other
-            QC flag in this stage, this one *is* a filter: a scan flagged
-            `flat_fragmentation` is never scored against the library in
-            `annotate` (Stage B) — it isn't a real fragmentation pattern
-            to begin with, so a library match against it would be
-            meaningless — but it's still kept and flagged here, not
+            `flat_fragmentation` — likely noise or an isobaric
+            co-isolation smear rather than a genuine fragmentation
+            spectrum — when its surviving peaks' intensities are too
+            uniform. Real CID/HCD fragmentation decays (one or a few
+            dominant fragments, several much smaller ones — a *high*
+            CV); many peaks at roughly the same height (a *low* CV)
+            looks more like chemical/electronic noise.
+
+            `cv = std(intensity) / mean(intensity)` (a ratio, not a
+            percentage) — flagged when `cv <= flat_fragmentation_cv_threshold`.
+
+            Range: **0** and up (unbounded in principle; real spectra
+            rarely exceed ~2). Default **0.2**. Near **0**: only near-perfectly
+            flat spectra get flagged — very permissive, most real (and
+            some fake) fragmentation passes through unflagged. Higher
+            (e.g. **0.5**+): even mildly-uniform spectra get flagged —
+            more aggressive, risks catching real but low-dynamic-range
+            fragmentation too.
+
+            **Interaction:** Unlike every other QC flag in this stage,
+            this one *is* a hard filter — a flagged scan is never scored
+            against the library in `annotate` (Stage B), regardless of
+            any setting there. It's still kept and flagged here, not
             dropped, so it stays visible for inspection/reporting.
         flat_fragmentation_min_rel_intensity: Peaks below this fraction of
             a scan's own base peak are dropped before both the peak count
@@ -541,13 +551,16 @@ class PurityConfig:
     needs data Stage A already has in hand.
 
     Attributes:
-        enabled: Run this stage. Default `True`; set `False` to skip it
-            entirely (e.g. to save time on a quick preliminary run) — every
-            downstream `purity_score`/`precursor_confirmed` field then
-            stays NULL and `annotate.min_purity_score`/
-            `consensus.min_purity_score` become no-ops.
-            `fragmentation_factor` is unaffected (computed by `group_ms2`
-            regardless of this setting).
+        enabled: Run this stage. When off, every downstream
+            `purity_score`/`precursor_confirmed` field stays `NULL` for
+            every scan.
+
+            **Interaction:** When `False`,
+            `annotate.min_purity_score`/`consensus.min_purity_score`
+            become no-ops (nothing to filter on), and the report's
+            precursor-purity section is empty. `fragmentation_factor` is
+            unaffected — it's computed by `group_ms2` regardless of this
+            setting.
         default_half_window_da: Half-width, in Da, of the isolation window
             assumed when a scan's raw metadata doesn't record one. Default
             `0.5` (a ±0.5 Da window).
@@ -570,18 +583,31 @@ class PurityConfig:
             `precursor_mz_snapped` — a no-op when the recorded value is
             already on a peak. Set to `0` to disable snapping entirely and
             always trust the recorded value as-is. Default `15.0`.
-        fragmentation_factor_mz_tol_da: Half-width, in Da, of the "counts
-            as still on the precursor" band `fragmentation_factor` is
-            computed from (see above). Worked example: a scan whose
-            recorded precursor is `500.25` Da, with the default `2.0` Da
-            tolerance, treats `[498.25, 502.25]` as "on the precursor" —
-            a fragment peak at `501.9` falls inside that band (counts
-            toward the leftover-precursor signal), one at `495.0` does
-            not (counts as real fragment signal).
-            `fragmentation_factor` is `1.0` minus the fraction of the
-            scan's *total* intensity that falls inside this band — e.g.
-            if 15% of a scan's total ion current lands inside
-            `[498.25, 502.25]`, `fragmentation_factor = 0.85`.
+        fragmentation_factor_mz_tol_da: Half-width, in Da, of the m/z
+            window around a scan's recorded precursor mass that still
+            counts as un-fragmented precursor, not a real fragment.
+
+            `fragmentation_factor = 1.0 - (intensity within this window)
+            / (scan's total intensity)`. Worked example: precursor
+            `500.25` Da, default `2.0` Da tolerance -> window
+            `[498.25, 502.25]`; if 15% of the scan's total ion current
+            lands inside it, `fragmentation_factor = 0.85`.
+
+            Range: **0** and up (typically **0.5**-**5** Da; no hard
+            maximum). Near **0**: even the precursor's own isotope peaks
+            and small calibration drift fall outside the window —
+            leftover precursor signal gets undercounted, so
+            `fragmentation_factor` reads higher than it should. Higher
+            (e.g. **10**+ Da): genuinely small real fragments near the
+            precursor mass get folded into the "still precursor" bucket,
+            so `fragmentation_factor` reads lower than it should.
+
+            **Interaction:** Only changes how `fragmentation_factor` is
+            computed during grouping (`group_ms2`) — it does not gate
+            whether a scan is scored against the library.
+            `report.fragmentation_factor_cutoff` is the separate,
+            report-only threshold that decides how many scans count as
+            "low fragmentation" in the summary.
         n_workers: How many samples to score in parallel, one worker
             process per sample. `None` or `0` (the default is `None`) uses
             `os.cpu_count()`; `1` forces a fully serial run (useful for
@@ -624,9 +650,13 @@ class AnnotateConfig:
             `"libraries/positive_mode.db"` or
             `["lib_a.db", "lib_b.db"]`. Every library given is searched for
             candidates and results are pooled together before ranking, so a
-            scan's top hit can come from any of them. Leaving this `None`
-            (the default) or an empty list skips annotation entirely — no
-            library, nothing to match against.
+            scan's top hit can come from any of them.
+
+            **Interaction:** Leaving this `None` (the default) or an
+            empty list disables annotation (Stage B) entirely — every
+            other setting in this section is then unused, and
+            `consensus` (Stage A″) still runs but has no library score to
+            fold in.
         noise_threshold: Before scoring, both the empirical scan and each
             library candidate are scaled so their tallest peak is `1.0`,
             then any peak below this fraction of that is dropped as noise.
@@ -701,27 +731,32 @@ class AnnotateConfig:
             row's rank, are untouched. Set to `0` to disable (plain
             highest-`score`-wins, ties broken arbitrarily, the old
             behavior).
-        min_purity_score: When set (e.g. `0.5`), scans whose precursor
-            purity (`purity_score` from the `purity` stage) is known and
-            below this value are skipped entirely — not scored, not
-            stored. `None` (the default) annotates every scan regardless
-            of precursor purity; every stored row still carries that
-            scan's own `purity_score`/`precursor_confirmed` either way,
-            so you can filter on it later without needing to have set this
-            at run time. Every MS2 scan associated with a feature is
-            scored by default — there is no longer a way to skip scoring
-            based on how many *other* aligned features happen to share a
-            scan's isolation window (see ADR 0019): that count says
-            nothing about what actually co-fragmented into any one scan's
-            own spectrum, and over-flagged badly once a feature list grew
-            dense (a denser feature list, e.g. from a looser
-            `peak.filter_mad_nmads`, used to silently collapse the number
-            of scans ever scored). `purity_score` is the real, per-scan
-            signal to filter on instead. Scans flagged `flat_fragmentation`
-            (see `group_ms2`) are always skipped regardless of this
-            setting — that's a separate, unconditional filter (a flat/
-            noisy spectrum isn't a real fragmentation pattern, unlike a
-            merely-impure-but-real one).
+        min_purity_score: When set, scans whose precursor purity
+            (`purity_score` from the `purity` stage) is known and below
+            this value are skipped entirely during library matching —
+            not scored, not stored.
+
+            Skipped when `purity_score < min_purity_score`.
+
+            Range: **0**-**1** (matches `purity_score`'s own range), or
+            `None` (the default) to disable this filter entirely. Near
+            **0**: almost nothing gets filtered — only scans with
+            essentially no signal on the recorded precursor are dropped.
+            Near **1**: very strict — only near-perfectly pure isolation
+            windows survive, which can filter out a large fraction of
+            real scans on dense/matrix-heavy data.
+
+            **Interaction:** Every stored row still carries its own
+            `purity_score`/`precursor_confirmed` regardless of this
+            setting, so you can filter on it later without re-running.
+            Scans flagged `flat_fragmentation` (see `group_ms2`) are
+            always skipped too, independently of this — a separate,
+            unconditional filter (a flat/noisy spectrum isn't a real
+            fragmentation pattern, unlike a merely-impure-but-real one).
+            There is no longer a way to skip scoring based on how many
+            *other* aligned features happen to share a scan's isolation
+            window (see ADR 0019): that count said nothing about what
+            actually co-fragmented into any one scan's own spectrum.
         store_raw_spectra: Persist the untouched (pre-noise-filtering) m/z
             + intensity arrays of both the empirical scan and its matched
             library candidate on every stored row, so a later mirror plot
