@@ -195,9 +195,7 @@ def export_integration_tables(
                 )
         written += 1
 
-    logger.info(
-        "exported %d integration table(s) to %s", written, dest_folder
-    )
+    logger.info("exported %d integration table(s) to %s", written, dest_folder)
     return written
 
 
@@ -307,7 +305,5 @@ def export_visual_inspection_images(
         plt.close(fig)
         written += 1
 
-    logger.info(
-        "exported %d visual inspection image(s) to %s", written, dest_folder
-    )
+    logger.info("exported %d visual inspection image(s) to %s", written, dest_folder)
     return written
