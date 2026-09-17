@@ -1,4 +1,3 @@
-import argparse
 from .parse_args import build_parser
 from msianalyzer.core.utils.logging_utils import configure_logging
 import logging

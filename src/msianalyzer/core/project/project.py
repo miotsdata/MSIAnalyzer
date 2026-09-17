@@ -89,7 +89,7 @@ class Project:
         """Export to a .yml/.yaml or .toml file, format inferred from suffix."""
         data = self.to_dict()
 
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, sort_keys=False)
 
     @classmethod
@@ -115,7 +115,7 @@ class Project:
         if path.name == "" or yaml_path is None:
             raise ValueError("no file provided.")
 
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         if not isinstance(data, dict):

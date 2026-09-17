@@ -12,7 +12,7 @@ from PySide6.QtWebEngineQuick import QtWebEngineQuick
 from pathlib import Path
 import logging
 
-from msianalyzer.gui import resources_rc
+from msianalyzer.gui import resources_rc  # pylint: disable=unused-import  (registers qrc resources on import)
 from msianalyzer.gui.utils.application import Application  # noqa: F401  (registers qrc resources on import)
 from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
 from msianalyzer.gui.utils import single_instance

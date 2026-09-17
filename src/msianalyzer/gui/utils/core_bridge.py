@@ -3,7 +3,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, Signal
 
-from msianalyzer.core import project
 from msianalyzer.core.config import Config
 from msianalyzer.core.project.project import Project, create_project_folder
 from msianalyzer.core.run.run import RUN_STEPS, Run

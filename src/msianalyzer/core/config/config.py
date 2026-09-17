@@ -1457,7 +1457,7 @@ class Config:
         path = Path(path).resolve()
 
         if path.suffix.lower() in (".yml", ".yaml"):
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
 
         elif path.suffix.lower() == ".toml":
@@ -1514,7 +1514,7 @@ class Config:
         data = self.to_dict()
 
         if suffix in (".yml", ".yaml"):
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 yaml.safe_dump(data, f, sort_keys=False)
         elif suffix == ".toml":
             if tomli_w is None:

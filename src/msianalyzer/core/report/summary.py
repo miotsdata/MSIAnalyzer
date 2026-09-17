@@ -1084,7 +1084,6 @@ def annotation_summary(
             "FROM feature_ms2_consensus"
         ).fetchall()
 
-    lib_name = {r[0]: (r[1] or f"library {r[0]}") for r in libs}
     best_by_lib: dict[int, int] = {}
     best_scores: list[float] = []
     best_scan: dict[int, tuple] = {}
@@ -1565,7 +1564,7 @@ def figure_base_peak_intensity_per_sample(summary: BasePeakIntensitySummary) -> 
 
 def figure_annotation_yield(a: AnnotationSummary) -> go.Figure:
     """Donut: MS2-bearing features by best-hit confidence."""
-    lo, hi = a.cutoffs
+    _, hi = a.cutoffs
     m = a.n_ms2_bearing_features
     if m == 0:
         return _empty("MS2 annotation yield")

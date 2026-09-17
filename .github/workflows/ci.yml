@@ -52,6 +52,16 @@ jobs:
       - name: Install dependencies
         run: pdm install -G:all -d
 
+      # `site/` is gitignored (never committed) and only exists locally
+      # because a dev happens to have run this — a fresh CI checkout has
+      # no built docs at all. Router.openUserGuide() (Help > User Guide)
+      # resolves `site/index.html` on disk and correctly returns False
+      # when it's missing, which is exactly what
+      # test_open_user_guide_opens_local_built_docs exercises — so the
+      # suite needs a real build here, not a workaround in the test.
+      - name: Build docs
+        run: pdm run mkdocs build
+
       # Advisory only for now — no pyproject [tool.pylint] config exists
       # yet, so default pylint flags ~360 pre-existing findings (mostly
       # missing-docstring, which conflicts with this project's own "no
