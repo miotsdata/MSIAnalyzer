@@ -17,9 +17,15 @@ from msianalyzer.core.plotting import roi
 from msianalyzer.core.plotting.heatmap import category_color
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
 from msianalyzer.core.plotting.plotter import Plotter
+from msianalyzer.core.registration import (
+    attach_he_image,
+    fit_and_save_registration,
+    load_registration,
+)
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
 from msianalyzer.gui.utils.export_worker import ExportWorker
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
+from msianalyzer.gui.utils.he_image_provider import HEImageProvider
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
 from msianalyzer.gui.utils.table_query_worker import TableQueryWorker
@@ -171,6 +177,9 @@ class AnalysisBridge(QObject):
         # registers it with the engine (`engine.addImageProvider("heatmap",
         # application.analysis_bridge.heatmap_provider)`).
         self.heatmap_provider = HeatmapImageProvider()
+        # Same "own it here, main.py just registers it" reasoning as
+        # heatmap_provider above.
+        self.he_image_provider = HEImageProvider()
         # Plot HTML -> temp file -> `WebEngineView.url`, not `.loadHtml()`.
         # `loadHtml`/`setHtml` silently fail past Qt's documented ~2MB
         # limit (it's an IPC message, capped); a plot with the full
@@ -220,6 +229,13 @@ class AnalysisBridge(QObject):
         ever one active analysis workspace at a time).
         """
         self.heatmap_provider.setAnalysisDbPath(analysis_db_path)
+
+    @Slot(str)
+    def setHeImageAnalysis(self, analysis_db_path: str) -> None:
+        """Point the `image://he_image/...` provider at this analysis —
+        the H&E-coregistration analogue of `setHeatmapAnalysis`, called
+        from the same place (Visual Inspection's `onAnalysisChanged`)."""
+        self.he_image_provider.setAnalysisDbPath(analysis_db_path)
 
     @Slot(list, float, str, result=dict)
     def getFeatureValueRange(self, sample_names: list, mz: float, layer: str) -> dict:
@@ -1013,6 +1029,134 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         if analysis_db_path and Path(analysis_db_path).exists():
             catalog_removed = analysis_db.delete_roi_catalog_entry(analysis_db_path, name)
         return {"catalog_removed": catalog_removed, "samples_removed": removed_samples}
+
+    # -----------------------------------------------------------------
+    # H&E image coregistration (see core/registration/)
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _landmarks_to_rows(fit) -> list:
+        return [
+            {
+                "heX": lm.he_x, "heY": lm.he_y,
+                "gridX": lm.grid_x, "gridY": lm.grid_y,
+                "error": err,
+            }
+            for lm, err in zip(fit.landmarks, fit.reprojection_errors)
+        ]
+
+    @Slot(str, str, result=dict)
+    def getRegistrationInfo(self, analysis_db_path: str, sample_name: str) -> dict:
+        """One sample's attached H&E image and fitted registration, if
+        any — `CoregistrationWindow`'s state on open/sample-switch.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_name: Which sample's raw database to read (see
+                `analysis_db.get_sample_raw_db_path`).
+
+        Returns:
+            `{"hasImage": bool, "width", "height", "format", "hasFit":
+            bool, "transformType", "rmse", "landmarks": [{"heX", "heY",
+            "gridX", "gridY", "error"}, ...]}`. `hasImage`/`hasFit` are
+            both `False` (everything else at its zero value) if the
+            sample has no raw database, or no image has been attached yet.
+        """
+        empty = {
+            "hasImage": False, "width": 0, "height": 0, "format": "",
+            "hasFit": False, "transformType": "", "rmse": 0.0, "landmarks": [],
+        }
+        raw_db_path = analysis_db.get_sample_raw_db_path(analysis_db_path, sample_name)
+        if not raw_db_path:
+            return empty
+        info = load_registration(raw_db_path)
+        if info is None:
+            return empty
+        result = {
+            "hasImage": True,
+            "width": info.image.width,
+            "height": info.image.height,
+            "format": info.image.image_format,
+            "hasFit": info.fit is not None,
+            "transformType": info.fit.transform_type if info.fit else "",
+            "rmse": info.fit.rmse if info.fit else 0.0,
+            "landmarks": self._landmarks_to_rows(info.fit) if info.fit else [],
+        }
+        return result
+
+    @Slot(str, str, str, result=dict)
+    def attachHeImage(self, analysis_db_path: str, sample_name: str, image_path: str) -> dict:
+        """Attach (or replace) `sample_name`'s H&E/brightfield image —
+        `CoregistrationWindow`'s "Attach Image..." action.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_name: Which sample's raw database to attach the image
+                to (see `attach_he_image` — it lives there, not in this
+                analysis' own database or `.h5ad`, since it doesn't change
+                across re-analyses of the same sample).
+            image_path: A local PNG/JPEG/TIFF file path (already resolved
+                from a QML `FileDialog`'s `file://` URL via
+                `Router.toLocalPath`).
+
+        Returns:
+            `{"ok": True, "width", "height", "format"}` on success, or
+            `{"ok": False, "error": "<message>"}` (no raw database for
+            this sample, or an unreadable/unsupported image file).
+        """
+        raw_db_path = analysis_db.get_sample_raw_db_path(analysis_db_path, sample_name)
+        if not raw_db_path:
+            return {"ok": False, "error": f"Sample {sample_name!r} has no raw database."}
+        try:
+            attached = attach_he_image(raw_db_path, image_path)
+        except (ValueError, OSError) as e:
+            return {"ok": False, "error": str(e)}
+        return {
+            "ok": True,
+            "width": attached.width,
+            "height": attached.height,
+            "format": attached.image_format,
+        }
+
+    @Slot(str, str, list, str, result=dict)
+    def saveRegistration(
+        self, analysis_db_path: str, sample_name: str, landmarks: list, transform_type: str,
+    ) -> dict:
+        """Fit and save a registration from user-placed landmark pairs —
+        `CoregistrationWindow`'s "Fit & Save" action.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_name: Which sample's raw database to save into.
+            landmarks: `[{"heX", "heY", "gridX", "gridY"}, ...]` — see
+                `fit_and_save_registration` for the point-pair semantics
+                and minimum count per `transform_type`.
+            transform_type: `"affine"` or `"similarity"`.
+
+        Returns:
+            `{"ok": True, "rmse": float, "landmarks": [{"heX", "heY",
+            "gridX", "gridY", "error"}, ...]}` on success, or
+            `{"ok": False, "error": "<message>"}` (no raw database, no
+            image attached yet, too few landmarks, or an unknown
+            `transform_type`).
+        """
+        raw_db_path = analysis_db.get_sample_raw_db_path(analysis_db_path, sample_name)
+        if not raw_db_path:
+            return {"ok": False, "error": f"Sample {sample_name!r} has no raw database."}
+        info = load_registration(raw_db_path)
+        if info is None:
+            return {"ok": False, "error": "No image attached to this sample yet."}
+
+        point_pairs = [
+            ((lm["heX"], lm["heY"]), (lm["gridX"], lm["gridY"])) for lm in landmarks
+        ]
+        try:
+            fit = fit_and_save_registration(
+                raw_db_path, info.image.image_id, point_pairs, transform_type,
+            )
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "rmse": fit.rmse, "landmarks": self._landmarks_to_rows(fit)}
 
     # -----------------------------------------------------------------
     # Export menu

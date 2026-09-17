@@ -59,6 +59,7 @@ def build_engine(
     context.setContextProperty("CoreBridge", application.core_bridge)
     context.setContextProperty("AnalysisBridge", application.analysis_bridge)
     engine.addImageProvider("heatmap", application.analysis_bridge.heatmap_provider)
+    engine.addImageProvider("he_image", application.analysis_bridge.he_image_provider)
     # Static schema metadata, not app state — see config_schema.py.
     config_schema_provider = ConfigSchemaProvider(engine)
     context.setContextProperty("ConfigSchema", config_schema_provider)

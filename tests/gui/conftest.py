@@ -357,6 +357,9 @@ def analysis_view(application):
         view.engine().addImageProvider(
             "heatmap", application.analysis_bridge.heatmap_provider
         )
+        view.engine().addImageProvider(
+            "he_image", application.analysis_bridge.he_image_provider
+        )
         view.setInitialProperties({"analysis": analysis_model})
         view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
         view.setSource(QUrl("qrc:/Views/AnalysisPage.qml"))

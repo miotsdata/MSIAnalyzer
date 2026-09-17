@@ -34,6 +34,7 @@ Item {
     onAnalysisChanged: {
         if (analysis && analysis.analysisDbPath) {
             AnalysisBridge.setHeatmapAnalysis(analysis.analysisDbPath)
+            AnalysisBridge.setHeImageAnalysis(analysis.analysisDbPath)
             controls.refresh()
             visualSection.refreshSampleRois()
         }
@@ -138,6 +139,23 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            Button {
+                id: openCoregistrationButton
+                objectName: "openCoregistrationButton"
+                text: "Coregister H&E Image"
+                onClicked: {
+                    coregistrationWindowLoader.active = true
+                    var win = coregistrationWindowLoader.item
+                    // Same reasoning as "Draw ROI" above: one window
+                    // reused across clicks, sharing this page's already-
+                    // selected feature/obs/colormap for its MSI-side pane.
+                    win.openFor(visualSection.analysis, visualSection.samples, controls)
+                }
+                HoverHandler {
+                    objectName: "openCoregistrationButtonHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
             Item { Layout.fillWidth: true }
         }
 
@@ -164,6 +182,19 @@ Item {
                 item.visibleChanged.connect(function () {
                     if (!item.visible) visualSection.refreshSampleRois()
                 })
+            }
+        }
+
+        // Same lazy-Loader-plus-openFor pattern as roiDesignWindowLoader
+        // above (see its own comment, and
+        // developer/architecture/gui.md's "Singleton popup windows"
+        // section) — one window reused across clicks.
+        Loader {
+            id: coregistrationWindowLoader
+            objectName: "coregistrationWindowLoader"
+            active: false
+            sourceComponent: CoregistrationWindow {
+                objectName: "coregistrationWindow"
             }
         }
 

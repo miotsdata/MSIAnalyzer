@@ -20,6 +20,7 @@ msianalyzer/gui/
     core_bridge.py           CoreBridge      — create/load project, run analysis (QThread via run_worker)
     analysis_bridge.py       AnalysisBridge  — read-only queries against one analysis DB, for QML
     heatmap_provider.py      HeatmapImageProvider — image://heatmap/... raster tiles for Visual Inspection
+    he_image_provider.py     HEImageProvider — image://he_image/... one sample's attached H&E image
     run_worker.py            QThread wrapper around Run, for the CoreBridge
     config_schema.py         drives the New Analysis page's generated config form
     formatting.py            shared display formatters (e.g. minute-precision dates)
@@ -110,10 +111,39 @@ recursing into a live `WebEngineView`'s child tree while searching for an
 unrelated item's children is unsafe (can crash `getWrapperForQObject`) —
 scope any recursive `childItems()` search to the smallest relevant subtree.
 
+`HEImageProvider` (`image://he_image/...`) is the same shape as
+`HeatmapImageProvider` but simpler: it just reads one sample's attached
+H&E/brightfield image file straight off disk (see
+`core/registration/image_registration.py`) and wraps it in a `QImage`, no
+rendering options, no cache (an H&E image is requested once per sample per
+`CoregistrationWindow` open/re-attach, not on every colormap/vmin/vmax
+tweak the way a heatmap tile is). Its request id is `sampleName|revision`,
+`revision` being a pure QML-side cache-buster bumped after a successful
+attach — see `CoregistrationWindow.qml`'s `heImageRevision`.
+
+**Gotcha: a `ZoomableImage` whose `Image` fails/hasn't loaded blocks
+input on the whole pane.** `ZoomableImage.qml`'s inner `Image` element
+used to size itself as `sourceSize.width/height * effectiveScale`, which
+is `(0, 0)` whenever `status !== Image.Ready` (empty `source`, still
+loading, or a failed provider request). An `Image` collapsed to exactly
+`0x0` was found (via a minimal reproduction outside this app) to silently
+swallow every tap/click anywhere in the enclosing `Flickable` — not just
+on the image itself — for every `PointerHandler` declared inside it, even
+though the `Flickable`'s own width/height stay nonzero. Every existing
+caller (Visual Inspection's heatmap tiles, ROI Design) always has a real
+image behind the pane a user can actually click on, so this went
+unnoticed until `CoregistrationWindow` — the first caller with a
+legitimate reason to be interactive before its image has resolved (an
+unattached H&E image, or before the MSI-side feature/obs selection has
+settled). Fixed by falling back to filling the viewport
+(`root.width`/`root.height`) instead of `0x0` when not `Ready` — see
+[ADR 46](../adr/0046-he-coregistration-phase2-gui-and-zoomableimage-fix.md).
+
 ## Singleton popup windows: `Loader` + `showFor()`/`openFor()`
 
-`MirrorPlotDetailWindow` and `RoiDesignWindow` (both top-level `Window`s,
-opened from a button click) are each held by a lazy `Loader` with
+`MirrorPlotDetailWindow`, `RoiDesignWindow`, and `CoregistrationWindow`
+(all top-level `Window`s, opened from a button click) are each held by a
+lazy `Loader` with
 `active: false` initially — the first click sets `active = true`, every
 click after that reuses the same `Loader.item` instead of constructing a
 new window. This matters beyond tidiness: enough accumulated top-level

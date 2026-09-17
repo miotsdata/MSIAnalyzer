@@ -14,6 +14,7 @@ from msianalyzer.core.analysis_db import (
     attach_raw,
     delete_roi_catalog_entry,
     find_nearest_feature,
+    get_sample_raw_db_path,
     init_analysis_db,
     is_command_already_run,
     load_feature_categories,
@@ -757,6 +758,29 @@ def test_load_samples_empty_db(tmp_path: Path):
     init_analysis_db(db).close()
 
     assert load_samples(db).empty
+
+
+def test_get_sample_raw_db_path_returns_stored_path(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    raw_db_path = tmp_path / "s1.db"
+    register_sample(db, name="s1", raw_db_path=raw_db_path)
+
+    assert get_sample_raw_db_path(db, "s1") == str(raw_db_path)
+
+
+def test_get_sample_raw_db_path_none_for_unknown_sample(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert get_sample_raw_db_path(db, "nope") is None
+
+
+def test_get_sample_raw_db_path_none_when_samples_table_missing(tmp_path: Path):
+    db = tmp_path / "empty.db"
+    db.touch()
+
+    assert get_sample_raw_db_path(db, "s1") is None
 
 
 # ---------------------------------------------------------------------------

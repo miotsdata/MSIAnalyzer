@@ -26,6 +26,8 @@
         <file>Views/RoiOverlay.qml</file>
         <file>Views/RoiDrawingCanvas.qml</file>
         <file>Views/RoiDesignWindow.qml</file>
+        <file>Views/LandmarkOverlay.qml</file>
+        <file>Views/CoregistrationWindow.qml</file>
         <file>Utils/SearchQuery.js</file>
     </qresource>
 </RCC>

@@ -88,6 +88,36 @@ Primary key `(pixel_id, scan_id)`. `map_pixels_to_db` also creates
 serve a lookup by `scan_id`, which downstream stages need. Databases parsed
 before this index existed pick it up on the next `map_pixels_to_db` run.
 
+### `registered_images` / `image_registrations` / `registration_landmarks`  (written by `core/registration/`, see [ADR 45](../adr/0045-he-image-coregistration-phase1.md)/[46](../adr/0046-he-coregistration-phase2-gui-and-zoomableimage-fix.md))
+
+H&E/brightfield image coregistration lives here, in the RAW database, not
+in any per-analysis `.h5ad` — the pixel grid a registration is fitted
+against is fixed at parse time and identical across every re-analysis of
+the sample, so one registration effort covers every analysis run against
+it. At most one attached image (and its registration) exists per sample:
+re-attaching replaces the previous image file and every row below.
+
+| table | column | type | notes |
+|---|---|---|---|
+| `registered_images` | `image_id` | INTEGER | PK, autoincrement |
+| | `filename` | TEXT | relative to `<raw db's folder>/images/` |
+| | `image_format` | TEXT | `PNG`/`JPEG`/`TIFF` |
+| | `width`, `height` | INTEGER | |
+| | `attached_at` | TEXT | ISO 8601 |
+| `image_registrations` | `image_id` | INTEGER | PK, FK → `registered_images` |
+| | `transform_type` | TEXT | `"affine"` or `"similarity"` |
+| | `matrix` | TEXT | JSON `[[a,b,c],[d,e,f]]`, H&E px → MSI grid-index |
+| | `fitted_at` | TEXT | ISO 8601 |
+| `registration_landmarks` | `landmark_id` | INTEGER | PK, autoincrement |
+| | `image_id` | INTEGER | FK → `registered_images` |
+| | `he_x`, `he_y` | REAL | H&E pixel coordinates |
+| | `grid_x`, `grid_y` | REAL | MSI pixel-grid-index coordinates |
+| | `reproj_error` | REAL | Euclidean distance, fitted matrix applied to `(he_x, he_y)` vs. `(grid_x, grid_y)` |
+
+Raw landmark pairs are kept (not just the fitted matrix) so switching
+`transform_type` later is a re-fit, not a redo of manual landmark
+placement.
+
 ---
 
 ## Analysis database — `analysis_<run-id>.db`

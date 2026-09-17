@@ -1441,6 +1441,31 @@ def load_samples(db_path: Path | str) -> pd.DataFrame:
 
 
 @log_call(source="db_path")
+def get_sample_raw_db_path(db_path: Path | str, sample_name: str) -> str | None:
+    """One sample's `raw_db_path` — how GUI code that needs the RAW
+    per-sample database (e.g. H&E image coregistration, see
+    `core/registration/`) gets there from an analysis DB + sample name,
+    the same two values every other `AnalysisBridge` slot already takes.
+
+    Args:
+        db_path: The analysis' SQLite database.
+        sample_name: `samples.name` to look up.
+
+    Returns:
+        The stored raw database path, or `None` if no sample named
+        `sample_name` exists (or the `samples` table doesn't exist yet).
+    """
+    with connect(db_path) as con:
+        try:
+            row = con.execute(
+                "SELECT raw_db_path FROM samples WHERE name = ?", (sample_name,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    return row[0] if row else None
+
+
+@log_call(source="db_path")
 def find_nearest_feature(db_path: Path | str, mz: float) -> dict | None:
     """The feature whose consensus m/z is closest to `mz`.
 

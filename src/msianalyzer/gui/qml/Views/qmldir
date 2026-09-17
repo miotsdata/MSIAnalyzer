@@ -19,3 +19,5 @@ HeatmapControlsPanel 1.0 HeatmapControlsPanel.qml
 RoiOverlay 1.0 RoiOverlay.qml
 RoiDrawingCanvas 1.0 RoiDrawingCanvas.qml
 RoiDesignWindow 1.0 RoiDesignWindow.qml
+LandmarkOverlay 1.0 LandmarkOverlay.qml
+CoregistrationWindow 1.0 CoregistrationWindow.qml

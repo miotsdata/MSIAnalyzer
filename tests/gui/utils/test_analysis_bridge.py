@@ -3,6 +3,7 @@ from pathlib import Path
 
 import anndata as ad
 import pandas as pd
+import pytest
 from PySide6.QtCore import QUrl
 from scipy.sparse import csr_matrix
 
@@ -1267,6 +1268,134 @@ def test_next_roi_color_missing_db_returns_first_palette_color(tmp_path):
 
     bridge = AnalysisBridge()
     assert bridge.nextRoiColor(str(tmp_path / "nope.db")) == category_color(0)
+
+
+# ---------------------------------------------------------------------------
+# H&E image coregistration (attachHeImage / getRegistrationInfo / saveRegistration)
+# ---------------------------------------------------------------------------
+
+
+def _make_he_png(path, size=(20, 10)):
+    from PIL import Image as PILImage
+
+    width, height = size
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    PILImage.fromarray(arr).save(path, format="PNG")
+
+
+def _seed_coreg_sample(tmp_path, sample_name="s1"):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    raw_db_path = tmp_path / f"{sample_name}.db"
+    register_sample(db_path, name=sample_name, raw_db_path=raw_db_path)
+    return db_path, raw_db_path
+
+
+_COREG_LANDMARKS = [
+    {"heX": 0.0, "heY": 0.0, "gridX": 0.0, "gridY": 0.0},
+    {"heX": 10.0, "heY": 0.0, "gridX": 5.0, "gridY": 0.0},
+    {"heX": 0.0, "heY": 10.0, "gridX": 0.0, "gridY": 5.0},
+]
+
+
+def test_get_registration_info_empty_for_sample_without_raw_db(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    info = bridge.getRegistrationInfo(str(db_path), "nope")
+
+    assert info["hasImage"] is False
+    assert info["hasFit"] is False
+    assert info["landmarks"] == []
+
+
+def test_attach_he_image_missing_sample_returns_error(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    image_path = tmp_path / "slide.png"
+    _make_he_png(image_path)
+
+    bridge = AnalysisBridge()
+    result = bridge.attachHeImage(str(db_path), "nope", str(image_path))
+
+    assert result["ok"] is False
+
+
+def test_attach_he_image_success_reflected_in_registration_info(tmp_path):
+    db_path, _raw_db_path = _seed_coreg_sample(tmp_path)
+    image_path = tmp_path / "slide.png"
+    _make_he_png(image_path, size=(20, 10))
+
+    bridge = AnalysisBridge()
+    result = bridge.attachHeImage(str(db_path), "s1", str(image_path))
+
+    assert result["ok"] is True
+    assert result["width"] == 20
+    assert result["height"] == 10
+    assert result["format"] == "PNG"
+
+    info = bridge.getRegistrationInfo(str(db_path), "s1")
+    assert info["hasImage"] is True
+    assert info["hasFit"] is False
+    assert info["width"] == 20
+    assert info["height"] == 10
+
+
+def test_attach_he_image_rejects_unsupported_format(tmp_path):
+    db_path, _raw_db_path = _seed_coreg_sample(tmp_path)
+    image_path = tmp_path / "slide.bmp"
+    from PIL import Image as PILImage
+
+    PILImage.fromarray(np.zeros((5, 5, 3), dtype=np.uint8)).save(image_path, format="BMP")
+
+    bridge = AnalysisBridge()
+    result = bridge.attachHeImage(str(db_path), "s1", str(image_path))
+
+    assert result["ok"] is False
+    assert "unsupported" in result["error"]
+
+
+def test_save_registration_round_trips_through_registration_info(tmp_path):
+    db_path, _raw_db_path = _seed_coreg_sample(tmp_path)
+    image_path = tmp_path / "slide.png"
+    _make_he_png(image_path)
+
+    bridge = AnalysisBridge()
+    bridge.attachHeImage(str(db_path), "s1", str(image_path))
+
+    result = bridge.saveRegistration(str(db_path), "s1", _COREG_LANDMARKS, "affine")
+
+    assert result["ok"] is True
+    assert result["rmse"] == pytest.approx(0.0, abs=1e-6)
+    assert len(result["landmarks"]) == 3
+
+    info = bridge.getRegistrationInfo(str(db_path), "s1")
+    assert info["hasFit"] is True
+    assert info["transformType"] == "affine"
+    assert len(info["landmarks"]) == 3
+
+
+def test_save_registration_without_attached_image_returns_error(tmp_path):
+    db_path, _raw_db_path = _seed_coreg_sample(tmp_path)
+
+    bridge = AnalysisBridge()
+    result = bridge.saveRegistration(str(db_path), "s1", _COREG_LANDMARKS, "affine")
+
+    assert result["ok"] is False
+
+
+def test_save_registration_rejects_too_few_landmarks(tmp_path):
+    db_path, _raw_db_path = _seed_coreg_sample(tmp_path)
+    image_path = tmp_path / "slide.png"
+    _make_he_png(image_path)
+
+    bridge = AnalysisBridge()
+    bridge.attachHeImage(str(db_path), "s1", str(image_path))
+
+    result = bridge.saveRegistration(str(db_path), "s1", _COREG_LANDMARKS[:2], "affine")
+
+    assert result["ok"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -55,3 +55,4 @@ useful).
 | [43](0043-fragmentation-factor-purity-score-rename.md) | `fragmentation_factor`/`purity_score` rename; flat-fragmentation scans excluded from library matching | Accepted |
 | [44](0044-structured-markdown-field-help.md) | Structured Markdown field help, in a dedicated window | Accepted |
 | [45](0045-he-image-coregistration-phase1.md) | H&E/brightfield image coregistration, Phase 1: raw-DB storage + landmark fit | Accepted |
+| [46](0046-he-coregistration-phase2-gui-and-zoomableimage-fix.md) | H&E coregistration Phase 2: `CoregistrationWindow` GUI, and a `ZoomableImage` input bug found along the way | Accepted |

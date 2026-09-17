@@ -42,8 +42,22 @@ Flickable {
     Image {
         id: image
         objectName: "zoomableImageContent"
-        width: sourceSize.width * root.effectiveScale
-        height: sourceSize.height * root.effectiveScale
+        // Falls back to filling the viewport when there's no real source
+        // size yet (source is "", still loading, or failed — status !==
+        // Ready) rather than collapsing to 0x0: an image element sized
+        // exactly 0x0 was found to silently swallow every tap/click
+        // anywhere in this Flickable — not just on the image itself —
+        // for every PointerHandler declared inside it (confirmed with a
+        // minimal reproduction outside this app: a sibling TapHandler
+        // stops firing the moment this Image's own size hits (0, 0), even
+        // though the enclosing Flickable's own width/height stay
+        // nonzero). Previously unnoticed because every existing caller
+        // (Visual Inspection's heatmap tiles, ROI Design) always has a
+        // real image by the time a user can click — CoregistrationWindow
+        // is the first caller that can legitimately open with a pane
+        // whose image hasn't resolved yet.
+        width: image.status === Image.Ready ? sourceSize.width * root.effectiveScale : root.width
+        height: image.status === Image.Ready ? sourceSize.height * root.effectiveScale : root.height
         // Centered when smaller than the viewport (contentWidth/Height
         // floor at the viewport size) rather than stuck in the top-left
         // corner with blank space around it.
