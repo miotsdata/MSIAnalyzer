@@ -23,13 +23,16 @@ Design (see ADR 0007):
   ``rank_feature_sample`` then rank the feature's rows outright (``1`` = its
   single best hit), and ``rank_scan_feature`` /
   ``rank_scan_feature_sample`` rank its *scans* by their best hit.
-* **Every associated MS2 scan is scored, unconditionally.** There is no
-  longer a "chimeric" gate keyed on how many *other* aligned features
-  happen to share a scan's isolation window — that count says nothing
-  about what actually co-fragmented into any one scan's own spectrum, and
-  over-flagged badly once a feature list grew dense (see ADR 0019).
-  ``min_precursor_frac`` is the real, per-scan signal to filter on instead,
-  if you want to skip scoring scans with poor precursor purity.
+* **Every associated MS2 scan is scored, except a scan flagged
+  ``flat_fragmentation``** (always skipped — a flat/noisy spectrum isn't a
+  real fragmentation pattern to begin with, so a library match against it
+  is never meaningful). There is no longer a "chimeric" gate keyed on how
+  many *other* aligned features happen to share a scan's isolation window
+  — that count says nothing about what actually co-fragmented into any
+  one scan's own spectrum, and over-flagged badly once a feature list grew
+  dense (see ADR 0019). ``min_purity_score`` is the real, per-scan signal
+  to filter on instead, if you want to also skip scoring scans with poor
+  precursor purity.
 * **Raw spectra, not filtered ones.** The *untouched* empirical and
   library peak lists — not the noise-filtered/max-normalised copies
   actually scored — are persisted on every row (``store_raw_spectra``),
@@ -164,7 +167,7 @@ class AnnotationRow:
     n_lib_peaks: int
     n_emp_peaks_raw: int
     n_emp_peaks_filtered: int
-    precursor_only: bool
+    fragmentation_factor: float | None
     flat_fragmentation: bool
     # The untouched (pre-noise-filtering) spectra on both sides — not the
     # filtered/normalised copies. `spectral_match.normalize_and_filter_spectrum`
@@ -184,7 +187,7 @@ class AnnotationRow:
     rank_scan_feature: int | None = None
     rank_scan_feature_sample: int | None = None
     precursor_confirmed: bool | None = None
-    precursor_frac: float | None = None
+    purity_score: float | None = None
     # See Candidate's own fields of the same name — carried straight
     # through from the matched candidate, best-effort.
     adduct: str | None = None
@@ -421,10 +424,10 @@ def _row_from_match(
         n_lib_peaks=m.n_lib_peaks,
         n_emp_peaks_raw=m.n_emp_peaks_raw,
         n_emp_peaks_filtered=m.n_emp_peaks_filtered,
-        precursor_only=bool(scan.get("precursor_only")),
+        fragmentation_factor=scan.get("fragmentation_factor"),
         flat_fragmentation=bool(scan.get("flat_fragmentation")),
         precursor_confirmed=scan.get("precursor_confirmed"),
-        precursor_frac=scan.get("precursor_frac"),
+        purity_score=scan.get("purity_score"),
         # The untouched spectra — `scan["emp_mz"]`/`["emp_int"]` (this
         # scan's own raw arrays, already read once by `_read_fragments`
         # and reused for every candidate) and `cand.mz`/`.intensity`
@@ -456,7 +459,7 @@ def annotate_feature(
     weight_dot: float = 1.0,
     weight_lib_coverage: float = 0.5,
     weight_emp_coverage: float = 0.5,
-    min_precursor_frac: float | None = None,
+    min_purity_score: float | None = None,
 ) -> list[AnnotationRow]:
     """Score every scan of one feature against a shared candidate set.
 
@@ -464,10 +467,10 @@ def annotate_feature(
         feature_id: The master feature id stamped on every produced row.
         feature_mz: The feature's m/z (candidates were gathered around it).
         scans: Dicts with ``scan_id``, ``sample_id``, ``emp_mz``,
-            ``emp_int``, ``precursor_only`` and (optional)
-            ``precursor_frac`` / ``precursor_confirmed``.
+            ``emp_int``, ``flat_fragmentation`` and (optional)
+            ``purity_score`` / ``precursor_confirmed``.
         candidates: Library spectra to score against (shared by all scans).
-        min_precursor_frac: When set, scans with a known ``precursor_frac``
+        min_purity_score: When set, scans with a known ``purity_score``
             below this are skipped.
 
     Returns:
@@ -480,9 +483,15 @@ def annotate_feature(
     """
     rows: list[AnnotationRow] = []
     for scan in scans:
-        if min_precursor_frac is not None:
-            frac = scan.get("precursor_frac")
-            if frac is not None and frac < min_precursor_frac:
+        # A flat/noisy spectrum isn't a real fragmentation pattern to begin
+        # with — unlike min_purity_score below, this is unconditional, not
+        # a configurable threshold (see GroupMs2Config.flat_fragmentation_
+        # cv_threshold's own docstring).
+        if scan.get("flat_fragmentation"):
+            continue
+        if min_purity_score is not None:
+            frac = scan.get("purity_score")
+            if frac is not None and frac < min_purity_score:
                 continue
         scored = score_scan_against_candidates(
             scan["emp_mz"],
@@ -697,7 +706,7 @@ def _annotate_feature_batch(
     mz_power: float,
     int_power: float,
     min_matched_peaks: int,
-    min_precursor_frac: float | None = None,
+    min_purity_score: float | None = None,
     weight_dot: float = 1.0,
     weight_lib_coverage: float = 0.5,
     weight_emp_coverage: float = 0.5,
@@ -706,9 +715,10 @@ def _annotate_feature_batch(
 
     Candidates from every configured library are pooled per scan, so
     ``rank_ms2`` orders the best hit across all of them. Every MS2 scan
-    associated with the feature is scored unconditionally — ``precursor_purity``
-    is left-joined so every row can carry the scan's ``precursor_frac`` /
-    ``precursor_confirmed`` and ``min_precursor_frac`` can drop low-purity
+    associated with the feature is scored, except one flagged
+    ``flat_fragmentation`` (always skipped) — ``precursor_purity``
+    is left-joined so every row can carry the scan's ``purity_score`` /
+    ``precursor_confirmed`` and ``min_purity_score`` can drop low-purity
     scans (see ADR 0019).
     """
     libraries = _WORKER_LIBRARIES
@@ -719,8 +729,8 @@ def _annotate_feature_batch(
         for feature_id, feature_mz in batch:
             assoc = adb.execute(
                 "SELECT a.scan_id, a.sample_id, "
-                "a.precursor_only, a.flat_fragmentation, a.polarity, "
-                "p.precursor_confirmed, p.precursor_frac "
+                "a.fragmentation_factor, a.flat_fragmentation, a.polarity, "
+                "p.precursor_confirmed, p.purity_score "
                 "FROM ms2_associations a "
                 "LEFT JOIN precursor_purity p "
                 "  ON p.sample_id = a.sample_id AND p.ms2_scan_id = a.scan_id "
@@ -732,13 +742,15 @@ def _annotate_feature_batch(
 
             scans_by_pol: dict[str | None, list[dict]] = defaultdict(list)
             for (
-                scan_id, sample_id, prec_only, flat_frag, pol,
-                confirmed, frac,
+                scan_id, sample_id, frag_factor, flat_frag, pol,
+                confirmed, purity,
             ) in assoc:
+                if flat_frag:
+                    continue
                 if (
-                    min_precursor_frac is not None
-                    and frac is not None
-                    and frac < min_precursor_frac
+                    min_purity_score is not None
+                    and purity is not None
+                    and purity < min_purity_score
                 ):
                     continue
                 emp_mz, emp_int = _read_fragments(
@@ -750,12 +762,12 @@ def _annotate_feature_batch(
                     {
                         "scan_id": scan_id,
                         "sample_id": sample_id,
-                        "precursor_only": bool(prec_only),
+                        "fragmentation_factor": frag_factor,
                         "flat_fragmentation": bool(flat_frag),
                         "precursor_confirmed": (
                             None if confirmed is None else bool(confirmed)
                         ),
-                        "precursor_frac": frac,
+                        "purity_score": purity,
                         "emp_mz": emp_mz,
                         "emp_int": emp_int,
                     }
@@ -789,7 +801,7 @@ def _annotate_feature_batch(
                         weight_dot=weight_dot,
                         weight_lib_coverage=weight_lib_coverage,
                         weight_emp_coverage=weight_emp_coverage,
-                        min_precursor_frac=min_precursor_frac,
+                        min_purity_score=min_purity_score,
                     )
                 )
     finally:
@@ -831,8 +843,8 @@ _ANN_COLS = (
     "rank_scan_feature",
     "rank_scan_feature_sample",
     "precursor_confirmed",
-    "precursor_frac",
-    "precursor_only",
+    "purity_score",
+    "fragmentation_factor",
     "flat_fragmentation",
     "emp_raw_mz",
     "emp_raw_intensity",
@@ -927,8 +939,8 @@ def persist_annotations(
                         r.rank_scan_feature,
                         r.rank_scan_feature_sample,
                         None if r.precursor_confirmed is None else int(r.precursor_confirmed),
-                        r.precursor_frac,
-                        int(r.precursor_only),
+                        r.purity_score,
+                        r.fragmentation_factor,
                         int(r.flat_fragmentation),
                         _blob_or_none(r.emp_raw_mz, store_raw_spectra),
                         _blob_or_none(r.emp_raw_intensity, store_raw_spectra),
@@ -1093,7 +1105,7 @@ def run_annotation(
         weight_dot=getattr(config, "score_weight_dot", 1.0),
         weight_lib_coverage=getattr(config, "score_weight_lib_coverage", 0.5),
         weight_emp_coverage=getattr(config, "score_weight_emp_coverage", 0.5),
-        min_precursor_frac=getattr(config, "min_precursor_frac", None),
+        min_purity_score=getattr(config, "min_purity_score", None),
     )
 
     rows: list[AnnotationRow] = []

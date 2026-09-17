@@ -9,15 +9,15 @@ spectrum per feature. This stage folds three per-scan signals into a single
 * the best library score for the scan (``ms2_annotations.score`` at
   ``rank_ms2 = 1``) when Stage B ran — otherwise treated as ``1.0`` so the
   pick still works library-free;
-* the precursor purity (``precursor_frac``) from the purity stage
-  (Stage A′), or ``config.neutral_precursor_frac`` when the scan could not
+* the precursor purity (``purity_score``) from the purity stage
+  (Stage A′), or ``config.neutral_purity_score`` when the scan could not
   be scored;
 * a peak-richness term ``min(1, n_peaks / target_peaks)`` on the scan's
   fragment count.
 
-``consensus_score = best_score x precursor_frac_term x peak_term``. The
+``consensus_score = best_score x purity_score_term x peak_term``. The
 stage never drops a feature's scans from the counts, only from the *pick*
-(via ``min_precursor_frac``). One row per MS2-bearing feature in
+(via ``min_purity_score``). One row per MS2-bearing feature in
 ``feature_ms2_consensus`` (schema in
 :func:`msianalyzer.core.analysis_db.create_analysis_schema`); a re-run
 replaces every row.
@@ -45,7 +45,7 @@ __all__ = [
     "ConsensusRow",
     "ConsensusResult",
     "peak_term",
-    "precursor_frac_term",
+    "purity_score_term",
     "consensus_score",
     "pick_feature",
     "build_consensus",
@@ -65,7 +65,7 @@ class ScanStat:
 
     Attributes:
         sample_id / scan_id: the MS2 scan.
-        precursor_frac: precursor-ion purity, or ``None`` when unscored.
+        purity_score: precursor-ion purity, or ``None`` when unscored.
         n_peaks: fragment-peak count of the scan.
         best_score: best ``ms2_annotations.score`` for the scan, or ``None``
             when annotation did not run / produced nothing.
@@ -75,7 +75,7 @@ class ScanStat:
 
     sample_id: int | None
     scan_id: int
-    precursor_frac: float | None
+    purity_score: float | None
     n_peaks: int
     best_score: float | None
     best_compound_name: str | None = None
@@ -94,7 +94,7 @@ class ConsensusRow:
     n_ms2_considered: int
     n_ms2_scored: int
     consensus_score: float
-    precursor_frac: float | None
+    purity_score: float | None
     n_peaks: int
     best_annotation_score: float | None
     best_compound_name: str | None
@@ -122,20 +122,20 @@ def peak_term(n_peaks: int, target_peaks: int) -> float:
     return float(min(1.0, max(0.0, n_peaks / target_peaks)))
 
 
-def precursor_frac_term(precursor_frac: float | None, neutral: float) -> float:
+def purity_score_term(purity_score: float | None, neutral: float) -> float:
     """Precursor-purity term, clamped to ``[0, 1]``; ``neutral`` stands in for ``None``."""
-    v = neutral if precursor_frac is None else precursor_frac
+    v = neutral if purity_score is None else purity_score
     return float(min(1.0, max(0.0, v)))
 
 
 def consensus_score(
-    stat: ScanStat, *, target_peaks: int, neutral_precursor_frac: float
+    stat: ScanStat, *, target_peaks: int, neutral_purity_score: float
 ) -> float:
-    """``best_score x precursor_frac_term x peak_term`` (best_score ``1.0`` when absent)."""
+    """``best_score x purity_score_term x peak_term`` (best_score ``1.0`` when absent)."""
     base = 1.0 if stat.best_score is None else float(stat.best_score)
     return (
         base
-        * precursor_frac_term(stat.precursor_frac, neutral_precursor_frac)
+        * purity_score_term(stat.purity_score, neutral_purity_score)
         * peak_term(stat.n_peaks, target_peaks)
     )
 
@@ -146,13 +146,13 @@ def pick_feature(
     stats: Sequence[ScanStat],
     *,
     target_peaks: int,
-    neutral_precursor_frac: float,
-    min_precursor_frac: float | None,
+    neutral_purity_score: float,
+    min_purity_score: float | None,
 ) -> ConsensusRow | None:
     """Choose the best scan for one feature, or ``None`` when none qualifies.
 
-    ``min_precursor_frac`` (when set) drops scans with a *known*
-    ``precursor_frac`` below it from the pick; they still count in
+    ``min_purity_score`` (when set) drops scans with a *known*
+    ``purity_score`` below it from the pick; they still count in
     ``n_ms2``. Ties break on the annotation score, then the peak count,
     then the lower ``scan_id``.
     """
@@ -162,9 +162,9 @@ def pick_feature(
     considered = [
         s
         for s in stats
-        if min_precursor_frac is None
-        or s.precursor_frac is None
-        or s.precursor_frac >= min_precursor_frac
+        if min_purity_score is None
+        or s.purity_score is None
+        or s.purity_score >= min_purity_score
     ]
     if not considered:
         return None
@@ -172,7 +172,7 @@ def pick_feature(
     def key(s: ScanStat) -> tuple:
         return (
             consensus_score(
-                s, target_peaks=target_peaks, neutral_precursor_frac=neutral_precursor_frac
+                s, target_peaks=target_peaks, neutral_purity_score=neutral_purity_score
             ),
             -1.0 if s.best_score is None else s.best_score,
             s.n_peaks,
@@ -189,9 +189,9 @@ def pick_feature(
         n_ms2_considered=len(considered),
         n_ms2_scored=sum(s.best_score is not None for s in considered),
         consensus_score=consensus_score(
-            best, target_peaks=target_peaks, neutral_precursor_frac=neutral_precursor_frac
+            best, target_peaks=target_peaks, neutral_purity_score=neutral_purity_score
         ),
-        precursor_frac=best.precursor_frac,
+        purity_score=best.purity_score,
         n_peaks=best.n_peaks,
         best_annotation_score=best.best_score,
         best_compound_name=best.best_compound_name,
@@ -205,8 +205,8 @@ def build_consensus(
     scans_by_feature: dict[int, Sequence[ScanStat]],
     *,
     target_peaks: int,
-    neutral_precursor_frac: float,
-    min_precursor_frac: float | None,
+    neutral_purity_score: float,
+    min_purity_score: float | None,
 ) -> ConsensusResult:
     """Run :func:`pick_feature` over every feature and tally the result."""
     rows: list[ConsensusRow] = []
@@ -216,8 +216,8 @@ def build_consensus(
             feature_mz,
             scans_by_feature.get(feature_id, ()),
             target_peaks=target_peaks,
-            neutral_precursor_frac=neutral_precursor_frac,
-            min_precursor_frac=min_precursor_frac,
+            neutral_purity_score=neutral_purity_score,
+            min_purity_score=min_purity_score,
         )
         if row is not None:
             rows.append(row)
@@ -241,7 +241,7 @@ _CONSENSUS_COLS = (
     "n_ms2_considered",
     "n_ms2_scored",
     "consensus_score",
-    "precursor_frac",
+    "purity_score",
     "n_peaks",
     "best_annotation_score",
     "best_compound_name",
@@ -279,7 +279,7 @@ def persist_consensus(
                     r.n_ms2_considered,
                     r.n_ms2_scored,
                     r.consensus_score,
-                    r.precursor_frac,
+                    r.purity_score,
                     r.n_peaks,
                     r.best_annotation_score,
                     r.best_compound_name,
@@ -314,8 +314,8 @@ def run_consensus(
     """
     analysis_db_path = Path(analysis_db_path)
     target_peaks = int(config.target_peaks)
-    neutral_precursor_frac = float(config.neutral_precursor_frac)
-    min_precursor_frac = config.min_precursor_frac
+    neutral_purity_score = float(config.neutral_purity_score)
+    min_purity_score = config.min_purity_score
 
     with sqlite3.connect(analysis_db_path) as con:
         features = con.execute(
@@ -328,14 +328,14 @@ def run_consensus(
             "FROM ms2_associations WHERE feature_id IS NOT NULL"
         ).fetchall()
         purity_rows = con.execute(
-            "SELECT sample_id, ms2_scan_id, precursor_frac FROM precursor_purity"
+            "SELECT sample_id, ms2_scan_id, purity_score FROM precursor_purity"
         ).fetchall()
         ann_rows = con.execute(
             "SELECT sample_id, scan_id, score, compound_name, inchikey "
             "FROM ms2_annotations WHERE rank_ms2 = 1"
         ).fetchall()
 
-    frac_by_scan = {(s, sc): f for s, sc, f in purity_rows}
+    purity_by_scan = {(s, sc): f for s, sc, f in purity_rows}
     ann_by_scan = {
         (s, sc): (score, name, key) for s, sc, score, name, key in ann_rows
     }
@@ -347,7 +347,7 @@ def run_consensus(
             ScanStat(
                 sample_id=sample_id,
                 scan_id=scan_id,
-                precursor_frac=frac_by_scan.get((sample_id, scan_id)),
+                purity_score=purity_by_scan.get((sample_id, scan_id)),
                 n_peaks=int(n_peaks or 0),
                 best_score=score,
                 best_compound_name=name,
@@ -359,8 +359,8 @@ def run_consensus(
         features,
         scans_by_feature,
         target_peaks=target_peaks,
-        neutral_precursor_frac=neutral_precursor_frac,
-        min_precursor_frac=min_precursor_frac,
+        neutral_purity_score=neutral_purity_score,
+        min_purity_score=min_purity_score,
     )
     persist_consensus(analysis_db_path, result, command_id=command_id)
     logger.info(

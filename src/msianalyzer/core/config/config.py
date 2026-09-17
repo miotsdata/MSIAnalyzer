@@ -468,18 +468,6 @@ class GroupMs2Config:
             itself doesn't record isolation-window offsets. Only matters
             for instruments/methods that omit this metadata; e.g. `0.5`
             (the default) assumes a ±0.5 Da window.
-        precursor_only_tic_frac: Flags a scan as `precursor_only` — likely
-            failed fragmentation, since almost all of the ion signal is
-            still sitting on the precursor mass rather than spread across
-            fragment peaks — when at least this fraction of the scan's
-            total fragment-ion current lies within
-            `precursor_only_mz_tol_da` of the precursor m/z. Example: the
-            default `0.8` flags a scan where 80%+ of its fragment TIC is
-            still "on the precursor." This is a QC flag, not a filter —
-            flagged scans are kept and still scored downstream.
-        precursor_only_mz_tol_da: Half-width, in Da, of the "counts as
-            still on the precursor" band used by the `precursor_only_tic_frac`
-            test above.
         flat_fragmentation_min_peaks: Minimum number of surviving fragment
             peaks (after the `flat_fragmentation_min_rel_intensity` cutoff)
             a scan needs before the `flat_fragmentation` QC check even
@@ -494,8 +482,13 @@ class GroupMs2Config:
             `0.2`. Real CID/HCD fragmentation decays (one or a few
             dominant fragments, several much smaller ones, so a *high*
             CV); many peaks all at roughly the same height (a *low* CV)
-            looks more like chemical/electronic noise. Soft QC flag, not a
-            filter — flagged scans are still scored and stored.
+            looks more like chemical/electronic noise. Unlike every other
+            QC flag in this stage, this one *is* a filter: a scan flagged
+            `flat_fragmentation` is never scored against the library in
+            `annotate` (Stage B) — it isn't a real fragmentation pattern
+            to begin with, so a library match against it would be
+            meaningless — but it's still kept and flagged here, not
+            dropped, so it stays visible for inspection/reporting.
         flat_fragmentation_min_rel_intensity: Peaks below this fraction of
             a scan's own base peak are dropped before both the peak count
             and the coefficient of variation above are computed, e.g. the
@@ -507,8 +500,6 @@ class GroupMs2Config:
     assoc_ppm: float = 10.0
     include_unmatched: bool = True
     default_isolation_half_width: float = 0.5
-    precursor_only_tic_frac: float = 0.8
-    precursor_only_mz_tol_da: float = 2.0
     flat_fragmentation_min_peaks: int = 3
     flat_fragmentation_cv_threshold: float = 0.2
     flat_fragmentation_min_rel_intensity: float = 0.01
@@ -516,44 +507,62 @@ class GroupMs2Config:
 
 @dataclass
 class PurityConfig:
-    """Measure how "clean" each MS2 scan's precursor selection was.
+    """Every setting for "is something wrong with this scan's precursor" —
+    two related but genuinely distinct 0-1 scores, both configured here
+    (moved into one tab/config group specifically to stop them reading as
+    duplicates of each other — see ADR 0043).
 
-    Stage A′ of annotation (`core.annotation.precursor_purity`): a
-    fragmentation scan's isolation window can accidentally capture more
-    than one co-eluting compound at similar m/z — the resulting spectrum is
-    a mix, which weakens or misleads library matching. For every MS2 scan,
-    this stage looks at its *parent* MS1 scan and measures what fraction of
-    the ion current in the isolation window actually belongs to the
-    intended precursor versus other, unrelated ions —
-    `precursor_frac`, from 0 (mostly other ions) to 1 (window is
-    essentially pure precursor). This needs no peak detection (a direct
-    profile-area integration around the precursor m/z), so it stays
-    computable even in dense, matrix-heavy, low-mass windows where
-    resolving a discrete peak often fails; and unlike the grouper's old
-    feature-list-density flag, it needs no aligned feature list, so it's
-    meaningful even before/without alignment (see ADR 0019).
+    - `purity_score`: from the scan's *parent MS1* isolation window — what
+      fraction of the ion current there actually belongs to the intended
+      precursor versus other, co-isolated ions. Answers "was the isolation
+      window clean." A fragmentation scan's isolation window can
+      accidentally capture more than one co-eluting compound at similar
+      m/z; the resulting spectrum is a mix, which weakens or misleads
+      library matching. This needs no peak detection (a direct
+      profile-area integration around the precursor m/z), so it stays
+      computable even in dense, matrix-heavy, low-mass windows where
+      resolving a discrete peak often fails; and unlike the grouper's old
+      feature-list-density flag, it needs no aligned feature list, so
+      it's meaningful even before/without alignment (see ADR 0019).
+    - `fragmentation_factor`: from the scan's *own fragment spectrum*
+      (computed during grouping, `core.annotation.group_ms2`, Stage A,
+      alongside `flat_fragmentation` — both read the same already-loaded
+      per-scan arrays) — what fraction of the scan's total ion current is
+      real fragment signal rather than leftover, un-fragmented precursor.
+      Answers "did fragmentation actually happen." `1.0` means
+      essentially no signal survives on the precursor mass (real
+      fragmentation occurred); `0.0` means the whole scan is still
+      sitting on the precursor (fragmentation failed).
+
+    `core.annotation.precursor_purity` is Stage A′ — it computes
+    `purity_score`/`precursor_confirmed` (needs the parent MS1 scan,
+    so it runs as its own stage, after grouping); `fragmentation_factor`
+    is computed earlier, inside Stage A itself, purely because it only
+    needs data Stage A already has in hand.
 
     Attributes:
         enabled: Run this stage. Default `True`; set `False` to skip it
             entirely (e.g. to save time on a quick preliminary run) — every
-            downstream `precursor_frac`/`precursor_confirmed` field then
-            stays NULL and `annotate.min_precursor_frac`/
-            `consensus.min_precursor_frac` become no-ops.
+            downstream `purity_score`/`precursor_confirmed` field then
+            stays NULL and `annotate.min_purity_score`/
+            `consensus.min_purity_score` become no-ops.
+            `fragmentation_factor` is unaffected (computed by `group_ms2`
+            regardless of this setting).
         default_half_window_da: Half-width, in Da, of the isolation window
             assumed when a scan's raw metadata doesn't record one. Default
             `0.5` (a ±0.5 Da window).
         precursor_confirm_ppm: Half-width, in ppm, of a band placed exactly
-            on the recorded `precursor_mz`, used to compute `precursor_frac
+            on the recorded `precursor_mz`, used to compute `purity_score
             = I(that band) / I(whole isolation window)` — the fraction of
             the window's above-baseline ion current that sits on the
             precursor.
         precursor_confirm_min_frac: The `precursor_confirmed` flag is set
-            when `precursor_frac` (see above) is at least this value —
+            when `purity_score` (see above) is at least this value —
             e.g. the default `0.01` only requires the precursor band to
             carry 1%+ of the window's ion current, a deliberately lenient
             bar (it's a sanity check that *some* signal is where it should
-            be, not a purity threshold — use `annotate.min_precursor_frac`/
-            `consensus.min_precursor_frac` elsewhere for that).
+            be, not a purity threshold — use `annotate.min_purity_score`/
+            `consensus.min_purity_score` elsewhere for that).
         precursor_snap_ppm: If the recorded precursor m/z isn't exactly on
             a real local intensity maximum in the parent MS1 (common with
             some instrument/converter combinations), snap it to the
@@ -561,6 +570,18 @@ class PurityConfig:
             `precursor_mz_snapped` — a no-op when the recorded value is
             already on a peak. Set to `0` to disable snapping entirely and
             always trust the recorded value as-is. Default `15.0`.
+        fragmentation_factor_mz_tol_da: Half-width, in Da, of the "counts
+            as still on the precursor" band `fragmentation_factor` is
+            computed from (see above). Worked example: a scan whose
+            recorded precursor is `500.25` Da, with the default `2.0` Da
+            tolerance, treats `[498.25, 502.25]` as "on the precursor" —
+            a fragment peak at `501.9` falls inside that band (counts
+            toward the leftover-precursor signal), one at `495.0` does
+            not (counts as real fragment signal).
+            `fragmentation_factor` is `1.0` minus the fraction of the
+            scan's *total* intensity that falls inside this band — e.g.
+            if 15% of a scan's total ion current lands inside
+            `[498.25, 502.25]`, `fragmentation_factor = 0.85`.
         n_workers: How many samples to score in parallel, one worker
             process per sample. `None` or `0` (the default is `None`) uses
             `os.cpu_count()`; `1` forces a fully serial run (useful for
@@ -575,6 +596,7 @@ class PurityConfig:
     precursor_confirm_ppm: float = 25.0
     precursor_confirm_min_frac: float = 0.01
     precursor_snap_ppm: float = 15.0
+    fragmentation_factor_mz_tol_da: float = 2.0
     n_workers: int | None = None
 
 
@@ -679,12 +701,12 @@ class AnnotateConfig:
             row's rank, are untouched. Set to `0` to disable (plain
             highest-`score`-wins, ties broken arbitrarily, the old
             behavior).
-        min_precursor_frac: When set (e.g. `0.5`), scans whose precursor
-            purity (`precursor_frac` from the `purity` stage) is known and
+        min_purity_score: When set (e.g. `0.5`), scans whose precursor
+            purity (`purity_score` from the `purity` stage) is known and
             below this value are skipped entirely — not scored, not
             stored. `None` (the default) annotates every scan regardless
             of precursor purity; every stored row still carries that
-            scan's own `precursor_frac`/`precursor_confirmed` either way,
+            scan's own `purity_score`/`precursor_confirmed` either way,
             so you can filter on it later without needing to have set this
             at run time. Every MS2 scan associated with a feature is
             scored by default — there is no longer a way to skip scoring
@@ -694,8 +716,12 @@ class AnnotateConfig:
             own spectrum, and over-flagged badly once a feature list grew
             dense (a denser feature list, e.g. from a looser
             `peak.filter_mad_nmads`, used to silently collapse the number
-            of scans ever scored). `precursor_frac` is the real, per-scan
-            signal to filter on instead.
+            of scans ever scored). `purity_score` is the real, per-scan
+            signal to filter on instead. Scans flagged `flat_fragmentation`
+            (see `group_ms2`) are always skipped regardless of this
+            setting — that's a separate, unconditional filter (a flat/
+            noisy spectrum isn't a real fragmentation pattern, unlike a
+            merely-impure-but-real one).
         store_raw_spectra: Persist the untouched (pre-noise-filtering) m/z
             + intensity arrays of both the empirical scan and its matched
             library candidate on every stored row, so a later mirror plot
@@ -729,7 +755,7 @@ class AnnotateConfig:
     score_weight_emp_coverage: float = 0.5
     min_matched_peaks: int = 1
     representative_score_tolerance: float = 0.05
-    min_precursor_frac: float | None = None
+    min_purity_score: float | None = None
     store_raw_spectra: bool = True
     batch_size: int = 200
     n_workers: int | None = None
@@ -743,12 +769,12 @@ class ConsensusConfig:
     has several MS2 scans behind it (one per sample/pixel where it was
     fragmented), of varying quality. This stage folds each scan's best
     library score (when `annotate` ran), its precursor purity
-    (`precursor_frac`), and how many fragment peaks it has into one
-    `consensus_score = best_score × precursor_frac_term × peak_term`, and
+    (`purity_score`), and how many fragment peaks it has into one
+    `consensus_score = best_score × purity_score_term × peak_term`, and
     picks the highest-scoring scan as *the* representative one for that
     feature. Runs independently of whether annotation or purity actually
     ran — a feature with neither still gets a consensus pick based on peak
-    count alone (`best_score` and `precursor_frac_term` both default to
+    count alone (`best_score` and `purity_score_term` both default to
     neutral values in that case). Output:
     `feature_ms2_consensus`, one row per feature — a separate table this
     stage only *reads from* `ms2_annotations`/`precursor_purity`, never
@@ -777,13 +803,13 @@ class ConsensusConfig:
             raise `target_peaks` to weigh peak richness more heavily in
             the pick; lower it if your data is naturally low-peak-count and
             you don't want that to dominate over score/precursor purity.
-        neutral_precursor_frac: Precursor-purity value substituted into the
+        neutral_purity_score: Precursor-purity value substituted into the
             score for a scan the purity stage couldn't score (e.g.
             `purity.enabled = False`). Default `0.5` — a neutral middle
             value that neither rewards nor penalizes a scan just because
             purity data is missing for it.
-        min_precursor_frac: When set (e.g. `0.5`), scans with a *known*
-            `precursor_frac` below this value are excluded from the pick
+        min_purity_score: When set (e.g. `0.5`), scans with a *known*
+            `purity_score` below this value are excluded from the pick
             entirely — they still count toward that feature's `n_ms2`
             total, they just can't be chosen as the representative scan.
             `None` (the default) considers every scan regardless of
@@ -792,8 +818,8 @@ class ConsensusConfig:
 
     enabled: bool = True
     target_peaks: int = 10
-    neutral_precursor_frac: float = 0.5
-    min_precursor_frac: float | None = None
+    neutral_purity_score: float = 0.5
+    min_purity_score: float | None = None
 
 
 @dataclass
@@ -820,17 +846,25 @@ class ReportConfig:
             many samples (a run with `n` samples has up to `2^n - 1`
             possible combinations). Excess combinations are simply omitted
             from the plot, not merged into an "other" bucket.
-        purity_cutoff: `precursor_frac` value (e.g. `0.8`, the default)
+        purity_score_cutoff: `purity_score` value (e.g. `0.8`, the default)
             below which a scan counts as "low purity" for the report's
             summary count, and where the reference line is drawn on the
-            precursor-purity histogram — purely a reporting/visualization
-            threshold, it does not affect `annotate.min_precursor_frac` or
-            `consensus.min_precursor_frac`, which are set independently.
+            purity-score histogram — purely a reporting/visualization
+            threshold, it does not affect `annotate.min_purity_score` or
+            `consensus.min_purity_score`, which are set independently.
+        fragmentation_factor_cutoff: `fragmentation_factor` value (e.g.
+            `0.2`, the default) below which a scan counts as "low
+            fragmentation" for the report's summary count — purely a
+            reporting/visualization threshold, same role as
+            `purity_score_cutoff` above but for the other precursor
+            signal (see `PurityConfig`'s own docstring for the
+            distinction between the two).
     """
 
     enabled: bool = True
     overlap_top_n: int = 30
-    purity_cutoff: float = 0.8
+    purity_score_cutoff: float = 0.8
+    fragmentation_factor_cutoff: float = 0.2
 
 
 @dataclass
@@ -993,7 +1027,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 16
+    version: int = 17
 
     def __init__(
         self,

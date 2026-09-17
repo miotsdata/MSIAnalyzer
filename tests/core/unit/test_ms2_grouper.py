@@ -13,8 +13,8 @@ import pytest
 
 from msianalyzer.core.annotation.group_ms2 import (
     associate_scan,
+    compute_fragmentation_factor,
     detect_flat_fragmentation,
-    detect_precursor_only,
     group_ms2,
     persist_grouping,
     run_grouper,
@@ -102,20 +102,24 @@ def test_null_precursor_falls_back_to_isolation_window_target(ms2_grouper_mock_d
 # ---------------------------------------------------------------------------
 
 
-def test_detect_precursor_only_true_for_surviving_precursor():
+def test_compute_fragmentation_factor_low_for_surviving_precursor():
     mz = np.array([120.0, 200.0, 499.985])
     inten = np.array([50.0, 40.0, 9000.0])
-    assert detect_precursor_only(mz, inten, 500.0) is True
+    # 9000 of 9090 total intensity sits within 2 Da of the precursor.
+    assert compute_fragmentation_factor(mz, inten, 500.0) == pytest.approx(
+        1.0 - 9000.0 / 9090.0
+    )
 
 
-def test_detect_precursor_only_false_for_real_fragmentation():
+def test_compute_fragmentation_factor_high_for_real_fragmentation():
     mz = np.array([120.0, 200.0, 333.0, 480.0])
     inten = np.array([5000.0, 4000.0, 6000.0, 100.0])
-    assert detect_precursor_only(mz, inten, 500.0) is False
+    # None of these fall within 2 Da of the precursor -> no signal "on" it.
+    assert compute_fragmentation_factor(mz, inten, 500.0) == pytest.approx(1.0)
 
 
-def test_detect_precursor_only_false_when_precursor_null():
-    assert detect_precursor_only(np.array([1.0]), np.array([1.0]), None) is False
+def test_compute_fragmentation_factor_none_when_precursor_null():
+    assert compute_fragmentation_factor(np.array([1.0]), np.array([1.0]), None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -194,22 +198,22 @@ def test_feature_ms2_summary_counts_flat_fragmentation():
     assert fs.n_flat_fragmentation == 1
 
 
-def test_precursor_only_scan_is_flagged_but_still_associated(ms2_grouper_mock_data):
+def test_low_fragmentation_scan_is_flagged_but_still_associated(ms2_grouper_mock_data):
     mock = ms2_grouper_mock_data(n=1000)
     case = mock.planted["precursor_only"]
 
     a = associate_scan(
         mock.planted_scan("precursor_only"), mock.master_mz, assoc_ppm=mock.assoc_ppm
     )
-    assert a.precursor_only is True
-    assert case.expected_precursor_only is True
+    assert a.fragmentation_factor < 0.2
+    assert case.expected_low_fragmentation is True
     assert a.feature_mz == pytest.approx(case.expected_feature_mz)  # not dropped
 
-    # an ordinary scan is not flagged
+    # an ordinary scan gets a high fragmentation_factor
     normal = associate_scan(
         mock.planted_scan("single"), mock.master_mz, assoc_ppm=mock.assoc_ppm
     )
-    assert normal.precursor_only is False
+    assert normal.fragmentation_factor > 0.8
 
 
 def test_feature_ms2_summary_counts_fragmentation_failures(ms2_grouper_mock_data):
@@ -227,7 +231,12 @@ def test_feature_ms2_summary_counts_fragmentation_failures(ms2_grouper_mock_data
     po_assoc = next(a for a in result.associations if a.scan_id == po_scan_id)
     fs = by_feat[po_assoc.feature_id]
 
-    assert fs.n_precursor_only >= 1
+    # At least one contributing scan (the planted low-fragmentation one)
+    # pulls this below 1.0 — other filler scans sharing the feature (if
+    # any) may dilute the mean back up, so this only checks it's populated
+    # and not the neutral "no data" value, not an exact number.
+    assert fs.mean_fragmentation_factor is not None
+    assert fs.mean_fragmentation_factor < 1.0
     assert fs.n_ms2 == sum(
         1 for a in result.associations if a.feature_id == po_assoc.feature_id
     )
@@ -380,19 +389,18 @@ def test_run_grouper_end_to_end(ms2_grouper_mock_data, make_ms2_db, tmp_path):
 
         # the precursor-only planted scan is flagged and rolled up
         po_id = mock.planted["precursor_only"].scan_id
-        feat_id, prec_only = con.execute(
-            "SELECT feature_id, precursor_only FROM ms2_associations "
+        feat_id, frag_factor = con.execute(
+            "SELECT feature_id, fragmentation_factor FROM ms2_associations "
             "WHERE scan_id = ? AND sample_id = ?",
             (po_id, sample_id),
         ).fetchone()
-        assert prec_only == 1
-        assert (
-            con.execute(
-                "SELECT n_precursor_only FROM feature_ms2_summary WHERE feature_id = ?",
-                (feat_id,),
-            ).fetchone()[0]
-            >= 1
-        )
+        assert frag_factor < 0.2
+        rolled_up = con.execute(
+            "SELECT mean_fragmentation_factor FROM feature_ms2_summary "
+            "WHERE feature_id = ?",
+            (feat_id,),
+        ).fetchone()[0]
+        assert rolled_up is not None
 
         # the null-precursor planted scan matched via the target
         np_id = mock.planted["null_precursor"].scan_id

@@ -198,7 +198,7 @@ class Ms2Summary:
     n_total: int
     n_associated: int
     n_unassociated: int
-    n_precursor_only: int
+    n_low_fragmentation: int
 
 
 @dataclass
@@ -214,7 +214,7 @@ class PerSampleMs2:
 
 @dataclass
 class AssocPuritySample:
-    """`precursor_frac` of one sample's *associated* MS2 (fed to annotation)."""
+    """`purity_score` of one sample's *associated* MS2 (fed to annotation)."""
 
     sample_id: int
     name: str
@@ -227,7 +227,7 @@ class AssocPuritySample:
 class AssociatedPuritySummary:
     """Precursor purity restricted to the MS2 that will actually be annotated.
 
-    ``precursor_frac`` (peak-detection-free, always populated) is the metric;
+    ``purity_score`` (peak-detection-free, always populated) is the metric;
     the population is MS2 with a non-NULL ``feature_id`` in
     ``ms2_associations``. ``frac_values_all`` keeps every scan's value for a
     faint context overlay only.
@@ -377,7 +377,7 @@ class AnnotationSummary:
             first.
         n_best_confident / n_confident_*: of the best hits at the high
             cutoff, how many come from a confirmed precursor / real
-            (non-precursor-only, non-flat) fragmentation.
+            (not-low-fragmentation, non-flat) fragmentation.
         n_consensus / n_consensus_matches_best: ``feature_ms2_consensus``
             rows, and how often its scan is the annotated best scan.
     """
@@ -398,7 +398,7 @@ class AnnotationSummary:
     top_features: list[tuple[int, float, str, str, float]]
     n_best_confident: int
     n_confident_precursor_confirmed: int
-    n_confident_not_precursor_only: int
+    n_confident_not_low_fragmentation: int
     n_confident_not_flat_fragmentation: int
     n_consensus: int
     n_consensus_matches_best: int
@@ -662,12 +662,18 @@ def overlap_combos(
 
 
 @log_call(source="analysis_db_path")
-def ms2_summary(analysis_db_path: Path | str) -> Ms2Summary:
-    """MS2 association roll-up over every scan."""
+def ms2_summary(analysis_db_path: Path | str, *, cutoff: float = 0.2) -> Ms2Summary:
+    """MS2 association roll-up over every scan.
+
+    Args:
+        cutoff: `fragmentation_factor` value below which a scan counts as
+            "low fragmentation" for `n_low_fragmentation` — see
+            `ReportConfig.fragmentation_factor_cutoff`.
+    """
     analysis_db_path = Path(analysis_db_path)
     with sqlite3.connect(analysis_db_path) as con:
         assoc = con.execute(
-            "SELECT feature_id, precursor_only FROM ms2_associations"
+            "SELECT feature_id, fragmentation_factor FROM ms2_associations"
         ).fetchall()
 
     n_total = len(assoc)
@@ -676,7 +682,9 @@ def ms2_summary(analysis_db_path: Path | str) -> Ms2Summary:
         n_total=n_total,
         n_associated=n_assoc,
         n_unassociated=n_total - n_assoc,
-        n_precursor_only=sum(1 for _, p in assoc if p),
+        n_low_fragmentation=sum(
+            1 for _, ff in assoc if ff is not None and ff < cutoff
+        ),
     )
 
 
@@ -684,7 +692,7 @@ def ms2_summary(analysis_db_path: Path | str) -> Ms2Summary:
 def associated_purity(
     analysis_db_path: Path | str, *, cutoff: float = 0.8
 ) -> AssociatedPuritySummary:
-    """`precursor_frac` distribution for the MS2 that will be annotated.
+    """`purity_score` distribution for the MS2 that will be annotated.
 
     Population: scans with a non-NULL ``feature_id`` in ``ms2_associations``
     (an unassociated MS2 fragmented an ion you cannot image, so its purity is
@@ -697,16 +705,16 @@ def associated_purity(
         all_frac = [
             float(r[0])
             for r in con.execute(
-                "SELECT precursor_frac FROM precursor_purity "
-                "WHERE precursor_frac IS NOT NULL"
+                "SELECT purity_score FROM precursor_purity "
+                "WHERE purity_score IS NOT NULL"
             ).fetchall()
         ]
         assoc_rows = con.execute(
-            "SELECT p.sample_id, p.precursor_frac "
+            "SELECT p.sample_id, p.purity_score "
             "FROM precursor_purity p "
             "JOIN ms2_associations a "
             "  ON a.sample_id = p.sample_id AND a.scan_id = p.ms2_scan_id "
-            "WHERE p.precursor_frac IS NOT NULL AND a.feature_id IS NOT NULL"
+            "WHERE p.purity_score IS NOT NULL AND a.feature_id IS NOT NULL"
         ).fetchall()
 
     by_sample: dict[int, list[float]] = {}
@@ -1032,6 +1040,7 @@ def annotation_summary(
     analysis_db_path: Path | str,
     *,
     cutoffs: tuple[float, float] = _ANNOTATION_CUTOFFS,
+    fragmentation_factor_cutoff: float = 0.2,
 ) -> AnnotationSummary | None:
     """Roll up ``ms2_annotations`` — or ``None`` when no library was used."""
     analysis_db_path = Path(analysis_db_path)
@@ -1054,7 +1063,7 @@ def annotation_summary(
         best = con.execute(
             "SELECT ms2_annotations.feature_id, sample_id, scan_id, score, "
             "       inchikey, compound_name, precursor_confirmed, "
-            "       precursor_only, library_id, flat_fragmentation, features.mz "
+            "       fragmentation_factor, library_id, flat_fragmentation, features.mz "
             "FROM ms2_annotations "
             "JOIN features ON features.feature_id = ms2_annotations.feature_id "
             "WHERE rank_feature = 1"
@@ -1080,9 +1089,9 @@ def annotation_summary(
     best_scores: list[float] = []
     best_scan: dict[int, tuple] = {}
     top_features: list[tuple[int, float, str, str, float]] = []
-    n_confident = n_conf_confirmed = n_conf_not_po = 0
+    n_confident = n_conf_confirmed = n_conf_not_low_frag = 0
     n_conf_not_flat = 0
-    for fid, sid, scid, score, ik, name, confirmed, po, lib_id, flat, fmz in best:
+    for fid, sid, scid, score, ik, name, confirmed, frag_factor, lib_id, flat, fmz in best:
         score = float(score or 0.0)
         best_scores.append(score)
         best_scan[fid] = (sid, scid)
@@ -1093,7 +1102,12 @@ def annotation_summary(
         if score >= hi:
             n_confident += 1
             n_conf_confirmed += int(bool(confirmed))
-            n_conf_not_po += int(not po)
+            # `None` (unscored, e.g. no recorded precursor m/z) counts as
+            # "not low fragmentation" — the old boolean this replaces
+            # defaulted to False (not flagged) for the same unscored case.
+            n_conf_not_low_frag += int(
+                frag_factor is None or frag_factor >= fragmentation_factor_cutoff
+            )
             n_conf_not_flat += int(not flat)
 
     top_features.sort(key=lambda t: t[4], reverse=True)
@@ -1171,7 +1185,7 @@ def annotation_summary(
         top_features=top_features,
         n_best_confident=n_confident,
         n_confident_precursor_confirmed=n_conf_confirmed,
-        n_confident_not_precursor_only=n_conf_not_po,
+        n_confident_not_low_fragmentation=n_conf_not_low_frag,
         n_confident_not_flat_fragmentation=n_conf_not_flat,
         n_consensus=n_consensus,
         n_consensus_matches_best=n_cons_match,
@@ -1290,7 +1304,7 @@ def figure_ms2_association(summary: Ms2Summary) -> go.Figure:
             dict(
                 text=(
                     f"{_fmt(summary.n_total)} MS2<br>"
-                    f"{_fmt(summary.n_precursor_only)} precursor-only"
+                    f"{_fmt(summary.n_low_fragmentation)} low-fragmentation"
                 ),
                 x=0.5, y=0.5, showarrow=False, font=dict(size=13),
             )
@@ -1362,7 +1376,7 @@ def figure_unassociated_recheck(recheck: RecheckSummary) -> go.Figure:
 
 
 def figure_purity(assoc: AssociatedPuritySummary) -> go.Figure:
-    """`precursor_frac` histogram for **associated** MS2, all-MS2 as faint context."""
+    """`purity_score` histogram for **associated** MS2, all-MS2 as faint context."""
     if not assoc.frac_values:
         return _empty("Precursor purity of associated MS2")
     fig = go.Figure()
@@ -1370,13 +1384,13 @@ def figure_purity(assoc: AssociatedPuritySummary) -> go.Figure:
         fig.add_histogram(
             x=assoc.frac_values_all, name="all MS2", nbinsx=40,
             histnorm="percent", marker_color=_C_MUTED, opacity=0.35,
-            hovertemplate="precursor_frac %{x}<br>%{y:.1f}%% of all MS2<extra></extra>",
+            hovertemplate="purity_score %{x}<br>%{y:.1f}%% of all MS2<extra></extra>",
         )
     fig.add_histogram(
         x=assoc.frac_values, name="associated MS2", nbinsx=40,
         histnorm="percent", marker_color=_C_OK,
         hovertemplate=(
-            "precursor_frac %{x}<br>%{y:.1f}%% of associated MS2<extra></extra>"
+            "purity_score %{x}<br>%{y:.1f}%% of associated MS2<extra></extra>"
         ),
     )
     fig.add_vline(
@@ -1385,12 +1399,12 @@ def figure_purity(assoc: AssociatedPuritySummary) -> go.Figure:
     )
     fig.update_layout(
         title=(
-            f"Precursor purity (precursor_frac) — {_fmt(assoc.n_ge_cutoff)} of "
+            f"Precursor purity (purity_score) — {_fmt(assoc.n_ge_cutoff)} of "
             f"{_fmt(assoc.n_associated)} associated MS2 at ≥ {assoc.cutoff:g} "
             f"({assoc.pct_ge_cutoff:.0f}%)"
         ),
         barmode="overlay",
-        xaxis=dict(title="precursor_frac", range=[0, 1]),
+        xaxis=dict(title="purity_score", range=[0, 1]),
         yaxis=dict(title="% of MS2"),
         legend=_LEGEND_TOP,
         margin=_MARGIN_TOP,
@@ -1402,7 +1416,7 @@ _DENSITY_GRID = np.linspace(0.0, 1.0, 200)
 
 
 def figure_purity_per_sample(assoc: AssociatedPuritySummary) -> go.Figure:
-    """Overlaid `precursor_frac` density per sample, on a shared [0, 1] grid.
+    """Overlaid `purity_score` density per sample, on a shared [0, 1] grid.
 
     One line per sample (own color, translucent fill); click a legend entry
     to hide it, double-click to isolate it — surfaces bimodal per-sample
@@ -1429,7 +1443,7 @@ def figure_purity_per_sample(assoc: AssociatedPuritySummary) -> go.Figure:
             name=f"{p.name} (n={_fmt(p.n_associated)})",
             line=dict(color=color, width=2),
             fill="tozeroy", fillcolor=_rgba(color, 0.15),
-            hovertemplate=f"{p.name}<br>precursor_frac %{{x:.2f}}<extra></extra>",
+            hovertemplate=f"{p.name}<br>purity_score %{{x:.2f}}<extra></extra>",
         )
     fig.add_vline(
         x=assoc.cutoff, line=dict(color=_C_BAD, dash="dash"),
@@ -1437,10 +1451,10 @@ def figure_purity_per_sample(assoc: AssociatedPuritySummary) -> go.Figure:
     )
     fig.update_layout(
         title=(
-            "Precursor purity (precursor_frac) density, by sample "
+            "Precursor purity (purity_score) density, by sample "
             "— click a legend entry to toggle, double-click to isolate"
         ),
-        xaxis=dict(title="precursor_frac", range=[0, 1]),
+        xaxis=dict(title="purity_score", range=[0, 1]),
         yaxis=dict(title="density"),
         legend=_LEGEND_TOP,
         margin=_MARGIN_TOP,
@@ -1671,7 +1685,8 @@ def collect_stats(
     raw_db_paths: dict[int, str | Path] | None = None,
     *,
     overlap_top_n: int = 30,
-    purity_cutoff: float = 0.8,
+    purity_score_cutoff: float = 0.8,
+    fragmentation_factor_cutoff: float = 0.2,
 ) -> SummaryStats:
     """Compute every number the report needs (no figures, no files)."""
     analysis_db_path = Path(analysis_db_path)
@@ -1685,14 +1700,16 @@ def collect_stats(
         samples=samples,
         n_features=0 if features_df is None else int(len(features_df)),
         overlap_combos=overlap_combos(membership, overlap_top_n),
-        ms2=ms2_summary(analysis_db_path),
+        ms2=ms2_summary(analysis_db_path, cutoff=fragmentation_factor_cutoff),
         per_sample_ms2=per_sample_ms2(analysis_db_path),
-        associated_purity=associated_purity(analysis_db_path, cutoff=purity_cutoff),
+        associated_purity=associated_purity(analysis_db_path, cutoff=purity_score_cutoff),
         base_peak_intensity=base_peak_intensity(analysis_db_path, raw_db_paths),
         target_list=target_list_summary(analysis_db_path),
         mad_filter=mad_filter_summary(analysis_db_path),
         recheck=unassociated_recheck(analysis_db_path),
-        annotation=annotation_summary(analysis_db_path),
+        annotation=annotation_summary(
+            analysis_db_path, fragmentation_factor_cutoff=fragmentation_factor_cutoff
+        ),
     )
 
 
@@ -1747,7 +1764,7 @@ def _assoc_purity_sentence(a: AssociatedPuritySummary) -> str:
     return (
         f"<p>Of {_fmt(a.n_associated)} MS2 associated to a feature (the spectra "
         f"that feed the library search), <b>{a.pct_ge_cutoff:.0f}%</b> have "
-        f"<code>precursor_frac</code> &ge; {a.cutoff:g} — the precursor dominates "
+        f"<code>purity_score</code> &ge; {a.cutoff:g} — the precursor dominates "
         f"its isolation window in that pixel's own MS1.</p>"
     )
 
@@ -1813,7 +1830,7 @@ def _annotation_section_html(a: AnnotationSummary) -> str:
         trust = (
             f" Of the {_fmt(c)} best hits ≥ {hi:g}: "
             f"{100.0 * a.n_confident_precursor_confirmed / c:.0f}% from a "
-            f"confirmed precursor, {100.0 * a.n_confident_not_precursor_only / c:.0f}% "
+            f"confirmed precursor, {100.0 * a.n_confident_not_low_fragmentation / c:.0f}% "
             f"with real fragmentation, "
             f"{100.0 * a.n_confident_not_flat_fragmentation / c:.0f}% not flagged "
             f"flat fragmentation."
@@ -1913,17 +1930,23 @@ def build_summary_report(
             default ``samples.raw_db_path`` is trusted.
         out_dir: Where to write the two files (default: the analysis DB's
             directory).
-        config: Optional object exposing ``overlap_top_n`` / ``purity_cutoff``
+        config: Optional object exposing ``overlap_top_n`` /
+            ``purity_score_cutoff`` / ``fragmentation_factor_cutoff``
             (a :class:`~msianalyzer.core.config.config.ReportConfig`).
     """
     analysis_db_path = Path(analysis_db_path)
     out_dir = Path(out_dir) if out_dir is not None else analysis_db_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     top_n = int(getattr(config, "overlap_top_n", 30))
-    cutoff = float(getattr(config, "purity_cutoff", 0.8))
+    purity_cutoff = float(getattr(config, "purity_score_cutoff", 0.8))
+    fragmentation_cutoff = float(getattr(config, "fragmentation_factor_cutoff", 0.2))
 
     stats = collect_stats(
-        analysis_db_path, raw_db_paths, overlap_top_n=top_n, purity_cutoff=cutoff
+        analysis_db_path,
+        raw_db_paths,
+        overlap_top_n=top_n,
+        purity_score_cutoff=purity_cutoff,
+        fragmentation_factor_cutoff=fragmentation_cutoff,
     )
     sample_names = [c.name for c in stats.samples]
 

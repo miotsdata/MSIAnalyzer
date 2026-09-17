@@ -70,12 +70,12 @@ def test_purity_group_classifies_optional_fields():
     assert fields_by_name["n_workers"]["kind"] == "optional_int"
 
 
-def test_annotate_group_classifies_min_precursor_frac_as_optional_float():
+def test_annotate_group_classifies_min_purity_score_as_optional_float():
     schema = build_config_schema()
     annotate = next(g for g in schema if g["key"] == "annotate")
     fields_by_name = {f["name"]: f for f in annotate["fields"]}
 
-    assert fields_by_name["min_precursor_frac"]["kind"] == "optional_float"
+    assert fields_by_name["min_purity_score"]["kind"] == "optional_float"
 
 
 def test_annotate_group_classifies_library_path_as_path_list():

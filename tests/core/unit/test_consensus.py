@@ -13,7 +13,7 @@ from msianalyzer.core.annotation.consensus import (
     consensus_score,
     peak_term,
     pick_feature,
-    precursor_frac_term,
+    purity_score_term,
     run_consensus,
 )
 from msianalyzer.core.config.config import ConsensusConfig
@@ -32,37 +32,37 @@ def test_peak_term_saturates_at_target():
     assert peak_term(3, 0) == 1.0  # target <= 0 disables the term
 
 
-def test_precursor_frac_term_neutral_for_none_and_clamped():
-    assert precursor_frac_term(None, 0.5) == 0.5
-    assert precursor_frac_term(0.9, 0.5) == pytest.approx(0.9)
-    assert precursor_frac_term(1.7, 0.5) == 1.0
-    assert precursor_frac_term(-0.2, 0.5) == 0.0
+def test_purity_score_term_neutral_for_none_and_clamped():
+    assert purity_score_term(None, 0.5) == 0.5
+    assert purity_score_term(0.9, 0.5) == pytest.approx(0.9)
+    assert purity_score_term(1.7, 0.5) == 1.0
+    assert purity_score_term(-0.2, 0.5) == 0.0
 
 
-def test_consensus_score_without_annotation_uses_precursor_frac_and_peaks():
-    s = ScanStat(1, 10, precursor_frac=0.8, n_peaks=5, best_score=None)
+def test_consensus_score_without_annotation_uses_purity_score_and_peaks():
+    s = ScanStat(1, 10, purity_score=0.8, n_peaks=5, best_score=None)
     # 1.0 * 0.8 * 0.5
     assert consensus_score(
-        s, target_peaks=10, neutral_precursor_frac=0.5
+        s, target_peaks=10, neutral_purity_score=0.5
     ) == pytest.approx(0.4)
 
 
 def test_consensus_score_with_annotation_multiplies_in_score():
-    s = ScanStat(1, 10, precursor_frac=1.0, n_peaks=20, best_score=0.6)
+    s = ScanStat(1, 10, purity_score=1.0, n_peaks=20, best_score=0.6)
     assert consensus_score(
-        s, target_peaks=10, neutral_precursor_frac=0.5
+        s, target_peaks=10, neutral_purity_score=0.5
     ) == pytest.approx(0.6)
 
 
 def test_pick_feature_prefers_cleaner_richer_scan():
     stats = [
-        ScanStat(1, 1, precursor_frac=0.3, n_peaks=3, best_score=None),
-        ScanStat(1, 2, precursor_frac=0.95, n_peaks=15, best_score=None),
-        ScanStat(2, 3, precursor_frac=0.6, n_peaks=8, best_score=None),
+        ScanStat(1, 1, purity_score=0.3, n_peaks=3, best_score=None),
+        ScanStat(1, 2, purity_score=0.95, n_peaks=15, best_score=None),
+        ScanStat(2, 3, purity_score=0.6, n_peaks=8, best_score=None),
     ]
     row = pick_feature(
         7, 500.1234, stats,
-        target_peaks=10, neutral_precursor_frac=0.5, min_precursor_frac=None,
+        target_peaks=10, neutral_purity_score=0.5, min_purity_score=None,
     )
     assert row.best_scan_id == 2
     assert row.n_ms2 == 3
@@ -70,14 +70,14 @@ def test_pick_feature_prefers_cleaner_richer_scan():
     assert row.n_ms2_scored == 0
 
 
-def test_pick_feature_min_precursor_frac_excludes_from_pick_not_from_count():
+def test_pick_feature_min_purity_score_excludes_from_pick_not_from_count():
     stats = [
-        ScanStat(1, 1, precursor_frac=0.2, n_peaks=30, best_score=0.9),  # richest but dirty
-        ScanStat(1, 2, precursor_frac=0.85, n_peaks=6, best_score=0.4),
+        ScanStat(1, 1, purity_score=0.2, n_peaks=30, best_score=0.9),  # richest but dirty
+        ScanStat(1, 2, purity_score=0.85, n_peaks=6, best_score=0.4),
     ]
     row = pick_feature(
         1, 100.0, stats,
-        target_peaks=10, neutral_precursor_frac=0.5, min_precursor_frac=0.5,
+        target_peaks=10, neutral_purity_score=0.5, min_purity_score=0.5,
     )
     assert row.best_scan_id == 2
     assert row.n_ms2 == 2
@@ -85,11 +85,11 @@ def test_pick_feature_min_precursor_frac_excludes_from_pick_not_from_count():
 
 
 def test_pick_feature_returns_none_when_all_excluded():
-    stats = [ScanStat(1, 1, precursor_frac=0.1, n_peaks=5, best_score=None)]
+    stats = [ScanStat(1, 1, purity_score=0.1, n_peaks=5, best_score=None)]
     assert (
         pick_feature(
             1, 1.0, stats,
-            target_peaks=10, neutral_precursor_frac=0.5, min_precursor_frac=0.5,
+            target_peaks=10, neutral_purity_score=0.5, min_purity_score=0.5,
         )
         is None
     )
@@ -99,7 +99,7 @@ def test_pick_feature_none_for_no_scans():
     assert (
         pick_feature(
             1, 1.0, [],
-            target_peaks=10, neutral_precursor_frac=0.5, min_precursor_frac=None,
+            target_peaks=10, neutral_purity_score=0.5, min_purity_score=None,
         )
         is None
     )
@@ -124,8 +124,8 @@ def _analysis_db(tmp_path: Path, *, with_purity=True, with_annotations=True) -> 
         # feature 1: two scans; feature 2: one scan
         con.executemany(
             "INSERT INTO ms2_associations "
-            "(sample_id, scan_id, feature_id, match_key, "
-            " n_peaks, precursor_only) VALUES (?,?,?,?,?,0)",
+            "(sample_id, scan_id, feature_id, match_key, n_peaks) "
+            "VALUES (?,?,?,?,?)",
             [
                 (1, 10, 1, "precursor_mz", 4),
                 (1, 11, 1, "precursor_mz", 25),
@@ -135,7 +135,7 @@ def _analysis_db(tmp_path: Path, *, with_purity=True, with_annotations=True) -> 
         if with_purity:
             con.executemany(
                 "INSERT INTO precursor_purity "
-                "(sample_id, ms2_scan_id, precursor_frac) VALUES (?,?,?)",
+                "(sample_id, ms2_scan_id, purity_score) VALUES (?,?,?)",
                 [(1, 10, 0.98), (1, 11, 0.30), (1, 20, 0.95)],
             )
         if with_annotations:
@@ -164,7 +164,7 @@ def _analysis_db(tmp_path: Path, *, with_purity=True, with_annotations=True) -> 
 
 def test_run_consensus_picks_clean_scan_and_persists(tmp_path):
     adb = _analysis_db(tmp_path)
-    result = run_consensus(adb, ConsensusConfig(min_precursor_frac=0.5))
+    result = run_consensus(adb, ConsensusConfig(min_purity_score=0.5))
 
     assert result.n_features == 2
     assert result.n_features_scored == 2
@@ -177,7 +177,7 @@ def test_run_consensus_picks_clean_scan_and_persists(tmp_path):
                 "best_compound_name FROM feature_ms2_consensus"
             ).fetchall()
         }
-    # scan 11 is richer + higher library score but precursor_frac 0.30 < min
+    # scan 11 is richer + higher library score but purity_score 0.30 < min
     assert rows[1][1] == 10
     assert rows[1][2] == 2
     assert rows[1][3] == 1
@@ -187,7 +187,7 @@ def test_run_consensus_picks_clean_scan_and_persists(tmp_path):
 
 def test_run_consensus_works_without_annotations(tmp_path):
     adb = _analysis_db(tmp_path, with_annotations=False)
-    result = run_consensus(adb, ConsensusConfig(min_precursor_frac=None))
+    result = run_consensus(adb, ConsensusConfig(min_purity_score=None))
 
     assert result.n_features == 2
     assert result.n_features_scored == 0
@@ -197,20 +197,20 @@ def test_run_consensus_works_without_annotations(tmp_path):
                 "SELECT feature_id, best_scan_id FROM feature_ms2_consensus"
             ).fetchall()
         )
-    # no library: precursor_frac (0.98 vs 0.30) outweighs scan 11's extra peaks
+    # no library: purity_score (0.98 vs 0.30) outweighs scan 11's extra peaks
     assert best[1] == 10
 
 
-def test_run_consensus_peak_richness_breaks_precursor_frac_tie(tmp_path):
+def test_run_consensus_peak_richness_breaks_purity_score_tie(tmp_path):
     adb = _analysis_db(tmp_path, with_annotations=False, with_purity=False)
-    run_consensus(adb, ConsensusConfig(min_precursor_frac=None))
+    run_consensus(adb, ConsensusConfig(min_purity_score=None))
     with sqlite3.connect(adb) as con:
         best = dict(
             con.execute(
                 "SELECT feature_id, best_scan_id FROM feature_ms2_consensus"
             ).fetchall()
         )
-    # equal (neutral) precursor_frac -> scan 11 wins feature 1 on peak richness
+    # equal (neutral) purity_score -> scan 11 wins feature 1 on peak richness
     assert best[1] == 11
 
 

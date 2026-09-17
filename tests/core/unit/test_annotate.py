@@ -70,7 +70,7 @@ def _row(scan_id, score, *, feature_id=1, sample_id=1, n_matched_peaks=3, compou
         n_lib_peaks=3,
         n_emp_peaks_raw=5,
         n_emp_peaks_filtered=4,
-        precursor_only=False,
+        fragmentation_factor=1.0,
         flat_fragmentation=False,
         emp_raw_mz=empty,
         emp_raw_intensity=empty,
@@ -331,7 +331,6 @@ def test_annotate_feature_true_compound_outranks_decoys_and_carries_raw_arrays()
     scan = {
         "scan_id": 7,
         "sample_id": 1,
-        "precursor_only": False,
         "emp_mz": emp_mz,
         "emp_int": emp_int,
     }
@@ -373,7 +372,6 @@ def test_annotate_feature_scores_every_scan_regardless_of_window_crowding():
     scan = {
         "scan_id": 1,
         "sample_id": 1,
-        "precursor_only": False,
         "emp_mz": np.array([100.0, 200.0]),
         "emp_int": np.array([1.0, 1.0]),
     }
@@ -392,18 +390,17 @@ def test_annotate_feature_scores_every_scan_regardless_of_window_crowding():
     assert len(rows) == 1
 
 
-def _purity_scan(scan_id, precursor_frac):
+def _purity_scan(scan_id, purity_score):
     return {
         "scan_id": scan_id,
         "sample_id": 1,
-        "precursor_only": False,
-        "precursor_frac": precursor_frac,
+        "purity_score": purity_score,
         "emp_mz": np.array([100.0, 200.0]),
         "emp_int": np.array([1.0, 1.0]),
     }
 
 
-def _annotate_one(scans, *, min_precursor_frac=None):
+def _annotate_one(scans, *, min_purity_score=None):
     return annotate_feature(
         1,
         150.0,
@@ -414,22 +411,30 @@ def _annotate_one(scans, *, min_precursor_frac=None):
         mz_power=2.0,
         int_power=0.5,
         min_matched_peaks=1,
-        min_precursor_frac=min_precursor_frac,
+        min_purity_score=min_purity_score,
     )
 
 
-def test_annotate_feature_carries_precursor_frac_onto_rows():
+def test_annotate_feature_carries_purity_score_onto_rows():
     rows = _annotate_one([_purity_scan(1, 0.83)])
-    assert rows[0].precursor_frac == pytest.approx(0.83)
+    assert rows[0].purity_score == pytest.approx(0.83)
 
 
-def test_annotate_feature_min_precursor_frac_skips_low_and_keeps_unscored():
+def test_annotate_feature_min_purity_score_skips_low_and_keeps_unscored():
     rows = _annotate_one(
         [_purity_scan(1, 0.4), _purity_scan(2, 0.9), _purity_scan(3, None)],
-        min_precursor_frac=0.5,
+        min_purity_score=0.5,
     )
     kept = {r.scan_id for r in rows}
     assert kept == {2, 3}  # 0.4 dropped; None (unscored) kept
+
+
+def test_annotate_feature_skips_flat_fragmentation_scan_unconditionally():
+    flat_scan = _purity_scan(1, 0.99)
+    flat_scan["flat_fragmentation"] = True
+    normal_scan = _purity_scan(2, 0.99)
+    rows = _annotate_one([flat_scan, normal_scan])
+    assert {r.scan_id for r in rows} == {2}
 
 
 # ---------------------------------------------------------------------------
@@ -638,18 +643,18 @@ def _seeded_analysis_db(tmp_path, mock, make_ms2_db):
     return adb
 
 
-def _seed_purity(adb, scan_id, precursor_frac, *, sample_id=1, confirmed=1):
+def _seed_purity(adb, scan_id, purity_score, *, sample_id=1, confirmed=1):
     with sqlite3.connect(adb) as con:
         con.execute("PRAGMA foreign_keys = ON")
         con.execute(
             "INSERT INTO precursor_purity (sample_id, ms2_scan_id, "
-            "precursor_confirmed, precursor_frac) VALUES (?,?,?,?)",
-            (sample_id, scan_id, confirmed, precursor_frac),
+            "precursor_confirmed, purity_score) VALUES (?,?,?,?)",
+            (sample_id, scan_id, confirmed, purity_score),
         )
         con.commit()
 
 
-def test_run_annotation_carries_precursor_frac_and_min_precursor_frac_filters(
+def test_run_annotation_carries_purity_score_and_min_purity_score_filters(
     ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
 ):
     mock = ms2_grouper_mock_data(n=1000)
@@ -662,7 +667,7 @@ def test_run_annotation_carries_precursor_frac_and_min_precursor_frac_filters(
     run_annotation(adb, cfg)
     with sqlite3.connect(adb) as con:
         row = con.execute(
-            "SELECT precursor_confirmed, precursor_frac "
+            "SELECT precursor_confirmed, purity_score "
             "FROM ms2_annotations WHERE scan_id = ?", (single_scan,)
         ).fetchone()
     assert row is not None
@@ -671,14 +676,14 @@ def test_run_annotation_carries_precursor_frac_and_min_precursor_frac_filters(
 
     cfg_filtered = AnnotateConfig(
         library_path=str(lib), candidate_ppm=25.0, n_workers=1,
-        min_precursor_frac=0.5,
+        min_purity_score=0.5,
     )
     run_annotation(adb, cfg_filtered)
     with sqlite3.connect(adb) as con:
         n = con.execute(
             "SELECT COUNT(*) FROM ms2_annotations WHERE scan_id = ?", (single_scan,)
         ).fetchone()[0]
-    assert n == 0  # dropped by min_precursor_frac
+    assert n == 0  # dropped by min_purity_score
 
 
 def test_run_annotation_end_to_end_ranks_true_compound(

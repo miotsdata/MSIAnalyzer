@@ -17,7 +17,7 @@ aggregated_spectra   averaged MS1 / centroids / filtered peaks, per sample
 features             aligned cross-sample master m/z list
 ms2_associations     one row per MS2 scan snapped to a feature (grouper)
 feature_ms2_summary  per-feature MS2 coverage roll-up
-precursor_purity     per-MS2 precursor purity (precursor_frac) vs. its parent MS1
+precursor_purity     per-MS2 precursor purity (purity_score) vs. its parent MS1
 feature_ms2_consensus per-feature "best MS2 scan" pick
 annotation_libraries one row per spectral library used to annotate
 ms2_annotations      one row per (MS2 scan, library candidate) comparison
@@ -207,7 +207,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     # inside it is no longer stored or exposed — it measures feature-list
     # density, not what actually co-fragmented into this scan's own
     # spectrum, and over-flagged badly once a feature list grew dense (see
-    # ADR 0019). precursor_purity.precursor_frac is the scan-intrinsic
+    # ADR 0019). precursor_purity.purity_score is the scan-intrinsic
     # replacement.
     con.execute("""
         CREATE TABLE IF NOT EXISTS ms2_associations (
@@ -227,7 +227,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             collision_energy            REAL,
             n_peaks                     INTEGER,
             polarity                    TEXT,
-            precursor_only              INTEGER NOT NULL DEFAULT 0,
+            fragmentation_factor        REAL,
             flat_fragmentation          INTEGER NOT NULL DEFAULT 0,
             command_id                  INTEGER,
             UNIQUE (sample_id, scan_id),
@@ -235,6 +235,9 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             FOREIGN KEY (command_id) REFERENCES commands(id)
         )
     """)
+    # Retrofit before the index below — an old table (pre-ADR-43 rename)
+    # has neither this column nor anything an index could reference yet.
+    _ensure_column(con, "ms2_associations", "fragmentation_factor", "REAL")
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_assoc_feature ON ms2_associations(feature_id)"
     )
@@ -245,19 +248,20 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             feature_mz        REAL    NOT NULL,
             n_ms2             INTEGER NOT NULL,
             n_samples         INTEGER NOT NULL,
-            n_precursor_only  INTEGER NOT NULL,
+            mean_fragmentation_factor REAL,
             n_single_peak     INTEGER NOT NULL,
             n_flat_fragmentation INTEGER NOT NULL DEFAULT 0,
             median_n_peaks    REAL    NOT NULL,
             FOREIGN KEY (feature_id) REFERENCES features(feature_id)
         )
     """)
+    _ensure_column(con, "feature_ms2_summary", "mean_fragmentation_factor", "REAL")
 
     # --- MS2 precursor ion purity (Stage A' of annotation) --------------
     # Written by core.annotation.precursor_purity.run_precursor_purity. One
     # row per MS2 scan; a re-run replaces every row. Chimericity measured
     # against the scan's own parent MS1, not the analysis-wide feature
-    # list — precursor_frac (peak-detection-free) is the metric; see
+    # list — purity_score (peak-detection-free) is the metric; see
     # ADR 0019 for why the old peak-picking-based purity/n_peaks_in_window/
     # runner_up_rel_int (and the parent+next-MS1 raster interpolation that
     # fed them) were retired: on real MALDI-imaging data the peak-picker
@@ -273,7 +277,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             window_lo_mz            REAL,
             window_hi_mz            REAL,
             precursor_confirmed     INTEGER,
-            precursor_frac          REAL,
+            purity_score            REAL,
             precursor_mz_snapped    REAL,
             snap_shift_ppm          REAL,
             command_id              INTEGER,
@@ -282,13 +286,16 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             FOREIGN KEY (command_id) REFERENCES commands(id)
         )
     """)
+    # Retrofit before the indexes below — same ordering reason as
+    # ms2_associations.fragmentation_factor above.
+    _ensure_column(con, "precursor_purity", "purity_score", "REAL")
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_purity_scan "
         "ON precursor_purity(sample_id, ms2_scan_id)"
     )
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_purity_value "
-        "ON precursor_purity(precursor_frac)"
+        "ON precursor_purity(purity_score)"
     )
 
     # --- per-feature "best MS2 scan" pick (Stage A'' of annotation) ------
@@ -307,7 +314,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             n_ms2_considered       INTEGER NOT NULL,
             n_ms2_scored           INTEGER NOT NULL,
             consensus_score        REAL    NOT NULL,
-            precursor_frac         REAL,
+            purity_score            REAL,
             n_peaks                INTEGER,
             best_annotation_score  REAL,
             best_compound_name     TEXT,
@@ -317,6 +324,7 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             FOREIGN KEY (command_id) REFERENCES commands(id)
         )
     """)
+    _ensure_column(con, "feature_ms2_consensus", "purity_score", "REAL")
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_consensus_score "
         "ON feature_ms2_consensus(consensus_score)"
@@ -345,10 +353,12 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     #   rank_scan_feature         - the feature's scans by their best hit
     #                              (all samples), broadcast onto the scan's rows
     #   rank_scan_feature_sample  - same, within one sample
-    # Every MS2 scan associated with a feature is scored unconditionally —
-    # there is no more feature-list-density "chimeric" gate (see ADR 0019).
-    # precursor_confirmed/precursor_frac are carried through from
-    # precursor_purity as the real, per-scan quality signal.
+    # Every MS2 scan associated with a feature is scored unconditionally,
+    # EXCEPT a scan flagged flat_fragmentation (see group_ms2) — never
+    # library-matched, a flat/noisy spectrum isn't real fragmentation to
+    # begin with. There is no more feature-list-density "chimeric" gate
+    # (see ADR 0019). precursor_confirmed/purity_score are carried through
+    # from precursor_purity as the real, per-scan quality signal.
     # emp_raw_*/lib_raw_* are the *untouched* (pre-noise-filtering) spectra
     # on both sides: emp_raw_* is the scan's own raw fragment arrays
     # (identical across every candidate row of that scan), lib_raw_* is the
@@ -393,8 +403,8 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             rank_scan_feature        INTEGER,
             rank_scan_feature_sample INTEGER,
             precursor_confirmed    INTEGER,
-            precursor_frac         REAL,
-            precursor_only         INTEGER NOT NULL DEFAULT 0,
+            purity_score           REAL,
+            fragmentation_factor   REAL,
             flat_fragmentation     INTEGER NOT NULL DEFAULT 0,
             emp_raw_mz             BLOB,
             emp_raw_intensity      BLOB,
@@ -435,6 +445,17 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     # this can't just be part of the CREATE TABLE above like the columns
     # a brand-new analysis already gets.
     for _col, _coltype in (("adduct", "TEXT"), ("cas", "TEXT"), ("hmdb", "TEXT")):
+        _ensure_column(con, "ms2_annotations", _col, _coltype)
+
+    # Retrofit for the precursor_only/precursor_frac -> fragmentation_factor/
+    # purity_score rename (ADR 43) — the other four tables' own retrofits
+    # sit right after their own CREATE TABLE (ordering matters there: each
+    # table's own CREATE INDEX below it references the new column name).
+    # This one has no such index to worry about.
+    for _col, _coltype in (
+        ("fragmentation_factor", "REAL"),
+        ("purity_score", "REAL"),
+    ):
         _ensure_column(con, "ms2_annotations", _col, _coltype)
 
     # Convenience view: for every (feature, distinct compound) the best

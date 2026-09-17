@@ -110,7 +110,7 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
             "ms2_scan_id",
             "parent_ms1_scan_id",
             "precursor_confirmed",
-            "precursor_frac",
+            "purity_score",
             "precursor_mz_snapped",
             "snap_shift_ppm",
         } <= purity_cols
@@ -121,7 +121,7 @@ def test_init_analysis_db_creates_tables(tmp_path: Path):
                 "PRAGMA table_info(ms2_annotations)"
             ).fetchall()
         }
-        assert {"precursor_confirmed", "precursor_frac"} <= ann_cols
+        assert {"precursor_confirmed", "purity_score"} <= ann_cols
         assert {
             "rank_ms2",
             "rank_feature",
@@ -227,6 +227,68 @@ def test_ensure_column_retrofits_adduct_cas_hmdb_onto_an_old_table(tmp_path: Pat
         con.commit()
         cols = {row[1] for row in con.execute("PRAGMA table_info(ms2_annotations)").fetchall()}
     assert {"adduct", "cas", "hmdb"} <= cols
+
+
+def test_ensure_column_retrofits_fragmentation_factor_and_purity_score(tmp_path: Path):
+    # Same "old table predates the rename" scenario as the adduct/cas/hmdb
+    # retrofit above, but for the precursor_only/precursor_frac ->
+    # fragmentation_factor/purity_score rename (ADR 43) — an old table
+    # still has the *old* columns (untouched) and needs the new ones added.
+    db = tmp_path / "analysis.db"
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "CREATE TABLE ms2_associations ("
+            "id INTEGER PRIMARY KEY, sample_id INTEGER, scan_id INTEGER, "
+            "feature_id INTEGER, precursor_only INTEGER NOT NULL DEFAULT 0"
+            ")"
+        )
+        con.execute(
+            "CREATE TABLE feature_ms2_summary ("
+            "feature_id INTEGER PRIMARY KEY, feature_mz REAL, n_ms2 INTEGER, "
+            "n_samples INTEGER, n_precursor_only INTEGER, n_single_peak INTEGER, "
+            "median_n_peaks REAL"
+            ")"
+        )
+        con.execute(
+            "CREATE TABLE precursor_purity ("
+            "id INTEGER PRIMARY KEY, sample_id INTEGER, ms2_scan_id INTEGER, "
+            "precursor_frac REAL"
+            ")"
+        )
+        con.execute(
+            "CREATE TABLE feature_ms2_consensus ("
+            "feature_id INTEGER PRIMARY KEY, feature_mz REAL, best_scan_id INTEGER, "
+            "n_ms2 INTEGER, consensus_score REAL, precursor_frac REAL"
+            ")"
+        )
+        con.execute(
+            "CREATE TABLE ms2_annotations ("
+            "id INTEGER PRIMARY KEY, sample_id INTEGER, scan_id INTEGER, "
+            "feature_id INTEGER, score REAL, inchikey TEXT, rank_feature INTEGER, "
+            "precursor_only INTEGER, precursor_frac REAL"
+            ")"
+        )
+        con.commit()
+
+    from msianalyzer.core.analysis_db import create_analysis_schema
+
+    with sqlite3.connect(db) as con:
+        create_analysis_schema(con)
+        con.commit()
+        assoc_cols = {row[1] for row in con.execute("PRAGMA table_info(ms2_associations)").fetchall()}
+        summary_cols = {row[1] for row in con.execute("PRAGMA table_info(feature_ms2_summary)").fetchall()}
+        purity_cols = {row[1] for row in con.execute("PRAGMA table_info(precursor_purity)").fetchall()}
+        cons_cols = {row[1] for row in con.execute("PRAGMA table_info(feature_ms2_consensus)").fetchall()}
+        ann_cols = {row[1] for row in con.execute("PRAGMA table_info(ms2_annotations)").fetchall()}
+
+    assert "fragmentation_factor" in assoc_cols
+    assert "mean_fragmentation_factor" in summary_cols
+    assert "purity_score" in purity_cols
+    assert "purity_score" in cons_cols
+    assert {"fragmentation_factor", "purity_score"} <= ann_cols
+    # old columns untouched, not dropped (no destructive migration)
+    assert "precursor_only" in assoc_cols
+    assert "precursor_frac" in purity_cols
 
 
 # ---------------------------------------------------------------------------
@@ -573,13 +635,13 @@ def _seed_samples_features_ms2_summary(db: Path) -> None:
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, "
+            "n_samples, mean_fragmentation_factor, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
             "VALUES (1, 100.0, 5, 2, 0, 0, 0, 3.0)"
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, "
+            "n_samples, mean_fragmentation_factor, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
             "VALUES (2, 200.0, 0, 0, 0, 0, 0, 0.0)"
         )
@@ -740,7 +802,7 @@ def test_load_feature_ms2_count_returns_n_ms2(tmp_path: Path):
     with sqlite3.connect(db) as con:
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, "
+            "n_samples, mean_fragmentation_factor, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
             "VALUES (1, 100.0, 7, 2, 0, 0, 0, 3.0)"
         )
@@ -848,13 +910,13 @@ def test_load_feature_categories_classifies_no_ms2_annotated_and_non_annotated(
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, "
+            "n_samples, mean_fragmentation_factor, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
             "VALUES (2, 200.0, 3, 1, 0, 0, 0, 3.0)"
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, "
+            "n_samples, mean_fragmentation_factor, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
             "VALUES (3, 300.0, 2, 1, 0, 0, 0, 3.0)"
         )

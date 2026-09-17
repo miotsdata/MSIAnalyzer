@@ -17,13 +17,13 @@ This stage now measures contamination where it physically happened — in the
 MS1 scan the MS2 was triggered from (``ms2_scans.parent_scan_id``) — using
 only the peak-detection-free view, which is always computable:
 
-* ``precursor_frac`` — above-baseline profile area within
+* ``purity_score`` — above-baseline profile area within
   ``precursor_confirm_ppm`` of the recorded ``precursor_mz`` over the whole
   isolation window's area. ``1.0`` means all of the window's ion current
   sits on the precursor; a low value means another, unrelated ion
   dominates the window — the real, per-scan chimeric-risk signal. Robust
   where peak detection fails (dense, matrix-heavy, low-m/z windows).
-* ``precursor_confirmed`` — ``precursor_frac >= precursor_confirm_min_frac``:
+* ``precursor_confirmed`` — ``purity_score >= precursor_confirm_min_frac``:
   the recorded precursor really does carry signal in its own parent MS1
   (association-confidence gate; carried onto ``ms2_annotations``).
 * ``precursor_mz_snapped`` / ``snap_shift_ppm`` — ``precursor_mz`` snapped
@@ -402,7 +402,7 @@ class PurityRow:
     window_lo_mz: float | None
     window_hi_mz: float | None
     precursor_confirmed: bool | None
-    precursor_frac: float | None
+    purity_score: float | None
     precursor_mz_snapped: float | None
     snap_shift_ppm: float | None
 
@@ -437,7 +437,7 @@ def compute_scan_purity(
         window_lo_mz=None,
         window_hi_mz=None,
         precursor_confirmed=None,
-        precursor_frac=None,
+        purity_score=None,
         precursor_mz_snapped=None,
         snap_shift_ppm=None,
     )
@@ -466,7 +466,7 @@ def compute_scan_purity(
         window_lo_mz=float(lo),
         window_hi_mz=float(hi),
         precursor_confirmed=bool(frac >= confirm_min_frac),
-        precursor_frac=float(frac),
+        purity_score=float(frac),
         precursor_mz_snapped=snapped_mz,
         snap_shift_ppm=float(snap_shift),
     )
@@ -503,7 +503,7 @@ _PURITY_COLS = (
     "window_lo_mz",
     "window_hi_mz",
     "precursor_confirmed",
-    "precursor_frac",
+    "purity_score",
     "precursor_mz_snapped",
     "snap_shift_ppm",
     "command_id",
@@ -542,7 +542,7 @@ def persist_purity(
                     r.window_lo_mz,
                     r.window_hi_mz,
                     None if r.precursor_confirmed is None else int(r.precursor_confirmed),
-                    r.precursor_frac,
+                    r.purity_score,
                     r.precursor_mz_snapped,
                     r.snap_shift_ppm,
                     command_id,

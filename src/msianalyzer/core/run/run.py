@@ -775,6 +775,9 @@ class Run:
                 arguments={
                     **vars(config.group_ms2),
                     "align_ppm": config.align.align_ppm,
+                    "fragmentation_factor_mz_tol_da": (
+                        config.purity.fragmentation_factor_mz_tol_da
+                    ),
                 },
                 run_id=analysis_id,
             )
@@ -787,8 +790,9 @@ class Run:
                 default_isolation_half_width=(
                     config.group_ms2.default_isolation_half_width
                 ),
-                precursor_only_tic_frac=config.group_ms2.precursor_only_tic_frac,
-                precursor_only_mz_tol_da=config.group_ms2.precursor_only_mz_tol_da,
+                fragmentation_factor_mz_tol_da=(
+                    config.purity.fragmentation_factor_mz_tol_da
+                ),
                 flat_fragmentation_min_peaks=(
                     config.group_ms2.flat_fragmentation_min_peaks
                 ),

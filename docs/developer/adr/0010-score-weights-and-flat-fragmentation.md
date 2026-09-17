@@ -102,3 +102,10 @@ Config `version` 11 → 12.
   diagnostic columns — a weighting experiment is always inspectable against
   the same `dot_product_score` / `lib_coverage` / `emp_coverage` it started
   from.
+
+**Note (2026-09-17):** `flat_fragmentation` was originally a soft QC flag
+only (kept and scored either way). [ADR 43](0043-fragmentation-factor-purity-score-rename.md)
+made it an unconditional filter — a flagged scan is no longer scored
+against the library at all, still flagged/stored for inspection. This
+ADR's own `precursor_only` (renamed `fragmentation_factor`, also by
+ADR 43) remains a soft signal, unchanged.

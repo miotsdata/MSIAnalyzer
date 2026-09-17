@@ -176,25 +176,27 @@ def _analysis_db(tmp_path: Path) -> tuple[Path, dict[int, str]]:
         con.executemany(
             "INSERT INTO ms2_associations "
             "(sample_id, scan_id, feature_id, match_key, "
-            " n_peaks, precursor_only, precursor_mz, isolation_window_target, "
+            " n_peaks, fragmentation_factor, precursor_mz, isolation_window_target, "
             " isolation_window_lower, isolation_window_upper) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             [
                 # s1: two associated, one unassociated but recoverable (555.5)
-                (sid1, 1001, 1, "precursor_mz", 10, 0, 500.0, 500.0, 0.5, 0.5),
-                (sid1, 1002, 1, "precursor_mz", 20, 0, 500.0, 500.0, 0.5, 0.5),
-                (sid1, 1003, None, "precursor_mz", 2, 1, 555.5, 555.5, 0.5, 0.5),
+                # -- 1003 is deliberately low-fragmentation (< the 0.2 default
+                # cutoff), every other scan high (well above it).
+                (sid1, 1001, 1, "precursor_mz", 10, 0.9, 500.0, 500.0, 0.5, 0.5),
+                (sid1, 1002, 1, "precursor_mz", 20, 0.9, 500.0, 500.0, 0.5, 0.5),
+                (sid1, 1003, None, "precursor_mz", 2, 0.1, 555.5, 555.5, 0.5, 0.5),
                 # s2: one associated, one unassociated + unrecoverable (999.0),
                 #     one unassociated with no precursor m/z at all
-                (sid2, 1001, 2, "precursor_mz", 8, 0, 700.0, 700.0, 0.5, 0.5),
-                (sid2, 1002, None, "precursor_mz", 4, 0, 999.0, 999.0, 0.5, 0.5),
-                (sid2, 1003, None, "none", 1, 0, None, None, None, None),
+                (sid2, 1001, 2, "precursor_mz", 8, 0.9, 700.0, 700.0, 0.5, 0.5),
+                (sid2, 1002, None, "precursor_mz", 4, 0.9, 999.0, 999.0, 0.5, 0.5),
+                (sid2, 1003, None, "none", 1, 0.9, None, None, None, None),
             ],
         )
         con.executemany(
             "INSERT INTO precursor_purity "
             "(sample_id, ms2_scan_id, parent_ms1_scan_id, "
-            " precursor_confirmed, precursor_frac) "
+            " precursor_confirmed, purity_score) "
             "VALUES (?,?,?,?,?)",
             [
                 # s1: 1001/1002 are ASSOCIATED (feature_id=1); 2001/2002 are
@@ -252,7 +254,7 @@ def test_ms2_summary(tmp_path):
     assert s.n_total == 6
     assert s.n_associated == 3
     assert s.n_unassociated == 3
-    assert s.n_precursor_only == 1
+    assert s.n_low_fragmentation == 1
 
 
 def test_per_sample_ms2(tmp_path):
@@ -272,7 +274,7 @@ def test_associated_purity_scopes_to_associated_ms2(tmp_path):
     assert sorted(a.frac_values) == [0.4, 0.7, 0.9]
     assert a.n_ge_cutoff == 1  # 0.9 only
     assert round(a.pct_ge_cutoff) == 33
-    # every scan with a non-null precursor_frac is in the context list
+    # every scan with a non-null purity_score is in the context list
     assert len(a.frac_values_all) == 6
     by_name = {p.name: p for p in a.per_sample}
     assert sorted(by_name["s1"].frac_values) == [0.4, 0.9]
@@ -539,7 +541,7 @@ def _seed_annotations(adb: Path) -> None:
         "lib_coverage, emp_coverage, coverage_score, n_matched_peaks, n_lib_peaks, "
         "n_emp_peaks_raw, n_emp_peaks_filtered, rank_ms2, rank_feature, "
         "rank_feature_sample, rank_scan_feature, rank_scan_feature_sample, "
-        "precursor_confirmed, precursor_only) "
+        "precursor_confirmed, fragmentation_factor) "
         "VALUES (?,?,?,1,?,?,?,?,?,1,1,1,3,3,5,4,?,?,?,?,?,?,?)"
     )
     with sqlite3.connect(adb) as con:
@@ -554,11 +556,11 @@ def _seed_annotations(adb: Path) -> None:
                 # sid, scan, feat, lib_spec_id, inchikey, name, score, dot,
                 # rank_ms2, rank_feature, rank_feature_sample,
                 # rank_scan_feature, rank_scan_feature_sample,
-                # confirmed, prec_only
-                (1, 1001, 1, 10, "COMPA0000000AA", "Alpha", 0.85, 0.9, 1, 1, 1, 1, 1, 1, 0),
-                (1, 1001, 1, 11, "COMPB0000000BB", "Beta", 0.55, 0.6, 2, 3, 3, 1, 1, 1, 0),
-                (1, 1002, 1, 10, "COMPA0000000AA", "Alpha", 0.60, 0.7, 1, 2, 2, 2, 2, 1, 0),
-                (2, 1001, 2, 12, "COMPC0000000CC", "Gamma", 0.72, 0.8, 1, 1, 1, 1, 1, 1, 0),
+                # confirmed, fragmentation_factor (all "not low", 0.9)
+                (1, 1001, 1, 10, "COMPA0000000AA", "Alpha", 0.85, 0.9, 1, 1, 1, 1, 1, 1, 0.9),
+                (1, 1001, 1, 11, "COMPB0000000BB", "Beta", 0.55, 0.6, 2, 3, 3, 1, 1, 1, 0.9),
+                (1, 1002, 1, 10, "COMPA0000000AA", "Alpha", 0.60, 0.7, 1, 2, 2, 2, 2, 1, 0.9),
+                (2, 1001, 2, 12, "COMPC0000000CC", "Gamma", 0.72, 0.8, 1, 1, 1, 1, 1, 1, 0.9),
             ],
         )
         con.execute(
@@ -678,7 +680,7 @@ def test_build_summary_report_writes_files(tmp_path):
     assert "plotly" in text.lower()
     assert "pre-filter centroid list" in text  # the recheck sentence
     assert "feed the library search" in text  # the associated-purity sentence
-    assert "precursor_frac" in text
+    assert "purity_score" in text
     assert "base peak intensity" in text.lower()
     # the unscored-purity intro and its plot were dropped from the report
     assert "unscored for" not in text

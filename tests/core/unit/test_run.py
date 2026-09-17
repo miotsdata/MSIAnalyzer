@@ -81,8 +81,6 @@ class MockGroupMs2Config:
     assoc_ppm: float = 10.0
     include_unmatched: bool = True
     default_isolation_half_width: float = 0.5
-    precursor_only_tic_frac: float = 0.8
-    precursor_only_mz_tol_da: float = 2.0
     flat_fragmentation_min_peaks: int = 3
     flat_fragmentation_cv_threshold: float = 0.2
     flat_fragmentation_min_rel_intensity: float = 0.01
@@ -97,6 +95,7 @@ class MockPurityConfig:
     merge_ppm: float = 5.0
     use_next_ms1: bool = True
     max_interpixel_gap_sec: float | None = None
+    fragmentation_factor_mz_tol_da: float = 2.0
 
 
 @dataclass
@@ -126,7 +125,8 @@ class MockConsensusConfig:
 class MockReportConfig:
     enabled: bool = True
     overlap_top_n: int = 30
-    purity_cutoff: float = 0.8
+    purity_score_cutoff: float = 0.8
+    fragmentation_factor_cutoff: float = 0.2
 
 
 @dataclass

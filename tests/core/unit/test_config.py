@@ -185,11 +185,13 @@ def test_default_dataclass_initializations():
     assert PurityConfig().default_half_window_da == 0.5
     assert PurityConfig().precursor_confirm_ppm == 25.0
     assert PurityConfig().precursor_snap_ppm == 15.0
-    assert AnnotateConfig().min_precursor_frac is None
+    assert AnnotateConfig().min_purity_score is None
     assert ConsensusConfig().enabled is True
     assert ConsensusConfig().target_peaks == 10
     assert ReportConfig().enabled is True
-    assert ReportConfig().purity_cutoff == 0.8
+    assert ReportConfig().purity_score_cutoff == 0.8
+    assert ReportConfig().fragmentation_factor_cutoff == 0.2
+    assert PurityConfig().fragmentation_factor_mz_tol_da == 2.0
     assert AnnotateConfig().library_path is None
     assert AnnotateConfig().noise_threshold == 0.01
     assert AnnotateConfig().candidate_ppm == 10.0
@@ -223,7 +225,7 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     d = config.to_dict()
 
-    assert d["version"] == 16
+    assert d["version"] == 17
     assert isinstance(d["io"]["project_folder"], str)
     assert isinstance(d["io"]["mzml_paths"][0], str)
     assert d["ms1"]["chunk_size"] == 2000
@@ -232,7 +234,7 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
 def test_config_from_dict_success(sample_io_config: IOConfig):
     """Verify creating Config from a valid dictionary."""
     raw_data = {
-        "version": 16,
+        "version": 17,
         "io": {
             "project_folder": str(sample_io_config.project_folder),
             "mzml_paths": [str(p) for p in sample_io_config.mzml_paths],
@@ -258,7 +260,7 @@ def test_config_from_dict_version_mismatch():
 
 def test_config_from_dict_missing_required_io_fields():
     """Verify TypeError inside dataclasses wraps cleanly into ValueError."""
-    bad_data = {"version": 16, "io": {}}  # Missing required IO fields
+    bad_data = {"version": 17, "io": {}}  # Missing required IO fields
     with pytest.raises(ValueError, match="Invalid or incomplete config"):
         Config.from_dict(bad_data)
 
@@ -319,7 +321,7 @@ def test_config_str_representation(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     output = str(config)
 
-    assert "Config(version=16)" in output
+    assert "Config(version=17)" in output
     assert "input/output:" in output
     assert "detect centroids:" in output
     assert "group MS2:" in output
@@ -381,7 +383,7 @@ def test_create_config_file_force_overwrite(tmp_path: Path):
     )
 
     loaded = Config.load(config_file)
-    assert loaded.version == 16
+    assert loaded.version == 17
 
 
 def test_create_config_file_nonexistent_project_folder(tmp_path: Path):

@@ -161,3 +161,8 @@ migration, matching every prior precedent in this project (most recently
   `n_features_in_window`, `purity`, `runner_up_rel_int`) — this is a
   core-only change. Surfacing `precursor_frac` to a user per-annotation
   (e.g. a mirror-plot badge) is worthwhile future GUI work, not yet built.
+
+**Note (2026-09-17):** `precursor_frac`, the metric this ADR introduces
+as the feature-density flag's replacement, was later renamed
+`purity_score` — see [ADR 43](0043-fragmentation-factor-purity-score-rename.md).
+The reasoning above is unaffected; only the field/column name changed.

@@ -345,14 +345,14 @@ _KW = dict(default_half_width=0.5, confirm_ppm=25.0, confirm_min_frac=0.01, snap
 def test_compute_scan_purity_clean_scan_high_frac():
     row = compute_scan_purity(_SCAN, _resolved([(500.0, 1.0e5)]), **_KW)
     assert row.precursor_confirmed is True
-    assert row.precursor_frac > 0.9
+    assert row.purity_score > 0.9
 
 
 def test_compute_scan_purity_chimeric_scan_low_frac():
     row = compute_scan_purity(
         _SCAN, _resolved([(500.0, 2.0e4), (500.25, 8.0e4)]), **_KW
     )
-    assert row.precursor_frac < 0.5
+    assert row.purity_score < 0.5
 
 
 def test_compute_scan_purity_no_parent_returns_empty_row():
@@ -361,7 +361,7 @@ def test_compute_scan_purity_no_parent_returns_empty_row():
     )
     row = compute_scan_purity(_SCAN, resolved, **_KW)
     assert row.precursor_confirmed is None
-    assert row.precursor_frac is None
+    assert row.purity_score is None
     assert row.precursor_mz_snapped is None
 
 
@@ -372,7 +372,7 @@ def test_compute_scan_purity_confirms_and_snaps_minor_coisolate():
     resolved = _resolved([(500.0, 2.0e4), (500.45, 9.0e5)])
     row = compute_scan_purity(scan, resolved, **_KW)
     assert row.precursor_confirmed is True       # the ion is there
-    assert 0.0 < row.precursor_frac < 0.2        # minor co-isolate
+    assert 0.0 < row.purity_score < 0.2        # minor co-isolate
     assert abs(row.snap_shift_ppm) == pytest.approx(6.0, abs=1.5)
 
 
@@ -421,7 +421,7 @@ def test_run_precursor_purity_persists_rows_and_returns_result(tmp_path):
         rows = {
             r[0]: r
             for r in con.execute(
-                "SELECT ms2_scan_id, precursor_confirmed, precursor_frac, "
+                "SELECT ms2_scan_id, precursor_confirmed, purity_score, "
                 "precursor_mz_snapped FROM precursor_purity"
             ).fetchall()
         }
@@ -499,7 +499,7 @@ def test_run_precursor_purity_parallel_matches_serial(tmp_path):
             return {
                 (r[0], r[1]): round(r[2], 6) if r[2] is not None else None
                 for r in con.execute(
-                    "SELECT sample_id, ms2_scan_id, precursor_frac "
+                    "SELECT sample_id, ms2_scan_id, purity_score "
                     "FROM precursor_purity"
                 )
             }

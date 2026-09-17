@@ -979,13 +979,13 @@ def test_get_spectrum_url_colors_peaks_by_feature_category(tmp_path):
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, "
+            "n_samples, mean_fragmentation_factor, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
             "VALUES (2, 200.0, 3, 1, 0, 0, 0, 3.0)"
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, "
+            "n_samples, mean_fragmentation_factor, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
             "VALUES (3, 300.0, 2, 1, 0, 0, 0, 3.0)"
         )
@@ -1065,7 +1065,7 @@ def test_get_feature_detail_reports_presence_ms2_and_hits(tmp_path):
         )
         con.execute(
             "INSERT INTO feature_ms2_summary (feature_id, feature_mz, n_ms2, "
-            "n_samples, n_precursor_only, n_single_peak, "
+            "n_samples, mean_fragmentation_factor, n_single_peak, "
             "n_flat_fragmentation, median_n_peaks) "
             "VALUES (7, 150.0, 5, 1, 0, 0, 0, 3.0)"
         )

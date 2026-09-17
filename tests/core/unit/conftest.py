@@ -82,8 +82,10 @@ class PlantedCase:
         expected_match_key: Which scan field the grouper should match on —
             ``"precursor_mz"`` normally, ``"isolation_window_target"`` for
             the null-precursor fallback case.
-        expected_precursor_only: Whether the grouper should flag this scan
-            as showing no real fragmentation.
+        expected_low_fragmentation: Whether the grouper should compute a
+            low `fragmentation_factor` for this scan (showing no real
+            fragmentation) — a boolean statement of test intent, not the
+            continuous value itself.
     """
 
     name: str
@@ -98,7 +100,7 @@ class PlantedCase:
     expected_ppm_offset: float | None
     nearest_other_feature_ppm: float | None
     expected_match_key: str = "precursor_mz"
-    expected_precursor_only: bool = False
+    expected_low_fragmentation: bool = False
 
 
 @dataclass(frozen=True)
@@ -406,7 +408,7 @@ def build_ms2_grouper_mock_data(
         description=(
             "fragment spectrum is essentially just the surviving precursor "
             "(>98 % of the TIC within 2 Da of precursor_mz); the scan still "
-            "associates to its feature but must be flagged precursor_only."
+            "associates to its feature but must get a low fragmentation_factor."
         ),
         precursor_mz=p4,
         isolation_window=(r(po_feat - hw), r(po_feat + hw)),
@@ -416,7 +418,7 @@ def build_ms2_grouper_mock_data(
         expected_feature_mz=po_feat,
         expected_ppm_offset=ppm_between(p4, po_feat),
         nearest_other_feature_ppm=nearest_other_ppm(p4, po_feat),
-        expected_precursor_only=True,
+        expected_low_fragmentation=True,
     )
 
     # -- case 5: precursor_mz is null -> fall back to isolation target -----

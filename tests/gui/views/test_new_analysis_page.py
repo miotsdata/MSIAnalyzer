@@ -222,7 +222,7 @@ def test_optional_field_defaults_to_blank_text(
 ):
     _, root, _ = _make_page(new_analysis_view, project)
 
-    control = find_visual_child(root, "field_annotate_min_precursor_frac")
+    control = find_visual_child(root, "field_annotate_min_purity_score")
     assert control is not None
     assert control.property("text") == ""
 
