@@ -108,11 +108,31 @@ def analysis_db_path(
 # ---------------------------------------------------------------------------
 
 
+def _ensure_column(con: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
+    """Add ``column`` to ``table`` if it doesn't already have one.
+
+    Unlike ``CREATE INDEX IF NOT EXISTS`` (a separate object, added
+    independently of the table it indexes), ``CREATE TABLE IF NOT EXISTS``
+    is a total no-op on a table that already exists — it never
+    retroactively adds a column a newer schema version introduced. This
+    is what makes a later column addition (e.g. ``ms2_annotations.adduct``)
+    retroactive on an already-run analysis via
+    ``AnalysisBridge.ensureSchemaCurrent`` (ADR 37) the same way a new
+    index already was, instead of silently doing nothing for the one
+    class of schema change ADR 37 didn't originally cover.
+    """
+    existing = {row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+
+
 @log_call
 def create_analysis_schema(con: sqlite3.Connection) -> None:
     """Create every table and index of the analysis database on ``con``.
 
-    Idempotent — every statement uses ``IF NOT EXISTS``.
+    Idempotent — every ``CREATE`` statement uses ``IF NOT EXISTS``, and
+    a column added to an existing table (rather than a whole new table)
+    goes through ``_ensure_column`` instead, for the same effect.
     """
     con.execute("""
         CREATE TABLE IF NOT EXISTS metadata (
@@ -355,6 +375,9 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             compound_name          TEXT,
             compound_formula       TEXT,
             inchikey               TEXT,
+            adduct                 TEXT,
+            cas                    TEXT,
+            hmdb                   TEXT,
             score                  REAL    NOT NULL,
             dot_product_score      REAL    NOT NULL,
             lib_coverage           REAL    NOT NULL,
@@ -407,6 +430,12 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_ann_rank_feature_1 "
         "ON ms2_annotations(feature_id) WHERE rank_feature = 1"
     )
+    # Retrofit for an analysis run before these columns existed — see
+    # ADR (export feature) and `_ensure_column`'s own docstring for why
+    # this can't just be part of the CREATE TABLE above like the columns
+    # a brand-new analysis already gets.
+    for _col, _coltype in (("adduct", "TEXT"), ("cas", "TEXT"), ("hmdb", "TEXT")):
+        _ensure_column(con, "ms2_annotations", _col, _coltype)
 
     # Convenience view: for every (feature, distinct compound) the best
     # library score and the row it came from. Pure aggregation over
@@ -1152,7 +1181,8 @@ _TARGET_REP_CTE = """
         SELECT tlm.feature_id,
                GROUP_CONCAT(DISTINCT tlc.name) AS compound_name,
                GROUP_CONCAT(DISTINCT tlc.formula) AS compound_formula,
-               GROUP_CONCAT(DISTINCT tlc.inchikey) AS inchikey
+               GROUP_CONCAT(DISTINCT tlc.inchikey) AS inchikey,
+               GROUP_CONCAT(DISTINCT tlm.adduct_label) AS adduct
         FROM target_list_matches tlm
         JOIN target_list_compounds tlc ON tlc.id = tlm.target_compound_id
         GROUP BY tlm.feature_id
@@ -1182,7 +1212,9 @@ _PREDICTED_REP_CTE = """
 
 
 @log_call(source="db_path")
-def load_feature_representative_annotations(db_path: Path | str) -> pd.DataFrame:
+def load_feature_representative_annotations(
+    db_path: Path | str, *, include_unidentified: bool = False
+) -> pd.DataFrame:
     """One row per feature that has an MS2 annotation, a target-list match,
     and/or a predicted formula — the representative compound it's labelled
     by everywhere in the GUI/report.
@@ -1208,21 +1240,41 @@ def load_feature_representative_annotations(db_path: Path | str) -> pd.DataFrame
     Annotations table's backing reader. Empty when none of the three ever
     ran.
 
+    Args:
+        include_unidentified: When True, also include a row for every
+            feature with *no* representative identity at all (every
+            tier-specific column `None`/`NaN`, `source` `None`) — the
+            Export menu's Annotation export wants every feature
+            regardless of whether it was ever identified; the GUI
+            Annotations table (the default, `False`) only ever wants to
+            show features that have something to show.
+
     Returns:
         A DataFrame with ``feature_id``, ``mz``, ``compound_name``,
-        ``compound_formula``, ``inchikey``, ``source``, ``best_score``
-        (``None`` for a target-list- or predicted-sourced row),
+        ``compound_formula``, ``inchikey``, ``adduct``, ``cas``,
+        ``hmdb``, ``library_name``, ``source``, ``best_score`` (``None``
+        for a target-list-, predicted-, or unidentified row),
         ``n_matched_peaks``, ``n_lib_peaks``, ``best_sample_id``,
         ``best_scan_id``, ``best_library_id``, ordered by ``feature_id``.
+        ``adduct`` comes from ``target_list_matches.adduct_label`` (target
+        tier) or the MS2 library candidate's own adduct (ms2 tier, see
+        the export feature's own ADR) or ``predicted_formulas.adduct``
+        (predicted tier, already part of ``compound_name`` there too).
+        ``cas``/``hmdb`` are ms2-tier-only and best-effort — see
+        ``annotate._gather_spectrum_extras``'s own docstring for why
+        they're not guaranteed even for a library that has adduct info.
     """
     sql = f"""
         WITH {_TARGET_REP_CTE},
         ms2_rep AS (
             SELECT a.feature_id, a.compound_name, a.compound_formula,
-                   a.inchikey, a.score AS best_score, a.n_matched_peaks,
+                   a.inchikey, a.adduct, a.cas, a.hmdb,
+                   a.score AS best_score, a.n_matched_peaks,
                    a.n_lib_peaks, a.sample_id AS best_sample_id,
-                   a.scan_id AS best_scan_id, a.library_id AS best_library_id
+                   a.scan_id AS best_scan_id, a.library_id AS best_library_id,
+                   al.name AS library_name
             FROM ms2_annotations a
+            LEFT JOIN annotation_libraries al ON al.id = a.library_id
             WHERE a.rank_feature = 1
         ),
         {_PREDICTED_REP_CTE}
@@ -1234,10 +1286,13 @@ def load_feature_representative_annotations(db_path: Path | str) -> pd.DataFrame
             ) AS compound_name,
             COALESCE(tr.compound_formula, m.compound_formula, pr.formula) AS compound_formula,
             COALESCE(tr.inchikey, m.inchikey) AS inchikey,
+            COALESCE(tr.adduct, m.adduct, pr.adduct) AS adduct,
+            m.cas, m.hmdb, m.library_name,
             CASE
                 WHEN tr.feature_id IS NOT NULL THEN 'target_list'
                 WHEN m.feature_id IS NOT NULL THEN 'ms2'
-                ELSE 'predicted'
+                WHEN pr.feature_id IS NOT NULL THEN 'predicted'
+                ELSE NULL
             END AS source,
             m.best_score, m.n_matched_peaks, m.n_lib_peaks,
             m.best_sample_id, m.best_scan_id, m.best_library_id
@@ -1245,9 +1300,11 @@ def load_feature_representative_annotations(db_path: Path | str) -> pd.DataFrame
         LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
         LEFT JOIN ms2_rep m ON m.feature_id = f.feature_id
         LEFT JOIN predicted_rep pr ON pr.feature_id = f.feature_id
+        {"" if include_unidentified else '''
         WHERE tr.feature_id IS NOT NULL
            OR m.feature_id IS NOT NULL
            OR pr.feature_id IS NOT NULL
+        '''}
         ORDER BY f.feature_id
     """
     with connect(db_path) as con:

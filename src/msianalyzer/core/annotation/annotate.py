@@ -116,6 +116,12 @@ class Candidate:
     inchikey: str | None
     mz: np.ndarray
     intensity: np.ndarray
+    # This spectrum's own adduct, and CAS/HMDB registry numbers when the
+    # source library happens to carry them — see `_gather_candidates`'s
+    # own comment for where these come from and why they're best-effort.
+    adduct: str | None = None
+    cas: str | None = None
+    hmdb: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +185,11 @@ class AnnotationRow:
     rank_scan_feature_sample: int | None = None
     precursor_confirmed: bool | None = None
     precursor_frac: float | None = None
+    # See Candidate's own fields of the same name — carried straight
+    # through from the matched candidate, best-effort.
+    adduct: str | None = None
+    cas: str | None = None
+    hmdb: str | None = None
 
 
 @dataclass(frozen=True)
@@ -425,6 +436,9 @@ def _row_from_match(
         emp_raw_intensity=scan["emp_int"],
         lib_raw_mz=cand.mz,
         lib_raw_intensity=cand.intensity,
+        adduct=cand.adduct,
+        cas=cand.cas,
+        hmdb=cand.hmdb,
     )
 
 
@@ -530,24 +544,95 @@ def normalize_library_paths(library_path) -> list[str]:
     return out
 
 
+#: Case-insensitive `.msp` metadata key variants checked for CAS/HMDB —
+#: see `_gather_spectrum_extras` for why there's no single standard key.
+_CAS_METADATA_KEYS = {"cas", "cas#", "casno", "cas_number", "casrn"}
+_HMDB_METADATA_KEYS = {"hmdb", "hmdbid", "hmdb_id"}
+
+
+def _gather_spectrum_extras(
+    library, spectrum_ids: Sequence[int]
+) -> dict[int, tuple[str | None, str | None, str | None]]:
+    """Best-effort ``(adduct, cas, hmdb)`` for a batch of library spectra,
+    keyed by ``spectrum_id``. Any of the three may be `None`.
+
+    Queried directly against the library's own `adduct_type`/
+    `spectrum_metadata` tables via `library.session_scope()` (the same
+    public surface `Library` itself uses internally — `self.engine`/
+    `self.session_scope()` are plain attributes, not private) rather than
+    through `Library.get_spectra_in_mz_range`, which doesn't join either.
+    Deliberately not a `libviz` change: `libviz` is a separate package
+    with its own release process, currently blocked on the maintainer's
+    YubiKey — reading its existing tables directly needs no new release
+    at all.
+
+    CAS/HMDB are genuinely best-effort, not guaranteed: `libviz`'s own
+    `.msp` importer (`msp_reader.py`) dumps every non-standard `.msp`
+    field into `spectrum_metadata` verbatim, under whatever key name the
+    *source* library file happened to use — there is no standard key
+    across libraries. Checked case-insensitively against a handful of
+    common variants (`_CAS_METADATA_KEYS`/`_HMDB_METADATA_KEYS`); `None`
+    when nothing matches, same as a library that never had adduct-type
+    metadata resolves to a `None` adduct too (a library predating
+    `libviz`'s own adduct_type table, if one exists).
+    """
+    if not spectrum_ids:
+        return {}
+    from libviz.core.db.models import AdductType, Spectrum, SpectrumMetadata
+
+    ids = list(spectrum_ids)
+    result: dict[int, list[str | None]] = {sid: [None, None, None] for sid in ids}
+
+    with library.session_scope() as session:
+        for spectrum_id, formula in (
+            session.query(Spectrum.id, AdductType.formula)
+            .join(AdductType, AdductType.id == Spectrum.adduct_type_id)
+            .filter(Spectrum.id.in_(ids))
+            .all()
+        ):
+            result[spectrum_id][0] = formula
+
+        for spectrum_id, key, value in (
+            session.query(
+                SpectrumMetadata.spectrum_id, SpectrumMetadata.key, SpectrumMetadata.value
+            )
+            .filter(SpectrumMetadata.spectrum_id.in_(ids))
+            .all()
+        ):
+            key_lower = (key or "").strip().lower()
+            if key_lower in _CAS_METADATA_KEYS and result[spectrum_id][1] is None:
+                result[spectrum_id][1] = value
+            elif key_lower in _HMDB_METADATA_KEYS and result[spectrum_id][2] is None:
+                result[spectrum_id][2] = value
+
+    return {sid: (a, c, h) for sid, (a, c, h) in result.items()}
+
+
 def _gather_candidates(
     library, library_id: int, mz: float, ppm: float, polarity: str | None
 ) -> list[Candidate]:
     """Library spectra whose precursor m/z is within ``ppm`` of ``mz``."""
     lo = mz * (1.0 - ppm / 1e6)
     hi = mz * (1.0 + ppm / 1e6)
+    spectra = library.get_spectra_in_mz_range(lo, hi, polarity, convert_arrays=False)
+    extras = _gather_spectrum_extras(library, [int(s["spectrum_id"]) for s in spectra])
     out: list[Candidate] = []
-    for s in library.get_spectra_in_mz_range(lo, hi, polarity, convert_arrays=False):
+    for s in spectra:
+        spectrum_id = int(s["spectrum_id"])
+        adduct, cas, hmdb = extras.get(spectrum_id, (None, None, None))
         out.append(
             Candidate(
                 library_id=library_id,
-                spectrum_id=int(s["spectrum_id"]),
+                spectrum_id=spectrum_id,
                 compound_id=s.get("compound_id"),
                 compound_name=s.get("compound_name"),
                 compound_formula=s.get("compound_formula"),
                 inchikey=s.get("inchikey"),
                 mz=np.asarray(s["mz"], dtype=float),
                 intensity=np.asarray(s["intensity"], dtype=float),
+                adduct=adduct,
+                cas=cas,
+                hmdb=hmdb,
             )
         )
     return out
@@ -728,6 +813,9 @@ _ANN_COLS = (
     "compound_name",
     "compound_formula",
     "inchikey",
+    "adduct",
+    "cas",
+    "hmdb",
     "score",
     "dot_product_score",
     "lib_coverage",
@@ -821,6 +909,9 @@ def persist_annotations(
                         r.compound_name,
                         r.compound_formula,
                         r.inchikey,
+                        r.adduct,
+                        r.cas,
+                        r.hmdb,
                         r.score,
                         r.dot_product_score,
                         r.lib_coverage,

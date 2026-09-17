@@ -16,6 +16,8 @@ import pytest
 from msianalyzer.core.annotation.annotate import (
     AnnotationRow,
     Candidate,
+    _gather_candidates,
+    _gather_spectrum_extras,
     annotate_feature,
     assign_feature_ranks,
     normalize_library_paths,
@@ -431,6 +433,82 @@ def test_annotate_feature_min_precursor_frac_skips_low_and_keeps_unscored():
 
 
 # ---------------------------------------------------------------------------
+# _gather_candidates / _gather_spectrum_extras — adduct/CAS/HMDB capture
+# ---------------------------------------------------------------------------
+
+
+def _make_minimal_library(path, *, adduct_formula="[M+H]+"):
+    """A real (tiny) libviz library with one spectrum — enough to exercise
+    `_gather_candidates`'s adduct lookup against a genuine `adduct_type`
+    row, unlike `_cand()` above (which hand-builds a `Candidate` directly,
+    with no real library behind it at all)."""
+    from pathlib import Path
+
+    from libviz.core.library import Library
+
+    lib = Library.create(Path(path), name="mock-adduct-cas-hmdb")
+    adduct_id = next(
+        a["id"] for a in lib.get_adducts() if a["formula"] == adduct_formula
+    )
+    lib.add_spectra(
+        compound_name="TrueCompound",
+        compound_formula="C6H12O6",
+        inchikey="AAAAAAAAAAAAAA-BBBBBBBBBB-N",
+        spectra_info={
+            "precursor_mz": 181.0707,
+            "polarity": "POSITIVE",
+            "collision_energy": 20.0,
+            "mz": np.array([50.0, 70.0, 90.0]),
+            "intensity": np.array([0.2, 0.5, 1.0]),
+        },
+        adduct_id=adduct_id,
+    )
+    return lib
+
+
+def test_gather_candidates_carries_adduct_from_a_real_library(tmp_path):
+    lib = _make_minimal_library(tmp_path / "lib.db")
+
+    candidates = _gather_candidates(lib, library_id=1, mz=181.0707, ppm=10.0, polarity=None)
+
+    assert len(candidates) == 1
+    assert candidates[0].adduct == "[M+H]+"
+    # spectrum_metadata was never populated for this spectrum — CAS/HMDB
+    # correctly resolve to None rather than some accidental placeholder.
+    assert candidates[0].cas is None
+    assert candidates[0].hmdb is None
+
+
+def test_gather_spectrum_extras_finds_cas_and_hmdb_by_common_key_variants(tmp_path):
+    # spectrum_metadata is never populated by `add_spectra` itself (only
+    # the real `.msp` import path writes it) — inserted by hand here to
+    # stand in for whatever key name a real source library happened to
+    # use, matching the case-insensitive "a handful of common variants"
+    # lookup `_gather_spectrum_extras` documents.
+    from sqlalchemy import text
+
+    lib = _make_minimal_library(tmp_path / "lib.db")
+    with lib.session_scope() as session:
+        spectrum_id = session.execute(text("SELECT id FROM spectrum")).scalar_one()
+        session.execute(
+            text(
+                "INSERT INTO spectrum_metadata (spectrum_id, key, value) "
+                "VALUES (:sid, 'CAS#', '50-00-0'), (:sid, 'HMDBID', 'HMDB0000122')"
+            ),
+            {"sid": spectrum_id},
+        )
+
+    extras = _gather_spectrum_extras(lib, [spectrum_id])
+
+    assert extras[spectrum_id] == ("[M+H]+", "50-00-0", "HMDB0000122")
+
+
+def test_gather_spectrum_extras_empty_ids_returns_empty_dict(tmp_path):
+    lib = _make_minimal_library(tmp_path / "lib.db")
+    assert _gather_spectrum_extras(lib, []) == {}
+
+
+# ---------------------------------------------------------------------------
 # persist_annotations
 # ---------------------------------------------------------------------------
 
@@ -488,6 +566,34 @@ def test_persist_annotations_round_trip_keeps_raw_spectra(tmp_path):
     with sqlite3.connect(db) as con:
         n = con.execute("SELECT COUNT(*) FROM ms2_annotations").fetchone()[0]
     assert n == 1
+
+
+def test_persist_annotations_round_trip_keeps_adduct_cas_hmdb(tmp_path):
+    db = _fresh_analysis_db(tmp_path)
+
+    r = _row(3, 0.87, feature_id=None)
+    r.rank_ms2 = 1
+    r.rank_feature = 1
+    r.adduct = "[M+H]+"
+    r.cas = "50-00-0"
+    r.hmdb = "HMDB0000122"
+
+    persist_annotations(db, [r], 1)
+
+    with sqlite3.connect(db) as con:
+        row = con.execute("SELECT adduct, cas, hmdb FROM ms2_annotations").fetchone()
+    assert row == ("[M+H]+", "50-00-0", "HMDB0000122")
+
+
+def test_persist_annotations_adduct_cas_hmdb_default_to_null(tmp_path):
+    db = _fresh_analysis_db(tmp_path)
+    r = _row(3, 0.87, feature_id=None)  # adduct/cas/hmdb left at their None default
+
+    persist_annotations(db, [r], 1)
+
+    with sqlite3.connect(db) as con:
+        row = con.execute("SELECT adduct, cas, hmdb FROM ms2_annotations").fetchone()
+    assert row == (None, None, None)
 
 
 def test_persist_annotations_can_drop_raw_spectra(tmp_path):

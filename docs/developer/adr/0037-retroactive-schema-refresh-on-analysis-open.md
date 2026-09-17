@@ -35,7 +35,13 @@ This is deliberately general, not a one-off patch for `idx_ann_rank_feature_1`
 specifically — any future addition to `create_analysis_schema` (another
 index, a new table) now reaches already-run analyses the same way, the
 first time their workspace is opened after upgrading, with no separate
-migration step to remember.
+migration step to remember. **One real gap found afterward, not
+anticipated here**: a *column* added to an already-existing table isn't
+covered by this reasoning at all — `CREATE TABLE IF NOT EXISTS` is a total
+no-op once the table exists, so it never adds a column a newer schema
+introduced. [ADR 38](0038-adduct-cas-hmdb-capture.md) needed a separate
+`_ensure_column` (`PRAGMA table_info` + `ALTER TABLE ADD COLUMN`) for
+exactly this case the first time it actually came up.
 
 ## Alternatives considered
 

@@ -189,6 +189,46 @@ def test_ms2_annotations_has_partial_index_on_rank_feature(tmp_path: Path):
         conn.close()
 
 
+def test_ms2_annotations_has_adduct_cas_hmdb_columns(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    conn = init_analysis_db(db)
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(ms2_annotations)").fetchall()}
+        assert {"adduct", "cas", "hmdb"} <= cols
+    finally:
+        conn.close()
+
+
+def test_ensure_column_retrofits_adduct_cas_hmdb_onto_an_old_table(tmp_path: Path):
+    # Simulates an analysis run before these columns existed: a minimal
+    # ms2_annotations table missing them entirely (CREATE TABLE IF NOT
+    # EXISTS alone would never add them to an already-existing table —
+    # see _ensure_column's own docstring for why this needs the explicit
+    # ALTER TABLE path, unlike a new index).
+    db = tmp_path / "analysis.db"
+    with sqlite3.connect(db) as con:
+        # Every column the schema's own indexes reference, so
+        # create_analysis_schema's CREATE INDEX IF NOT EXISTS statements
+        # (all skipped anyway, since the table already exists — but SQLite
+        # still parses/validates them against it) don't fail on a genuinely
+        # missing column unrelated to this test.
+        con.execute(
+            "CREATE TABLE ms2_annotations ("
+            "id INTEGER PRIMARY KEY, sample_id INTEGER, scan_id INTEGER, "
+            "feature_id INTEGER, score REAL, inchikey TEXT, rank_feature INTEGER"
+            ")"
+        )
+        con.commit()
+
+    from msianalyzer.core.analysis_db import create_analysis_schema
+
+    with sqlite3.connect(db) as con:
+        create_analysis_schema(con)
+        con.commit()
+        cols = {row[1] for row in con.execute("PRAGMA table_info(ms2_annotations)").fetchall()}
+    assert {"adduct", "cas", "hmdb"} <= cols
+
+
 # ---------------------------------------------------------------------------
 # samples
 # ---------------------------------------------------------------------------
@@ -462,6 +502,54 @@ def test_load_feature_representative_annotations_empty_without_annotations(
     db = tmp_path / "analysis.db"
     init_analysis_db(db).close()
     assert load_feature_representative_annotations(db).empty
+
+
+def test_load_feature_representative_annotations_includes_adduct_cas_hmdb_library_name(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_representative_scenario(db)
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "UPDATE ms2_annotations SET adduct = '[M+H]+', cas = '50-21-5', "
+            "hmdb = 'HMDB0000190' WHERE id = 2"  # the winning (rank_feature=1) row
+        )
+        con.commit()
+
+    row = load_feature_representative_annotations(db).iloc[0]
+
+    assert row["adduct"] == "[M+H]+"
+    assert row["cas"] == "50-21-5"
+    assert row["hmdb"] == "HMDB0000190"
+    assert row["library_name"] == "my_library"
+
+
+def test_load_feature_representative_annotations_include_unidentified(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_representative_scenario(db)  # feature 76, annotated
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) "
+            "VALUES (77, 150.0, '{}')"  # no annotation at all
+        )
+        con.commit()
+
+    # Default: unidentified features excluded, matching the GUI table's
+    # existing behavior — unchanged by this parameter's addition.
+    default_df = load_feature_representative_annotations(db)
+    assert sorted(default_df["feature_id"]) == [76]
+
+    full_df = load_feature_representative_annotations(db, include_unidentified=True)
+    assert sorted(full_df["feature_id"]) == [76, 77]
+    unidentified = full_df[full_df["feature_id"] == 77].iloc[0]
+    # pd.read_sql_query represents a SQL NULL as NaN even in an
+    # otherwise-string column (pandas' own universal missing-value
+    # marker) — not None; _dataframe_to_records is what later normalizes
+    # NaN -> None for the GUI, not this raw DataFrame read.
+    assert pd.isna(unidentified["compound_name"])
+    assert pd.isna(unidentified["source"])
 
 
 # ---------------------------------------------------------------------------

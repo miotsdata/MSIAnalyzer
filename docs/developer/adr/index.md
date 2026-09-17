@@ -47,3 +47,4 @@ useful).
 | [35](0035-split-search-fields.md) | Split compound search into separate name and m/z fields | Accepted; supersedes 29 |
 | [36](0036-fixed-layout-space-for-toggled-content.md) | Reserve fixed layout space instead of swapping visible siblings | Accepted |
 | [37](0037-retroactive-schema-refresh-on-analysis-open.md) | Retroactively refresh an analysis DB's schema when its workspace opens | Accepted |
+| [38](0038-adduct-cas-hmdb-capture.md) | Capture adduct/CAS/HMDB for MS2-annotated hits | Accepted |
