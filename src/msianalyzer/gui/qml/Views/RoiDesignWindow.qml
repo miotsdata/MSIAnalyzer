@@ -71,6 +71,33 @@ Window {
     readonly property var selectedSample: (roiWindow.samples.length > roiWindow.selectedSampleIndex)
                                            ? roiWindow.samples[roiWindow.selectedSampleIndex] : null
 
+    // Which surface vertices are placed against — "grid" (the MSI
+    // heatmap raster, the original/default behavior) or "he" (that
+    // sample's H&E image, see ADR 47 / core/registration/). Reset to
+    // "grid" on every sample switch: a different sample's registration
+    // (or lack of one) shouldn't silently carry over.
+    property string drawSurface: "grid"
+    property var roiRegistrationInfo: ({hasFit: false, matrix: null})
+    function refreshRoiRegistrationInfo() {
+        var sample = (roiWindow.samples.length > roiWindow.selectedSampleIndex)
+                     ? roiWindow.samples[roiWindow.selectedSampleIndex] : null
+        if (roiWindow.analysis && roiWindow.analysis.analysisDbPath && sample) {
+            roiWindow.roiRegistrationInfo = AnalysisBridge.getRegistrationInfo(
+                roiWindow.analysis.analysisDbPath, sample.name)
+        } else {
+            roiWindow.roiRegistrationInfo = {hasFit: false, matrix: null}
+        }
+        roiWindow.drawSurface = "grid"
+    }
+    // The he_overlay target tail for the selected sample, or "" if
+    // nothing to show yet — same guard as CoregistrationWindow.overlaySource.
+    function heOverlaySource() {
+        if (!roiWindow.selectedSample || !roiWindow.controls
+                || !roiWindow.roiRegistrationInfo.hasFit) return ""
+        var target = roiWindow.controls.tileTarget(roiWindow.selectedSample.name)
+        return target ? "image://he_overlay/" + target : ""
+    }
+
     // "idle" (just the "Add ROI" button) -> "naming" (name + color, not
     // drawing yet) -> "drawing" (canvas accepts vertex taps). Closing the
     // polygon saves immediately and returns to "idle" — there is no
@@ -158,6 +185,7 @@ Window {
         roiWindow.resetDraft()
         roiWindow.refreshSavedRois()
         roiWindow.refreshCatalogRois()
+        roiWindow.refreshRoiRegistrationInfo()
     }
     onVisibleChanged: {
         if (roiWindow.visible) {
@@ -170,6 +198,7 @@ Window {
             roiWindow.resetDraft()
             roiWindow.refreshSavedRois()
             roiWindow.refreshCatalogRois()
+            roiWindow.refreshRoiRegistrationInfo()
         }
     }
 
@@ -192,6 +221,7 @@ Window {
             roiWindow.resetDraft()
             roiWindow.refreshSavedRois()
             roiWindow.refreshCatalogRois()
+            roiWindow.refreshRoiRegistrationInfo()
         }
     }
 
@@ -279,6 +309,15 @@ Window {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            CheckBox {
+                id: drawOnHeCheckBox
+                objectName: "drawOnHeCheckBox"
+                text: "Draw on H&E image"
+                visible: roiWindow.roiRegistrationInfo.hasFit
+                checked: roiWindow.drawSurface === "he"
+                onToggled: roiWindow.drawSurface = checked ? "he" : "grid"
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
             Item { Layout.fillWidth: true }
             Label { text: "Zoom:" }
             Button {
@@ -314,7 +353,13 @@ Window {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 source: (roiWindow.selectedSample && roiWindow.controls)
-                        ? roiWindow.controls.tileSource(roiWindow.selectedSample.name) : ""
+                        ? (roiWindow.drawSurface === "he"
+                           ? "image://he_image/" + roiWindow.selectedSample.name
+                           : roiWindow.controls.tileSource(roiWindow.selectedSample.name))
+                        : ""
+                heMode: roiWindow.drawSurface === "he"
+                heToGridMatrix: roiWindow.roiRegistrationInfo.matrix
+                heOverlaySource: roiWindow.heOverlaySource()
                 drawingEnabled: roiWindow.draftState === "drawing"
                 savedRois: roiWindow.savedRois
                 draftVertices: roiWindow.draftVertices

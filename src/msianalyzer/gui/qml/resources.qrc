@@ -29,5 +29,6 @@
         <file>Views/LandmarkOverlay.qml</file>
         <file>Views/CoregistrationWindow.qml</file>
         <file>Utils/SearchQuery.js</file>
+        <file>Utils/AffineTransform.js</file>
     </qresource>
 </RCC>

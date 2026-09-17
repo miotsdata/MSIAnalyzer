@@ -84,6 +84,18 @@ Window {
     // the SAME sample while this window stays open would otherwise keep
     // showing the old one.
     property int heImageRevision: 0
+    // Same cache-busting reasoning as heImageRevision, bumped after a
+    // successful fit — the warped overlay (image://he_overlay/...)
+    // depends on the fitted matrix, which an unchanged source string
+    // wouldn't otherwise pick up after re-fitting.
+    property int fitRevision: 0
+
+    // Overlay: the MSI heatmap warped into H&E pixel space (see
+    // core/registration/overlay.py), shown semi-transparent on top of
+    // the H&E pane so landmarks can be placed with the actual signal
+    // visible — not just blank tissue morphology.
+    property bool showOverlay: true
+    property real overlayOpacity: 0.6
 
     // "affine" or "similarity" — see core/registration/transform.py.
     property string transformType: "affine"
@@ -180,6 +192,17 @@ Window {
         }
     }
 
+    // Guards against `tileTarget` returning "" (e.g. no feature/obs
+    // column selected yet) the same way `HeatmapControlsPanel.tileSource`
+    // does, so an empty target never turns into a bogus
+    // "image://he_overlay/|<revision>" request.
+    function overlaySource() {
+        if (!win.selectedSample || !win.controls || !win.registrationInfo.hasFit) return ""
+        var target = win.controls.tileTarget(win.selectedSample.name)
+        if (!target) return ""
+        return "image://he_overlay/" + target + "|" + win.fitRevision
+    }
+
     function addLandmark(heX, heY, gridX, gridY) {
         win.landmarks = win.landmarks.concat([{heX: heX, heY: heY, gridX: gridX, gridY: gridY}])
         win.landmarkErrors = []
@@ -225,10 +248,13 @@ Window {
         if (result.ok) {
             win.saveError = ""
             win.saveStatus = "Saved — RMSE " + result.rmse.toFixed(3) + " grid units"
-            win.landmarks = result.landmarks.map(function (lm) {
-                return {heX: lm.heX, heY: lm.heY, gridX: lm.gridX, gridY: lm.gridY}
-            })
-            win.landmarkErrors = result.landmarks.map(function (lm) { return lm.error })
+            win.fitRevision += 1
+            // Re-fetches landmarks/hasFit/transformType/rmse fresh from
+            // the DB rather than patching them from `result` by hand —
+            // `registrationInfo.hasFit` in particular needs to flip to
+            // true immediately so the overlay shows without requiring a
+            // sample switch/reopen first.
+            win.refreshRegistrationInfo()
         } else {
             win.saveStatus = ""
             win.saveError = result.error
@@ -327,6 +353,29 @@ Window {
                                   + "|" + win.heImageRevision
                                 : ""
 
+                        // The MSI heatmap warped into this H&E image's
+                        // own pixel space (see core/registration/overlay.py),
+                        // placed inside overlayContent so it tracks the
+                        // H&E image's exact pan/zoom/position with no
+                        // separate math — both are rendered at identical
+                        // pixel dimensions (info.image.width/height), so
+                        // `anchors.fill: parent` (parent here being
+                        // ZoomableImage's overlayHolder, which already
+                        // tracks the underlying Image 1:1) lines them up
+                        // exactly. Declared before LandmarkOverlay so
+                        // landmark markers stay visibly on top of it.
+                        Image {
+                            id: heatmapOverlayImage
+                            objectName: "heatmapOverlayImage"
+                            anchors.fill: parent
+                            visible: win.showOverlay && win.registrationInfo.hasFit
+                            opacity: win.overlayOpacity
+                            smooth: false
+                            cache: false
+                            asynchronous: false
+                            source: win.overlaySource()
+                        }
+
                         LandmarkOverlay {
                             id: heOverlay
                             objectName: "heLandmarkOverlay"
@@ -379,6 +428,28 @@ Window {
                         text: "+"; implicitWidth: 32
                         onClicked: heZoomImage.zoom *= 1.3
                         HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    }
+                }
+
+                RowLayout {
+                    visible: win.registrationInfo.hasFit
+                    CheckBox {
+                        id: showOverlayCheckBox
+                        objectName: "showOverlayCheckBox"
+                        text: "Overlay"
+                        checked: win.showOverlay
+                        onToggled: win.showOverlay = checked
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    }
+                    Slider {
+                        id: overlayOpacitySlider
+                        objectName: "overlayOpacitySlider"
+                        Layout.fillWidth: true
+                        enabled: win.showOverlay
+                        from: 0.0
+                        to: 1.0
+                        value: win.overlayOpacity
+                        onMoved: win.overlayOpacity = value
                     }
                 }
             }

@@ -360,6 +360,9 @@ def analysis_view(application):
         view.engine().addImageProvider(
             "he_image", application.analysis_bridge.he_image_provider
         )
+        view.engine().addImageProvider(
+            "he_overlay", application.analysis_bridge.he_overlay_provider
+        )
         view.setInitialProperties({"analysis": analysis_model})
         view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
         view.setSource(QUrl("qrc:/Views/AnalysisPage.qml"))

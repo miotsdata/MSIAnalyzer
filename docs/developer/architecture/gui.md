@@ -21,6 +21,7 @@ msianalyzer/gui/
     analysis_bridge.py       AnalysisBridge  — read-only queries against one analysis DB, for QML
     heatmap_provider.py      HeatmapImageProvider — image://heatmap/... raster tiles for Visual Inspection
     he_image_provider.py     HEImageProvider — image://he_image/... one sample's attached H&E image
+    he_overlay_provider.py   HEOverlayImageProvider — image://he_overlay/... MSI heatmap warped onto the H&E image
     run_worker.py            QThread wrapper around Run, for the CoreBridge
     config_schema.py         drives the New Analysis page's generated config form
     formatting.py            shared display formatters (e.g. minute-precision dates)
@@ -138,6 +139,33 @@ unattached H&E image, or before the MSI-side feature/obs selection has
 settled). Fixed by falling back to filling the viewport
 (`root.width`/`root.height`) instead of `0x0` when not `Ready` — see
 [ADR 46](../adr/0046-he-coregistration-phase2-gui-and-zoomableimage-fix.md).
+
+`HEOverlayImageProvider` (`image://he_overlay/...`, see
+[ADR 47](../adr/0047-he-coregistration-phase3-overlay-and-roi-on-he.md))
+renders the MSI heatmap in the usual way (`render_heatmap_by_target`,
+shared with `HeatmapImageProvider` so both parse the same
+`sampleName|target|...` request-id shape) and then warps it into the H&E
+image's own pixel space (`core/registration/overlay.py`, a plain PIL
+`Image.transform(..., Image.AFFINE, ...)` using the fitted registration
+matrix directly — no GPU/QML transform trickery needed) so it can be
+alpha-blended as an ordinary same-size `Image` on top of the H&E pane.
+`HeatmapControlsPanel.tileTarget(sampleName)` is the `sampleName|...` tail
+both this provider's and `HeatmapImageProvider`'s URLs are built from
+(`tileSource` is now just `"image://heatmap/" + tileTarget(...)`) — one
+place owns the target-encoding logic for every image provider that needs it.
+
+`RoiOverlay.qml`'s `pixelSpace` property (default `false`, the original
+grid-index-cell-center convention) switches it to plain continuous-pixel
+positioning when `RoiDrawingCanvas.heMode` is on ("draw ROI on the H&E
+image" — see ADR 47): vertices are still always *stored* in grid-index
+space (`RoiDesignWindow`'s `draftVertices`/`savedRois` never change
+shape), but `RoiDrawingCanvas` converts each one through the fitted
+registration matrix (`Utils/AffineTransform.js`, a JS mirror of
+`core/registration/transform.py`'s `apply_transform`/`invert_transform` —
+needed client-side since round-tripping every tap/repaint through a
+bridge call would be far too slow) before handing it to `RoiOverlay` for
+display, and converts a tap the other way before it ever reaches
+`vertexRequested`.
 
 ## Singleton popup windows: `Loader` + `showFor()`/`openFor()`
 

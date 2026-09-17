@@ -315,28 +315,37 @@ Flickable {
         controlsFlickable.refreshObsCategoryLegend()
     }
 
-    // One sample's image://heatmap/... source, for either mode — shared by
-    // every owner of this panel (Visual Inspection's multi-tile grid, ROI
-    // Design's single-sample canvas) so the URL-building logic exists in
-    // exactly one place.
-    function tileSource(sampleName) {
+    // The "sampleName|..." tail shared by both image://heatmap/... (this
+    // panel's own tiles) and image://he_overlay/... (CoregistrationWindow's
+    // warped-onto-H&E overlay, see core/registration/overlay.py) — kept
+    // separate from tileSource so a second provider can reuse the exact
+    // same target-encoding logic instead of duplicating it.
+    function tileTarget(sampleName) {
         if (!controlsFlickable.analysis) return ""
         if (controlsFlickable.inspectionMode === "obs") {
             if (!controlsFlickable.selectedObsColumn) return ""
             if (controlsFlickable.isSelectedObsNumeric) {
-                return "image://heatmap/" + sampleName + "|obs:" + controlsFlickable.selectedObsColumn
+                return sampleName + "|obs:" + controlsFlickable.selectedObsColumn
                        + "|" + controlsFlickable.colormap
                        + "|" + controlsFlickable.vminToken()
                        + "|" + controlsFlickable.vmaxToken()
             }
             var cats = controlsFlickable.obsCategoryLegend.map(function (c) { return c.category }).join(",")
-            return "image://heatmap/" + sampleName + "|obs:" + controlsFlickable.selectedObsColumn
-                   + "|" + cats
+            return sampleName + "|obs:" + controlsFlickable.selectedObsColumn + "|" + cats
         }
         if (!controlsFlickable.selectedFeature) return ""
-        return "image://heatmap/" + sampleName + "|" + controlsFlickable.selectedFeature.mz + "|"
+        return sampleName + "|" + controlsFlickable.selectedFeature.mz + "|"
                + controlsFlickable.dataLayer + "|" + controlsFlickable.colormap + "|"
                + controlsFlickable.vminToken() + "|" + controlsFlickable.vmaxToken()
+    }
+
+    // One sample's image://heatmap/... source, for either mode — shared by
+    // every owner of this panel (Visual Inspection's multi-tile grid, ROI
+    // Design's single-sample canvas) so the URL-building logic exists in
+    // exactly one place.
+    function tileSource(sampleName) {
+        var target = controlsFlickable.tileTarget(sampleName)
+        return target ? "image://heatmap/" + target : ""
     }
 
     ColumnLayout {

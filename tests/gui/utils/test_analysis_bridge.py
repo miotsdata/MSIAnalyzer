@@ -1374,6 +1374,22 @@ def test_save_registration_round_trips_through_registration_info(tmp_path):
     assert info["hasFit"] is True
     assert info["transformType"] == "affine"
     assert len(info["landmarks"]) == 3
+    # _COREG_LANDMARKS: (0,0)->(0,0), (10,0)->(5,0), (0,10)->(0,5) -> a
+    # uniform 0.5x scale, no rotation/translation.
+    np.testing.assert_allclose(info["matrix"], [[0.5, 0.0, 0.0], [0.0, 0.5, 0.0]], atol=1e-9)
+
+
+def test_get_registration_info_matrix_none_without_fit(tmp_path):
+    db_path, _raw_db_path = _seed_coreg_sample(tmp_path)
+    image_path = tmp_path / "slide.png"
+    _make_he_png(image_path)
+    bridge = AnalysisBridge()
+    bridge.attachHeImage(str(db_path), "s1", str(image_path))
+
+    info = bridge.getRegistrationInfo(str(db_path), "s1")
+
+    assert info["hasFit"] is False
+    assert info["matrix"] is None
 
 
 def test_save_registration_without_attached_image_returns_error(tmp_path):

@@ -1,12 +1,16 @@
+import sqlite3
 from pathlib import Path
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image as PILImage
 from PySide6.QtCore import QObject, QPointF, Qt
 from PySide6.QtQuick import QQuickItem
 from scipy.sparse import csr_matrix
+
+from msianalyzer.core.registration import attach_he_image, fit_and_save_registration
 
 # Each opened RoiDesignWindow is a genuine extra top-level QWindow, on top
 # of whatever the `analysis_view` fixture already accumulates across the
@@ -51,6 +55,61 @@ def _write_grid_h5ad(path, n=4):
     adata = ad.AnnData(X=X, obs=obs, var=var)
     adata.obsm["spatial"] = np.array(coords, dtype=float)
     adata.write_h5ad(path)
+
+
+def _make_he_png(path, size=(40, 40)):
+    width, height = size
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    PILImage.fromarray(arr).save(path, format="PNG")
+
+
+@pytest.fixture
+def registered_analysis_model(analysis_model, tmp_path):
+    """`analysis_model`, seeded with one sample ('s1') backed by a REAL
+    raw database path (unlike `visual_analysis_model`'s placeholder
+    'a.db'), a 4x4 grid `.h5ad` (`_write_grid_h5ad`), and a fitted
+    registration: `he_to_grid = he / 10` (an H&E pixel at (10, 10) maps
+    onto grid-index (1, 1)) — for "draw on H&E" tests."""
+    raw1 = tmp_path / "s1.db"
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', ?, 'positive')", (str(raw1),),
+        )
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) "
+            "VALUES (1, 150.0, '{\"s1\": 0}')"
+        )
+        con.commit()
+    out_dir = Path(analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad", n=4)
+
+    image_path = tmp_path / "slide.png"
+    _make_he_png(image_path, size=(40, 40))
+    attached = attach_he_image(raw1, image_path)
+    fit_and_save_registration(
+        raw1, attached.image_id,
+        [
+            ((0.0, 0.0), (0.0, 0.0)),
+            ((40.0, 0.0), (4.0, 0.0)),
+            ((0.0, 40.0), (0.0, 4.0)),
+        ],
+        "affine",
+    )
+    return analysis_model
+
+
+def _tap_he_pixel_point(window, canvas, x, y, qtbot):
+    """Click the point in `canvas` at continuous H&E pixel coordinate
+    (x, y) — the "draw on H&E" analogue of `_tap_grid_point`, with no
+    `+0.5` cell-center offset (see `RoiOverlay.pixelSpace`)."""
+    overlay_holder = canvas.findChild(QQuickItem, "zoomableImageOverlayHolder")
+    zoom_image = canvas.findChild(QQuickItem, "roiZoomableImage")
+    scale = zoom_image.property("effectiveScale")
+    point = overlay_holder.mapToScene(QPointF(x * scale, y * scale)).toPoint()
+    qtbot.mouseMove(window, pos=point)
+    qtbot.mouseClick(window, Qt.LeftButton, pos=point)
+    qtbot.wait(30)
 
 
 def _click(window, item, qtbot):
@@ -551,3 +610,114 @@ def test_draw_for_this_sample_starts_drawing_with_existing_name_and_color(
     # Now on this sample's own list, no longer in "Other ROIs".
     assert [r["name"] for r in _as_list(window.property("savedRois"))] == ["liver"]
     assert _as_list(window.property("otherRois")) == []
+
+
+def test_draw_on_he_checkbox_hidden_without_a_fitted_registration(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad")
+    _write_grid_h5ad(out_dir / "s2.h5ad")
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    checkbox = window.findChild(QQuickItem, "drawOnHeCheckBox")
+    assert checkbox.property("visible") is False
+
+
+def test_draw_on_he_checkbox_visible_with_a_fitted_registration(
+    analysis_view, registered_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(registered_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    checkbox = window.findChild(QQuickItem, "drawOnHeCheckBox")
+    assert checkbox.property("visible") is True
+    assert window.property("drawSurface") == "grid"
+
+
+def test_draw_on_he_mode_converts_taps_to_grid_space_landmarks(
+    analysis_view, registered_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(registered_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    checkbox = window.findChild(QQuickItem, "drawOnHeCheckBox")
+    _click(window, checkbox, qtbot)
+    assert window.property("drawSurface") == "he"
+
+    _start_drawing(window, "tumor", qtbot)
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+
+    # he_to_grid = he / 10 (see registered_analysis_model) -> He pixel
+    # (10, 10) should land at grid-index (1, 1).
+    _tap_he_pixel_point(window, canvas, 10.0, 10.0, qtbot)
+
+    vertices = _as_list(window.property("draftVertices"))
+    assert len(vertices) == 1
+    assert vertices[0][0] == pytest.approx(1.0, abs=0.2)
+    assert vertices[0][1] == pytest.approx(1.0, abs=0.2)
+
+
+def test_draw_on_he_polygon_saves_the_same_mask_as_grid_mode(
+    analysis_view, registered_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(registered_analysis_model.outDir)
+    view = analysis_view(registered_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    checkbox = window.findChild(QQuickItem, "drawOnHeCheckBox")
+    _click(window, checkbox, qtbot)
+
+    _start_drawing(window, "tumor", qtbot)
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+
+    # A square at He pixels (10,10)-(30,30) -> grid-index (1,1)-(3,3),
+    # the same square test_draw_saves_immediately_on_close_writes_h5ad
+    # draws directly in grid mode.
+    _tap_he_pixel_point(window, canvas, 10.0, 10.0, qtbot)
+    _tap_he_pixel_point(window, canvas, 30.0, 10.0, qtbot)
+    _tap_he_pixel_point(window, canvas, 30.0, 30.0, qtbot)
+    _tap_he_pixel_point(window, canvas, 10.0, 30.0, qtbot)
+    _tap_he_pixel_point(window, canvas, 10.0, 10.0, qtbot)
+    qtbot.wait(100)
+
+    assert window.property("saveError") == ""
+    reread = ad.read_h5ad(out_dir / "s1.h5ad")
+    assert "roi_tumor" in reread.obs.columns
+    coords = reread.obsm["spatial"]
+    expected = np.array([(x in (1, 2) and y in (1, 2)) for x, y in coords], dtype=bool)
+    np.testing.assert_array_equal(reread.obs["roi_tumor"].to_numpy(), expected)
+
+
+def test_draw_surface_resets_to_grid_on_sample_switch(
+    analysis_view, registered_analysis_model, find_visual_child, qtbot
+):
+    # s2 has no registration -> switching to it must fall back to "grid"
+    # rather than silently keeping heMode on with a stale/no matrix.
+    out_dir = Path(registered_analysis_model.outDir)
+    with sqlite3.connect(registered_analysis_model.analysisDbPath) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (2, 's2', 'b.db', 'positive')"
+        )
+        con.commit()
+    _write_grid_h5ad(out_dir / "s2.h5ad")
+
+    view = analysis_view(registered_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    checkbox = window.findChild(QQuickItem, "drawOnHeCheckBox")
+    _click(window, checkbox, qtbot)
+    assert window.property("drawSurface") == "he"
+
+    window.setProperty("selectedSampleIndex", 1)
+    qtbot.wait(30)
+
+    assert window.property("drawSurface") == "grid"
+    assert checkbox.property("visible") is False

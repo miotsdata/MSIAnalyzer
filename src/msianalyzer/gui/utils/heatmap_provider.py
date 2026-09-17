@@ -11,14 +11,11 @@ from PySide6.QtQuick import QQuickImageProvider
 from msianalyzer.core.plotting.heatmap import (
     category_color,
     feature_value_range,
-    is_numeric_obs_column,
     list_obs_columns,
     obs_categories,
     obs_value_range,
     render_colorbar,
-    render_feature_heatmap,
-    render_obs_categories_heatmap,
-    render_obs_heatmap,
+    render_heatmap_by_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -233,26 +230,7 @@ class HeatmapImageProvider(QQuickImageProvider):
             if adata is None:
                 return QImage()
 
-            if target.startswith("obs:"):
-                obs_column = target[len("obs:") :]
-                if is_numeric_obs_column(adata, obs_column):
-                    colormap, vmin_str, vmax_str = parts[2], parts[3], parts[4]
-                    vmin = None if vmin_str == "auto" else float(vmin_str)
-                    vmax = None if vmax_str == "auto" else float(vmax_str)
-                    rgba = render_obs_heatmap(
-                        adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax,
-                    )
-                else:
-                    categories = parts[2].split(",") if parts[2] else []
-                    rgba = render_obs_categories_heatmap(adata, obs_column, categories)
-            else:
-                mz_str, layer, colormap, vmin_str, vmax_str = parts[1:6]
-                vmin = None if vmin_str == "auto" else float(vmin_str)
-                vmax = None if vmax_str == "auto" else float(vmax_str)
-                rgba = render_feature_heatmap(
-                    adata, float(mz_str), layer=layer, colormap=colormap,
-                    vmin=vmin, vmax=vmax,
-                )
+            rgba = render_heatmap_by_target(adata, target, parts)
         except Exception:
             logger.exception("heatmap render failed for request id %r", id)
             return QImage()

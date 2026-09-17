@@ -30,9 +30,25 @@ Item {
     property var draftVertices: []
     property color draftColor: "#ffffff"
     property bool firstVertexHighlighted: false
+    // false (default): vertices are grid-index coordinates, mapped to
+    // their cell CENTER (`+0.5`) — the original, still-default
+    // convention (see `core/plotting/roi.py::polygon_pixel_mask`'s
+    // identical pixel-center sampling). true: vertices are already plain
+    // continuous pixel coordinates in this canvas' own native space (no
+    // further offset) — used when drawing on the H&E pane
+    // (`RoiDrawingCanvas.heMode`), where the caller has already mapped
+    // every vertex it hands this overlay (grid<->H&E, see
+    // `Utils/AffineTransform.js`) before it ever reaches here.
+    property bool pixelSpace: false
 
-    function toItemX(col) { return (col + 0.5) * overlay.effectiveScale }
-    function toItemY(row) { return (row + 0.5) * overlay.effectiveScale }
+    function toItemX(col) {
+        return overlay.pixelSpace ? col * overlay.effectiveScale
+                                   : (col + 0.5) * overlay.effectiveScale
+    }
+    function toItemY(row) {
+        return overlay.pixelSpace ? row * overlay.effectiveScale
+                                   : (row + 0.5) * overlay.effectiveScale
+    }
 
     // Vertices as on-screen points, with the first point repeated at the
     // end to close the loop — used for every *saved* ROI (a finished

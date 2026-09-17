@@ -339,6 +339,43 @@ def render_obs_categories_heatmap(
     return np.ascontiguousarray(rgba)
 
 
+def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -> np.ndarray:
+    """Dispatch to `render_feature_heatmap`/`render_obs_heatmap`/
+    `render_obs_categories_heatmap` from an `image://heatmap/...`-style
+    request id's already-`unquote`d-and-split parts — the exact id shape
+    `HeatmapImageProvider` and (for warping onto an H&E image, see
+    `core/registration/overlay.py`) `HEOverlayImageProvider` both parse,
+    factored out here so they parse it identically instead of each
+    duplicating this dispatch.
+
+    Args:
+        adata: One sample's AnnData, already loaded.
+        target: `parts[1]` — an m/z string, or `"obs:<column>"`.
+        parts: The full split request id (`parts[0]`, the sample name, is
+            unused here — callers have already used it to resolve `adata`).
+
+    Returns:
+        An RGBA `uint8` array, as returned by whichever `render_*` this
+        dispatches to.
+    """
+    if target.startswith("obs:"):
+        obs_column = target[len("obs:") :]
+        if is_numeric_obs_column(adata, obs_column):
+            colormap, vmin_str, vmax_str = parts[2], parts[3], parts[4]
+            vmin = None if vmin_str == "auto" else float(vmin_str)
+            vmax = None if vmax_str == "auto" else float(vmax_str)
+            return render_obs_heatmap(adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax)
+        categories = parts[2].split(",") if parts[2] else []
+        return render_obs_categories_heatmap(adata, obs_column, categories)
+
+    mz_str, layer, colormap, vmin_str, vmax_str = parts[1:6]
+    vmin = None if vmin_str == "auto" else float(vmin_str)
+    vmax = None if vmax_str == "auto" else float(vmax_str)
+    return render_feature_heatmap(
+        adata, float(mz_str), layer=layer, colormap=colormap, vmin=vmin, vmax=vmax,
+    )
+
+
 #: Above this magnitude, the exported colorbar's tick labels switch to
 #: scientific notation — confirmed with the user ("if the value of vmin
 #: and vmax are > 10^3, use scientific notation in legend").

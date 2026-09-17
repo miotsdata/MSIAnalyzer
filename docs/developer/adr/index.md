@@ -56,3 +56,4 @@ useful).
 | [44](0044-structured-markdown-field-help.md) | Structured Markdown field help, in a dedicated window | Accepted |
 | [45](0045-he-image-coregistration-phase1.md) | H&E/brightfield image coregistration, Phase 1: raw-DB storage + landmark fit | Accepted |
 | [46](0046-he-coregistration-phase2-gui-and-zoomableimage-fix.md) | H&E coregistration Phase 2: `CoregistrationWindow` GUI, and a `ZoomableImage` input bug found along the way | Accepted |
+| [47](0047-he-coregistration-phase3-overlay-and-roi-on-he.md) | H&E coregistration Phase 3: warped-heatmap overlay, and drawing ROI on the H&E image | Accepted |

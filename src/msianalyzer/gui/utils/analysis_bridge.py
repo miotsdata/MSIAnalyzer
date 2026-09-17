@@ -26,6 +26,7 @@ from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
 from msianalyzer.gui.utils.export_worker import ExportWorker
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
 from msianalyzer.gui.utils.he_image_provider import HEImageProvider
+from msianalyzer.gui.utils.he_overlay_provider import HEOverlayImageProvider
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
 from msianalyzer.gui.utils.table_query_worker import TableQueryWorker
@@ -180,6 +181,7 @@ class AnalysisBridge(QObject):
         # Same "own it here, main.py just registers it" reasoning as
         # heatmap_provider above.
         self.he_image_provider = HEImageProvider()
+        self.he_overlay_provider = HEOverlayImageProvider()
         # Plot HTML -> temp file -> `WebEngineView.url`, not `.loadHtml()`.
         # `loadHtml`/`setHtml` silently fail past Qt's documented ~2MB
         # limit (it's an IPC message, capped); a plot with the full
@@ -232,10 +234,12 @@ class AnalysisBridge(QObject):
 
     @Slot(str)
     def setHeImageAnalysis(self, analysis_db_path: str) -> None:
-        """Point the `image://he_image/...` provider at this analysis —
-        the H&E-coregistration analogue of `setHeatmapAnalysis`, called
-        from the same place (Visual Inspection's `onAnalysisChanged`)."""
+        """Point the `image://he_image/...` and `image://he_overlay/...`
+        providers at this analysis — the H&E-coregistration analogue of
+        `setHeatmapAnalysis`, called from the same place (Visual
+        Inspection's `onAnalysisChanged`)."""
         self.he_image_provider.setAnalysisDbPath(analysis_db_path)
+        self.he_overlay_provider.setAnalysisDbPath(analysis_db_path)
 
     @Slot(list, float, str, result=dict)
     def getFeatureValueRange(self, sample_names: list, mz: float, layer: str) -> dict:
@@ -1057,14 +1061,21 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
 
         Returns:
             `{"hasImage": bool, "width", "height", "format", "hasFit":
-            bool, "transformType", "rmse", "landmarks": [{"heX", "heY",
-            "gridX", "gridY", "error"}, ...]}`. `hasImage`/`hasFit` are
-            both `False` (everything else at its zero value) if the
-            sample has no raw database, or no image has been attached yet.
+            bool, "transformType", "rmse", "matrix", "landmarks":
+            [{"heX", "heY", "gridX", "gridY", "error"}, ...]}`.
+            `hasImage`/`hasFit` are both `False` (everything else at its
+            zero value) if the sample has no raw database, or no image
+            has been attached yet. `matrix` is the H&E-pixel -> MSI
+            grid-index `[[a, b, c], [d, e, f]]` (`None` if `hasFit` is
+            `False`) — QML's `RoiDrawingCanvas`/`CoregistrationWindow`
+            need it client-side (via `Utils/AffineTransform.js`) for live
+            tap-to-coordinate conversion, not round-tripped through a
+            bridge call on every click.
         """
         empty = {
             "hasImage": False, "width": 0, "height": 0, "format": "",
-            "hasFit": False, "transformType": "", "rmse": 0.0, "landmarks": [],
+            "hasFit": False, "transformType": "", "rmse": 0.0, "matrix": None,
+            "landmarks": [],
         }
         raw_db_path = analysis_db.get_sample_raw_db_path(analysis_db_path, sample_name)
         if not raw_db_path:
@@ -1080,6 +1091,7 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             "hasFit": info.fit is not None,
             "transformType": info.fit.transform_type if info.fit else "",
             "rmse": info.fit.rmse if info.fit else 0.0,
+            "matrix": info.fit.matrix.tolist() if info.fit else None,
             "landmarks": self._landmarks_to_rows(info.fit) if info.fit else [],
         }
         return result

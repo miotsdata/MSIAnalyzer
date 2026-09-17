@@ -17,6 +17,7 @@ from msianalyzer.core.plotting.heatmap import (
     pixel_grid_indices,
     render_colorbar,
     render_feature_heatmap,
+    render_heatmap_by_target,
     render_heatmap_figure,
     render_obs_categories_heatmap,
     render_obs_heatmap,
@@ -332,6 +333,68 @@ def test_render_obs_categories_heatmap_paints_unlisted_category_black():
 
     assert tuple(rgba[0, 1]) == (0, 0, 0, 255)
     assert tuple(rgba[1, 1]) == (0, 0, 0, 255)
+
+
+def test_render_heatmap_by_target_feature_matches_render_feature_heatmap():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+    parts = ["s1", "100.0", "raw", "gray", "0.0", "15.0"]
+
+    dispatched = render_heatmap_by_target(adata, parts[1], parts)
+    direct = render_feature_heatmap(
+        adata, mz=100.0, layer="raw", colormap="gray", vmin=0.0, vmax=15.0
+    )
+
+    np.testing.assert_array_equal(dispatched, direct)
+
+
+def test_render_heatmap_by_target_feature_autoscale_tokens():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+    parts = ["s1", "100.0", "raw", "gray", "auto", "auto"]
+
+    dispatched = render_heatmap_by_target(adata, parts[1], parts)
+    direct = render_feature_heatmap(
+        adata, mz=100.0, layer="raw", colormap="gray", vmin=None, vmax=None
+    )
+
+    np.testing.assert_array_equal(dispatched, direct)
+
+
+def test_render_heatmap_by_target_numeric_obs():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0], obs_columns={"tic": [0.0, 10.0, 5.0, 15.0]}
+    )
+    parts = ["s1", "obs:tic", "gray", "0.0", "15.0"]
+
+    dispatched = render_heatmap_by_target(adata, parts[1], parts)
+    direct = render_obs_heatmap(adata, "tic", colormap="gray", vmin=0.0, vmax=15.0)
+
+    np.testing.assert_array_equal(dispatched, direct)
+
+
+def test_render_heatmap_by_target_categorical_obs():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+    parts = ["s1", "obs:polarity", "negative,positive"]
+
+    dispatched = render_heatmap_by_target(adata, parts[1], parts)
+    direct = render_obs_categories_heatmap(adata, "polarity", ["negative", "positive"])
+
+    np.testing.assert_array_equal(dispatched, direct)
+
+
+def test_render_heatmap_by_target_categorical_obs_empty_category_list():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+    parts = ["s1", "obs:polarity", ""]
+
+    dispatched = render_heatmap_by_target(adata, parts[1], parts)
+    direct = render_obs_categories_heatmap(adata, "polarity", [])
+
+    np.testing.assert_array_equal(dispatched, direct)
 
 
 def test_category_color_is_stable_and_distinct_for_different_indices():

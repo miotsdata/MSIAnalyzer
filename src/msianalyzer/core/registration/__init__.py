@@ -6,6 +6,7 @@ from .image_registration import (
     load_registration,
     resolve_image_path,
 )
+from .overlay import warp_heatmap_to_he_space
 from .transform import (
     Landmark,
     RegistrationFit,
@@ -23,6 +24,7 @@ __all__ = [
     "fit_and_save_registration",
     "load_registration",
     "resolve_image_path",
+    "warp_heatmap_to_he_space",
     "Landmark",
     "RegistrationFit",
     "apply_transform",
