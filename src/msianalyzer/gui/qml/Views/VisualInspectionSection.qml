@@ -45,6 +45,14 @@ Item {
     // this section without reaching two levels deep.
     property bool featuresLoading: controls.featuresLoading
 
+    // The live HeatmapControlsPanel instance itself, forwarded the same
+    // way — Export > Image… (Main.qml) reads its current
+    // inspectionMode/dataLayer/colormap/vminToken()/vmaxToken() straight
+    // off this reference rather than re-deriving "current Visual
+    // Inspection settings" a second time. `controls` is a fixed child,
+    // not a Loader item, so this binding's identity never changes.
+    property var controlsPanel: controls
+
     // Set by AnalysisPage right after (re-)constructing this section for
     // an "Inspect visually" jump from Annotations — see
     // AnalysisPage.qml's visualLoader.onLoaded. NaN (the default) means

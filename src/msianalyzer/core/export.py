@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 import anndata as ad
+import matplotlib.pyplot as plt
 import numpy as np
 
 from .analysis_db import (
@@ -22,7 +23,14 @@ from .analysis_db import (
     load_feature_representative_annotations,
     load_samples,
 )
-from .plotting.heatmap import _feature_column_index, _layer_column
+from .plotting.heatmap import (
+    _feature_column_index,
+    _layer_column,
+    is_numeric_obs_column,
+    obs_categories,
+    render_heatmap_figure,
+)
+from .plotting.roi import load_sample_rois
 
 logger = logging.getLogger(__name__)
 
@@ -189,5 +197,117 @@ def export_integration_tables(
 
     logger.info(
         "exported %d integration table(s) to %s", written, dest_folder
+    )
+    return written
+
+
+def export_visual_inspection_images(
+    db_path: str | Path,
+    dest_folder: str | Path,
+    image_format: str,
+    mode: str,
+    *,
+    mz: float | None = None,
+    obs_column: str | None = None,
+    layer: str = "TIC",
+    colormap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    show_rois: bool = False,
+) -> int:
+    """Write `<dest_folder>/<sample_name>.<image_format>` for every
+    sample — the same raster + colorbar/legend `render_heatmap_figure`
+    builds, matching whatever Visual Inspection is currently showing
+    (every argument here is meant to be read straight from
+    `HeatmapControlsPanel`'s own live property values, not re-derived).
+
+    Args:
+        db_path: The analysis' SQLite database.
+        dest_folder: Directory to write into (created if missing).
+        image_format: `"png"`, `"pdf"`, or `"svg"` — Matplotlib's
+            `savefig` picks the writer purely from the extension.
+        mode: `"feature"` or `"obs"` — whether `mz` or `obs_column`
+            drives the raster. For `"obs"`, whether a given sample's
+            column is numeric or categorical is decided per sample
+            (`is_numeric_obs_column`), same as the GUI's own tile
+            requests — a category union across every sample (not just
+            this one) is computed once up front so a category always
+            gets the same color/legend entry everywhere, same as
+            `HeatmapControlsPanel.obsCategoryLegend`'s own convention.
+        mz: Required for `mode="feature"`.
+        obs_column: Required for `mode="obs"`.
+        layer: `"raw"` or `"TIC"` — `mode="feature"` only.
+        colormap: Any registered Matplotlib colormap name.
+        vmin: Lower color-scale bound. `None` autoscales per sample
+            (matching `HeatmapControlsPanel.vminToken()`'s own `"auto"`
+            convention once translated to `None` by the caller).
+        vmax: Upper color-scale bound. `None` autoscales per sample.
+        show_rois: Draw each sample's own saved ROI polygons on top,
+            matching Visual Inspection's "Show ROIs" checkbox.
+
+    Returns:
+        The number of sample images written. A sample with no `.h5ad`
+        on disk is skipped, not an error.
+    """
+    dest_folder = Path(dest_folder)
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    ext = image_format.lower().lstrip(".")
+
+    samples = load_samples(db_path)
+    loaded: dict[str, ad.AnnData] = {}
+    for sample_name in samples["name"]:
+        h5ad_path = _sample_h5ad_path(db_path, sample_name)
+        if not h5ad_path.exists():
+            logger.warning(
+                "skipping %s in image export: no h5ad at %s", sample_name, h5ad_path
+            )
+            continue
+        loaded[sample_name] = ad.read_h5ad(h5ad_path)
+
+    categories: list[str] | None = None
+    if mode == "obs" and obs_column:
+        union: set[str] = set()
+        for adata in loaded.values():
+            if obs_column in adata.obs.columns and not is_numeric_obs_column(
+                adata, obs_column
+            ):
+                union |= set(obs_categories(adata, obs_column))
+        categories = sorted(union) if union else None
+
+    written = 0
+    for sample_name, adata in loaded.items():
+        if mode == "feature":
+            render_mode = "feature"
+        elif obs_column and is_numeric_obs_column(adata, obs_column):
+            render_mode = "obs_numeric"
+        else:
+            render_mode = "obs_categorical"
+
+        rois = (
+            load_sample_rois(_sample_h5ad_path(db_path, sample_name))
+            if show_rois
+            else None
+        )
+
+        fig = render_heatmap_figure(
+            adata,
+            mode=render_mode,
+            mz=mz,
+            obs_column=obs_column,
+            categories=categories,
+            layer=layer,
+            colormap=colormap,
+            vmin=vmin,
+            vmax=vmax,
+            rois=rois,
+            title=sample_name,
+        )
+        dest_path = dest_folder / f"{sample_name}.{ext}"
+        fig.savefig(dest_path, bbox_inches="tight")
+        plt.close(fig)
+        written += 1
+
+    logger.info(
+        "exported %d visual inspection image(s) to %s", written, dest_folder
     )
     return written

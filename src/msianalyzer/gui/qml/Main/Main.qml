@@ -243,6 +243,20 @@ ApplicationWindow {
                 enabled: window.currentAnalysis !== null
                 onTriggered: exportIntegrationDialog.open()
             }
+            // Only meaningful while Visual Inspection is the tab actually
+            // on screen — its control values (colormap/vmin/vmax/...)
+            // only exist as a live QML instance then (AnalysisPage.qml's
+            // visualLoader is a lazily-active Loader, not a permanent
+            // child). "Export the current plots in visual inspection"
+            // only means something once there's a current plot to read.
+            AppMenuItem {
+                objectName: "exportImageMenuItem"
+                text: "Image…"
+                enabled: window.currentAnalysis !== null
+                         && stackView.currentItem
+                         && stackView.currentItem.visualInspectionActive === true
+                onTriggered: exportImageDialog.open()
+            }
         }
 
         Menu {
@@ -483,6 +497,98 @@ ApplicationWindow {
                 Router.toLocalPath(selectedFolder),
                 exportIntegrationDialog.layer,
                 exportIntegrationDialog.format)
+        }
+    }
+
+    // Image export needs a format (PNG/PDF/SVG) choice up front, same
+    // "custom Dialog, then hand off to a FolderDialog" shape as
+    // Integration export above — plus a snapshot of Visual Inspection's
+    // own live control values, taken once when the dialog opens rather
+    // than re-read at accept time (the folder picker in between is
+    // modal, but this keeps the export's inputs pinned to what the user
+    // was actually looking at when they chose "Export").
+    Dialog {
+        id: exportImageDialog
+        objectName: "exportImageDialog"
+        title: "Export Visual Inspection Images"
+        modal: true
+        standardButtons: Dialog.Cancel
+        anchors.centerIn: parent
+
+        property string format: "png"
+        property var controlsSnapshot: null
+
+        onAboutToShow: {
+            var section = stackView.currentItem ? stackView.currentItem.visualInspectionSection : null
+            var controls = section ? section.controlsPanel : null
+            exportImageDialog.controlsSnapshot = controls ? {
+                "mode": controls.inspectionMode,
+                "mz": controls.selectedFeature ? String(controls.selectedFeature.mz) : "",
+                "obsColumn": controls.selectedObsColumn || "",
+                "layer": controls.dataLayer,
+                "colormap": controls.colormap,
+                "vmin": controls.vminToken(),
+                "vmax": controls.vmaxToken(),
+                "showRois": section.showRois,
+            } : null
+        }
+
+        Column {
+            spacing: 12
+
+            Label { text: "Format:" }
+            Row {
+                spacing: 6
+                Button {
+                    objectName: "imagePngButton"
+                    text: "PNG"
+                    highlighted: exportImageDialog.format === "png"
+                    onClicked: exportImageDialog.format = "png"
+                }
+                Button {
+                    objectName: "imagePdfButton"
+                    text: "PDF"
+                    highlighted: exportImageDialog.format === "pdf"
+                    onClicked: exportImageDialog.format = "pdf"
+                }
+                Button {
+                    objectName: "imageSvgButton"
+                    text: "SVG"
+                    highlighted: exportImageDialog.format === "svg"
+                    onClicked: exportImageDialog.format = "svg"
+                }
+            }
+
+            Button {
+                objectName: "imageChooseFolderButton"
+                text: "Choose Folder…"
+                enabled: exportImageDialog.controlsSnapshot !== null
+                onClicked: {
+                    exportImageDialog.close()
+                    exportImageFolderDialog.open()
+                }
+            }
+        }
+    }
+
+    FolderDialog {
+        id: exportImageFolderDialog
+        objectName: "exportImageFolderDialog"
+        options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
+        onAccepted: {
+            var snap = exportImageDialog.controlsSnapshot
+            AnalysisBridge.exportVisualInspectionImages(
+                window.currentAnalysis.analysisDbPath,
+                Router.toLocalPath(selectedFolder),
+                exportImageDialog.format,
+                snap.mode,
+                snap.mz,
+                snap.obsColumn,
+                snap.layer,
+                snap.colormap,
+                snap.vmin,
+                snap.vmax,
+                snap.showRois)
         }
     }
 

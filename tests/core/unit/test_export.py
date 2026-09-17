@@ -13,7 +13,12 @@ import pytest
 from scipy.sparse import csr_matrix
 
 from msianalyzer.core.analysis_db import init_analysis_db, register_sample
-from msianalyzer.core.export import export_annotation_table, export_integration_tables
+from msianalyzer.core.export import (
+    export_annotation_table,
+    export_integration_tables,
+    export_visual_inspection_images,
+)
+from msianalyzer.core.plotting.roi import save_roi_to_sample
 
 
 def _read_rows(path: Path, delimiter: str) -> list[list[str]]:
@@ -295,3 +300,102 @@ def test_export_integration_tables_creates_destination_directory(tmp_path):
     export_integration_tables(db, tmp_path / "nested" / "dir", "TIC")
 
     assert (tmp_path / "nested" / "dir" / "sampleA_integration.csv").exists()
+
+
+def _seed_sample_with_obs(
+    db: Path, name: str, *, obs_columns: dict | None = None
+) -> None:
+    register_sample(db, name=name, raw_db_path=db.parent / f"{name}_raw.db")
+    obs = pd.DataFrame(index=["px0", "px1", "px2", "px3"])
+    for col, values in (obs_columns or {}).items():
+        obs[col] = values
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.array([[1.0], [2.0], [3.0], [4.0]], dtype=np.float32))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array(
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
+    )
+    adata.layers["TIC"] = csr_matrix(np.array([[10.0], [20.0], [30.0], [40.0]], dtype=np.float32))
+    adata.write_h5ad(db.parent / f"{name}.h5ad")
+
+
+def test_export_visual_inspection_images_writes_one_file_per_sample(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_sample_with_obs(db, "sampleA")
+    _seed_sample_with_obs(db, "sampleB")
+
+    written = export_visual_inspection_images(
+        db, tmp_path / "out", "png", "feature", mz=100.0
+    )
+
+    assert written == 2
+    assert (tmp_path / "out" / "sampleA.png").exists()
+    assert (tmp_path / "out" / "sampleB.png").exists()
+
+
+def test_export_visual_inspection_images_respects_format_extension(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_sample_with_obs(db, "sampleA")
+
+    export_visual_inspection_images(db, tmp_path / "out", "svg", "feature", mz=100.0)
+
+    dest = tmp_path / "out" / "sampleA.svg"
+    assert dest.exists()
+    assert dest.read_text(encoding="utf-8").lstrip().startswith("<?xml")
+
+
+def test_export_visual_inspection_images_obs_categorical_mode(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_sample_with_obs(
+        db, "sampleA", obs_columns={"polarity": ["neg", "pos", "neg", "pos"]}
+    )
+
+    written = export_visual_inspection_images(
+        db, tmp_path / "out", "png", "obs", obs_column="polarity"
+    )
+
+    assert written == 1
+    assert (tmp_path / "out" / "sampleA.png").exists()
+
+
+def test_export_visual_inspection_images_skips_sample_with_missing_h5ad(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    register_sample(db, name="ghost", raw_db_path=tmp_path / "ghost_raw.db")
+
+    written = export_visual_inspection_images(
+        db, tmp_path / "out", "png", "feature", mz=100.0
+    )
+
+    assert written == 0
+
+
+def test_export_visual_inspection_images_with_rois_still_writes_file(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_sample_with_obs(db, "sampleA")
+    save_roi_to_sample(
+        db.parent / "sampleA.h5ad", "tumor", "#ff0000", [[0, 0], [1, 0], [1, 1], [0, 1]]
+    )
+
+    written = export_visual_inspection_images(
+        db, tmp_path / "out", "png", "feature", mz=100.0, show_rois=True
+    )
+
+    assert written == 1
+    assert (tmp_path / "out" / "sampleA.png").exists()
+
+
+def test_export_visual_inspection_images_creates_destination_directory(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_sample_with_obs(db, "sampleA")
+
+    export_visual_inspection_images(
+        db, tmp_path / "nested" / "dir", "png", "feature", mz=100.0
+    )
+
+    assert (tmp_path / "nested" / "dir" / "sampleA.png").exists()

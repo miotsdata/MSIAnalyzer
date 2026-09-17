@@ -504,6 +504,110 @@ def test_export_integration_choose_folder_opens_folder_dialog_with_chosen_layer_
     assert folder_dialog.property("visible") is True
 
 
+def test_export_image_menu_item_disabled_on_non_visual_inspection_tab(
+    application, engine, qtbot
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    image_item = window.findChild(QObject, "exportImageMenuItem")
+    assert image_item.property("enabled") is False  # Summary tab is active by default
+
+
+def test_export_image_menu_item_enabled_after_switching_to_visual_inspection_tab(
+    application, engine, qtbot, find_visual_child
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    # Repeater-created delegates (navButton_N) aren't reachable via
+    # QObject.findChild — see find_visual_child's own docstring.
+    nav_rail = window.findChild(QQuickItem, "navRail")
+    nav_button = find_visual_child(nav_rail, "navButton_3")
+    nav_button.click()
+    qtbot.wait(100)
+
+    image_item = window.findChild(QObject, "exportImageMenuItem")
+    assert image_item.property("enabled") is True
+
+
+def test_export_image_menu_item_opens_choice_dialog_with_a_controls_snapshot(
+    application, engine, qtbot, find_visual_child
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+    nav_rail = window.findChild(QQuickItem, "navRail")
+    find_visual_child(nav_rail, "navButton_3").click()
+    qtbot.wait(100)
+
+    dialog = window.findChild(QObject, "exportImageDialog")
+    assert dialog is not None
+    assert dialog.property("visible") is False
+
+    image_item = window.findChild(QObject, "exportImageMenuItem")
+    image_item.click()
+    qtbot.wait(50)
+
+    assert dialog.property("visible") is True
+    snapshot = dialog.property("controlsSnapshot").toVariant()
+    assert snapshot is not None
+    assert snapshot["layer"] == "TIC"
+
+
+def test_export_image_choose_folder_opens_folder_dialog_with_chosen_format(
+    application, engine, qtbot, find_visual_child
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+    nav_rail = window.findChild(QQuickItem, "navRail")
+    find_visual_child(nav_rail, "navButton_3").click()
+    qtbot.wait(100)
+
+    dialog = window.findChild(QObject, "exportImageDialog")
+    dialog.setProperty("visible", True)
+    svg_button = window.findChild(QObject, "imageSvgButton")
+    svg_button.clicked.emit()
+    assert dialog.property("format") == "svg"
+
+    folder_dialog = window.findChild(QObject, "exportImageFolderDialog")
+    assert folder_dialog.property("visible") is False
+
+    choose_button = window.findChild(QObject, "imageChooseFolderButton")
+    choose_button.clicked.emit()
+    qtbot.wait(50)
+
+    assert dialog.property("visible") is False
+    assert folder_dialog.property("visible") is True
+
+
 def test_export_finished_shows_result_dialog(application, engine, qtbot):
     window = engine.rootObjects()[0]
     result_dialog = window.findChild(QObject, "exportResultDialog")

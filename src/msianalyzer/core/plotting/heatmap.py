@@ -1,5 +1,9 @@
 import anndata as ad
 import matplotlib
+import matplotlib.cm
+import matplotlib.figure
+import matplotlib.patches
+import matplotlib.ticker
 import numpy as np
 import pandas as pd
 
@@ -333,3 +337,139 @@ def render_obs_categories_heatmap(
         rgba[grid == i] = _category_rgba(i)
 
     return np.ascontiguousarray(rgba)
+
+
+#: Above this magnitude, the exported colorbar's tick labels switch to
+#: scientific notation — confirmed with the user ("if the value of vmin
+#: and vmax are > 10^3, use scientific notation in legend").
+_SCIENTIFIC_NOTATION_THRESHOLD = 1000.0
+
+
+def render_heatmap_figure(
+    adata: ad.AnnData,
+    *,
+    mode: str,
+    mz: float | None = None,
+    obs_column: str | None = None,
+    categories: list[str] | None = None,
+    layer: str = "TIC",
+    colormap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    rois: dict | None = None,
+    title: str | None = None,
+) -> matplotlib.figure.Figure:
+    """A real Matplotlib `Figure` for one sample's spatial heatmap —
+    what `export_visual_inspection_images` writes to PNG/PDF/SVG, unlike
+    `render_feature_heatmap`/`render_obs_heatmap`/
+    `render_obs_categories_heatmap`'s bare RGBA arrays (built for the
+    GUI's own lightweight `Image` tiles, no tick-labelled legend).
+
+    Reuses those three functions to build the exact same RGBA raster the
+    live GUI tile shows for the same arguments — `imshow`ing an
+    already-colorized array, not re-normalizing independently — so a
+    colorbar/legend built alongside it is guaranteed to describe the same
+    pixels the user actually saw, not a second, potentially-diverging
+    color computation.
+
+    Args:
+        adata: One sample's AnnData, already loaded.
+        mode: `"feature"`, `"obs_numeric"`, or `"obs_categorical"`.
+        mz: Required for `mode="feature"`.
+        obs_column: Required for `mode="obs_numeric"`/`"obs_categorical"`.
+        categories: Required for `mode="obs_categorical"` — the full,
+            shared category order (see `render_obs_categories_heatmap`),
+            normally the union across every sample being exported so a
+            category always gets the same color/legend entry.
+        layer: `"raw"` or `"TIC"` — `mode="feature"` only.
+        colormap: Any registered Matplotlib colormap name.
+        vmin: Lower color-scale bound. `None` autoscales to this sample's
+            own data (matching what an actual autoscaled GUI tile shows).
+        vmax: Upper color-scale bound. `None` autoscales similarly.
+        rois: `{name: {"color": "#rrggbb", "vertices": [[col, row], ...]}}`
+            (see `core.plotting.roi.load_sample_rois`) — each drawn as an
+            unfilled polygon outline on top of the raster, in the same
+            grid-index coordinate space `imshow`'s default pixel
+            centers already use (no extra transform needed). `None`/`{}`
+            draws nothing.
+        title: Optional figure title (e.g. the sample name).
+
+    Returns:
+        A standalone `Figure` (not tied to `pyplot`'s global current-figure
+        state) — the caller is responsible for `fig.savefig(...)` and
+        closing it (`matplotlib.pyplot.close(fig)`) once done, same as any
+        `Figure` built directly rather than via `pyplot.figure()`.
+    """
+    fig = matplotlib.figure.Figure()
+    ax = fig.add_subplot(111)
+    ax.set_axis_off()
+
+    legend_kind: str
+    eff_vmin = eff_vmax = None
+
+    if mode == "feature":
+        if mz is None:
+            raise ValueError("mode='feature' requires mz")
+        rgba = render_feature_heatmap(
+            adata, mz, layer=layer, colormap=colormap, vmin=vmin, vmax=vmax
+        )
+        eff_vmin, eff_vmax = vmin, vmax
+        if eff_vmin is None or eff_vmax is None:
+            data_min, data_max = feature_value_range(adata, mz, layer)
+            eff_vmin = data_min if eff_vmin is None else eff_vmin
+            eff_vmax = data_max if eff_vmax is None else eff_vmax
+        legend_kind = "colorbar"
+    elif mode == "obs_numeric":
+        if not obs_column:
+            raise ValueError("mode='obs_numeric' requires obs_column")
+        rgba = render_obs_heatmap(
+            adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax
+        )
+        eff_vmin, eff_vmax = vmin, vmax
+        if eff_vmin is None or eff_vmax is None:
+            data_min, data_max = obs_value_range(adata, obs_column)
+            eff_vmin = data_min if eff_vmin is None else eff_vmin
+            eff_vmax = data_max if eff_vmax is None else eff_vmax
+        legend_kind = "colorbar"
+    elif mode == "obs_categorical":
+        if not obs_column:
+            raise ValueError("mode='obs_categorical' requires obs_column")
+        rgba = render_obs_categories_heatmap(adata, obs_column, categories or [])
+        legend_kind = "categories"
+    else:
+        raise ValueError(f"unknown mode {mode!r}")
+
+    ax.imshow(rgba, origin="upper")
+
+    for info in (rois or {}).values():
+        vertices = info["vertices"]
+        if len(vertices) >= 3:
+            ax.add_patch(
+                matplotlib.patches.Polygon(
+                    vertices, closed=True, fill=False,
+                    edgecolor=info["color"], linewidth=1.5,
+                )
+            )
+
+    if legend_kind == "colorbar":
+        if eff_vmax <= eff_vmin:
+            eff_vmax = eff_vmin + 1.0
+        norm = matplotlib.colors.Normalize(vmin=eff_vmin, vmax=eff_vmax)
+        mappable = matplotlib.cm.ScalarMappable(norm=norm, cmap=matplotlib.colormaps[colormap])
+        cbar = fig.colorbar(mappable, ax=ax)
+        if max(abs(eff_vmin), abs(eff_vmax)) > _SCIENTIFIC_NOTATION_THRESHOLD:
+            formatter = matplotlib.ticker.ScalarFormatter(useMathText=True)
+            formatter.set_powerlimits((0, 0))
+            cbar.ax.yaxis.set_major_formatter(formatter)
+    else:
+        handles = [
+            matplotlib.patches.Patch(facecolor=category_color(i), label=cat)
+            for i, cat in enumerate(categories or [])
+        ]
+        if handles:
+            ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.0, 0.5))
+
+    if title:
+        ax.set_title(title)
+
+    return fig

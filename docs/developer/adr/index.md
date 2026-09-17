@@ -50,3 +50,4 @@ useful).
 | [38](0038-adduct-cas-hmdb-capture.md) | Capture adduct/CAS/HMDB for MS2-annotated hits | Accepted |
 | [39](0039-export-menu-annotation.md) | Export menu: Annotation export | Accepted |
 | [40](0040-export-menu-integration.md) | Export menu: Integration export | Accepted |
+| [41](0041-export-menu-image.md) | Export menu: Image export | Accepted |

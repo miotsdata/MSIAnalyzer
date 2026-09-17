@@ -185,6 +185,36 @@ def test_export_integration_tables_failure_emits_export_failed(tmp_path, qtbot):
         )
 
 
+def test_export_visual_inspection_images_writes_files_and_emits_finished(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_sample_with_h5ad(db_path, "sampleA")
+    dest_folder = tmp_path / "out"
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.exportFinished, timeout=2000) as spy:
+        bridge.exportVisualInspectionImages(
+            str(db_path), str(dest_folder), "png", "feature", "100.0", "",
+            "TIC", "viridis", "auto", "auto", False,
+        )
+
+    assert (dest_folder / "sampleA.png").exists()
+    assert "1 sample" in spy.args[0]
+
+
+def test_export_visual_inspection_images_failure_emits_export_failed(tmp_path, qtbot):
+    bridge = AnalysisBridge()
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    dest_folder = blocker / "out"
+
+    with qtbot.waitSignal(bridge.exportFailed, timeout=2000):
+        bridge.exportVisualInspectionImages(
+            str(tmp_path / "does_not_exist.db"), str(dest_folder), "png", "feature",
+            "100.0", "", "TIC", "viridis", "auto", "auto", False,
+        )
+
+
 def test_get_summary_missing_db_returns_zero_dict(tmp_path):
     bridge = AnalysisBridge()
     assert bridge.getSummary(str(tmp_path / "does_not_exist.db")) == _ZERO_SUMMARY

@@ -1,7 +1,11 @@
 import anndata as ad
 import matplotlib
+import matplotlib.figure
+import matplotlib.patches
+import matplotlib.ticker
 import numpy as np
 import pandas as pd
+import pytest
 from scipy.sparse import csr_matrix
 
 from msianalyzer.core.plotting.heatmap import (
@@ -13,6 +17,7 @@ from msianalyzer.core.plotting.heatmap import (
     pixel_grid_indices,
     render_colorbar,
     render_feature_heatmap,
+    render_heatmap_figure,
     render_obs_categories_heatmap,
     render_obs_heatmap,
 )
@@ -338,3 +343,77 @@ def _to_rgba(hex_color):
     hex_color = hex_color.lstrip("#")
     r, g, b = (int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
     return (r, g, b, 255)
+
+
+def test_render_heatmap_figure_feature_mode_returns_figure_with_colorbar():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+
+    fig = render_heatmap_figure(adata, mode="feature", mz=100.0, layer="X_unused_falls_back_to_X")
+
+    assert isinstance(fig, matplotlib.figure.Figure)
+    # One image axes + one colorbar axes.
+    assert len(fig.axes) == 2
+
+
+def test_render_heatmap_figure_obs_categorical_mode_draws_legend_not_colorbar():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+
+    fig = render_heatmap_figure(
+        adata, mode="obs_categorical", obs_column="polarity",
+        categories=["negative", "positive"],
+    )
+
+    assert len(fig.axes) == 1  # no separate colorbar axes
+    assert fig.axes[0].get_legend() is not None
+
+
+def test_render_heatmap_figure_scientific_notation_above_threshold():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+
+    fig_small = render_heatmap_figure(
+        adata, mode="feature", mz=100.0, layer="X_unused_falls_back_to_X",
+        vmin=0.0, vmax=15.0,
+    )
+    fig_large = render_heatmap_figure(
+        adata, mode="feature", mz=100.0, layer="X_unused_falls_back_to_X",
+        vmin=0.0, vmax=5000.0,
+    )
+
+    small_formatter = fig_small.axes[1].yaxis.get_major_formatter()
+    large_formatter = fig_large.axes[1].yaxis.get_major_formatter()
+    assert not isinstance(small_formatter, matplotlib.ticker.ScalarFormatter) or \
+        small_formatter.get_useMathText() is False or small_formatter._powerlimits != (0, 0)
+    assert isinstance(large_formatter, matplotlib.ticker.ScalarFormatter)
+    assert large_formatter._powerlimits == (0, 0)
+
+
+def test_render_heatmap_figure_draws_roi_polygon():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+    rois = {"tumor": {"color": "#ff0000", "vertices": [[0, 0], [1, 0], [1, 1], [0, 1]]}}
+
+    fig = render_heatmap_figure(
+        adata, mode="feature", mz=100.0, layer="X_unused_falls_back_to_X", rois=rois,
+    )
+
+    patches = [p for p in fig.axes[0].patches if isinstance(p, matplotlib.patches.Polygon)]
+    assert len(patches) == 1
+
+
+def test_render_heatmap_figure_autoscales_when_vmin_vmax_are_none():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+
+    fig = render_heatmap_figure(adata, mode="feature", mz=100.0, layer="X_unused_falls_back_to_X")
+
+    # Colorbar's own scale reflects this sample's actual data range.
+    cbar_axes = fig.axes[1]
+    assert cbar_axes.get_ylim()[0] == 0.0
+    assert cbar_axes.get_ylim()[1] == 15.0
+
+
+def test_render_heatmap_figure_rejects_unknown_mode():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+    with pytest.raises(ValueError):
+        render_heatmap_figure(adata, mode="bogus")

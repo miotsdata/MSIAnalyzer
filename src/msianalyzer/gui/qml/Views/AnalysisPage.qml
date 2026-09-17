@@ -29,6 +29,17 @@ Page {
     // re-apply a stale feature selection from a previous "Inspect visually".
     property real pendingInspectMz: NaN
 
+    // Export > Image… (Main.qml) needs Visual Inspection's own live
+    // control values, but that section is a lazily-active Loader
+    // (visualLoader below) — only actually instantiated while its tab is
+    // the current one. Forwarded up here (and again from `window` in
+    // Main.qml via `stackView.currentItem`) so the menu item can both
+    // gate itself on "is there anything live to read right now" and
+    // read it, without Main.qml reaching three files deep on its own.
+    readonly property bool visualInspectionActive: sectionStack.currentIndex === 3
+                                                     && visualLoader.status === Loader.Ready
+    property var visualInspectionSection: visualLoader.item
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0

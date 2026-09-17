@@ -1090,3 +1090,64 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             return f"Integration tables exported for {n} sample(s) to {dest_folder}"
 
         self._run_export(_do_export)
+
+    @Slot(str, str, str, str, str, str, str, str, str, str, bool)
+    def exportVisualInspectionImages(
+        self,
+        analysis_db_path: str,
+        dest_folder: str,
+        image_format: str,
+        mode: str,
+        mz_str: str,
+        obs_column: str,
+        layer: str,
+        colormap: str,
+        vmin_token: str,
+        vmax_token: str,
+        show_rois: bool,
+    ) -> None:
+        """Start writing the Image export (one PNG/PDF/SVG per sample,
+        matching Visual Inspection's own current display settings) on a
+        background thread; completion arrives via
+        `exportFinished(message)`/`exportFailed(message)`.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            dest_folder: Destination folder, as chosen in the folder
+                dialog — one `<sample_name>.<image_format>` file per
+                sample is written into it.
+            image_format: `"png"`, `"pdf"`, or `"svg"`.
+            mode: `"feature"` or `"obs"` — mirrors
+                `HeatmapControlsPanel.inspectionMode`.
+            mz_str: The selected feature's m/z as a string (`mode="feature"`
+                only) — `""` otherwise.
+            obs_column: The selected obs column (`mode="obs"` only) — `""`
+                otherwise.
+            layer: `"raw"` or `"TIC"` — mirrors
+                `HeatmapControlsPanel.dataLayer`.
+            colormap: Mirrors `HeatmapControlsPanel.colormap`.
+            vmin_token: `HeatmapControlsPanel.vminToken()`'s own value —
+                `"auto"` or a numeric string.
+            vmax_token: `HeatmapControlsPanel.vmaxToken()`'s own value.
+            show_rois: Mirrors Visual Inspection's "Show ROIs" checkbox.
+        """
+        def _do_export() -> str:
+            mz = float(mz_str) if mz_str else None
+            vmin = None if vmin_token == "auto" else float(vmin_token)
+            vmax = None if vmax_token == "auto" else float(vmax_token)
+            n = core_export.export_visual_inspection_images(
+                analysis_db_path,
+                dest_folder,
+                image_format,
+                mode,
+                mz=mz,
+                obs_column=obs_column or None,
+                layer=layer,
+                colormap=colormap,
+                vmin=vmin,
+                vmax=vmax,
+                show_rois=show_rois,
+            )
+            return f"Images exported for {n} sample(s) to {dest_folder}"
+
+        self._run_export(_do_export)
