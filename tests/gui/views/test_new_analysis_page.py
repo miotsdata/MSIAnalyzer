@@ -227,12 +227,62 @@ def test_optional_field_defaults_to_blank_text(
     assert control.property("text") == ""
 
 
-def test_library_path_field_is_read_only(new_analysis_view, project, find_visual_child):
-    _, root, _ = _make_page(new_analysis_view, project)
+def _open_annotate_tab(view, root, find_visual_child, qtbot):
+    tab_button = find_visual_child(root, "tabButton_annotate")
+    center = tab_button.mapToScene(tab_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+
+def test_library_path_starts_empty_with_placeholder_label(
+    new_analysis_view, project, find_visual_child, qtbot
+):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_annotate_tab(view, root, find_visual_child, qtbot)
 
     control = find_visual_child(root, "field_annotate_library_path")
     assert control is not None
-    assert control.property("readOnly") is True
+    empty_label = find_visual_child(control, "libraryPathEmptyLabel")
+    assert empty_label.property("visible") is True
+    assert find_visual_child(control, "libraryPathRow_0") is None
+
+
+def test_adding_library_paths_lists_them_with_remove_buttons(
+    new_analysis_view, project, find_visual_child, qtbot
+):
+    view, root, _ = _make_page(new_analysis_view, project)
+    _open_annotate_tab(view, root, find_visual_child, qtbot)
+
+    root.addLibraryPaths(["/libs/a.db", "/libs/b.db"])
+    qtbot.wait(50)
+
+    control = find_visual_child(root, "field_annotate_library_path")
+    assert find_visual_child(control, "libraryPathEmptyLabel").property("visible") is False
+    row0 = find_visual_child(control, "libraryPathRow_0")
+    row1 = find_visual_child(control, "libraryPathRow_1")
+    assert row0 is not None and row1 is not None
+    assert find_visual_child(control, "removeLibraryPathButton_0") is not None
+    assert find_visual_child(control, "removeLibraryPathButton_1") is not None
+
+
+def test_adding_the_same_library_path_twice_does_not_duplicate_it(
+    new_analysis_view, project
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addLibraryPaths(["/libs/a.db"])
+    root.addLibraryPaths(["/libs/a.db"])
+
+    assert _as_list(root.property("libraryPaths")) == ["/libs/a.db"]
+
+
+def test_removing_a_library_path_removes_only_that_one(new_analysis_view, project):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    root.addLibraryPaths(["/libs/a.db", "/libs/b.db"])
+    root.removeLibraryPath(0)
+
+    assert _as_list(root.property("libraryPaths")) == ["/libs/b.db"]
 
 
 def test_group_tab_shows_a_description_sentence(new_analysis_view, project, find_visual_child):
@@ -326,6 +376,50 @@ def test_run_click_emits_router_signal_with_nested_config(
     assert config_dict["io"]["project_folder"] == model.folder
     assert config_dict["peak"]["filter_mad"] is True
     assert config_dict["annotate"]["library_path"] is None
+
+
+def test_run_click_emits_a_single_library_path_as_a_bare_string(
+    new_analysis_view, project, application, qtbot
+):
+    view, root, model = _make_page(new_analysis_view, project)
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/sample1.mzML")
+    root.setSampleField(0, "xml", "/data/sample1.xml")
+    root.addLibraryPaths(["/libs/a.db"])
+
+    application.core_bridge.run_analysis = MagicMock()
+    spy = QSignalSpy(application.router.runAnalysisRequested)
+    button_center = run_button.mapToScene(run_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    _, config_dict = spy.at(0)
+
+    assert config_dict["annotate"]["library_path"] == "/libs/a.db"
+
+
+def test_run_click_emits_multiple_library_paths_as_a_list(
+    new_analysis_view, project, application, qtbot
+):
+    view, root, model = _make_page(new_analysis_view, project)
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/sample1.mzML")
+    root.setSampleField(0, "xml", "/data/sample1.xml")
+    root.addLibraryPaths(["/libs/a.db", "/libs/b.db"])
+
+    application.core_bridge.run_analysis = MagicMock()
+    spy = QSignalSpy(application.router.runAnalysisRequested)
+    button_center = run_button.mapToScene(run_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    _, config_dict = spy.at(0)
+
+    assert config_dict["annotate"]["library_path"] == ["/libs/a.db", "/libs/b.db"]
 
 
 def test_run_click_emits_config_with_mixed_mzml_and_db_only_samples(
@@ -532,6 +626,13 @@ def _rich_template_config():
             "adducts": ["[M-H]-"],
             "match_ppm": 15.0,
         },
+        # Two paths, deliberately — this exact shape (Config.to_dict()'s
+        # own list-of-str for a multi-library run) is what reproduced the
+        # reported "library path shows as '//'" bug: the value crosses the
+        # Python/QML boundary as an array-*like* object that fails
+        # Array.isArray(), so the old code fell through to stringifying it
+        # directly instead of joining it.
+        "annotate": {"library_path": ["/libs/a.db", "/libs/b.db"]},
     }
 
 
@@ -575,6 +676,8 @@ def test_apply_config_prefills_io_generic_and_target_list_tabs(
     ppm_field = find_visual_child(root, "field_target_list_match_ppm")
     assert ppm_field.property("text") == "15"
 
+    assert _as_list(root.property("libraryPaths")) == ["/libs/a.db", "/libs/b.db"]
+
 
 def test_reset_to_blank_restores_defaults_after_a_load(
     new_analysis_view, find_visual_child
@@ -598,6 +701,7 @@ def test_reset_to_blank_restores_defaults_after_a_load(
     assert _as_list(root.property("targetListSelectedAdducts")) == []
     paths_field = find_visual_child(root, "field_target_list_paths")
     assert paths_field.property("text") == ""
+    assert _as_list(root.property("libraryPaths")) == []
 
 
 def test_template_combo_lists_start_blank_and_previous_runs(

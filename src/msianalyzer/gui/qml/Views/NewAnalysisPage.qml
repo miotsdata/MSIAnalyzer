@@ -108,6 +108,29 @@ Page {
         sampleRows = rows
     }
 
+    // ------------------------------------------------------------------ //
+    // annotate.library_path — listed + removable, like the sample-row
+    // table above, not a semicolon-joined text field (that's still how
+    // target_list.paths works; this field alone was redesigned).
+    // ------------------------------------------------------------------ //
+
+    property var libraryPaths: []
+
+    function addLibraryPaths(paths) {
+        var merged = libraryPaths.slice()
+        for (var i = 0; i < paths.length; i++) {
+            if (merged.indexOf(paths[i]) === -1)
+                merged.push(paths[i])
+        }
+        libraryPaths = merged
+    }
+
+    function removeLibraryPath(index) {
+        var paths = libraryPaths.slice()
+        paths.splice(index, 1)
+        libraryPaths = paths
+    }
+
     // Bulk mzML: every selected path becomes its own new row (mzml set,
     // xml left blank) — the primary way to populate the table, so you
     // don't add rows one at a time before you can even pick a file.
@@ -218,6 +241,28 @@ Page {
         return control.checked === field.enabledWhenEquals
     }
 
+    // Coerces a `path_list`-shaped config value (`null` / a bare string /
+    // an array) into a plain JS array of strings. An array reaching QML
+    // from Python (e.g. a loaded run's `annotate.library_path`) crosses
+    // the Python/QML boundary as an array-*like* object that does NOT
+    // reliably satisfy `Array.isArray()` — iterating by `.length`/index
+    // instead is what actually works. `applyFieldValue`'s old
+    // `Array.isArray(value) ? value.join(...) : (value || "")` fallback
+    // silently mis-stringified such a value (reported: a 2-library config
+    // reloaded as `"//"` instead of the two joined paths) — traced with a
+    // debug property dumping `typeof`/`Array.isArray`/`JSON.stringify` on
+    // the actual value QML received.
+    function normalizePathListValue(value) {
+        if (value === null || value === undefined || value === "")
+            return []
+        if (typeof value === "string")
+            return [value]
+        var out = []
+        for (var i = 0; i < value.length; i++)
+            out.push(value[i])
+        return out
+    }
+
     function parseFieldValue(kind, control) {
         var text = control.text !== undefined ? control.text.trim() : ""
         switch (kind) {
@@ -276,7 +321,7 @@ Page {
             control.text = (value && value.length > 0) ? value.join(", ") : ""
             return
         case "path_list":
-            control.text = Array.isArray(value) ? value.join("; ") : (value || "")
+            control.text = normalizePathListValue(value).join("; ")
             return
         }
     }
@@ -321,6 +366,14 @@ Page {
             var groupDict = {}
             for (var f = 0; f < group.fields.length; f++) {
                 var field = group.fields[f]
+                // library_path is list+remove state (newAnalysisPage.libraryPaths),
+                // not a control's .text — see that property's own comment.
+                if (field.kind === "path_list") {
+                    groupDict[field.name] = newAnalysisPage.libraryPaths.length === 0 ? null
+                        : (newAnalysisPage.libraryPaths.length === 1
+                           ? newAnalysisPage.libraryPaths[0] : newAnalysisPage.libraryPaths.slice())
+                    continue
+                }
                 var control = findByObjectName(
                     newAnalysisPage, "field_" + group.key + "_" + field.name)
                 groupDict[field.name] = control
@@ -379,6 +432,10 @@ Page {
                 var field = group.fields[f]
                 if (!(field.name in groupValues))
                     continue
+                if (field.kind === "path_list") {
+                    newAnalysisPage.libraryPaths = normalizePathListValue(groupValues[field.name])
+                    continue
+                }
                 var control = findByObjectName(
                     newAnalysisPage, "field_" + group.key + "_" + field.name)
                 if (control)
@@ -399,10 +456,14 @@ Page {
         targetListSelectedAdducts = []
         targetListMatchPpmField.text = String(ConfigSchema.targetListSchema.fields.match_ppm.default)
 
+        newAnalysisPage.libraryPaths = []
+
         for (var g = 0; g < ConfigSchema.groups.length; g++) {
             var group = ConfigSchema.groups[g]
             for (var f = 0; f < group.fields.length; f++) {
                 var field = group.fields[f]
+                if (field.kind === "path_list")
+                    continue
                 var control = findByObjectName(
                     newAnalysisPage, "field_" + group.key + "_" + field.name)
                 if (control)
@@ -1156,22 +1217,61 @@ Page {
                                     Layout.fillWidth: true
                                 }
 
-                                RowLayout {
+                                // library_path: a picked-files list with a
+                                // remove button per row (like the io tab's
+                                // sample-row table), not a single
+                                // semicolon-joined text field — the user
+                                // wanted to see and prune what's selected,
+                                // not read/edit a joined string.
+                                ColumnLayout {
+                                    objectName: modelData.kind === "path_list" ? fieldRow.fieldObjectName : ""
                                     visible: modelData.kind === "path_list"
                                     Layout.fillWidth: true
+                                    spacing: 4
 
-                                    TextField {
-                                        id: libraryPathField
-                                        objectName: modelData.kind === "path_list" ? fieldRow.fieldObjectName : ""
-                                        readOnly: true
+                                    RowLayout {
                                         Layout.fillWidth: true
-                                    }
-                                    Button {
-                                        text: "Browse..."
-                                        onClicked: libraryPathDialog.open()
 
-                                        HoverHandler {
-                                            cursorShape: Qt.PointingHandCursor
+                                        Label {
+                                            objectName: "libraryPathEmptyLabel"
+                                            visible: newAnalysisPage.libraryPaths.length === 0
+                                            text: "No libraries selected"
+                                            color: Theme.mutedTextColor
+                                            Layout.fillWidth: true
+                                        }
+                                        Item { Layout.fillWidth: newAnalysisPage.libraryPaths.length > 0 }
+
+                                        Button {
+                                            objectName: "libraryPathBrowseButton"
+                                            text: "Browse..."
+                                            onClicked: libraryPathDialog.open()
+
+                                            HoverHandler {
+                                                cursorShape: Qt.PointingHandCursor
+                                            }
+                                        }
+                                    }
+
+                                    Repeater {
+                                        model: newAnalysisPage.libraryPaths
+                                        delegate: RowLayout {
+                                            objectName: "libraryPathRow_" + index
+                                            Layout.fillWidth: true
+
+                                            Label {
+                                                text: modelData
+                                                elide: Text.ElideMiddle
+                                                Layout.fillWidth: true
+                                            }
+                                            Button {
+                                                objectName: "removeLibraryPathButton_" + index
+                                                text: "Remove"
+                                                onClicked: newAnalysisPage.removeLibraryPath(index)
+
+                                                HoverHandler {
+                                                    cursorShape: Qt.PointingHandCursor
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1206,9 +1306,7 @@ Page {
             var paths = []
             for (var i = 0; i < selectedFiles.length; i++)
                 paths.push(Router.toLocalPath(selectedFiles[i]))
-            var field = findByObjectName(newAnalysisPage, "field_annotate_library_path")
-            if (field)
-                field.text = paths.join("; ")
+            newAnalysisPage.addLibraryPaths(paths)
         }
     }
 
