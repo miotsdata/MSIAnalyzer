@@ -24,6 +24,12 @@ ApplicationWindow {
     // page happens to be on top of `stackView` right now.
     property var currentProject: null
 
+    // The analysis workspace currently open, or null — same shape and
+    // reasoning as currentProject above, so the menu bar can show/enable
+    // the Export menu only while an analysis is actually open, regardless
+    // of which page is on top of stackView.
+    property var currentAnalysis: null
+
     // The Nth-most-recent run of the current project, or null — used to
     // fill the "Analyses > Open" submenu's fixed 5 slots. A plain
     // function over a Repeater: this codebase's test harness has a
@@ -216,6 +222,23 @@ ApplicationWindow {
             }
         }
 
+        // Only meaningful inside an analysis workspace — same
+        // whole-menu-disabled treatment as "Analyses" itself gets when no
+        // project is open, for the same reason ("I actually want the
+        // entire menu item disabled").
+        Menu {
+            objectName: "exportMenu"
+            title: "Export"
+            enabled: window.currentAnalysis !== null
+
+            AppMenuItem {
+                objectName: "exportAnnotationMenuItem"
+                text: "Annotation…"
+                enabled: window.currentAnalysis !== null
+                onTriggered: exportAnnotationDialog.open()
+            }
+        }
+
         Menu {
             objectName: "viewMenu"
             title: "View"
@@ -278,25 +301,30 @@ ApplicationWindow {
         target: Router
         function onShowProjectHomeRequested(project) {
             window.currentProject = project
+            window.currentAnalysis = null
             stackView.push("qrc:/Views/ProjectHomePage.qml", {"project": project})
         }
 
         function onCreateProjectPageRequested() {
+            window.currentAnalysis = null
             stackView.push("qrc:/Views/CreateProjectPage.qml")
         }
 
         function onNewAnalysisPageRequested(project) {
             window.currentProject = project
+            window.currentAnalysis = null
             stackView.push("qrc:/Views/NewAnalysisPage.qml", {"project": project})
         }
 
         function onShowRunningPageRequested(project, runId) {
             window.currentProject = project
+            window.currentAnalysis = null
             stackView.push("qrc:/Views/RunningAnalysisPage.qml", {"project": project, "runId": runId})
         }
 
         function onShowAnalysisRequested(analysis) {
             window.currentProject = analysis.project
+            window.currentAnalysis = analysis
             stackView.push("qrc:/Views/AnalysisPage.qml", {"analysis": analysis})
         }
 
@@ -307,6 +335,7 @@ ApplicationWindow {
 
         function onCloseProjectRequested() {
             window.currentProject = null
+            window.currentAnalysis = null
             stackView.push("qrc:/Views/StartPage.qml")
         }
     }
@@ -350,5 +379,43 @@ ApplicationWindow {
         objectName: "openProjectDialog"
         options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
         onAccepted: Router.projectFolderChosen(Router.toLocalPath(selectedFolder))
+    }
+
+    // This app's first SaveFile dialog — every other FileDialog here
+    // (NewAnalysisPage.qml's mzML/XML/library pickers) is OpenFile(s),
+    // choosing an existing input; this one chooses a destination that
+    // doesn't exist yet. `nameFilters`' extension is what
+    // AnalysisBridge.exportAnnotationTable's own delimiter choice keys
+    // off (".txt" -> tab, anything else, ".csv" included, -> comma) —
+    // see core.export.export_annotation_table.
+    FileDialog {
+        id: exportAnnotationDialog
+        objectName: "exportAnnotationDialog"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["CSV files (*.csv)", "Text files (*.txt)"]
+        options: Qt.platform.pluginName === "offscreen" ? FileDialog.DontUseNativeDialog : 0
+        onAccepted: {
+            AnalysisBridge.exportAnnotationTable(
+                window.currentAnalysis.analysisDbPath, Router.toLocalPath(selectedFile))
+        }
+    }
+
+    Connections {
+        target: AnalysisBridge
+        function onExportFinished(message) {
+            exportResultDialog.text = message
+            exportResultDialog.open()
+        }
+        function onExportFailed(message) {
+            exportResultDialog.text = "Export failed: " + message
+            exportResultDialog.open()
+        }
+    }
+
+    MessageDialog {
+        id: exportResultDialog
+        objectName: "exportResultDialog"
+        buttons: MessageDialog.Ok
+        modality: Qt.ApplicationModal
     }
 }

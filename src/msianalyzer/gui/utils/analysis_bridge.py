@@ -11,12 +11,14 @@ import pandas as pd
 from PySide6.QtCore import QObject, Signal, Slot
 
 from msianalyzer.core import analysis_db
+from msianalyzer.core import export as core_export
 from msianalyzer.core.annotation.formula_prediction import FormulaPredictionSettings
 from msianalyzer.core.plotting import roi
 from msianalyzer.core.plotting.heatmap import category_color
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
 from msianalyzer.core.plotting.plotter import Plotter
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
+from msianalyzer.gui.utils.export_worker import ExportWorker
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
@@ -159,6 +161,8 @@ class AnalysisBridge(QObject):
     formulaPredictionFailed = Signal(str, str)  # analysis_db_path, message
     annotationTableReady = Signal(list)
     featureListReady = Signal(list)
+    exportFinished = Signal(str)  # human-readable "done" message
+    exportFailed = Signal(str)  # human-readable error message
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -197,6 +201,10 @@ class AnalysisBridge(QObject):
         # was still fetching.
         self._annotation_table_worker: TableQueryWorker | None = None
         self._feature_list_worker: TableQueryWorker | None = None
+        # Same pattern once more — one slot shared by every Export menu
+        # action, since only one export can sensibly run at a time from
+        # one workspace.
+        self._export_worker: ExportWorker | None = None
 
     @Slot(float)
     def onSpectrumPointClicked(self, mz: float) -> None:
@@ -1005,3 +1013,53 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         if analysis_db_path and Path(analysis_db_path).exists():
             catalog_removed = analysis_db.delete_roi_catalog_entry(analysis_db_path, name)
         return {"catalog_removed": catalog_removed, "samples_removed": removed_samples}
+
+    # -----------------------------------------------------------------
+    # Export menu
+    # -----------------------------------------------------------------
+
+    def _run_export(self, export_fn) -> None:
+        """Shared fire-and-forget plumbing for every Export menu action —
+        see the class docstring's own note on `exportFinished`/
+        `exportFailed` for why this is threaded rather than a return
+        value, and `ExportWorker`'s docstring for why it's generic over
+        which export function runs.
+        """
+        worker = ExportWorker(export_fn, self)
+        worker.succeeded.connect(self._onExportSucceeded)
+        worker.failed.connect(self._onExportFailed)
+        self._export_worker = worker
+        worker.start()
+
+    @Slot(str)
+    def _onExportSucceeded(self, message: str) -> None:
+        if self.sender() is not self._export_worker:
+            return  # superseded by a newer request — discard
+        self.exportFinished.emit(message)
+
+    @Slot(str)
+    def _onExportFailed(self, message: str) -> None:
+        if self.sender() is not self._export_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("export failed: %s", message)
+        self.exportFailed.emit(message)
+
+    @Slot(str, str)
+    def exportAnnotationTable(self, analysis_db_path: str, dest_path: str) -> None:
+        """Start writing the Annotation export (one row per feature,
+        every tier's identity fields, including features with none at
+        all) on a background thread; completion arrives via
+        `exportFinished(message)`/`exportFailed(message)`.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            dest_path: Where to write the export, as chosen in the save
+                dialog — `.txt` for tab-delimited, anything else
+                (`.csv` included) for comma-delimited (see
+                `core.export.export_annotation_table`).
+        """
+        def _do_export() -> str:
+            core_export.export_annotation_table(analysis_db_path, dest_path)
+            return f"Annotation table exported to {dest_path}"
+
+        self._run_export(_do_export)

@@ -87,6 +87,61 @@ def test_ensure_schema_current_empty_path_is_a_no_op():
     bridge.ensureSchemaCurrent("")  # must not raise
 
 
+# ---------------------------------------------------------------------------
+# Export menu
+# ---------------------------------------------------------------------------
+
+
+def test_export_annotation_table_writes_file_and_emits_finished(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 300.5, '{}')"
+        )
+        con.commit()
+    dest = tmp_path / "out.csv"
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.exportFinished, timeout=2000) as spy:
+        bridge.exportAnnotationTable(str(db_path), str(dest))
+
+    assert dest.exists()
+    assert str(dest) in spy.args[0]
+
+
+def test_export_annotation_table_failure_emits_export_failed(tmp_path, qtbot):
+    bridge = AnalysisBridge()
+    # A destination under a path component that's actually a file, not a
+    # directory — os.makedirs (via Path.mkdir(parents=True)) genuinely
+    # fails on this, unlike a merely-missing directory.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    dest = blocker / "out.csv"
+
+    with qtbot.waitSignal(bridge.exportFailed, timeout=2000):
+        bridge.exportAnnotationTable(str(tmp_path / "does_not_exist.db"), str(dest))
+
+
+def test_export_annotation_table_stale_request_is_discarded(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    received = []
+    bridge.exportFinished.connect(received.append)
+
+    bridge.exportAnnotationTable(str(db_path), str(tmp_path / "first.csv"))
+    first_worker = bridge._export_worker
+    bridge.exportAnnotationTable(str(db_path), str(tmp_path / "second.csv"))
+
+    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+    qtbot.wait(50)
+
+    assert len(received) == 1
+
+
 def test_get_summary_missing_db_returns_zero_dict(tmp_path):
     bridge = AnalysisBridge()
     assert bridge.getSummary(str(tmp_path / "does_not_exist.db")) == _ZERO_SUMMARY

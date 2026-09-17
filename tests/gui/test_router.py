@@ -372,6 +372,107 @@ def test_about_dialog_shows_software_name_and_version(application, engine, qtbot
 
 
 # ---------------------------------------------------------------------------
+# Export menu
+# ---------------------------------------------------------------------------
+
+
+def test_export_menu_disabled_without_a_current_analysis(application, engine):
+    window = engine.rootObjects()[0]
+    export_menu = window.findChild(QObject, "exportMenu")
+    annotation_item = window.findChild(QObject, "exportAnnotationMenuItem")
+
+    # Same "whole top-level entry disabled, not just its children" pattern
+    # as the "Analyses" menu itself.
+    assert export_menu.property("enabled") is False
+    assert annotation_item.property("enabled") is False
+
+
+def test_export_menu_enabled_once_an_analysis_is_open(application, engine, qtbot):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    export_menu = window.findChild(QObject, "exportMenu")
+    assert export_menu.property("enabled") is False
+
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    assert export_menu.property("enabled") is True
+    assert window.property("currentAnalysis") is not None
+
+
+def test_export_menu_disabled_again_after_returning_to_project_home(
+    application, project, engine, qtbot
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(project, "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+    assert window.property("currentAnalysis") is not None
+
+    application.router.showProjectHomeRequested.emit(project_model)
+    qtbot.wait(100)
+
+    assert window.property("currentAnalysis") is None
+    export_menu = window.findChild(QObject, "exportMenu")
+    assert export_menu.property("enabled") is False
+
+
+def test_export_annotation_menu_item_opens_save_dialog(application, engine, qtbot):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    dialog = window.findChild(QObject, "exportAnnotationDialog")
+    assert dialog is not None
+    assert dialog.property("visible") is False
+
+    annotation_item = window.findChild(QObject, "exportAnnotationMenuItem")
+    annotation_item.click()
+    qtbot.wait(50)
+
+    assert dialog.property("visible") is True
+
+
+def test_export_finished_shows_result_dialog(application, engine, qtbot):
+    window = engine.rootObjects()[0]
+    result_dialog = window.findChild(QObject, "exportResultDialog")
+    assert result_dialog.property("visible") is False
+
+    application.analysis_bridge.exportFinished.emit("Annotation table exported to /tmp/out.csv")
+    qtbot.wait(50)
+
+    assert result_dialog.property("visible") is True
+    assert "out.csv" in result_dialog.property("text")
+
+
+def test_export_failed_shows_result_dialog_with_failure_message(application, engine, qtbot):
+    window = engine.rootObjects()[0]
+    result_dialog = window.findChild(QObject, "exportResultDialog")
+
+    application.analysis_bridge.exportFailed.emit("disk full")
+    qtbot.wait(50)
+
+    assert result_dialog.property("visible") is True
+    assert "disk full" in result_dialog.property("text")
+
+
+# ---------------------------------------------------------------------------
 # View menu — light/dark theme switch
 # ---------------------------------------------------------------------------
 
