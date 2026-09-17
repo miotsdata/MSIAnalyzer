@@ -1063,3 +1063,30 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             return f"Annotation table exported to {dest_path}"
 
         self._run_export(_do_export)
+
+    @Slot(str, str, str, str)
+    def exportIntegrationTables(
+        self, analysis_db_path: str, dest_folder: str, layer: str, file_format: str
+    ) -> None:
+        """Start writing the Integration export (one pixel x feature
+        matrix per sample) on a background thread; completion arrives via
+        `exportFinished(message)`/`exportFailed(message)`.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            dest_folder: Destination folder, as chosen in the folder
+                dialog — one `<sample_name>_integration.<ext>` file per
+                sample is written into it.
+            layer: `"raw"` or `"TIC"`.
+            file_format: `"csv"` (comma) or `"txt"` (tab) — a folder
+                dialog gives no filename to key a suffix off, so this is
+                its own explicit choice (see
+                `core.export.export_integration_tables`).
+        """
+        def _do_export() -> str:
+            n = core_export.export_integration_tables(
+                analysis_db_path, dest_folder, layer, file_format
+            )
+            return f"Integration tables exported for {n} sample(s) to {dest_folder}"
+
+        self._run_export(_do_export)

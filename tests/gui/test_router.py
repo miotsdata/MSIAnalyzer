@@ -449,6 +449,61 @@ def test_export_annotation_menu_item_opens_save_dialog(application, engine, qtbo
     assert dialog.property("visible") is True
 
 
+def test_export_integration_menu_item_opens_choice_dialog(application, engine, qtbot):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    dialog = window.findChild(QObject, "exportIntegrationDialog")
+    assert dialog is not None
+    assert dialog.property("visible") is False
+
+    integration_item = window.findChild(QObject, "exportIntegrationMenuItem")
+    integration_item.click()
+    qtbot.wait(50)
+
+    assert dialog.property("visible") is True
+
+
+def test_export_integration_choose_folder_opens_folder_dialog_with_chosen_layer_and_format(
+    application, engine, qtbot
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    dialog = window.findChild(QObject, "exportIntegrationDialog")
+    dialog.setProperty("visible", True)
+    raw_button = window.findChild(QObject, "integrationRawButton")
+    txt_button = window.findChild(QObject, "integrationTxtButton")
+    raw_button.clicked.emit()
+    txt_button.clicked.emit()
+    assert dialog.property("layer") == "raw"
+    assert dialog.property("format") == "txt"
+
+    folder_dialog = window.findChild(QObject, "exportIntegrationFolderDialog")
+    assert folder_dialog.property("visible") is False
+
+    choose_button = window.findChild(QObject, "integrationChooseFolderButton")
+    choose_button.clicked.emit()
+    qtbot.wait(50)
+
+    assert dialog.property("visible") is False
+    assert folder_dialog.property("visible") is True
+
+
 def test_export_finished_shows_result_dialog(application, engine, qtbot):
     window = engine.rootObjects()[0]
     result_dialog = window.findChild(QObject, "exportResultDialog")

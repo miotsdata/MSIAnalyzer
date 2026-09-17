@@ -1,8 +1,10 @@
 import sqlite3
 from pathlib import Path
 
+import anndata as ad
 import pandas as pd
 from PySide6.QtCore import QUrl
+from scipy.sparse import csr_matrix
 
 from msianalyzer.core.analysis_db import init_analysis_db, log_command, register_sample
 from msianalyzer.core.parser.mzml_parser import array_to_blob
@@ -140,6 +142,47 @@ def test_export_annotation_table_stale_request_is_discarded(tmp_path, qtbot):
     qtbot.wait(50)
 
     assert len(received) == 1
+
+
+def _seed_sample_with_h5ad(db_path: Path, name: str) -> None:
+    register_sample(db_path, name=name, raw_db_path=db_path.parent / f"{name}_raw.db")
+    obs = pd.DataFrame(index=["px0", "px1"])
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    adata = ad.AnnData(X=csr_matrix(np.array([[1.0], [2.0]], dtype=np.float32)), obs=obs, var=var)
+    adata.obsm["spatial"] = np.array([(0.0, 0.0), (1.0, 0.0)], dtype=float)
+    adata.layers["TIC"] = csr_matrix(np.array([[10.0], [20.0]], dtype=np.float32))
+    adata.write_h5ad(db_path.parent / f"{name}.h5ad")
+
+
+def test_export_integration_tables_writes_files_and_emits_finished(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 100.0, '{}')"
+        )
+        con.commit()
+    _seed_sample_with_h5ad(db_path, "sampleA")
+    dest_folder = tmp_path / "out"
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.exportFinished, timeout=2000) as spy:
+        bridge.exportIntegrationTables(str(db_path), str(dest_folder), "TIC", "csv")
+
+    assert (dest_folder / "sampleA_integration.csv").exists()
+    assert "1 sample" in spy.args[0]
+
+
+def test_export_integration_tables_failure_emits_export_failed(tmp_path, qtbot):
+    bridge = AnalysisBridge()
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    dest_folder = blocker / "out"
+
+    with qtbot.waitSignal(bridge.exportFailed, timeout=2000):
+        bridge.exportIntegrationTables(
+            str(tmp_path / "does_not_exist.db"), str(dest_folder), "TIC", "csv"
+        )
 
 
 def test_get_summary_missing_db_returns_zero_dict(tmp_path):

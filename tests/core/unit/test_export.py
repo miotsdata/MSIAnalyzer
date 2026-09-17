@@ -6,10 +6,14 @@ import csv
 import sqlite3
 from pathlib import Path
 
+import anndata as ad
+import numpy as np
+import pandas as pd
 import pytest
+from scipy.sparse import csr_matrix
 
-from msianalyzer.core.analysis_db import init_analysis_db
-from msianalyzer.core.export import export_annotation_table
+from msianalyzer.core.analysis_db import init_analysis_db, register_sample
+from msianalyzer.core.export import export_annotation_table, export_integration_tables
 
 
 def _read_rows(path: Path, delimiter: str) -> list[list[str]]:
@@ -173,3 +177,121 @@ def test_export_annotation_table_empty_analysis_writes_header_only(tmp_path):
 
     rows = _read_rows(dest, ",")
     assert len(rows) == 1  # header only, no features at all
+
+
+def _seed_sample_with_h5ad(
+    db: Path, name: str, *, raw_values, tic_values, mzs=(100.0, 200.0)
+) -> None:
+    """Register a sample and write a matching 2-pixel `.h5ad` next to
+    `db`, same layout `test_heatmap.py`'s own `_make_grid_adata` uses —
+    one row per pixel, `X` = raw, `layers["TIC"]` = TIC-normalized."""
+    register_sample(db, name=name, raw_db_path=db.parent / f"{name}_raw.db")
+    obs = pd.DataFrame(index=["px0", "px1"])
+    var = pd.DataFrame({"mz": list(mzs)}, index=[f"mz_{m:.4f}" for m in mzs])
+    X = csr_matrix(np.array(raw_values, dtype=np.float32))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array([(0.0, 0.0), (1.0, 0.0)], dtype=float)
+    adata.layers["TIC"] = csr_matrix(np.array(tic_values, dtype=np.float32))
+    adata.write_h5ad(db.parent / f"{name}.h5ad")
+
+
+def _seed_two_feature_rows(db: Path, mzs=(100.0, 200.0)) -> None:
+    with sqlite3.connect(db) as con:
+        for i, mz in enumerate(mzs, start=1):
+            con.execute(
+                "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+                (i, mz),
+            )
+        con.commit()
+
+
+def test_export_integration_tables_writes_one_file_per_sample(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_rows(db)
+    _seed_sample_with_h5ad(
+        db, "sampleA", raw_values=[[1.0, 2.0], [3.0, 4.0]], tic_values=[[10.0, 20.0], [30.0, 40.0]]
+    )
+    _seed_sample_with_h5ad(
+        db, "sampleB", raw_values=[[5.0, 6.0], [7.0, 8.0]], tic_values=[[50.0, 60.0], [70.0, 80.0]]
+    )
+
+    written = export_integration_tables(db, tmp_path / "out", "TIC")
+
+    assert written == 2
+    assert (tmp_path / "out" / "sampleA_integration.csv").exists()
+    assert (tmp_path / "out" / "sampleB_integration.csv").exists()
+
+
+def test_export_integration_tables_header_is_x_y_and_mz_to_4_decimals(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_rows(db, mzs=(100.5, 200.25))
+    _seed_sample_with_h5ad(
+        db, "sampleA", raw_values=[[1.0, 2.0], [3.0, 4.0]], tic_values=[[10.0, 20.0], [30.0, 40.0]],
+        mzs=(100.5, 200.25),
+    )
+
+    export_integration_tables(db, tmp_path / "out", "TIC")
+
+    rows = _read_rows(tmp_path / "out" / "sampleA_integration.csv", ",")
+    assert rows[0] == ["x", "y", "100.5000", "200.2500"]
+
+
+def test_export_integration_tables_raw_vs_tic_selects_the_right_layer(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_rows(db)
+    _seed_sample_with_h5ad(
+        db, "sampleA", raw_values=[[1.0, 2.0], [3.0, 4.0]], tic_values=[[10.0, 20.0], [30.0, 40.0]]
+    )
+
+    export_integration_tables(db, tmp_path / "raw_out", "raw")
+    export_integration_tables(db, tmp_path / "tic_out", "TIC")
+
+    raw_rows = _read_rows(tmp_path / "raw_out" / "sampleA_integration.csv", ",")
+    tic_rows = _read_rows(tmp_path / "tic_out" / "sampleA_integration.csv", ",")
+    assert raw_rows[1] == ["0.0", "0.0", "1.0", "2.0"]
+    assert tic_rows[1] == ["0.0", "0.0", "10.0", "20.0"]
+
+
+def test_export_integration_tables_txt_extension_is_tab_delimited(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_rows(db)
+    _seed_sample_with_h5ad(
+        db, "sampleA", raw_values=[[1.0, 2.0], [3.0, 4.0]], tic_values=[[10.0, 20.0], [30.0, 40.0]]
+    )
+
+    export_integration_tables(db, tmp_path / "out", "TIC", file_format="txt")
+
+    dest = tmp_path / "out" / "sampleA_integration.txt"
+    assert dest.exists()
+    raw = dest.read_text(encoding="utf-8")
+    assert "\t" in raw.splitlines()[0]
+    assert "," not in raw.splitlines()[0].replace('"', "")
+
+
+def test_export_integration_tables_skips_sample_with_missing_h5ad(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_rows(db)
+    register_sample(db, name="ghost", raw_db_path=tmp_path / "ghost_raw.db")
+
+    written = export_integration_tables(db, tmp_path / "out", "TIC")
+
+    assert written == 0
+    assert not (tmp_path / "out" / "ghost_integration.csv").exists()
+
+
+def test_export_integration_tables_creates_destination_directory(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_rows(db)
+    _seed_sample_with_h5ad(
+        db, "sampleA", raw_values=[[1.0, 2.0], [3.0, 4.0]], tic_values=[[10.0, 20.0], [30.0, 40.0]]
+    )
+
+    export_integration_tables(db, tmp_path / "nested" / "dir", "TIC")
+
+    assert (tmp_path / "nested" / "dir" / "sampleA_integration.csv").exists()

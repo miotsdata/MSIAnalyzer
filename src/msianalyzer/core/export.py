@@ -14,7 +14,15 @@ import csv
 import logging
 from pathlib import Path
 
-from .analysis_db import load_feature_representative_annotations
+import anndata as ad
+import numpy as np
+
+from .analysis_db import (
+    load_feature_ids_and_mzs,
+    load_feature_representative_annotations,
+    load_samples,
+)
+from .plotting.heatmap import _feature_column_index, _layer_column
 
 logger = logging.getLogger(__name__)
 
@@ -101,3 +109,85 @@ def _text_or_blank(value) -> str:
     if value is None or (isinstance(value, float) and value != value):  # NaN
         return ""
     return str(value)
+
+
+def _sample_h5ad_path(db_path: str | Path, sample_name: str) -> Path:
+    """Same convention as `AnalysisBridge._sample_h5ad_path`/
+    `HeatmapImageProvider._load_adata` and `run.py`'s own writer — every
+    sample's `.h5ad` lives next to the analysis database itself, named
+    after the sample."""
+    return Path(db_path).parent / f"{sample_name}.h5ad"
+
+
+def export_integration_tables(
+    db_path: str | Path,
+    dest_folder: str | Path,
+    layer: str,
+    file_format: str = "csv",
+) -> int:
+    """Write one pixel x feature intensity matrix per sample into
+    `dest_folder` — `<sample_name>_integration.<ext>`, header `x, y,
+    <mz_1>, <mz_2>, ...` (every analysis feature, m/z to 4 decimals,
+    matching every other m/z display in this app), one row per pixel.
+
+    No spatial aggregation: this is the full per-pixel matrix, not a
+    per-sample summary row.
+
+    Args:
+        db_path: The analysis' SQLite database.
+        dest_folder: Directory to write into (created if missing).
+        layer: `"raw"` or `"TIC"` — which `adata` layer to read, same
+            convention as `core.plotting.heatmap._layer_column`.
+        file_format: `"csv"` (comma) or `"txt"` (tab) — chosen explicitly
+            here rather than keyed off a destination filename's suffix
+            (unlike `export_annotation_table`), since a folder picker
+            never gives the user a filename to type an extension into.
+
+    Returns:
+        The number of sample files written. A sample with no `.h5ad` on
+        disk is skipped, not an error — same convention as
+        `HeatmapImageProvider._load_adata`.
+    """
+    dest_folder = Path(dest_folder)
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    delimiter = "\t" if file_format.lower() == "txt" else ","
+    ext = ".txt" if file_format.lower() == "txt" else ".csv"
+
+    features = load_feature_ids_and_mzs(db_path)
+    mz_values = features["mz"].to_numpy(dtype=float)
+    header = ["x", "y"] + [f"{mz:.4f}" for mz in mz_values]
+
+    samples = load_samples(db_path)
+    written = 0
+    for sample_name in samples["name"]:
+        h5ad_path = _sample_h5ad_path(db_path, sample_name)
+        if not h5ad_path.exists():
+            logger.warning(
+                "skipping %s in integration export: no h5ad at %s",
+                sample_name,
+                h5ad_path,
+            )
+            continue
+
+        adata = ad.read_h5ad(h5ad_path)
+        xy = np.asarray(adata.obsm["spatial"], dtype=float)
+        columns = [
+            _layer_column(adata, layer, _feature_column_index(adata, mz))
+            for mz in mz_values
+        ]
+
+        dest_path = dest_folder / f"{sample_name}_integration{ext}"
+        with open(dest_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f, delimiter=delimiter, quoting=csv.QUOTE_NONNUMERIC)
+            writer.writerow(header)
+            for row_idx in range(xy.shape[0]):
+                writer.writerow(
+                    [xy[row_idx, 0], xy[row_idx, 1]]
+                    + [column[row_idx] for column in columns]
+                )
+        written += 1
+
+    logger.info(
+        "exported %d integration table(s) to %s", written, dest_folder
+    )
+    return written

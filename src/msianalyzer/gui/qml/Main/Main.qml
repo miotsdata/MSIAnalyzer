@@ -237,6 +237,12 @@ ApplicationWindow {
                 enabled: window.currentAnalysis !== null
                 onTriggered: exportAnnotationDialog.open()
             }
+            AppMenuItem {
+                objectName: "exportIntegrationMenuItem"
+                text: "Integration…"
+                enabled: window.currentAnalysis !== null
+                onTriggered: exportIntegrationDialog.open()
+            }
         }
 
         Menu {
@@ -397,6 +403,86 @@ ApplicationWindow {
         onAccepted: {
             AnalysisBridge.exportAnnotationTable(
                 window.currentAnalysis.analysisDbPath, Router.toLocalPath(selectedFile))
+        }
+    }
+
+    // Integration export needs a layer (Raw/TIC) and format (CSV/TXT)
+    // choice up front, then a destination folder — a bare `FolderDialog`
+    // can't express the first two, so this is a small custom `Dialog`
+    // (same "more than one dialog type can express" situation
+    // NewAnalysisPage.qml's multi-field forms already handle) that hands
+    // off to a second `FolderDialog` once both choices are made. Plain
+    // Buttons for each choice, not RadioButton + ButtonGroup — see
+    // HeatmapControlsPanel.qml's own Raw/TIC toggle comment for why.
+    Dialog {
+        id: exportIntegrationDialog
+        objectName: "exportIntegrationDialog"
+        title: "Export Integration Tables"
+        modal: true
+        standardButtons: Dialog.Cancel
+        anchors.centerIn: parent
+
+        property string layer: "TIC"
+        property string format: "csv"
+
+        Column {
+            spacing: 12
+
+            Label { text: "Data:" }
+            Row {
+                spacing: 6
+                Button {
+                    objectName: "integrationRawButton"
+                    text: "Raw"
+                    highlighted: exportIntegrationDialog.layer === "raw"
+                    onClicked: exportIntegrationDialog.layer = "raw"
+                }
+                Button {
+                    objectName: "integrationTicButton"
+                    text: "TIC"
+                    highlighted: exportIntegrationDialog.layer === "TIC"
+                    onClicked: exportIntegrationDialog.layer = "TIC"
+                }
+            }
+
+            Label { text: "Format:" }
+            Row {
+                spacing: 6
+                Button {
+                    objectName: "integrationCsvButton"
+                    text: "CSV"
+                    highlighted: exportIntegrationDialog.format === "csv"
+                    onClicked: exportIntegrationDialog.format = "csv"
+                }
+                Button {
+                    objectName: "integrationTxtButton"
+                    text: "TXT"
+                    highlighted: exportIntegrationDialog.format === "txt"
+                    onClicked: exportIntegrationDialog.format = "txt"
+                }
+            }
+
+            Button {
+                objectName: "integrationChooseFolderButton"
+                text: "Choose Folder…"
+                onClicked: {
+                    exportIntegrationDialog.close()
+                    exportIntegrationFolderDialog.open()
+                }
+            }
+        }
+    }
+
+    FolderDialog {
+        id: exportIntegrationFolderDialog
+        objectName: "exportIntegrationFolderDialog"
+        options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
+        onAccepted: {
+            AnalysisBridge.exportIntegrationTables(
+                window.currentAnalysis.analysisDbPath,
+                Router.toLocalPath(selectedFolder),
+                exportIntegrationDialog.layer,
+                exportIntegrationDialog.format)
         }
     }
 
