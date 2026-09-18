@@ -721,3 +721,60 @@ def test_draw_surface_resets_to_grid_on_sample_switch(
 
     assert window.property("drawSurface") == "grid"
     assert checkbox.property("visible") is False
+
+
+def test_overlay_controls_hidden_on_grid_surface_visible_on_he(
+    analysis_view, registered_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(registered_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    overlay_checkbox = window.findChild(QQuickItem, "roiShowOverlayCheckBox")
+    assert overlay_checkbox.parent().property("visible") is False
+
+    draw_on_he_checkbox = window.findChild(QQuickItem, "drawOnHeCheckBox")
+    _click(window, draw_on_he_checkbox, qtbot)
+
+    assert overlay_checkbox.parent().property("visible") is True
+
+
+def test_overlay_opacity_slider_updates_canvas_overlay_opacity(
+    analysis_view, registered_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(registered_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    draw_on_he_checkbox = window.findChild(QQuickItem, "drawOnHeCheckBox")
+    _click(window, draw_on_he_checkbox, qtbot)
+
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+    assert canvas.property("overlayOpacity") == pytest.approx(0.6)
+
+    window.setProperty("overlayOpacity", 0.2)
+
+    assert canvas.property("overlayOpacity") == pytest.approx(0.2)
+    overlay_image = canvas.findChild(QQuickItem, "roiHeatmapOverlayImage")
+    assert overlay_image.property("opacity") == pytest.approx(0.2)
+
+
+def test_show_overlay_checkbox_hides_overlay_image(
+    analysis_view, registered_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(registered_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    draw_on_he_checkbox = window.findChild(QQuickItem, "drawOnHeCheckBox")
+    _click(window, draw_on_he_checkbox, qtbot)
+
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+    overlay_image = canvas.findChild(QQuickItem, "roiHeatmapOverlayImage")
+    assert overlay_image.property("visible") is True
+
+    overlay_checkbox = window.findChild(QQuickItem, "roiShowOverlayCheckBox")
+    _click(window, overlay_checkbox, qtbot)
+
+    assert window.property("showOverlay") is False
+    assert overlay_image.property("visible") is False

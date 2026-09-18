@@ -54,6 +54,12 @@ Item {
     // faintly under the drawing overlay while in heMode, so a user can
     // still see the underlying signal while drawing on tissue morphology.
     property string heOverlaySource: ""
+    // Same show/opacity controls as CoregistrationWindow's overlay —
+    // RoiDesignWindow exposes them as a checkbox + slider next to "Draw
+    // on H&E image", so the balance between tissue morphology and
+    // chemical signal is adjustable while drawing here too.
+    property bool showOverlay: true
+    property real overlayOpacity: 0.6
 
     readonly property var _gridToHeMatrix: (canvas.heMode && canvas.heToGridMatrix)
         ? AffineTransform.invert(canvas.heToGridMatrix) : null
@@ -94,8 +100,8 @@ Item {
         Image {
             objectName: "roiHeatmapOverlayImage"
             anchors.fill: parent
-            visible: canvas.heMode && canvas.heOverlaySource !== ""
-            opacity: 0.6
+            visible: canvas.heMode && canvas.showOverlay && canvas.heOverlaySource !== ""
+            opacity: canvas.overlayOpacity
             smooth: false
             cache: false
             asynchronous: false

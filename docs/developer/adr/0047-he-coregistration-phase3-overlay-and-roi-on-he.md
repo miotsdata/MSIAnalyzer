@@ -85,6 +85,16 @@ shows the warped-heatmap overlay (reusing `image://he_overlay/...`) so a
 user can still see the underlying chemical signal while drawing on tissue
 morphology, not just blank H&E.
 
+**Follow-up (2026-09-18, confirmed working in the real app first):** the
+overlay show/opacity controls (`CoregistrationWindow`'s "Overlay"
+checkbox + slider) were ported to `RoiDesignWindow` too, once "Draw on
+H&E image" is active — same two `RoiDrawingCanvas` properties
+(`showOverlay`/`overlayOpacity`) the window's checkbox/slider already
+existed for on the coregistration side, just plumbed through a second
+caller. No new concept, no new provider — the overlay image element
+already took an `opacity`/`visible` binding, they just weren't exposed as
+window-level controls outside `CoregistrationWindow` yet.
+
 ## Alternatives considered
 
 - **Storing ROI vertices in H&E-pixel space when drawn that way.**

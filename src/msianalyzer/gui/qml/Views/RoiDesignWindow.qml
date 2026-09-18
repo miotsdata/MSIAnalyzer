@@ -78,6 +78,11 @@ Window {
     // (or lack of one) shouldn't silently carry over.
     property string drawSurface: "grid"
     property var roiRegistrationInfo: ({hasFit: false, matrix: null})
+    // Same overlay show/opacity controls as CoregistrationWindow, for
+    // the same reason: how much H&E tissue morphology vs. warped
+    // metabolite signal to see while drawing on the H&E surface.
+    property bool showOverlay: true
+    property real overlayOpacity: 0.6
     function refreshRoiRegistrationInfo() {
         var sample = (roiWindow.samples.length > roiWindow.selectedSampleIndex)
                      ? roiWindow.samples[roiWindow.selectedSampleIndex] : null
@@ -344,6 +349,29 @@ Window {
 
         RowLayout {
             Layout.fillWidth: true
+            visible: roiWindow.drawSurface === "he"
+            CheckBox {
+                id: roiShowOverlayCheckBox
+                objectName: "roiShowOverlayCheckBox"
+                text: "Overlay"
+                checked: roiWindow.showOverlay
+                onToggled: roiWindow.showOverlay = checked
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
+            Slider {
+                id: roiOverlayOpacitySlider
+                objectName: "roiOverlayOpacitySlider"
+                Layout.fillWidth: true
+                enabled: roiWindow.showOverlay
+                from: 0.0
+                to: 1.0
+                value: roiWindow.overlayOpacity
+                onMoved: roiWindow.overlayOpacity = value
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 12
 
@@ -360,6 +388,8 @@ Window {
                 heMode: roiWindow.drawSurface === "he"
                 heToGridMatrix: roiWindow.roiRegistrationInfo.matrix
                 heOverlaySource: roiWindow.heOverlaySource()
+                showOverlay: roiWindow.showOverlay
+                overlayOpacity: roiWindow.overlayOpacity
                 drawingEnabled: roiWindow.draftState === "drawing"
                 savedRois: roiWindow.savedRois
                 draftVertices: roiWindow.draftVertices
