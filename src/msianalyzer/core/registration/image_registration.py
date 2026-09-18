@@ -109,10 +109,26 @@ class RegistrationInfo:
     fit: RegistrationFit | None
 
 
+def _images_dir(raw_db_path: Path) -> Path:
+    """Where one sample's attached image lives on disk.
+
+    Namespaced by the raw database's own filename stem, not just
+    `raw_db_path.parent / IMAGES_SUBDIR` — every sample's raw database
+    lives in the same shared `<project_folder>/parsed/` directory
+    (differentiated only by filename, see `IOConfig.raw_db_paths`), so
+    without this every sample's fixed `he_image.<ext>` filename collided
+    in one shared `images/` folder: attaching a second sample's image
+    silently overwrote the first sample's file on disk (both samples'
+    own DB rows stayed correct — this was a real, reported bug, not just
+    a display/cache issue).
+    """
+    return raw_db_path.parent / IMAGES_SUBDIR / raw_db_path.stem
+
+
 def resolve_image_path(raw_db_path: Path | str, image: AttachedImage) -> Path:
     """Full path to an attached image's file on disk, given the raw
     database it's attached to."""
-    return Path(raw_db_path).parent / IMAGES_SUBDIR / image.filename
+    return _images_dir(Path(raw_db_path)) / image.filename
 
 
 @log_call(source="raw_db_path")
@@ -146,7 +162,7 @@ def attach_he_image(raw_db_path: Path | str, image_path: Path | str) -> Attached
             f"expected one of {sorted(SUPPORTED_FORMATS)}"
         )
 
-    images_dir = raw_db_path.parent / IMAGES_SUBDIR
+    images_dir = _images_dir(raw_db_path)
     images_dir.mkdir(parents=True, exist_ok=True)
     for old_file in images_dir.glob("he_image.*"):
         old_file.unlink()

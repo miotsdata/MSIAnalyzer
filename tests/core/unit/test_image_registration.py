@@ -65,8 +65,39 @@ def test_attach_he_image_replaces_previous_image(tmp_path: Path, raw_db_path: Pa
     assert rows == [(attached2.image_id,)]
 
     images_dir = raw_db_path.parent / "images"
-    remaining = sorted(p.name for p in images_dir.glob("he_image.*"))
+    remaining = sorted(p.name for p in images_dir.rglob("he_image.*"))
     assert remaining == [attached2.filename]
+
+
+def test_attach_he_image_does_not_collide_across_samples_sharing_a_parent_dir(
+    tmp_path: Path,
+):
+    # Regression: every sample's raw db lives in the same shared
+    # `<project>/parsed/` folder (see IOConfig.raw_db_paths) —
+    # attach_he_image used to write every sample's image to the same
+    # fixed `images/he_image.<ext>` path, so attaching a second sample's
+    # image silently overwrote the first sample's file on disk (reported
+    # by the user: reopening the first sample after attaching to a
+    # second showed the second sample's image).
+    raw_db_1 = tmp_path / "s1.db"
+    raw_db_2 = tmp_path / "s2.db"
+
+    image_1 = tmp_path / "slide1.png"
+    _make_image(image_1, size=(20, 20))
+    image_2 = tmp_path / "slide2.png"
+    _make_image(image_2, size=(50, 40))
+
+    attached_1 = attach_he_image(raw_db_1, image_1)
+    attached_2 = attach_he_image(raw_db_2, image_2)
+
+    path_1 = resolve_image_path(raw_db_1, attached_1)
+    path_2 = resolve_image_path(raw_db_2, attached_2)
+
+    assert path_1 != path_2
+    assert path_1.exists() and path_2.exists()
+    with Image.open(path_1) as img1, Image.open(path_2) as img2:
+        assert img1.size == (20, 20)
+        assert img2.size == (50, 40)
 
 
 def test_load_registration_none_when_db_missing(tmp_path: Path):

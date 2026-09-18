@@ -100,7 +100,7 @@ re-attaching replaces the previous image file and every row below.
 | table | column | type | notes |
 |---|---|---|---|
 | `registered_images` | `image_id` | INTEGER | PK, autoincrement |
-| | `filename` | TEXT | relative to `<raw db's folder>/images/` |
+| | `filename` | TEXT | relative to `<raw db's folder>/images/<raw db's own stem>/` (namespaced per sample — every sample's raw db shares the same `parsed/` folder, see ADR 45's 2026-09-18 bugfix note) |
 | | `image_format` | TEXT | `PNG`/`JPEG`/`TIFF` |
 | | `width`, `height` | INTEGER | |
 | | `attached_at` | TEXT | ISO 8601 |

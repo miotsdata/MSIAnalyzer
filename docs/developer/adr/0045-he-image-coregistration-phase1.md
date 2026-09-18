@@ -119,3 +119,16 @@ bookkeeping.
   display.
 - `pyproject.toml` dependencies gained `pillow>=12.3.0` (was already
   resolved transitively via matplotlib, so `pdm.lock` changed minimally).
+
+**Bug found and fixed 2026-09-18** (reported by the user after real-app
+use, once multiple samples had images attached): `attach_he_image` wrote
+every sample's image to a fixed `images/he_image.<ext>` path relative to
+`raw_db_path.parent` — but every sample's raw database lives in the same
+shared `<project_folder>/parsed/` directory (see `IOConfig.raw_db_paths`),
+so attaching a second sample's image silently overwrote the first
+sample's file on disk (each sample's own DB row stayed correct — this
+was a storage-path collision, not a display/cache bug). Fixed by
+namespacing the images directory with the raw database's own filename
+stem (`_images_dir`), so `<parsed>/images/s1/he_image.png` and
+`<parsed>/images/s2/he_image.png` no longer collide. Regression test:
+`test_attach_he_image_does_not_collide_across_samples_sharing_a_parent_dir`.
