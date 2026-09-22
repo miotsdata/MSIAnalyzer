@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 @log_call(source="h5ad_path")
-def compute_spatial_autocorr(h5ad_path: str | Path, layer: str = "TIC") -> None:
+def compute_spatial_autocorr(
+    h5ad_path: str | Path, layer: str = "TIC", n_jobs: int | None = None
+) -> None:
     """Compute per-feature Moran's I for one sample and write it back in place.
 
     Reads `h5ad_path`, builds a spatial neighbor graph over its pixels
@@ -33,6 +35,10 @@ def compute_spatial_autocorr(h5ad_path: str | Path, layer: str = "TIC") -> None:
         layer: Which `.h5ad` layer's intensities to score. Falls back to
             raw `.X` when the layer isn't present (e.g.
             `normalization.enabled` was `False`).
+        n_jobs: Passed straight through to `spatial_autocorr`'s own
+            `n_jobs` — parallelizes scoring across this sample's features
+            (squidpy's own joblib-backed parallelism), not across samples;
+            callers still process one sample at a time.
     """
     h5ad_path = Path(h5ad_path)
     adata = ad.read_h5ad(h5ad_path)
@@ -51,6 +57,7 @@ def compute_spatial_autocorr(h5ad_path: str | Path, layer: str = "TIC") -> None:
         mode="moran",
         genes=list(adata.var_names),
         layer=use_layer,
+        n_jobs=n_jobs,
         show_progress_bar=False,
     )
 

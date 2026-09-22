@@ -976,7 +976,11 @@ class Run:
                 )
                 for db_path in out_db_paths:
                     out_adata_path = out_dir / f"{db_path.stem}.h5ad"
-                    compute_spatial_autocorr(out_adata_path, layer=spatial_corr_cfg.layer)
+                    compute_spatial_autocorr(
+                        out_adata_path,
+                        layer=spatial_corr_cfg.layer,
+                        n_jobs=spatial_corr_cfg.n_jobs,
+                    )
                     logger.info(
                         "%s: computed Moran's I -> %s",
                         db_path,

@@ -148,6 +148,7 @@ class MockNormalizationConfig:
 class MockSpatialCorrelationConfig:
     enabled: bool = False
     layer: str = "TIC"
+    n_jobs: int | None = None
 
 
 class DummyConfig:

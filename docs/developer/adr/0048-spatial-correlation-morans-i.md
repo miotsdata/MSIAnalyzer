@@ -118,3 +118,30 @@ Per this round's discussion, v1 ships:
   size and hidden-imports handling has not been re-validated against this
   much larger dependency tree; flagged for a follow-up build-and-verify
   pass before this ships in a packaged release.
+
+## Follow-ups (same conversation)
+
+- **Parallelism**: `spatial_correlation.n_jobs` (new `SpatialCorrelationConfig`
+  field, default `None`) is passed straight through to
+  `squidpy.gr.spatial_autocorr`'s own `n_jobs` — parallelizes scoring
+  *within* one sample, across its features (squidpy's own joblib-backed
+  parallelism). Samples themselves are still processed one at a time in
+  `Run.run_core`'s loop; per-sample parallelism (a process pool over
+  samples, like `precursor_purity.n_workers`) was considered and
+  deliberately not built — the user chose to rely on squidpy's own
+  parallelism first.
+- **Real bug found and fixed**: after running the pipeline with this
+  feature enabled, the new "Spatial Correlation" tab didn't appear in the
+  actual GUI app at all. Root cause: `src/msianalyzer/gui/resources_rc.py`
+  is a *generated* file (`pyside6-rcc qml/resources.qrc -o resources_rc.py`,
+  see `docs/developer/architecture/gui.md`) that the real app imports
+  directly and must be committed up to date — but `tests/gui`'s own
+  session fixture (`compile_qml_resources`) transparently recompiles it
+  fresh before every test run, which silently masked that the *committed*
+  copy had gone stale (last touched by an unrelated H&E commit, well
+  before this feature's QML changes) while every test still passed.
+  Fixed by regenerating and committing it. **Takeaway for future GUI
+  work**: adding/changing a `.qml` file always needs `resources_rc.py`
+  regenerated and committed alongside `resources.qrc` — the test suite's
+  automatic recompilation is real, but it only proves the *tests* see the
+  new file, not that a real, already-built `resources_rc.py` does.

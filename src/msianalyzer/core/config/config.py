@@ -1312,10 +1312,22 @@ class SpatialCorrelationConfig:
             **Interaction:** Only meaningful when `normalization.enabled`
             is also `True`; otherwise no `"TIC"` layer exists and this
             silently falls back to raw intensities.
+        n_jobs: Parallel workers `squidpy.gr.spatial_autocorr` uses to
+            score features *within* one sample — samples themselves are
+            still processed one at a time, in sequence; this only
+            parallelizes the per-feature scoring inside each one.
+
+            Range: `None` (the default, squidpy/joblib picks its own
+            worker count) or **1** and up (**1** forces fully serial
+            scoring, useful for debugging). Higher: faster on a sample
+            with many features, more CPU/RAM used at once.
+
+            **Interaction:** None.
     """
 
     enabled: bool = False
     layer: str = "TIC"
+    n_jobs: int | None = None
 
 
 # Maps group name (used as the nested key in dicts/files) -> dataclass type,

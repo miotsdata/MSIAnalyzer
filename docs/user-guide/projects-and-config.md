@@ -290,6 +290,7 @@ See [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md).
 |---|---|---|
 | `enabled` | `false` | run this stage. Off by default — it's an optional, fairly heavy extra pass (spatial neighbor graph + per-feature autocorrelation for every sample) that most runs don't need. |
 | `layer` | `"TIC"` | which `.h5ad` layer's intensities to score — TIC-normalized by default for comparability across samples, falling back to raw `.X` when the named layer isn't present (e.g. `normalization.enabled: false`). |
+| `n_jobs` | `null` | parallel workers squidpy uses to score features *within* one sample (samples are still processed one at a time). `null` lets squidpy/joblib pick its own worker count. |
 
 ### `analysis` — per-analysis database
 
