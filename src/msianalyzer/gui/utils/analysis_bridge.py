@@ -83,32 +83,67 @@ def _dataframe_to_records(df: pd.DataFrame) -> list:
     return records
 
 
+_COMPOUND_NAME_MATCH_PPM = 10.0
+
+
+def _nearest_compound_name(mz: float, feature_mzs: np.ndarray, feature_names: np.ndarray) -> str | None:
+    """`feature_names[i]` for the `feature_mzs[i]` closest to `mz`, within
+    `_COMPOUND_NAME_MATCH_PPM` — nearest rather than exact-equality since a
+    SQLite REAL round-trip isn't guaranteed bit-exact against the float an
+    `.h5ad`'s `var["mz"]` was built from (same reasoning as
+    `heatmap._feature_column_index`), but capped by a tolerance so an mz
+    with no real corresponding feature (shouldn't happen in production —
+    `.h5ad` var mzs are always sourced from this same analysis' own
+    `features` table — but is a real gap without a cap) doesn't silently
+    borrow an unrelated feature's name just because it's the closest one
+    around.
+    """
+    if feature_mzs.size == 0:
+        return None
+    idx = np.searchsorted(feature_mzs, mz)
+    idx = np.clip(idx, 1, len(feature_mzs) - 1)
+    left_closer = (mz - feature_mzs[idx - 1]) <= (feature_mzs[idx] - mz)
+    idx = idx - 1 if left_closer else idx
+    nearest_mz = feature_mzs[idx]
+    if abs(nearest_mz - mz) > nearest_mz * _COMPOUND_NAME_MATCH_PPM * 1e-6:
+        return None
+    name = feature_names[idx]
+    return None if pd.isna(name) else name
+
+
 def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
     """One row per (feature, sample) with that sample's Moran's I for that
-    feature — the flat shape `SpatialCorrelationSection.qml` pivots
-    client-side into per-sample top-N lists and the full table (same
-    "flat rows in, QML pivots" shape `AnnotationsSection.qml` already
-    uses for its own table).
+    feature, plus its representative compound name (if annotated) — the
+    flat shape `SpatialCorrelationSection.qml` pivots client-side into the
+    full table (same "flat rows in, QML pivots" shape
+    `AnnotationsSection.qml` already uses for its own table).
 
     Reads each sample's own `.h5ad` (`AnalysisBridge._sample_h5ad_path`'s
     convention) rather than a SQL table — `core.spatial.moran` writes
     Moran's I straight into `adata.uns["moranI"]` and nowhere else (see
-    ADR for spatial correlation), so this is purely an `.h5ad` read, no
-    analysis-database query involved beyond `load_samples` for the sample
-    list itself.
+    ADR 48), so the Moran's I values themselves are purely an `.h5ad`
+    read; `compound_name` comes from `analysis_db.load_feature_list`, the
+    same representative-annotation lookup Visual Inspection's feature
+    picker uses, so a feature shows the same name in both places.
 
     Args:
-        analysis_db_path: The analysis' SQLite database — only used to
-            find the output folder and sample list; not queried for
-            Moran's I itself.
+        analysis_db_path: The analysis' SQLite database — used both to
+            find the output folder/sample list and to look up compound
+            names.
 
     Returns:
-        Columns `mz`, `sample`, `moran_i`. Empty when no sample's `.h5ad`
-        has ever had `spatial_correlation` run on it.
+        Columns `mz`, `sample`, `moran_i`, `compound_name` (`None` when
+        unannotated). Empty when no sample's `.h5ad` has ever had
+        `spatial_correlation` run on it.
     """
     samples = analysis_db.load_samples(analysis_db_path)
+    columns = ["mz", "sample", "moran_i", "compound_name"]
     if samples.empty:
-        return pd.DataFrame(columns=["mz", "sample", "moran_i"])
+        return pd.DataFrame(columns=columns)
+
+    features = analysis_db.load_feature_list(analysis_db_path)
+    feature_mzs = features["mz"].to_numpy() if not features.empty else np.array([])
+    feature_names = features["compound_name"].to_numpy() if not features.empty else np.array([])
 
     rows = []
     for name in samples["name"]:
@@ -121,15 +156,17 @@ def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
             continue
         mz_by_var = adata.var["mz"]
         for var_name, i_score in moran["I"].items():
+            mz = float(mz_by_var.loc[var_name])
             rows.append(
                 {
-                    "mz": float(mz_by_var.loc[var_name]),
+                    "mz": mz,
                     "sample": name,
                     "moran_i": float(i_score),
+                    "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
                 }
             )
 
-    return pd.DataFrame(rows, columns=["mz", "sample", "moran_i"])
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _categorize_peaks(mz_array: np.ndarray, feature_categories: pd.DataFrame) -> np.ndarray:
@@ -233,6 +270,10 @@ class AnalysisBridge(QObject):
         # the single place that wires up an AnalysisBridge; main.py just
         # registers it with the engine (`engine.addImageProvider("heatmap",
         # application.analysis_bridge.heatmap_provider)`).
+        # Single-slot cache for requestSpatialCorrelation — see that
+        # method's own docstring for why.
+        self._spatial_correlation_cache_path: str | None = None
+        self._spatial_correlation_cache_rows: list = []
         self.heatmap_provider = HeatmapImageProvider()
         # Same "own it here, main.py just registers it" reasoning as
         # heatmap_provider above.
@@ -445,13 +486,26 @@ class AnalysisBridge(QObject):
 
     @Slot(str)
     def requestSpatialCorrelation(self, analysis_db_path: str) -> None:
-        """Start fetching every sample's Moran's I scores on a background
-        thread; the result arrives via `spatialCorrelationReady(rows)`.
+        """Start fetching every sample's Moran's I scores; the result
+        arrives via `spatialCorrelationReady(rows)`.
 
-        Fire-and-forget rather than a return value — see the class
-        docstring for why (real per-sample `.h5ad` file I/O). Used by the
-        Spatial Correlation section, which shows a loading state the same
-        way Annotations' table does.
+        Single-slot cache, keyed by `analysis_db_path`: `SpatialCorrelationSection.qml`
+        is a lazy `Loader` (`AnalysisPage.qml`'s `spatialCorrLoader`,
+        `active` only while its tab is current) whose whole item — and
+        the `rows` it fetched — is destroyed on every tab switch away
+        from it. Re-reading every sample's `.h5ad` from disk on every
+        single visit back to this tab was reported as unnecessary reload
+        cost ("the table remains the same for the analysis"); serving a
+        cached copy back immediately (no background thread at all) fixes
+        that while a plain per-instance cache on the QML side couldn't,
+        since the QML instance itself doesn't survive the tab switch.
+        The cache holds exactly one analysis' rows — switching to a
+        *different* analysis (a different `analysis_db_path`) invalidates
+        it and re-fetches, matching "switching to a new analysis clears
+        the memory of the table".
+
+        Fire-and-forget rather than a return value on a cache miss — see
+        the class docstring for why (real per-sample `.h5ad` file I/O).
 
         Args:
             analysis_db_path: The analysis' SQLite database.
@@ -464,9 +518,21 @@ class AnalysisBridge(QObject):
         if not analysis_db_path or not Path(analysis_db_path).exists():
             self.spatialCorrelationReady.emit([])
             return
+        if analysis_db_path == self._spatial_correlation_cache_path:
+            self.spatialCorrelationReady.emit(self._spatial_correlation_cache_rows)
+            return
         worker = TableQueryWorker(
             _load_spatial_correlation_table, analysis_db_path, self
         )
+        # Plain bound-method connections, not a lambda — PySide only
+        # marshals a cross-thread signal onto the main thread's event
+        # loop for a bound QObject-method slot (it inspects the
+        # receiver's thread affinity); a lambda has no such receiver, so
+        # it ran directly on the worker thread instead, which then wrote
+        # straight to a QML-exposed property from off the GUI thread and
+        # hung the whole test process. The worker's own
+        # `_analysis_db_path` (read via `sender()`) replaces what the
+        # lambda used to close over.
         worker.succeeded.connect(self._onSpatialCorrelationSucceeded)
         worker.failed.connect(self._onSpatialCorrelationFailed)
         self._spatial_correlation_worker = worker
@@ -474,9 +540,13 @@ class AnalysisBridge(QObject):
 
     @Slot(object)
     def _onSpatialCorrelationSucceeded(self, df: pd.DataFrame) -> None:
-        if self.sender() is not self._spatial_correlation_worker:
+        worker = self.sender()
+        if worker is not self._spatial_correlation_worker:
             return  # superseded by a newer request — discard
-        self.spatialCorrelationReady.emit([] if df.empty else _dataframe_to_records(df))
+        rows = [] if df.empty else _dataframe_to_records(df)
+        self._spatial_correlation_cache_path = worker._analysis_db_path
+        self._spatial_correlation_cache_rows = rows
+        self.spatialCorrelationReady.emit(rows)
 
     @Slot(str)
     def _onSpatialCorrelationFailed(self, message: str) -> None:

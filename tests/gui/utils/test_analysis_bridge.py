@@ -450,6 +450,94 @@ def test_request_feature_list_stale_request_is_discarded(tmp_path, qtbot):
     assert len(received) == 1
 
 
+def _seed_moran_h5ad(out_dir: Path, sample_name: str, mz: float, moran_i: float) -> None:
+    var = pd.DataFrame({"mz": [mz]}, index=["mz_test"])
+    adata = ad.AnnData(X=np.zeros((1, 1)), var=var)
+    adata.uns["moranI"] = pd.DataFrame({"I": [moran_i]}, index=["mz_test"])
+    adata.write_h5ad(out_dir / f"{sample_name}.h5ad")
+
+
+def test_request_spatial_correlation_reads_moran_scores_with_name(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)  # registers sample "s1", annotates feature 7 as "Caffeine"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 123.4567, '{}')"
+        )
+        con.commit()
+    _seed_moran_h5ad(tmp_path, "s1", mz=123.4567, moran_i=0.75)
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.spatialCorrelationReady, timeout=2000) as spy:
+        bridge.requestSpatialCorrelation(str(db_path))
+    rows = spy.args[0]
+
+    assert len(rows) == 1
+    assert rows[0]["sample"] == "s1"
+    assert rows[0]["mz"] == 123.4567
+    assert rows[0]["moran_i"] == 0.75
+    assert rows[0]["compound_name"] == "Caffeine"
+
+
+def test_request_spatial_correlation_caches_per_analysis(tmp_path, qtbot):
+    # "the table remains the same for the analyses, keep it in memory" —
+    # a second request for the SAME analysis must not re-read the .h5ad
+    # files at all (served straight from the single-slot cache, no
+    # worker thread spun up a second time).
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.commit()
+    _seed_moran_h5ad(tmp_path, "s1", mz=100.0, moran_i=0.5)
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.spatialCorrelationReady, timeout=2000):
+        bridge.requestSpatialCorrelation(str(db_path))
+    assert bridge._spatial_correlation_cache_path == str(db_path)
+
+    # Mutate the .h5ad after the first fetch — if the second request hit
+    # the cache (not the disk), it still reports the OLD value.
+    _seed_moran_h5ad(tmp_path, "s1", mz=100.0, moran_i=0.99)
+
+    received = []
+    bridge.spatialCorrelationReady.connect(received.append)
+    bridge.requestSpatialCorrelation(str(db_path))  # synchronous: cache hit
+    assert len(received) == 1
+    assert received[0][0]["moran_i"] == 0.5
+
+
+def test_request_spatial_correlation_new_analysis_invalidates_cache(tmp_path, qtbot):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    db_a = tmp_path / "a" / "a.db"
+    db_b = tmp_path / "b" / "b.db"
+    init_analysis_db(db_a).close()
+    init_analysis_db(db_b).close()
+    for db_path, mz, i in [(db_a, 100.0, 0.5), (db_b, 200.0, 0.9)]:
+        with sqlite3.connect(db_path) as con:
+            con.execute(
+                "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+                "VALUES (1, 's1', 'a.db', 'positive')"
+            )
+            con.commit()
+        _seed_moran_h5ad(db_path.parent, "s1", mz=mz, moran_i=i)
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.spatialCorrelationReady, timeout=2000) as spy_a:
+        bridge.requestSpatialCorrelation(str(db_a))
+    assert spy_a.args[0][0]["mz"] == 100.0
+
+    with qtbot.waitSignal(bridge.spatialCorrelationReady, timeout=2000) as spy_b:
+        bridge.requestSpatialCorrelation(str(db_b))
+    assert spy_b.args[0][0]["mz"] == 200.0
+    assert bridge._spatial_correlation_cache_path == str(db_b)
+
+
 def test_get_feature_top_hits_for_feature(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()

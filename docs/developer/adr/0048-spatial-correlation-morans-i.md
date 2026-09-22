@@ -74,22 +74,54 @@ backs a new `SpatialCorrelationSection.qml` tab, added to
 QML (same "flat rows in, QML pivots" shape `AnnotationsSection.qml`
 already uses).
 
-Per this round's discussion, v1 ships:
-- **Per-sample top-N** ranked lists (one block per sample, not one global
-  ranking — "for each slide/sample, not overall"), reusing the existing
-  top-N `SpinBox` pattern (`AnnotationsSection.qml`'s `topNSpinBox`).
-- **A plain sortable full table** (features × samples, click-to-sort
-  header, reusing `AnnotationsSection.qml`'s `sortColumn`/`sortAscending`/
-  `sortBy()` pattern verbatim) — flat styling; per-cell color-coding is
-  explicitly deferred (no such QML control exists yet anywhere in this
-  codebase, and would need real design work to avoid, in the user's words,
-  "stuck[ing] the page").
-- **Right-click "Show spatial distribution"** on any row (top-N or full
-  table), reusing the exact cross-tab handoff Annotations' "Inspect
-  visually" already established (ADR 32) — `AnalysisPage.qml`'s existing
-  `pendingInspectMz` property and `visualLoader` wiring, unchanged; the new
-  tab just emits into the same mechanism via a new
-  `showSpatialDistributionRequested(real mz)` signal.
+Per this round's discussion, v1 shipped with a per-sample top-N ranked
+list plus a plain sortable full table. After using it against real data,
+the user judged the page "very very ugly" and the top-N panel redundant
+with the full table — revised (same conversation, v1.1) to:
+
+- **The per-sample top-N panel was removed entirely.** Everything it did
+  is achievable by sorting the full table by a sample's own column.
+- **The full table is the whole page now**: one row per feature, one
+  fixed-width column per sample (`featureColumnWidth`/`sampleColumnWidth`
+  constants in `SpatialCorrelationSection.qml`) — no more
+  Layout-negotiated variable widths, which was the source of the
+  misalignment complaint. A frozen header row (its own
+  non-interactive `Flickable`, horizontal position slaved to the
+  scrollable body's `contentX`) wraps long sample names onto up to 3
+  lines and always leaves room for the sort-direction arrow underneath,
+  rather than truncating the name and hiding the arrow. The body scrolls
+  both directions with visible scrollbars — fixed column widths mean
+  "roughly 6 samples visible before scrolling" falls out naturally from
+  typical window width, rather than being hard-capped at exactly 6.
+  Numeric cells are right-aligned in a monospace font for column
+  alignment; the feature column is left-aligned.
+- **The feature column shows the representative compound name when
+  annotated, else `m/z <value>`** — the exact same convention Visual
+  Inspection's own feature picker uses (`HeatmapControlsPanel.qml`'s
+  `featureLabels`). Backed by a new `_nearest_compound_name` join in
+  `analysis_bridge.py` against `analysis_db.load_feature_list` (nearest
+  m/z within a 10 ppm tolerance — capped, unlike `heatmap.py`'s
+  equivalent lookup, since here a genuinely unmatched m/z is possible and
+  must fall back to "unannotated" rather than silently borrowing an
+  unrelated feature's name).
+- **Name/m/z search fields**, same two-field convention as Annotate/Visual
+  Inspection (`Utils/SearchQuery.js`, ADR 34/35) — filters the full table
+  live.
+- **Right-click "Show spatial distribution"** unchanged in mechanism —
+  the exact cross-tab handoff Annotations' "Inspect visually" already
+  established (ADR 32), just now only on the full table's rows (the
+  top-N panel it also lived on is gone).
+- **Caching across tab switches**: `AnalysisBridge.requestSpatialCorrelation`
+  gained a single-slot cache keyed by `analysis_db_path`. The section is
+  a lazy `Loader` (`active` only while its tab is current,
+  `AnalysisPage.qml`'s `spatialCorrLoader`) — its whole QML item,
+  including the fetched `rows`, is destroyed on every tab switch away, so
+  a per-QML-instance cache can't survive that; caching on the Python side
+  instead means only the *first* visit to the tab (per analysis) actually
+  re-reads every sample's `.h5ad` — switching tabs and back is instant.
+  A different analysis (different `analysis_db_path`) misses the cache
+  and re-fetches, matching "switching to a new analysis clears the
+  memory of the table".
 
 ## Out of scope for this pass
 
@@ -100,6 +132,18 @@ Per this round's discussion, v1 ships:
 - **Cross-sample comparison views** (e.g. "is feature X organized in A but
   not B") — the full table's columns already let this be eyeballed
   directly; no dedicated visualization built.
+- **Per-cell color-coding** for the full table — still deferred (see v1.1
+  redesign above); the fixed-width/wrapped-header/frozen-header rework
+  addressed alignment and readability, but adding a gradient/heatmap-style
+  background per cell is separate follow-on work.
+- **The right-click → Visual Inspection handoff can freeze the UI
+  momentarily** — the user reported this, explicitly flagged it as lower
+  priority ("optional now"), and it was not investigated or fixed this
+  round. Likely the same underlying cost as opening Visual Inspection
+  cold for any other reason (its own feature-list fetch + first heatmap
+  image render are not obviously backgrounded end-to-end) rather than
+  something this feature's handoff introduced — worth a dedicated look if
+  it keeps coming up.
 
 ## Consequences
 
@@ -145,3 +189,19 @@ Per this round's discussion, v1 ships:
   regenerated and committed alongside `resources.qrc` — the test suite's
   automatic recompilation is real, but it only proves the *tests* see the
   new file, not that a real, already-built `resources_rc.py` does.
+- **A second real bug found and fixed, same session**: the first attempt
+  at `requestSpatialCorrelation`'s cache passed `analysis_db_path` into
+  `_onSpatialCorrelationSucceeded` via a `lambda df: ...` closure instead
+  of a plain bound-method connection. PySide only marshals a cross-thread
+  signal onto the main thread's event loop when it can detect the
+  receiver's thread affinity from a bound `QObject` method; a lambda has
+  no such receiver, so it ran directly on the worker thread — which then
+  wrote straight to a QML-exposed property from off the GUI thread and
+  silently hung the test process (no traceback, just a `waitUntil`
+  timeout). Fixed by keeping a plain `worker.succeeded.connect(self._onSpatialCorrelationSucceeded)`
+  connection and reading `analysis_db_path` back off
+  `self.sender()._analysis_db_path` (an attribute `TableQueryWorker`
+  already stores) instead of closing over it. **Takeaway**: never wrap a
+  `TableQueryWorker`/similar cross-thread signal connection in a lambda
+  to smuggle extra arguments through — read them off the worker/sender
+  instead.

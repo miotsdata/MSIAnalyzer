@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "qrc:/Style"
+import "qrc:/Utils/SearchQuery.js" as SearchQuery
 
 Item {
     id: spatialCorrelationSection
@@ -16,9 +17,13 @@ Item {
 
     property var analysis
 
-    // Flat rows, one per (feature, sample) — {mz, sample, moran_i}.
-    // Fetched on a background thread (real per-sample .h5ad file reads),
-    // same reasoning/pattern as AnnotationsSection's rows/rowsLoading.
+    // Flat rows, one per (feature, sample) — {mz, sample, moran_i,
+    // compound_name}. Fetched via AnalysisBridge, which caches the last
+    // analysis' rows itself (see requestSpatialCorrelation's own
+    // docstring) — this section is a lazy Loader (AnalysisPage.qml),
+    // destroyed on every tab switch away from it, so the cache has to
+    // live on the Python side to actually avoid re-reading every
+    // sample's .h5ad on each visit back.
     property var rows: []
     property bool rowsLoading: false
 
@@ -43,8 +48,7 @@ Item {
     }
 
     // Every distinct sample name that appears in `rows`, alphabetical —
-    // drives both the per-sample top-N blocks and the full table's
-    // (dynamic, one-per-sample) columns.
+    // drives the table's (dynamic, one-per-sample) columns.
     readonly property var sampleNames: {
         var seen = {}
         var names = []
@@ -59,25 +63,10 @@ Item {
         return names
     }
 
-    // "for each slide/sample (not overall)" — one independent top-N per
-    // sample, not one global ranking across samples.
-    property int topN: 5
-
-    readonly property var topNBySample: {
-        var result = {}
-        var samples = spatialCorrelationSection.sampleNames
-        for (var i = 0; i < samples.length; i++) {
-            var name = samples[i]
-            var forSample = spatialCorrelationSection.rows.filter(function (r) {
-                return r.sample === name
-            })
-            forSample.sort(function (a, b) { return b.moran_i - a.moran_i })
-            result[name] = forSample.slice(0, spatialCorrelationSection.topN)
-        }
-        return result
-    }
-
-    // Full table: one row per feature (mz), one column per sample.
+    // One row per feature (mz), one column per sample, plus that
+    // feature's representative compound name (same "annotated: name,
+    // else m/z" convention Visual Inspection's feature picker uses —
+    // HeatmapControlsPanel.qml's featureLabels).
     readonly property var featureRows: {
         var byMz = {}
         var order = []
@@ -85,7 +74,7 @@ Item {
             var r = spatialCorrelationSection.rows[i]
             var key = String(r.mz)
             if (!byMz[key]) {
-                byMz[key] = {mz: r.mz}
+                byMz[key] = {mz: r.mz, compound_name: r.compound_name || null}
                 order.push(key)
             }
             byMz[key][r.sample] = r.moran_i
@@ -93,14 +82,21 @@ Item {
         return order.map(function (key) { return byMz[key] })
     }
 
-    readonly property var tableColumns: {
-        var cols = [{key: "mz", label: "m/z", width: 90}]
-        var samples = spatialCorrelationSection.sampleNames
-        for (var i = 0; i < samples.length; i++) {
-            cols.push({key: samples[i], label: samples[i], width: -1})
-        }
-        return cols
+    function featureLabel(row) {
+        return row.compound_name
+               ? (Number(row.mz).toFixed(4) + ": " + row.compound_name)
+               : ("m/z " + Number(row.mz).toFixed(4))
     }
+
+    // Two separate fields (same convention as Annotate/Visual Inspection,
+    // ADR 34/35) — name (contains) and m/z (a value or "min-max" range).
+    property string nameQuery: ""
+    property string mzQuery: ""
+
+    readonly property var filteredFeatureRows: spatialCorrelationSection.featureRows.filter(function (r) {
+        return SearchQuery.matchesName(spatialCorrelationSection.nameQuery, r.compound_name)
+            && SearchQuery.matchesMz(spatialCorrelationSection.mzQuery, r.mz)
+    })
 
     property string sortColumn: "mz"
     property bool sortAscending: true
@@ -117,7 +113,7 @@ Item {
     readonly property var sortedFeatureRows: {
         var col = spatialCorrelationSection.sortColumn
         var dir = spatialCorrelationSection.sortAscending ? 1 : -1
-        var arr = spatialCorrelationSection.featureRows.slice()
+        var arr = spatialCorrelationSection.filteredFeatureRows.slice()
         arr.sort(function (a, b) {
             var av = a[col]
             var bv = b[col]
@@ -128,6 +124,24 @@ Item {
         })
         return arr
     }
+
+    readonly property string defaultFontFamily: Qt.application.font.family
+    readonly property int featureColumnWidth: 240
+    readonly property int sampleColumnWidth: 130
+    readonly property int headerHeight: 56
+    readonly property int rowHeight: 32
+
+    readonly property var tableColumns: {
+        var cols = [{key: "mz", label: "Feature", width: spatialCorrelationSection.featureColumnWidth}]
+        var samples = spatialCorrelationSection.sampleNames
+        for (var i = 0; i < samples.length; i++) {
+            cols.push({key: samples[i], label: samples[i], width: spatialCorrelationSection.sampleColumnWidth})
+        }
+        return cols
+    }
+
+    readonly property int totalColumnsWidth: spatialCorrelationSection.tableColumns.reduce(
+        function (sum, c) { return sum + c.width }, 0)
 
     Label {
         objectName: "spatialCorrelationEmptyStateLabel"
@@ -140,115 +154,111 @@ Item {
         horizontalAlignment: Text.AlignHCenter
     }
 
-    SplitView {
-        id: spatialCorrelationSplit
-        objectName: "spatialCorrelationSplit"
+    ColumnLayout {
         anchors.fill: parent
         anchors.margins: 16
         visible: spatialCorrelationSection.rows.length > 0
-        orientation: Qt.Vertical
+        spacing: 8
 
-        // Top: per-sample top-N ranked lists.
-        ColumnLayout {
-            id: topNPanel
-            objectName: "spatialCorrelationTopNPanel"
-            SplitView.preferredHeight: spatialCorrelationSplit.height * 0.45
-            SplitView.minimumHeight: 150
-            spacing: 8
+        RowLayout {
+            Layout.fillWidth: true
 
-            RowLayout {
+            Label {
+                text: "Spatial correlation (Moran's I) — " + spatialCorrelationSection.featureRows.length + " feature(s)"
+                font.bold: true
+                font.pixelSize: 14
                 Layout.fillWidth: true
-                Label {
-                    text: "Top features by Moran's I, per sample:"
-                    font.bold: true
-                    font.pixelSize: 14
-                    Layout.fillWidth: true
-                }
-                SpinBox {
-                    id: topNSpin
-                    objectName: "spatialCorrelationTopNSpinBox"
-                    editable: true
-                    from: 1
-                    to: 50
-                    value: spatialCorrelationSection.topN
-                    onValueModified: spatialCorrelationSection.topN = value
-                }
             }
+            TextField {
+                id: spatialCorrelationNameSearchField
+                objectName: "spatialCorrelationNameSearchField"
+                Layout.preferredWidth: 200
+                placeholderText: "Search name…"
+                text: spatialCorrelationSection.nameQuery
+                onTextChanged: spatialCorrelationSection.nameQuery = text
+            }
+            TextField {
+                id: spatialCorrelationMzSearchField
+                objectName: "spatialCorrelationMzSearchField"
+                Layout.preferredWidth: 100
+                placeholderText: "m/z…"
+                text: spatialCorrelationSection.mzQuery
+                onTextChanged: spatialCorrelationSection.mzQuery = text
+            }
+        }
 
-            Flickable {
-                id: topNFlickable
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: width
-                contentHeight: topNRow.implicitHeight
-                boundsBehavior: Flickable.StopAtBounds
+        Label {
+            objectName: "spatialCorrelationSearchEmptyLabel"
+            visible: spatialCorrelationSection.featureRows.length > 0
+                     && spatialCorrelationSection.sortedFeatureRows.length === 0
+            text: "No features match your search."
+            color: Theme.mutedTextColor
+            Layout.alignment: Qt.AlignHCenter
+        }
 
-                RowLayout {
-                    id: topNRow
-                    width: topNFlickable.width
-                    spacing: 12
+        // Header — its own non-vertically-scrolling Flickable, horizontal
+        // position slaved to the body's (headerFlickable.interactive is
+        // false: it never scrolls on its own, only follows bodyFlickable
+        // below) — a "frozen header row" over a scrolling body, both
+        // moving together horizontally when there are more sample
+        // columns than fit on screen (fixed column widths, per-column
+        // scroll rather than squeezed-to-fit — "6 samples max, then
+        // scrolling").
+        Flickable {
+            id: headerFlickable
+            objectName: "spatialCorrelationHeaderFlickable"
+            visible: spatialCorrelationSection.sortedFeatureRows.length > 0
+            Layout.fillWidth: true
+            Layout.preferredHeight: spatialCorrelationSection.headerHeight
+            interactive: false
+            clip: true
+            contentWidth: Math.max(width, spatialCorrelationSection.totalColumnsWidth)
+            contentX: bodyFlickable.contentX
 
-                    Repeater {
-                        id: sampleBlocksRepeater
-                        objectName: "spatialCorrelationSampleBlocks"
-                        model: spatialCorrelationSection.sampleNames
+            Row {
+                id: headerRow
+                height: spatialCorrelationSection.headerHeight
 
-                        delegate: ColumnLayout {
-                            objectName: "spatialCorrelationSampleBlock_" + modelData
-                            Layout.preferredWidth: 220
-                            Layout.fillHeight: true
-                            spacing: 2
+                Repeater {
+                    model: spatialCorrelationSection.tableColumns
+
+                    delegate: Rectangle {
+                        objectName: "spatialCorrelationSortHeader_" + modelData.key
+                        width: modelData.width
+                        height: spatialCorrelationSection.headerHeight
+                        color: "transparent"
+                        border.color: palette.mid
+                        border.width: 1
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: spatialCorrelationSection.sortBy(modelData.key)
+                        }
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            spacing: 0
 
                             Label {
-                                text: modelData
-                                font.bold: true
-                                elide: Text.ElideRight
                                 Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                text: modelData.label
+                                font.bold: true
+                                wrapMode: Text.WrapAnywhere
+                                elide: Text.ElideRight
+                                maximumLineCount: 3
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
                             }
-
-                            Repeater {
-                                model: spatialCorrelationSection.topNBySample[modelData] || []
-
-                                delegate: Rectangle {
-                                    objectName: "spatialCorrelationTopNRow_" + modelData.sample + "_" + index
-                                    Layout.fillWidth: true
-                                    height: 26
-                                    radius: 4
-                                    color: "transparent"
-                                    border.color: palette.mid
-                                    border.width: 1
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: (mouse) => {
-                                            if (mouse.button === Qt.RightButton) {
-                                                topNContextMenu.popup()
-                                            }
-                                        }
-                                    }
-
-                                    Menu {
-                                        id: topNContextMenu
-                                        MenuItem {
-                                            objectName: "spatialCorrelationTopNShowDistribution_" + modelData.sample + "_" + index
-                                            text: "Show spatial distribution"
-                                            onTriggered: spatialCorrelationSection.showSpatialDistributionRequested(modelData.mz)
-                                        }
-                                    }
-
-                                    Label {
-                                        anchors.fill: parent
-                                        anchors.leftMargin: 6
-                                        anchors.rightMargin: 6
-                                        verticalAlignment: Text.AlignVCenter
-                                        elide: Text.ElideRight
-                                        text: (index + 1) + ". " + Number(modelData.mz).toFixed(4)
-                                              + "  (I=" + Number(modelData.moran_i).toFixed(3) + ")"
-                                    }
-                                }
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                font.pixelSize: 11
+                                text: spatialCorrelationSection.sortColumn === modelData.key
+                                      ? (spatialCorrelationSection.sortAscending ? "▲" : "▼")
+                                      : " "
                             }
                         }
                     }
@@ -256,118 +266,83 @@ Item {
             }
         }
 
-        // Bottom: full sortable features x samples table.
-        ColumnLayout {
-            id: fullTablePanel
-            objectName: "spatialCorrelationFullTablePanel"
-            SplitView.fillHeight: true
-            SplitView.minimumHeight: 150
-            spacing: 4
+        // Body — scrolls both ways; horizontal scrollbar makes the
+        // "more samples than fit -> scroll" affordance visible even
+        // without a trackpad gesture.
+        Flickable {
+            id: bodyFlickable
+            objectName: "spatialCorrelationBodyFlickable"
+            visible: spatialCorrelationSection.sortedFeatureRows.length > 0
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            contentWidth: Math.max(width, spatialCorrelationSection.totalColumnsWidth)
+            contentHeight: spatialCorrelationSection.sortedFeatureRows.length * spatialCorrelationSection.rowHeight
+            boundsBehavior: Flickable.StopAtBounds
 
-            Label {
-                text: "All features (" + spatialCorrelationSection.featureRows.length + ")"
-                font.bold: true
-                font.pixelSize: 14
-            }
+            ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            RowLayout {
-                objectName: "spatialCorrelationTableHeader"
-                Layout.fillWidth: true
-                spacing: 4
+            Column {
+                id: bodyColumn
 
                 Repeater {
-                    model: spatialCorrelationSection.tableColumns
+                    objectName: "spatialCorrelationTableRepeater"
+                    model: spatialCorrelationSection.sortedFeatureRows
 
-                    delegate: MouseArea {
-                        objectName: "spatialCorrelationSortHeader_" + modelData.key
-                        Layout.preferredWidth: modelData.width > 0 ? modelData.width : -1
-                        Layout.fillWidth: modelData.width < 0
-                        implicitHeight: headerLabel.implicitHeight
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: spatialCorrelationSection.sortBy(modelData.key)
+                    delegate: Rectangle {
+                        id: featureRowDelegate
+                        objectName: "spatialCorrelationRow_" + modelData.mz
+                        // Captured at this outer-Repeater scope, before
+                        // the inner Repeater's own `modelData` (one
+                        // table column, not this row) shadows it below.
+                        property var featureRow: modelData
+                        width: spatialCorrelationSection.totalColumnsWidth
+                        height: spatialCorrelationSection.rowHeight
+                        color: "transparent"
+                        border.color: palette.mid
+                        border.width: 1
 
-                        Label {
-                            id: headerLabel
+                        MouseArea {
                             anchors.fill: parent
-                            font.bold: true
-                            elide: Text.ElideRight
-                            text: modelData.label
-                                  + (spatialCorrelationSection.sortColumn === modelData.key
-                                     ? (spatialCorrelationSection.sortAscending ? " ▲" : " ▼")
-                                     : "")
+                            acceptedButtons: Qt.RightButton
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: fullTableRowContextMenu.popup()
                         }
-                    }
-                }
-            }
 
-            Flickable {
-                id: fullTableFlickable
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: width
-                contentHeight: spatialCorrelationSection.sortedFeatureRows.length > 0
-                    ? spatialCorrelationSection.sortedFeatureRows.length * 32
-                      + (spatialCorrelationSection.sortedFeatureRows.length - 1) * fullTableColumn.spacing
-                    : 0
-                boundsBehavior: Flickable.StopAtBounds
-
-                Column {
-                    id: fullTableColumn
-                    width: fullTableFlickable.width
-                    spacing: 4
-
-                    Repeater {
-                        objectName: "spatialCorrelationTableRepeater"
-                        model: spatialCorrelationSection.sortedFeatureRows
-
-                        delegate: Rectangle {
-                            id: featureRowDelegate
-                            objectName: "spatialCorrelationRow_" + modelData.mz
-                            // Captured at this outer-Repeater scope, before
-                            // the inner Repeater's own `modelData` (one
-                            // table column, not this row) shadows it below.
-                            property var featureRow: modelData
-                            width: fullTableColumn.width
-                            height: 32
-                            radius: 4
-                            color: "transparent"
-                            border.color: palette.mid
-                            border.width: 1
-
-                            MouseArea {
-                                anchors.fill: parent
-                                acceptedButtons: Qt.RightButton
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: fullTableRowContextMenu.popup()
+                        Menu {
+                            id: fullTableRowContextMenu
+                            objectName: "spatialCorrelationRowContextMenu_" + featureRowDelegate.featureRow.mz
+                            MenuItem {
+                                objectName: "spatialCorrelationShowDistribution_" + featureRowDelegate.featureRow.mz
+                                text: "Show spatial distribution"
+                                onTriggered: spatialCorrelationSection.showSpatialDistributionRequested(
+                                    featureRowDelegate.featureRow.mz)
                             }
+                        }
 
-                            Menu {
-                                id: fullTableRowContextMenu
-                                objectName: "spatialCorrelationRowContextMenu_" + featureRowDelegate.featureRow.mz
-                                MenuItem {
-                                    objectName: "spatialCorrelationShowDistribution_" + featureRowDelegate.featureRow.mz
-                                    text: "Show spatial distribution"
-                                    onTriggered: spatialCorrelationSection.showSpatialDistributionRequested(
-                                        featureRowDelegate.featureRow.mz)
-                                }
-                            }
+                        Row {
+                            anchors.fill: parent
 
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 6
-                                spacing: 4
+                            Repeater {
+                                model: spatialCorrelationSection.tableColumns
 
-                                Repeater {
-                                    model: spatialCorrelationSection.tableColumns
+                                delegate: Item {
+                                    width: modelData.width
+                                    height: spatialCorrelationSection.rowHeight
 
-                                    delegate: Label {
-                                        Layout.preferredWidth: modelData.width > 0 ? modelData.width : -1
-                                        Layout.fillWidth: modelData.width < 0
+                                    Label {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 8
+                                        anchors.rightMargin: 8
+                                        verticalAlignment: Text.AlignVCenter
+                                        horizontalAlignment: modelData.key === "mz" ? Text.AlignLeft : Text.AlignRight
                                         elide: Text.ElideRight
+                                        font.family: modelData.key === "mz"
+                                                      ? spatialCorrelationSection.defaultFontFamily : "monospace"
                                         text: {
                                             if (modelData.key === "mz")
-                                                return Number(featureRowDelegate.featureRow.mz).toFixed(4)
+                                                return spatialCorrelationSection.featureLabel(featureRowDelegate.featureRow)
                                             var v = featureRowDelegate.featureRow[modelData.key]
                                             return v !== undefined ? Number(v).toFixed(3) : "–"
                                         }
