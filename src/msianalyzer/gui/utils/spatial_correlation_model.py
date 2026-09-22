@@ -64,6 +64,7 @@ class SpatialCorrelationModel(QAbstractTableModel):
     rowsLoadingChanged = Signal()
     queriesChanged = Signal()
     sortStateChanged = Signal()
+    samplesChanged = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -154,10 +155,26 @@ class SpatialCorrelationModel(QAbstractTableModel):
         state is preserved and reapplied, not reset, so a fresh fetch
         (e.g. after re-running with `spatial_correlation.enabled: true`)
         doesn't silently undo what the user had set up.
+
+        Real bug this fixed: `samples`'s Property used to declare
+        `notify=sortStateChanged`, which is only ever emitted by
+        `sortBy()` — never by this method. QML reads `model.samples`
+        once when the section first binds to it (before the background
+        fetch finishes, so it reads `[]`), and with no notify signal
+        firing when the real data lands, that binding never
+        re-evaluates. Reported directly: the tab shows "no correlation
+        run" on the very first visit, but works after leaving and coming
+        back — because leaving and coming back destroys and rebuilds the
+        whole section, which re-reads `model.samples` fresh (by then
+        populated) rather than relying on a notification that was never
+        going to fire.
         """
         self._all_rows = rows
+        samples_changed = samples != self._samples
         self._samples = samples
         self._apply_filter_and_sort()
+        if samples_changed:
+            self.samplesChanged.emit()
 
     # ------------------------------------------------------------------
     # QML-facing API
@@ -186,7 +203,7 @@ class SpatialCorrelationModel(QAbstractTableModel):
     def _get_samples(self) -> list:
         return self._samples
 
-    samples = Property("QVariantList", _get_samples, notify=sortStateChanged)
+    samples = Property("QVariantList", _get_samples, notify=samplesChanged)
 
     def _get_name_query(self) -> str:
         return self._name_query

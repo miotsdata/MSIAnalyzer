@@ -19,6 +19,21 @@ Page {
     onAnalysisChanged: {
         if (analysisPage.analysis && analysisPage.analysis.analysisDbPath) {
             AnalysisBridge.ensureSchemaCurrent(analysisPage.analysis.analysisDbPath)
+            // Warm up two background-thread fetches other tabs will
+            // almost certainly need, right now while the user is
+            // already looking at a "loading" state (opening the
+            // analysis), instead of paying that cost again the moment
+            // they switch to Visual Inspection or Spatial Correlation
+            // (each is a lazy Loader, destroyed/rebuilt every tab
+            // switch — see AnalysisBridge.requestFeatureList's and
+            // getSpatialCorrelationModel's own docstrings). Both cache
+            // by analysis_db_path on the bridge itself, so calling them
+            // again later from those sections' own onAnalysisChanged is
+            // a cache hit, not a duplicate fetch. Fire-and-forget: no
+            // listener needed here, the cache population is a side
+            // effect of the bridge methods themselves.
+            AnalysisBridge.requestFeatureList(analysisPage.analysis.analysisDbPath)
+            AnalysisBridge.getSpatialCorrelationModel(analysisPage.analysis.analysisDbPath)
         }
     }
     // Set by Annotations' "Inspect visually" right-click just before

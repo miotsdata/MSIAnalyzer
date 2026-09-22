@@ -252,6 +252,58 @@ be shown before it's ever displayed.
 
 ## Follow-ups (same conversation)
 
+- **A fourth real bug — a "loophole" the user found**: after the
+  backed-mode fix, the table still showed "no correlation run" on the
+  *first* visit to the tab, but worked correctly after switching to
+  Visual Inspection and back. Root cause: `SpatialCorrelationModel.samples`
+  (a `Property`) declared `notify=sortStateChanged`, a signal only ever
+  emitted by `sortBy()` — never by `setRows()`. QML reads `model.samples`
+  once, when the section first binds to the model (before the
+  background fetch finishes, so it reads `[]`), and with no notify
+  firing when the real data actually lands, that binding never
+  re-evaluates — it's stuck showing the empty state forever, for that
+  one section instance. Leaving the tab and coming back rebuilds the
+  whole section from scratch, so it re-reads `model.samples` fresh (by
+  then populated) — which is why that "fixed" it, and why it looked like
+  a timing loophole rather than a broken binding. Fixed with a dedicated
+  `samplesChanged` signal, emitted by `setRows()` when the sample list
+  actually changes.
+- **Eager warm-up at analysis-open time**: the user separately reported
+  the Visual Inspection freeze was *still* happening (1s spinner, then
+  3-5s blank, then everything appears) even after the render-cache
+  prefetch fix, and proposed prefetching the feature list and the
+  spatial-correlation table as soon as an analysis opens rather than
+  waiting for the relevant tab's first visit — reasoning that opening an
+  analysis is already an expected "loading" moment, so a little more
+  work there is a better trade than a freeze mid-navigation later.
+  Agreed as a good, pragmatic direction (see the exploratory discussion
+  in-session) and implemented: `AnalysisPage.qml`'s `onAnalysisChanged`
+  now also calls `AnalysisBridge.requestFeatureList` and
+  `getSpatialCorrelationModel` eagerly, fire-and-forget. Both already
+  had single-slot caches keyed by `analysis_db_path` (added
+  `requestFeatureList`'s cache as part of this same change, mirroring
+  `getSpatialCorrelationModel`'s), so the later, real call from
+  `HeatmapControlsPanel.qml`/`SpatialCorrelationSection.qml` is a cache
+  hit rather than a duplicate fetch. **Known limitation, not yet
+  addressed**: `requestFeatureList`'s cache has no invalidation hook —
+  a compound name set by "Predict formula" (ADR 27) after this cache is
+  already warm won't show up in Visual Inspection's feature list until
+  a different analysis is opened. **Also not yet addressed**: this
+  doesn't touch the actual per-tile matplotlib render cost for anything
+  beyond the one default tile already prefetched — the user separately
+  asked (for a later session) whether the whole heatmap render pipeline
+  can be made properly asynchronous (their suspicion: the loading
+  spinner itself still visibly freezes, suggesting something is still
+  blocking the main thread despite the render-cache prefetch) — flagged
+  for follow-up, not investigated yet.
+- **Local Moran's I revisited**: the user pointed out a real modeling
+  concern with global Moran's I as currently computed — their samples'
+  `.h5ad` each contain *both* a matrix-only region and the actual tissue
+  in one image, so a feature's global spatial autocorrelation is heavily
+  influenced by the gross matrix-vs-tissue split rather than genuine
+  structure *within* the tissue. Local Moran's I (per-pixel LISA,
+  already noted as out-of-scope for v1 above) would likely help here —
+  flagged for follow-up, not investigated yet.
 - **A third real bug, found on a real production-scale dataset**: after
   all the above shipped, the user tested against a real project (6
   samples, several `.h5ad` files 1-1.6GB each) and the new tab reported

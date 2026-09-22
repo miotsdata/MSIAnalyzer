@@ -327,6 +327,10 @@ class AnalysisBridge(QObject):
         # method's own docstring for why.
         self._spatial_correlation_model_path: str | None = None
         self._spatial_correlation_model: "SpatialCorrelationModel | None" = None
+        # Single-slot cache for requestFeatureList — see that method's
+        # own docstring for why.
+        self._feature_list_cache_path: str | None = None
+        self._feature_list_cache_rows: list = []
         self.heatmap_provider = HeatmapImageProvider()
         # Same "own it here, main.py just registers it" reasoning as
         # heatmap_provider above.
@@ -1103,6 +1107,22 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         feature selector on a background thread; the result arrives via
         `featureListReady(features)`.
 
+        Single-slot cache, keyed by `analysis_db_path` — same pattern and
+        motivation as `getSpatialCorrelationModel`'s: opening Visual
+        Inspection re-fetches this on every tab switch away and back
+        (its `Loader` is lazy, destroyed each time), which is wasted
+        work for a list that essentially never changes mid-analysis.
+        `AnalysisPage.qml` also calls this once, eagerly, right when the
+        analysis is opened (`onAnalysisChanged`) — by the time the user
+        actually visits Visual Inspection, this is usually already warm.
+        A cache hit still emits `featureListReady` (just synchronously,
+        no worker thread), so callers don't need to know which case
+        happened. Known limitation: a `compound_name` set by "Predict
+        formula" (ADR 27) after this cache is warm won't show up here
+        until a different analysis is opened — `AnnotationsSection.qml`'s
+        own table has its own, separate refresh path for that; this
+        cache doesn't hook into it yet.
+
         Fire-and-forget rather than a return value — see the class
         docstring for why. Used by `HeatmapControlsPanel.qml`, which shows
         a loading state until `featureListReady` fires.
@@ -1116,17 +1136,24 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         if not analysis_db_path or not Path(analysis_db_path).exists():
             self.featureListReady.emit([])
             return
+        if analysis_db_path == self._feature_list_cache_path:
+            self.featureListReady.emit(self._feature_list_cache_rows)
+            return
         worker = TableQueryWorker(analysis_db.load_feature_list, analysis_db_path, self)
         worker.succeeded.connect(self._onFeatureListSucceeded)
         worker.failed.connect(self._onFeatureListFailed)
         self._feature_list_worker = worker
+        self._feature_list_worker_path = analysis_db_path
         worker.start()
 
     @Slot(object)
     def _onFeatureListSucceeded(self, df: pd.DataFrame) -> None:
         if self.sender() is not self._feature_list_worker:
             return  # superseded by a newer request — discard
-        self.featureListReady.emit([] if df.empty else _dataframe_to_records(df))
+        rows = [] if df.empty else _dataframe_to_records(df)
+        self._feature_list_cache_path = self._feature_list_worker_path
+        self._feature_list_cache_rows = rows
+        self.featureListReady.emit(rows)
 
     @Slot(str)
     def _onFeatureListFailed(self, message: str) -> None:
