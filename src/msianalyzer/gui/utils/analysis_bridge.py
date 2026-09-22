@@ -168,21 +168,39 @@ def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
         h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name)
         if not h5ad_path.exists():
             continue
-        adata = ad.read_h5ad(h5ad_path)
-        moran = adata.uns.get("moranI")
-        if moran is None:
-            continue
-        mz_by_var = adata.var["mz"]
-        for var_name, i_score in moran["I"].items():
-            mz = float(mz_by_var.loc[var_name])
-            rows.append(
-                {
-                    "mz": mz,
-                    "sample": name,
-                    "moran_i": float(i_score),
-                    "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
-                }
-            )
+        # `backed="r"` — this only needs `uns`/`var` (small metadata),
+        # never `X` (the actual per-pixel intensities). A plain
+        # `ad.read_h5ad` loads the whole sparse matrix into memory just
+        # to throw it away, which is merely wasteful on a small project
+        # but genuinely broke on a real one: several-GB `.h5ad` files
+        # (backed mode reads a project's own multi-GB samples in well
+        # under a second here, vs. loading gigabytes of `X` for nothing)
+        # caused this to fail — silently, from the user's side, since
+        # the fetch runs on a background thread and only logs a warning
+        # on failure — reported as "no correlation run" for an analysis
+        # that very much had one.
+        adata = ad.read_h5ad(h5ad_path, backed="r")
+        try:
+            moran = adata.uns.get("moranI")
+            if moran is None:
+                continue
+            mz_by_var = adata.var["mz"]
+            for var_name, i_score in moran["I"].items():
+                mz = float(mz_by_var.loc[var_name])
+                rows.append(
+                    {
+                        "mz": mz,
+                        "sample": name,
+                        "moran_i": float(i_score),
+                        "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
+                    }
+                )
+        finally:
+            # Backed mode keeps the underlying HDF5 file open
+            # (`adata.file`) until explicitly closed — without this,
+            # looping over several samples leaks one open file handle
+            # per sample for the rest of the process's lifetime.
+            adata.file.close()
 
     return pd.DataFrame(rows, columns=columns)
 

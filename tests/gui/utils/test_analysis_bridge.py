@@ -1,5 +1,6 @@
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 import anndata as ad
 import pandas as pd
@@ -10,7 +11,11 @@ from scipy.sparse import csr_matrix
 from msianalyzer.core.analysis_db import init_analysis_db, log_command, register_sample
 from msianalyzer.core.parser.mzml_parser import array_to_blob
 from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
-from msianalyzer.gui.utils.analysis_bridge import AnalysisBridge, _categorize_peaks
+from msianalyzer.gui.utils.analysis_bridge import (
+    AnalysisBridge,
+    _categorize_peaks,
+    _load_spatial_correlation_table,
+)
 import numpy as np
 
 
@@ -451,10 +456,66 @@ def test_request_feature_list_stale_request_is_discarded(tmp_path, qtbot):
 
 
 def _seed_moran_h5ad(out_dir: Path, sample_name: str, mz: float, moran_i: float) -> None:
-    var = pd.DataFrame({"mz": [mz]}, index=["mz_test"])
-    adata = ad.AnnData(X=np.zeros((1, 1)), var=var)
-    adata.uns["moranI"] = pd.DataFrame({"I": [moran_i]}, index=["mz_test"])
+    _seed_moran_h5ad_multi(out_dir, sample_name, [(mz, moran_i)])
+
+
+def _seed_moran_h5ad_multi(out_dir: Path, sample_name: str, features: list) -> None:
+    """`features`: `[(mz, moran_i), ...]` — more than one, unlike
+    `_seed_moran_h5ad`, to catch bugs that only surface with multiple
+    features per sample (e.g. a loop accidentally appending only the
+    last one)."""
+    var_names = [f"mz_test_{i}" for i in range(len(features))]
+    var = pd.DataFrame({"mz": [f[0] for f in features]}, index=var_names)
+    adata = ad.AnnData(X=np.zeros((1, len(features))), var=var)
+    adata.uns["moranI"] = pd.DataFrame({"I": [f[1] for f in features]}, index=var_names)
     adata.write_h5ad(out_dir / f"{sample_name}.h5ad")
+
+
+def test_load_spatial_correlation_table_reads_every_feature_not_just_the_last(tmp_path):
+    # Regression: a loop-indentation bug once appended only the LAST
+    # var_name/score pair per sample instead of one row per feature —
+    # invisible with the single-feature fixture every other test here
+    # uses, since "last" and "only" were indistinguishable.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.commit()
+    _seed_moran_h5ad_multi(
+        tmp_path, "s1", [(100.0, 0.5), (200.0, 0.6), (300.0, 0.7)]
+    )
+
+    df = _load_spatial_correlation_table(str(db_path))
+
+    assert len(df) == 3
+    assert sorted(df["mz"].tolist()) == [100.0, 200.0, 300.0]
+
+
+def test_load_spatial_correlation_table_does_not_load_full_x_into_memory(tmp_path):
+    # The real bug this backed-mode fix addresses: ad.read_h5ad() (no
+    # `backed`) loads the whole X matrix just to read uns/var, which
+    # failed outright on a real project with multi-GB .h5ad files
+    # (reported as "no correlation run" for an analysis that had one).
+    # Confirms the fetch goes through backed mode rather than a full read.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.commit()
+    _seed_moran_h5ad(tmp_path, "s1", mz=100.0, moran_i=0.5)
+
+    with patch("msianalyzer.gui.utils.analysis_bridge.ad.read_h5ad", wraps=ad.read_h5ad) as spy:
+        _load_spatial_correlation_table(str(db_path))
+
+    assert spy.call_count == 1
+    _, kwargs = spy.call_args
+    assert kwargs.get("backed") == "r"
 
 
 def test_get_spatial_correlation_model_reads_moran_scores_with_name(tmp_path, qtbot):

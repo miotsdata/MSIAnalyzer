@@ -252,6 +252,38 @@ be shown before it's ever displayed.
 
 ## Follow-ups (same conversation)
 
+- **A third real bug, found on a real production-scale dataset**: after
+  all the above shipped, the user tested against a real project (6
+  samples, several `.h5ad` files 1-1.6GB each) and the new tab reported
+  "no correlation run" for an analysis that had genuinely run
+  `spatial_correlation.enabled: true` — every `.h5ad` had `uns["moranI"]`
+  present and correct. Root cause: `_load_spatial_correlation_table`
+  called plain `ad.read_h5ad(h5ad_path)` per sample — which loads the
+  **entire** `X` matrix into memory just to read the small `uns`/`var`
+  metadata this function actually needs. Trivial on the tiny synthetic
+  fixtures every test here used; on the real multi-GB files, reading all
+  6 samples' full `X` (on top of whatever `HeatmapImageProvider`'s own
+  cache already held) failed — silently, since the fetch runs on a
+  background thread and a failure there only logs a warning, never
+  reaches the user. Fixed with `ad.read_h5ad(h5ad_path, backed="r")`
+  (loads `obs`/`var`/`uns` normally, keeps `X` as an on-disk-backed
+  proxy, never materialized) — confirmed on the real project's own files:
+  well under a second per sample instead of loading gigabytes.
+  **A second bug was found and fixed while writing this one's fix**: the
+  loop that turns `moranI`'s per-feature scores into rows had its
+  `rows.append(...)` sitting one indentation level too shallow, so a
+  sample with N features would only append the *last* one — invisible
+  with every existing test's single-feature fixture (where "last" and
+  "only" are indistinguishable), only caught by writing a genuinely
+  multi-feature test alongside this fix
+  (`test_load_spatial_correlation_table_reads_every_feature_not_just_the_last`).
+  **Takeaway**: a function that reads a whole `.h5ad` for a handful of
+  small metadata fields should default to `backed="r"` unless it
+  actually needs pixel-level data (`HeatmapImageProvider._load_adata`
+  legitimately does, and stays as a full read) — and any fixture/test
+  built around a single-row/single-feature case can hide an
+  off-by-one/scope bug in a loop that a real dataset's multiplicity
+  would immediately expose.
 - **Parallelism**: `spatial_correlation.n_jobs` (new `SpatialCorrelationConfig`
   field, default `None`) is passed straight through to
   `squidpy.gr.spatial_autocorr`'s own `n_jobs` — parallelizes scoring
