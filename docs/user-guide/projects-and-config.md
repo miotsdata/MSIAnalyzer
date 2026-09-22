@@ -58,9 +58,9 @@ every tab anyway.
 
 Sections run in roughly this order during a pipeline execution: `ms1` →
 `centroid` → `peak` → `align` → `group_ms2` → `purity` → `annotate` →
-`consensus` → `report` → `h5ad` → `normalization` → `analysis`. `io` isn't a
-"stage" as such — it's the input/output paths every other stage reads from or
-writes into.
+`consensus` → `report` → `h5ad` → `normalization` → `spatial_correlation` →
+`analysis`. `io` isn't a "stage" as such — it's the input/output paths
+every other stage reads from or writes into.
 
 ### `io` — input/output (required)
 
@@ -274,6 +274,22 @@ compresses the result.
 | key | default | meaning |
 |---|---|---|
 | `enabled` | `true` | add `layers['raw']` (untouched) / `layers['TIC']` (normalized) to every `<sample>.h5ad` and write the cross-sample `merged.h5ad`. `false` skips this entirely — only raw intensities remain, saving processing time/disk space if TIC normalization doesn't apply to your data. |
+
+### `spatial_correlation` — per-feature spatial autocorrelation (opt-in, off by default)
+
+Computes Moran's I (via `squidpy`) for every feature, independently per
+sample — how much a feature's pixel intensities cluster spatially rather
+than scattering at random, a proxy for "is this a real, spatially
+organized signal or noise." Runs after `normalization`, once every
+per-sample `.h5ad` exists; results are written directly into each sample's
+own `.h5ad` (`adata.uns["moranI"]`, squidpy's own convention), not into
+the analysis database. Browsable in the GUI's **Spatial Correlation** tab.
+See [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md).
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | run this stage. Off by default — it's an optional, fairly heavy extra pass (spatial neighbor graph + per-feature autocorrelation for every sample) that most runs don't need. |
+| `layer` | `"TIC"` | which `.h5ad` layer's intensities to score — TIC-normalized by default for comparability across samples, falling back to raw `.X` when the named layer isn't present (e.g. `normalization.enabled: false`). |
 
 ### `analysis` — per-analysis database
 

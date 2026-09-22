@@ -33,6 +33,7 @@ from msianalyzer.core.spectra.average_spectra import (
     load_aggregated_spectra,
     save_aggregated_spectra,
 )
+from msianalyzer.core.spatial.moran import compute_spatial_autocorr
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 from msianalyzer.core.utils.create_adata import create_spatial_adata
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
@@ -62,6 +63,7 @@ RUN_STEPS: tuple[str, ...] = (
     "ms2_consensus",
     "assemble_adata",
     "normalize_tic",
+    "spatial_correlation",
     "summary_report",
 )
 
@@ -958,6 +960,35 @@ class Run:
         else:
             logger.info("TIC normalization disabled; skipping")
             self._emit_step("normalize_tic", "skipped")
+
+        # --- SPATIAL CORRELATION (Moran's I, writes into each .h5ad) ---
+        spatial_corr_cfg = getattr(config, "spatial_correlation", None)
+        if spatial_corr_cfg is not None and getattr(spatial_corr_cfg, "enabled", False):
+            self._emit_step("spatial_correlation", "started")
+            if not analysis_db.is_command_already_run(
+                "spatial_correlation", analysis_id, adb_path
+            ):
+                analysis_db.log_command(
+                    adb_path,
+                    command_name="spatial_correlation",
+                    arguments={**vars(spatial_corr_cfg)},
+                    run_id=analysis_id,
+                )
+                for db_path in out_db_paths:
+                    out_adata_path = out_dir / f"{db_path.stem}.h5ad"
+                    compute_spatial_autocorr(out_adata_path, layer=spatial_corr_cfg.layer)
+                    logger.info(
+                        "%s: computed Moran's I -> %s",
+                        db_path,
+                        out_adata_path.name,
+                        extra={"source_file": db_path},
+                    )
+            else:
+                logger.debug("Already run spatial_correlation")
+            self._emit_step("spatial_correlation", "completed")
+        else:
+            logger.info("Spatial correlation disabled; skipping")
+            self._emit_step("spatial_correlation", "skipped")
 
         # --- SUMMARY REPORT ---
         report_cfg = getattr(config, "report", None)

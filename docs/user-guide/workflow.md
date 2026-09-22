@@ -115,6 +115,19 @@ samples concatenated with a `sample` obs column — needed to compute the
 median and kept for future cross-sample analyses. Controlled by
 `normalization.*`; set `normalization.enabled: false` to skip.
 
+## Stage 12.5 — Spatial correlation (opt-in)
+
+Off by default (`spatial_correlation.enabled: false`). When enabled,
+`core.spatial.moran.compute_spatial_autocorr()` runs per sample, after TIC
+normalization: builds a spatial neighbor graph over that sample's pixel
+grid (`squidpy.gr.spatial_neighbors_grid`) and computes Moran's I for every
+feature (`squidpy.gr.spatial_autocorr`) against `spatial_correlation.layer`
+(`"TIC"` by default) — how much a feature's pixel values cluster spatially
+rather than scattering at random, computed independently per sample (never
+pooled across samples). Results are written directly into that sample's
+own `.h5ad` (`adata.uns["moranI"]`, squidpy's own convention) — no new
+analysis-database table. See [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md).
+
 ## Stage 13 — Summary report (→ out_dir)
 
 `build_summary_report()` writes `summary_report.html` + `summary.json`:

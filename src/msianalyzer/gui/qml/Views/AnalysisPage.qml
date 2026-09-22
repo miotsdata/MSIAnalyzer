@@ -97,7 +97,7 @@ Page {
                 Repeater {
                     id: navRepeater
                     objectName: "navRepeater"
-                    model: ["Summary", "MS1 Spectra", "Annotations", "Visual Inspection"]
+                    model: ["Summary", "MS1 Spectra", "Annotations", "Visual Inspection", "Spatial Correlation"]
 
                     delegate: Button {
                         objectName: "navButton_" + index
@@ -247,6 +247,21 @@ Page {
                         item.pendingInspectMz = Qt.binding(function () { return analysisPage.pendingInspectMz })
                     }
                 }
+                Loader {
+                    id: spatialCorrLoader
+                    objectName: "spatialCorrelationSectionLoader"
+                    active: sectionStack.currentIndex === 4
+                    source: "qrc:/Views/SpatialCorrelationSection.qml"
+                    onLoaded: {
+                        item.analysis = Qt.binding(function () { return analysisPage.analysis })
+                        // "Show spatial distribution" — identical handoff
+                        // to Annotations' "Inspect visually" above (ADR 32).
+                        item.showSpatialDistributionRequested.connect(function (mz) {
+                            analysisPage.pendingInspectMz = mz
+                            sectionStack.currentIndex = 3
+                        })
+                    }
+                }
             }
 
             // "whenever I change a page there is a small delay/page
@@ -274,6 +289,8 @@ Page {
                        && annotationsLoader.item && !annotationsLoader.item.rowsLoading
         case 3: return visualLoader.status === Loader.Ready
                        && visualLoader.item && !visualLoader.item.featuresLoading
+        case 4: return spatialCorrLoader.status === Loader.Ready
+                       && spatialCorrLoader.item && !spatialCorrLoader.item.rowsLoading
         default: return true
         }
     }

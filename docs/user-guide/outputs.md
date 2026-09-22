@@ -75,6 +75,7 @@ adata.layers["raw"]      # same as .X, explicitly labelled
 adata.layers["TIC"]      # TIC-normalized, log1p-compressed
 adata.var_names          # feature m/z
 adata.obs                # pixel x / y coordinates, obs["tic"] is the per-pixel TIC used for normalization
+adata.uns["moranI"]      # per-feature Moran's I (+ p-values), only when spatial_correlation.enabled: true
 ```
 
 ## Re-running

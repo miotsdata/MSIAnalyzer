@@ -144,6 +144,12 @@ class MockNormalizationConfig:
     enabled: bool = True
 
 
+@dataclass
+class MockSpatialCorrelationConfig:
+    enabled: bool = False
+    layer: str = "TIC"
+
+
 class DummyConfig:
     def __init__(self, tmp_path):
         self.io = MockIOConfig(
@@ -164,6 +170,7 @@ class DummyConfig:
         self.report = MockReportConfig()
         self.h5ad = MockH5ADConfig()
         self.normalization = MockNormalizationConfig()
+        self.spatial_correlation = MockSpatialCorrelationConfig()
         self.analysis = MockAnalysisConfig()
 
     @classmethod
@@ -978,6 +985,7 @@ _FULL_RUN_STAGES_SUCCESS = [
     ("assemble_adata", "completed"),
     ("normalize_tic", "started"),
     ("normalize_tic", "completed"),
+    ("spatial_correlation", "skipped"),
     ("summary_report", "started"),
     ("summary_report", "completed"),
 ]
@@ -1203,6 +1211,7 @@ def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
         ("assemble_adata", "started"),
         ("assemble_adata", "completed"),
         ("normalize_tic", "skipped"),
+        ("spatial_correlation", "skipped"),
         ("summary_report", "skipped"),
     ]
 

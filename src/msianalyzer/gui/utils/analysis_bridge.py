@@ -83,6 +83,55 @@ def _dataframe_to_records(df: pd.DataFrame) -> list:
     return records
 
 
+def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
+    """One row per (feature, sample) with that sample's Moran's I for that
+    feature — the flat shape `SpatialCorrelationSection.qml` pivots
+    client-side into per-sample top-N lists and the full table (same
+    "flat rows in, QML pivots" shape `AnnotationsSection.qml` already
+    uses for its own table).
+
+    Reads each sample's own `.h5ad` (`AnalysisBridge._sample_h5ad_path`'s
+    convention) rather than a SQL table — `core.spatial.moran` writes
+    Moran's I straight into `adata.uns["moranI"]` and nowhere else (see
+    ADR for spatial correlation), so this is purely an `.h5ad` read, no
+    analysis-database query involved beyond `load_samples` for the sample
+    list itself.
+
+    Args:
+        analysis_db_path: The analysis' SQLite database — only used to
+            find the output folder and sample list; not queried for
+            Moran's I itself.
+
+    Returns:
+        Columns `mz`, `sample`, `moran_i`. Empty when no sample's `.h5ad`
+        has ever had `spatial_correlation` run on it.
+    """
+    samples = analysis_db.load_samples(analysis_db_path)
+    if samples.empty:
+        return pd.DataFrame(columns=["mz", "sample", "moran_i"])
+
+    rows = []
+    for name in samples["name"]:
+        h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name)
+        if not h5ad_path.exists():
+            continue
+        adata = ad.read_h5ad(h5ad_path)
+        moran = adata.uns.get("moranI")
+        if moran is None:
+            continue
+        mz_by_var = adata.var["mz"]
+        for var_name, i_score in moran["I"].items():
+            rows.append(
+                {
+                    "mz": float(mz_by_var.loc[var_name]),
+                    "sample": name,
+                    "moran_i": float(i_score),
+                }
+            )
+
+    return pd.DataFrame(rows, columns=["mz", "sample", "moran_i"])
+
+
 def _categorize_peaks(mz_array: np.ndarray, feature_categories: pd.DataFrame) -> np.ndarray:
     """Nearest-feature category (`"no_ms2"`/`"annotated"`/`"non_annotated"`)
     for each peak in `mz_array` — which of `feature_categories`'s `mz`
@@ -160,6 +209,12 @@ class AnalysisBridge(QObject):
       Offloaded to `TableQueryWorker`. `AnnotationsSection.qml`/
       `HeatmapControlsPanel.qml` call these and listen for the `*Ready`
       signals instead of using a return value.
+    - `spatialCorrelationReady`: `requestSpatialCorrelation` reads every
+      sample's own `.h5ad` file off disk (not a SQL query) to collect
+      Moran's I scores — real file I/O per sample, same "don't block the
+      GUI thread" reasoning as the two above. Offloaded to
+      `TableQueryWorker` as well; `SpatialCorrelationSection.qml` calls it
+      and listens for `spatialCorrelationReady`.
     """
 
     spectrumPointClicked = Signal(float)
@@ -168,6 +223,7 @@ class AnalysisBridge(QObject):
     formulaPredictionFailed = Signal(str, str)  # analysis_db_path, message
     annotationTableReady = Signal(list)
     featureListReady = Signal(list)
+    spatialCorrelationReady = Signal(list)
     exportFinished = Signal(str)  # human-readable "done" message
     exportFailed = Signal(str)  # human-readable error message
 
@@ -386,6 +442,48 @@ class AnalysisBridge(QObject):
             return  # superseded by a newer request — discard
         logger.warning("annotation table load failed: %s", message)
         self.annotationTableReady.emit([])
+
+    @Slot(str)
+    def requestSpatialCorrelation(self, analysis_db_path: str) -> None:
+        """Start fetching every sample's Moran's I scores on a background
+        thread; the result arrives via `spatialCorrelationReady(rows)`.
+
+        Fire-and-forget rather than a return value — see the class
+        docstring for why (real per-sample `.h5ad` file I/O). Used by the
+        Spatial Correlation section, which shows a loading state the same
+        way Annotations' table does.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+
+        `spatialCorrelationReady`'s rows come from
+        `_load_spatial_correlation_table` — one row per (feature, sample),
+        empty when `spatial_correlation.enabled` was never turned on for
+        this analysis (no sample's `.h5ad` has `uns["moranI"]`).
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            self.spatialCorrelationReady.emit([])
+            return
+        worker = TableQueryWorker(
+            _load_spatial_correlation_table, analysis_db_path, self
+        )
+        worker.succeeded.connect(self._onSpatialCorrelationSucceeded)
+        worker.failed.connect(self._onSpatialCorrelationFailed)
+        self._spatial_correlation_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _onSpatialCorrelationSucceeded(self, df: pd.DataFrame) -> None:
+        if self.sender() is not self._spatial_correlation_worker:
+            return  # superseded by a newer request — discard
+        self.spatialCorrelationReady.emit([] if df.empty else _dataframe_to_records(df))
+
+    @Slot(str)
+    def _onSpatialCorrelationFailed(self, message: str) -> None:
+        if self.sender() is not self._spatial_correlation_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("spatial correlation load failed: %s", message)
+        self.spatialCorrelationReady.emit([])
 
     @Slot(str, result=list)
     def getFeaturesForPrediction(self, analysis_db_path: str) -> list:

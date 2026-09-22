@@ -57,3 +57,4 @@ useful).
 | [45](0045-he-image-coregistration-phase1.md) | H&E/brightfield image coregistration, Phase 1: raw-DB storage + landmark fit | Accepted |
 | [46](0046-he-coregistration-phase2-gui-and-zoomableimage-fix.md) | H&E coregistration Phase 2: `CoregistrationWindow` GUI, and a `ZoomableImage` input bug found along the way | Accepted |
 | [47](0047-he-coregistration-phase3-overlay-and-roi-on-he.md) | H&E coregistration Phase 3: warped-heatmap overlay, and drawing ROI on the H&E image | Accepted |
+| [48](0048-spatial-correlation-morans-i.md) | Spatial correlation (Moran's I), computed via squidpy on the `.h5ad` | Accepted |

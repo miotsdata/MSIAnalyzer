@@ -1278,6 +1278,46 @@ class NormalizationConfig:
     enabled: bool = True
 
 
+@dataclass
+class SpatialCorrelationConfig:
+    """Per-feature, per-sample spatial autocorrelation (Moran's I).
+
+    `core.spatial.moran`: runs after `normalization`, once every per-sample
+    `.h5ad` file exists. For each sample independently (never pooled across
+    samples — a feature's spatial organization in one slide says nothing
+    about another), builds a spatial neighbor graph over that sample's
+    pixels (`squidpy.gr.spatial_neighbors`) and computes Moran's I for every
+    feature (`squidpy.gr.spatial_autocorr`, `mode="moran"`) — how much a
+    feature's high/low pixel values cluster near each other spatially,
+    rather than being scattered at random. Results are written directly
+    into that sample's `.h5ad` (`adata.uns["moranI"]`, squidpy's own
+    convention), not into the analysis database — this stage is purely an
+    `.h5ad` enrichment step, read back on demand by the GUI's Spatial
+    Correlation page.
+
+    Attributes:
+        enabled: Run this stage. Off by default — it's an optional,
+            fairly heavy extra pass (spatial neighbor graph + per-feature
+            autocorrelation for every sample) that most runs don't need.
+            Default `False`.
+
+            **Interaction:** The GUI's Spatial Correlation page has
+            nothing to show for a sample whose `.h5ad` was never enriched
+            by this stage.
+        layer: Which `.h5ad` layer's intensities to run Moran's I on.
+            Default `"TIC"` (TIC-normalized, for comparability across
+            samples) — falls back to `.X` (raw) if the named layer isn't
+            present, e.g. when `normalization.enabled` is `False`.
+
+            **Interaction:** Only meaningful when `normalization.enabled`
+            is also `True`; otherwise no `"TIC"` layer exists and this
+            silently falls back to raw intensities.
+    """
+
+    enabled: bool = False
+    layer: str = "TIC"
+
+
 # Maps group name (used as the nested key in dicts/files) -> dataclass type,
 # and doubles as the canonical group order for __str__ and CLI wiring.
 GROUPS: dict[str, type] = {
@@ -1294,6 +1334,7 @@ GROUPS: dict[str, type] = {
     "report": ReportConfig,
     "h5ad": H5adConfig,
     "normalization": NormalizationConfig,
+    "spatial_correlation": SpatialCorrelationConfig,
     "analysis": AnalysisConfig,
 }
 
@@ -1312,6 +1353,7 @@ GROUP_TITLES: dict[str, str] = {
     "report": "summary report",
     "h5ad": "create h5ad",
     "normalization": "TIC normalization",
+    "spatial_correlation": "spatial correlation",
     "analysis": "analysis database",
 }
 
@@ -1340,10 +1382,11 @@ class Config:
         report: End-of-run summary report parameters.
         h5ad: Spatial `AnnData` assembly parameters.
         normalization: TIC-normalization parameters.
+        spatial_correlation: Spatial autocorrelation (Moran's I) parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 17
+    version: int = 18
 
     def __init__(
         self,
@@ -1360,6 +1403,7 @@ class Config:
         report: ReportConfig | None = None,
         h5ad: H5adConfig | None = None,
         normalization: NormalizationConfig | None = None,
+        spatial_correlation: SpatialCorrelationConfig | None = None,
         analysis: AnalysisConfig | None = None,
     ) -> None:
         self.io: IOConfig = io
@@ -1376,6 +1420,9 @@ class Config:
         self.h5ad: H5adConfig = h5ad or H5adConfig()
         self.normalization: NormalizationConfig = (
             normalization or NormalizationConfig()
+        )
+        self.spatial_correlation: SpatialCorrelationConfig = (
+            spatial_correlation or SpatialCorrelationConfig()
         )
         self.analysis: AnalysisConfig = analysis or AnalysisConfig()
 
