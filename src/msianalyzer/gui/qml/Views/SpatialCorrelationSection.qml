@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "qrc:/Style"
-import "qrc:/Utils/SearchQuery.js" as SearchQuery
 
 Item {
     id: spatialCorrelationSection
@@ -17,119 +16,43 @@ Item {
 
     property var analysis
 
-    // Flat rows, one per (feature, sample) — {mz, sample, moran_i,
-    // compound_name}. Fetched via AnalysisBridge, which caches the last
-    // analysis' rows itself (see requestSpatialCorrelation's own
-    // docstring) — this section is a lazy Loader (AnalysisPage.qml),
-    // destroyed on every tab switch away from it, so the cache has to
-    // live on the Python side to actually avoid re-reading every
-    // sample's .h5ad on each visit back.
-    property var rows: []
-    property bool rowsLoading: false
+    // The persistent model backing this page — a plain QObject owned by
+    // AnalysisBridge (SpatialCorrelationModel), not something this
+    // section constructs or holds any real state in itself. This
+    // section is a lazy Loader (AnalysisPage.qml's spatialCorrLoader,
+    // `active` only while its tab is current) — its whole item is
+    // destroyed on every tab switch away, so `model`'s rows/sort
+    // column/search text living in Python (surviving that destruction)
+    // is what actually makes "switch away and back" instant and
+    // state-preserving, rather than a local `property var rows` that
+    // would just reset every time. See getSpatialCorrelationModel's own
+    // docstring for the full reasoning (including why this is a plain
+    // QObject + Repeater/Flickable, not a TableView + QAbstractTableModel
+    // — the latter doesn't render under this project's GUI test harness).
+    property var model: (analysis && analysis.analysisDbPath)
+                         ? AnalysisBridge.getSpatialCorrelationModel(analysis.analysisDbPath)
+                         : null
 
-    function refreshRows() {
-        if (analysis && analysis.analysisDbPath) {
-            spatialCorrelationSection.rowsLoading = true
-            AnalysisBridge.requestSpatialCorrelation(analysis.analysisDbPath)
-        } else {
-            spatialCorrelationSection.rows = []
-            spatialCorrelationSection.rowsLoading = false
-        }
-    }
-
-    onAnalysisChanged: spatialCorrelationSection.refreshRows()
-
-    Connections {
-        target: AnalysisBridge
-        function onSpatialCorrelationReady(receivedRows) {
-            spatialCorrelationSection.rows = receivedRows
-            spatialCorrelationSection.rowsLoading = false
-        }
-    }
-
-    // Every distinct sample name that appears in `rows`, alphabetical —
-    // drives the table's (dynamic, one-per-sample) columns.
-    readonly property var sampleNames: {
-        var seen = {}
-        var names = []
-        for (var i = 0; i < spatialCorrelationSection.rows.length; i++) {
-            var s = spatialCorrelationSection.rows[i].sample
-            if (!seen[s]) {
-                seen[s] = true
-                names.push(s)
-            }
-        }
-        names.sort()
-        return names
-    }
-
-    // One row per feature (mz), one column per sample, plus that
-    // feature's representative compound name (same "annotated: name,
-    // else m/z" convention Visual Inspection's feature picker uses —
-    // HeatmapControlsPanel.qml's featureLabels).
-    readonly property var featureRows: {
-        var byMz = {}
-        var order = []
-        for (var i = 0; i < spatialCorrelationSection.rows.length; i++) {
-            var r = spatialCorrelationSection.rows[i]
-            var key = String(r.mz)
-            if (!byMz[key]) {
-                byMz[key] = {mz: r.mz, compound_name: r.compound_name || null}
-                order.push(key)
-            }
-            byMz[key][r.sample] = r.moran_i
-        }
-        return order.map(function (key) { return byMz[key] })
-    }
-
-    function featureLabel(row) {
-        return row.compound_name
-               ? (Number(row.mz).toFixed(4) + ": " + row.compound_name)
-               : ("m/z " + Number(row.mz).toFixed(4))
-    }
-
-    // Two separate fields (same convention as Annotate/Visual Inspection,
-    // ADR 34/35) — name (contains) and m/z (a value or "min-max" range).
-    property string nameQuery: ""
-    property string mzQuery: ""
-
-    readonly property var filteredFeatureRows: spatialCorrelationSection.featureRows.filter(function (r) {
-        return SearchQuery.matchesName(spatialCorrelationSection.nameQuery, r.compound_name)
-            && SearchQuery.matchesMz(spatialCorrelationSection.mzQuery, r.mz)
-    })
-
-    property string sortColumn: "mz"
-    property bool sortAscending: true
+    property bool rowsLoading: spatialCorrelationSection.model
+                                ? spatialCorrelationSection.model.rowsLoading : false
+    readonly property var visibleRows: spatialCorrelationSection.model
+                                        ? spatialCorrelationSection.model.visibleRows : []
+    readonly property var sampleNames: spatialCorrelationSection.model
+                                        ? spatialCorrelationSection.model.samples : []
+    readonly property string sortColumn: spatialCorrelationSection.model
+                                          ? spatialCorrelationSection.model.sortColumn : "mz"
+    readonly property bool sortAscending: spatialCorrelationSection.model
+                                           ? spatialCorrelationSection.model.sortAscending : true
 
     function sortBy(column) {
-        if (spatialCorrelationSection.sortColumn === column) {
-            spatialCorrelationSection.sortAscending = !spatialCorrelationSection.sortAscending
-        } else {
-            spatialCorrelationSection.sortColumn = column
-            spatialCorrelationSection.sortAscending = true
-        }
+        if (spatialCorrelationSection.model) spatialCorrelationSection.model.sortBy(column)
     }
 
-    readonly property var sortedFeatureRows: {
-        var col = spatialCorrelationSection.sortColumn
-        var dir = spatialCorrelationSection.sortAscending ? 1 : -1
-        var arr = spatialCorrelationSection.filteredFeatureRows.slice()
-        arr.sort(function (a, b) {
-            var av = a[col]
-            var bv = b[col]
-            if (av === bv) return 0
-            if (av === undefined) return 1
-            if (bv === undefined) return -1
-            return dir * (av < bv ? -1 : 1)
-        })
-        return arr
-    }
-
-    readonly property string defaultFontFamily: Qt.application.font.family
     readonly property int featureColumnWidth: 240
     readonly property int sampleColumnWidth: 130
     readonly property int headerHeight: 56
     readonly property int rowHeight: 32
+    readonly property string defaultFontFamily: Qt.application.font.family
 
     readonly property var tableColumns: {
         var cols = [{key: "mz", label: "Feature", width: spatialCorrelationSection.featureColumnWidth}]
@@ -145,7 +68,13 @@ Item {
 
     Label {
         objectName: "spatialCorrelationEmptyStateLabel"
-        visible: !spatialCorrelationSection.rowsLoading && spatialCorrelationSection.rows.length === 0
+        // No samples ever had `spatial_correlation` run on them for this
+        // analysis (or there's no analysis/model at all yet) — distinct
+        // from "the table is there but a search matched nothing", which
+        // spatialCorrelationSearchEmptyLabel below covers instead.
+        visible: !spatialCorrelationSection.rowsLoading
+                 && (!spatialCorrelationSection.model
+                     || spatialCorrelationSection.model.samples.length === 0)
         anchors.centerIn: parent
         text: "No spatial correlation scores yet — enable `spatial_correlation` in the run config."
         color: Theme.mutedTextColor
@@ -157,14 +86,14 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 16
-        visible: spatialCorrelationSection.rows.length > 0
+        visible: spatialCorrelationSection.model && spatialCorrelationSection.model.samples.length > 0
         spacing: 8
 
         RowLayout {
             Layout.fillWidth: true
 
             Label {
-                text: "Spatial correlation (Moran's I) — " + spatialCorrelationSection.featureRows.length + " feature(s)"
+                text: "Spatial correlation (Moran's I) — " + spatialCorrelationSection.visibleRows.length + " feature(s)"
                 font.bold: true
                 font.pixelSize: 14
                 Layout.fillWidth: true
@@ -174,23 +103,24 @@ Item {
                 objectName: "spatialCorrelationNameSearchField"
                 Layout.preferredWidth: 200
                 placeholderText: "Search name…"
-                text: spatialCorrelationSection.nameQuery
-                onTextChanged: spatialCorrelationSection.nameQuery = text
+                text: spatialCorrelationSection.model ? spatialCorrelationSection.model.nameQuery : ""
+                onTextChanged: if (spatialCorrelationSection.model) spatialCorrelationSection.model.nameQuery = text
             }
             TextField {
                 id: spatialCorrelationMzSearchField
                 objectName: "spatialCorrelationMzSearchField"
                 Layout.preferredWidth: 100
                 placeholderText: "m/z…"
-                text: spatialCorrelationSection.mzQuery
-                onTextChanged: spatialCorrelationSection.mzQuery = text
+                text: spatialCorrelationSection.model ? spatialCorrelationSection.model.mzQuery : ""
+                onTextChanged: if (spatialCorrelationSection.model) spatialCorrelationSection.model.mzQuery = text
             }
         }
 
         Label {
             objectName: "spatialCorrelationSearchEmptyLabel"
-            visible: spatialCorrelationSection.featureRows.length > 0
-                     && spatialCorrelationSection.sortedFeatureRows.length === 0
+            visible: spatialCorrelationSection.model
+                     && spatialCorrelationSection.model.samples.length > 0
+                     && spatialCorrelationSection.visibleRows.length === 0
             text: "No features match your search."
             color: Theme.mutedTextColor
             Layout.alignment: Qt.AlignHCenter
@@ -207,7 +137,7 @@ Item {
         Flickable {
             id: headerFlickable
             objectName: "spatialCorrelationHeaderFlickable"
-            visible: spatialCorrelationSection.sortedFeatureRows.length > 0
+            visible: spatialCorrelationSection.visibleRows.length > 0
             Layout.fillWidth: true
             Layout.preferredHeight: spatialCorrelationSection.headerHeight
             interactive: false
@@ -272,12 +202,12 @@ Item {
         Flickable {
             id: bodyFlickable
             objectName: "spatialCorrelationBodyFlickable"
-            visible: spatialCorrelationSection.sortedFeatureRows.length > 0
+            visible: spatialCorrelationSection.visibleRows.length > 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
             contentWidth: Math.max(width, spatialCorrelationSection.totalColumnsWidth)
-            contentHeight: spatialCorrelationSection.sortedFeatureRows.length * spatialCorrelationSection.rowHeight
+            contentHeight: spatialCorrelationSection.visibleRows.length * spatialCorrelationSection.rowHeight
             boundsBehavior: Flickable.StopAtBounds
 
             ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -288,7 +218,7 @@ Item {
 
                 Repeater {
                     objectName: "spatialCorrelationTableRepeater"
-                    model: spatialCorrelationSection.sortedFeatureRows
+                    model: spatialCorrelationSection.visibleRows
 
                     delegate: Rectangle {
                         id: featureRowDelegate
@@ -342,9 +272,9 @@ Item {
                                                       ? spatialCorrelationSection.defaultFontFamily : "monospace"
                                         text: {
                                             if (modelData.key === "mz")
-                                                return spatialCorrelationSection.featureLabel(featureRowDelegate.featureRow)
+                                                return featureRowDelegate.featureRow.label
                                             var v = featureRowDelegate.featureRow[modelData.key]
-                                            return v !== undefined ? Number(v).toFixed(3) : "–"
+                                            return (v !== undefined && v !== null) ? Number(v).toFixed(3) : "–"
                                         }
                                     }
                                 }

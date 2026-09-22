@@ -27,8 +27,10 @@ from msianalyzer.gui.utils.export_worker import ExportWorker
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
 from msianalyzer.gui.utils.he_image_provider import HEImageProvider
 from msianalyzer.gui.utils.he_overlay_provider import HEOverlayImageProvider
+from msianalyzer.gui.utils.heatmap_prefetch_worker import HeatmapPrefetchWorker
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
+from msianalyzer.gui.utils.spatial_correlation_model import SpatialCorrelationModel
 from msianalyzer.gui.utils.table_query_worker import TableQueryWorker
 
 logger = logging.getLogger(__name__)
@@ -109,6 +111,22 @@ def _nearest_compound_name(mz: float, feature_mzs: np.ndarray, feature_names: np
         return None
     name = feature_names[idx]
     return None if pd.isna(name) else name
+
+
+def _pivot_spatial_correlation_rows(flat_rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """`_load_spatial_correlation_table`'s flat `(mz, sample, moran_i,
+    compound_name)` rows -> one dict per feature, that sample's score
+    folded in as `row[sample_name]` — the shape
+    `SpatialCorrelationModel.setRows` expects (one row per feature,
+    one column per sample), and `sorted(set(...))` sample names for its
+    column list.
+    """
+    by_mz: dict[float, dict] = {}
+    for r in flat_rows:
+        row = by_mz.setdefault(r["mz"], {"mz": r["mz"], "compound_name": r["compound_name"]})
+        row[r["sample"]] = r["moran_i"]
+    samples = sorted({r["sample"] for r in flat_rows})
+    return list(by_mz.values()), samples
 
 
 def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
@@ -246,12 +264,29 @@ class AnalysisBridge(QObject):
       Offloaded to `TableQueryWorker`. `AnnotationsSection.qml`/
       `HeatmapControlsPanel.qml` call these and listen for the `*Ready`
       signals instead of using a return value.
-    - `spatialCorrelationReady`: `requestSpatialCorrelation` reads every
-      sample's own `.h5ad` file off disk (not a SQL query) to collect
-      Moran's I scores — real file I/O per sample, same "don't block the
-      GUI thread" reasoning as the two above. Offloaded to
-      `TableQueryWorker` as well; `SpatialCorrelationSection.qml` calls it
-      and listens for `spatialCorrelationReady`.
+    - `getSpatialCorrelationModel`: returns a `SpatialCorrelationModel`
+      (a small persistent `QObject`, not a plain value) rather than
+      emitting a `*Ready` signal — see that method's own docstring for
+      why a whole long-lived object, not a fire-and-forget row list, is
+      what this one needs (the QML section that displays it is a lazy
+      `Loader`, destroyed on every tab switch away — anything it held
+      itself would reset every time). The model itself still fills in
+      asynchronously (`TableQueryWorker`, same "don't block the GUI
+      thread" reasoning as `requestAnnotationTable`/`requestFeatureList`
+      above — real per-sample `.h5ad` file I/O), signalled via the
+      model's own `rowsLoading` property rather than a bridge-level
+      signal.
+    - `heatmapPrefetchReady`: `prefetchHeatmapSamples` warms
+      `heatmap_provider`'s cache for a set of samples on a background
+      thread (`HeatmapPrefetchWorker`, real `.h5ad` file I/O) — called
+      by `AnalysisPage.qml` just *before* switching to the Visual
+      Inspection tab, so the tab's own `ZoomableImage`s (deliberately
+      *not* async, see that file's own comment) find a warm cache and
+      don't block the GUI thread reading the file the moment they
+      activate. Reported directly as a freeze, worst right after a
+      cross-tab "Show spatial distribution"/"Inspect visually" handoff
+      (first time Visual Inspection opens for that analysis), but really
+      the same cost on any cold first visit.
     """
 
     spectrumPointClicked = Signal(float)
@@ -260,9 +295,9 @@ class AnalysisBridge(QObject):
     formulaPredictionFailed = Signal(str, str)  # analysis_db_path, message
     annotationTableReady = Signal(list)
     featureListReady = Signal(list)
-    spatialCorrelationReady = Signal(list)
     exportFinished = Signal(str)  # human-readable "done" message
     exportFailed = Signal(str)  # human-readable error message
+    heatmapPrefetchReady = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -270,10 +305,10 @@ class AnalysisBridge(QObject):
         # the single place that wires up an AnalysisBridge; main.py just
         # registers it with the engine (`engine.addImageProvider("heatmap",
         # application.analysis_bridge.heatmap_provider)`).
-        # Single-slot cache for requestSpatialCorrelation — see that
+        # Single-slot cache for getSpatialCorrelationModel — see that
         # method's own docstring for why.
-        self._spatial_correlation_cache_path: str | None = None
-        self._spatial_correlation_cache_rows: list = []
+        self._spatial_correlation_model_path: str | None = None
+        self._spatial_correlation_model: "SpatialCorrelationModel | None" = None
         self.heatmap_provider = HeatmapImageProvider()
         # Same "own it here, main.py just registers it" reasoning as
         # heatmap_provider above.
@@ -328,6 +363,55 @@ class AnalysisBridge(QObject):
         ever one active analysis workspace at a time).
         """
         self.heatmap_provider.setAnalysisDbPath(analysis_db_path)
+
+    @Slot(str, list)
+    def prefetchHeatmapSamples(self, analysis_db_path: str, sample_names: list) -> None:
+        """Warm `heatmap_provider`'s `.h5ad` cache for `sample_names` on a
+        background thread; `heatmapPrefetchReady` fires once done (or
+        immediately, synchronously, if there's nothing to prefetch).
+
+        Call this — and wait for `heatmapPrefetchReady` — *before*
+        switching to the Visual Inspection tab, not after. See the class
+        docstring and `HeatmapPrefetchWorker`'s own docstring for the
+        freeze this avoids.
+
+        Also points the provider at `analysis_db_path` synchronously
+        first (same as `setHeatmapAnalysis`, safe to call again from
+        Visual Inspection's own `onAnalysisChanged` afterward) — the
+        background worker needs that set before it can resolve any
+        sample name to a `.h5ad` path at all.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_names: Which samples to prefetch — normally every
+                sample in the analysis (Visual Inspection's grid can show
+                any of them), not just the ones about to be visible.
+        """
+        self.heatmap_provider.setAnalysisDbPath(analysis_db_path)
+        if not sample_names:
+            self.heatmapPrefetchReady.emit()
+            return
+        worker = HeatmapPrefetchWorker(self.heatmap_provider, sample_names, self)
+        worker.succeeded.connect(self._onHeatmapPrefetchSucceeded)
+        worker.failed.connect(self._onHeatmapPrefetchFailed)
+        self._heatmap_prefetch_worker = worker
+        worker.start()
+
+    @Slot()
+    def _onHeatmapPrefetchSucceeded(self) -> None:
+        if self.sender() is not self._heatmap_prefetch_worker:
+            return  # superseded by a newer request — discard
+        self.heatmapPrefetchReady.emit()
+
+    @Slot(str)
+    def _onHeatmapPrefetchFailed(self, message: str) -> None:
+        if self.sender() is not self._heatmap_prefetch_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("heatmap prefetch failed: %s", message)
+        # Still proceed with the switch — a cold cache after this just
+        # means the original (known, tolerable-if-not-ideal) synchronous
+        # cost on first tile request, not a reason to block navigation.
+        self.heatmapPrefetchReady.emit()
 
     @Slot(str)
     def setHeImageAnalysis(self, analysis_db_path: str) -> None:
@@ -484,76 +568,95 @@ class AnalysisBridge(QObject):
         logger.warning("annotation table load failed: %s", message)
         self.annotationTableReady.emit([])
 
-    @Slot(str)
-    def requestSpatialCorrelation(self, analysis_db_path: str) -> None:
-        """Start fetching every sample's Moran's I scores; the result
-        arrives via `spatialCorrelationReady(rows)`.
+    @Slot(str, result=QObject)
+    def getSpatialCorrelationModel(self, analysis_db_path: str) -> SpatialCorrelationModel:
+        """The `SpatialCorrelationModel` for this analysis — created
+        (and its first fetch kicked off) on first call, otherwise the
+        same cached instance handed back again.
 
-        Single-slot cache, keyed by `analysis_db_path`: `SpatialCorrelationSection.qml`
-        is a lazy `Loader` (`AnalysisPage.qml`'s `spatialCorrLoader`,
-        `active` only while its tab is current) whose whole item — and
-        the `rows` it fetched — is destroyed on every tab switch away
-        from it. Re-reading every sample's `.h5ad` from disk on every
-        single visit back to this tab was reported as unnecessary reload
-        cost ("the table remains the same for the analysis"); serving a
-        cached copy back immediately (no background thread at all) fixes
-        that while a plain per-instance cache on the QML side couldn't,
-        since the QML instance itself doesn't survive the tab switch.
-        The cache holds exactly one analysis' rows — switching to a
-        *different* analysis (a different `analysis_db_path`) invalidates
-        it and re-fetches, matching "switching to a new analysis clears
-        the memory of the table".
+        Returning a whole model object rather than emitting a `*Ready`
+        row list (like `requestAnnotationTable`/`requestFeatureList`) is
+        the point: `SpatialCorrelationSection.qml` is a lazy `Loader`
+        (`AnalysisPage.qml`'s `spatialCorrLoader`, `active` only while its
+        tab is current), so the *entire QML item* — including any plain
+        `property var rows`/`sortColumn`/`nameQuery` it held — is
+        destroyed on every tab switch away from it. That was reported
+        directly: "if I go back I don't have the same table as before, I
+        might have sorted for a column." Caching just the fetched *rows*
+        in Python (an earlier version of this fix) wasn't enough, because
+        the sort/filter *state* still lived in the doomed QML item. A
+        `SpatialCorrelationModel` instance owned here, by this long-lived
+        `AnalysisBridge`, carries both the rows and the current
+        sort/filter state together, and re-binding the QML section's
+        `model` property to the same instance on a later visit is instant
+        and picks up exactly where the user left off. (`TableView` bound
+        to a real `QAbstractTableModel` was tried first — it turned out
+        not to instantiate any delegates at all under this project's
+        offscreen GUI test harness, a verified environment limitation —
+        see `SpatialCorrelationModel`'s own docstring.)
 
-        Fire-and-forget rather than a return value on a cache miss — see
-        the class docstring for why (real per-sample `.h5ad` file I/O).
+        Single-slot cache, keyed by `analysis_db_path` — switching to a
+        *different* analysis discards the old model (`deleteLater()`) and
+        builds a fresh one, matching "switching to a new analysis clears
+        the memory of the table". The underlying row fetch is still
+        backgrounded (`TableQueryWorker`, real per-sample `.h5ad` file
+        I/O) via `model.setRowsLoading(True)` until
+        `_load_spatial_correlation_table` returns.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
 
-        `spatialCorrelationReady`'s rows come from
-        `_load_spatial_correlation_table` — one row per (feature, sample),
-        empty when `spatial_correlation.enabled` was never turned on for
-        this analysis (no sample's `.h5ad` has `uns["moranI"]`).
+        Returns:
+            The (possibly still-loading — see `model.rowsLoading`)
+            `SpatialCorrelationModel` for this analysis, or a fresh
+            empty one for an invalid/missing path.
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
-            self.spatialCorrelationReady.emit([])
-            return
-        if analysis_db_path == self._spatial_correlation_cache_path:
-            self.spatialCorrelationReady.emit(self._spatial_correlation_cache_rows)
-            return
-        worker = TableQueryWorker(
-            _load_spatial_correlation_table, analysis_db_path, self
-        )
+            return SpatialCorrelationModel(self)
+        if analysis_db_path == self._spatial_correlation_model_path:
+            return self._spatial_correlation_model
+
+        if self._spatial_correlation_model is not None:
+            self._spatial_correlation_model.deleteLater()
+        model = SpatialCorrelationModel(self)
+        model.setRowsLoading(True)
+        self._spatial_correlation_model_path = analysis_db_path
+        self._spatial_correlation_model = model
+
+        worker = TableQueryWorker(_load_spatial_correlation_table, analysis_db_path, self)
         # Plain bound-method connections, not a lambda — PySide only
         # marshals a cross-thread signal onto the main thread's event
         # loop for a bound QObject-method slot (it inspects the
         # receiver's thread affinity); a lambda has no such receiver, so
         # it ran directly on the worker thread instead, which then wrote
         # straight to a QML-exposed property from off the GUI thread and
-        # hung the whole test process. The worker's own
-        # `_analysis_db_path` (read via `sender()`) replaces what the
-        # lambda used to close over.
+        # hung the whole test process (found the hard way building the
+        # previous version of this cache).
         worker.succeeded.connect(self._onSpatialCorrelationSucceeded)
         worker.failed.connect(self._onSpatialCorrelationFailed)
         self._spatial_correlation_worker = worker
         worker.start()
+        return model
 
     @Slot(object)
     def _onSpatialCorrelationSucceeded(self, df: pd.DataFrame) -> None:
         worker = self.sender()
         if worker is not self._spatial_correlation_worker:
             return  # superseded by a newer request — discard
-        rows = [] if df.empty else _dataframe_to_records(df)
-        self._spatial_correlation_cache_path = worker._analysis_db_path
-        self._spatial_correlation_cache_rows = rows
-        self.spatialCorrelationReady.emit(rows)
+        if self._spatial_correlation_model is None:
+            return  # analysis switched again before this landed
+        flat_rows = [] if df.empty else _dataframe_to_records(df)
+        feature_rows, samples = _pivot_spatial_correlation_rows(flat_rows)
+        self._spatial_correlation_model.setRows(feature_rows, samples)
+        self._spatial_correlation_model.setRowsLoading(False)
 
     @Slot(str)
     def _onSpatialCorrelationFailed(self, message: str) -> None:
         if self.sender() is not self._spatial_correlation_worker:
             return  # superseded by a newer request — discard
         logger.warning("spatial correlation load failed: %s", message)
-        self.spatialCorrelationReady.emit([])
+        if self._spatial_correlation_model is not None:
+            self._spatial_correlation_model.setRowsLoading(False)
 
     @Slot(str, result=list)
     def getFeaturesForPrediction(self, analysis_db_path: str) -> list:

@@ -16,6 +16,13 @@ def _open_spatial_correlation_tab(view, root, find_visual_child, qtbot):
     return section
 
 
+def _open_summary_tab(view, root, find_visual_child, qtbot):
+    nav_button = find_visual_child(root, "navButton_0")
+    center = nav_button.mapToScene(nav_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+
 def _seed_moran_h5ad(analysis_model, sample_name="s1", features=((123.4567, 0.75),)):
     """A minimal `.h5ad` with one or more features' Moran's I already
     computed — same shape `core.spatial.moran.compute_spatial_autocorr`
@@ -37,7 +44,7 @@ def test_spatial_correlation_empty_state_without_h5ad(
     root = view.rootObject()
     section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
 
-    assert section.property("rows") == []
+    assert section.property("visibleRows") == []
     empty_label = find_visual_child(root, "spatialCorrelationEmptyStateLabel")
     assert empty_label.property("visible") is True
 
@@ -54,18 +61,12 @@ def test_spatial_correlation_table_shows_moran_scores_with_compound_name(
     root = view.rootObject()
     section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
 
-    rows = section.property("rows")
+    rows = section.property("visibleRows")
     assert len(rows) == 1
-    assert rows[0]["sample"] == "s1"
     assert rows[0]["mz"] == 123.4567
-    assert rows[0]["moran_i"] == 0.75
+    assert rows[0]["s1"] == 0.75
     assert rows[0]["compound_name"] == "Caffeine"
-
-    feature_rows = section.property("featureRows").toVariant()
-    assert feature_rows[0]["s1"] == 0.75
-    assert feature_rows[0]["compound_name"] == "Caffeine"
-
-    assert section.featureLabel(feature_rows[0]) == "123.4567: Caffeine"
+    assert rows[0]["label"] == "123.4567: Caffeine"
 
 
 def test_spatial_correlation_name_search_filters_table(
@@ -77,15 +78,61 @@ def test_spatial_correlation_name_search_filters_table(
     root = view.rootObject()
     section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
 
-    assert len(section.property("sortedFeatureRows").toVariant()) == 2
+    assert len(section.property("visibleRows")) == 2
 
     search_field = find_visual_child(root, "spatialCorrelationNameSearchField")
     search_field.setProperty("text", "caff")
     qtbot.wait(50)
 
-    filtered = section.property("sortedFeatureRows").toVariant()
+    filtered = section.property("visibleRows")
     assert len(filtered) == 1
     assert filtered[0]["mz"] == 123.4567
+
+
+def test_sort_and_search_state_survive_switching_tabs_away_and_back(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # The actual bug report this whole redesign is for: "if I go back I
+    # don't have the same table as before, I might have sorted for a
+    # column" — sort column/direction AND search text must both still be
+    # there after leaving this tab (which destroys the section's QML
+    # item, since it's a lazy Loader) and coming back.
+    _seed_moran_h5ad(annotated_analysis_model, features=((123.4567, 0.75), (50.0, 0.2)))
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
+
+    # Default sort is by mz ascending: 50.0 before 123.4567.
+    assert [r["mz"] for r in section.property("visibleRows")] == [50.0, 123.4567]
+
+    mz_header = find_visual_child(root, "spatialCorrelationSortHeader_mz")
+    center = mz_header.mapToScene(mz_header.boundingRect().center()).toPoint()
+    # Already sorted by mz (the default) -> one click flips to descending.
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+    assert section.property("sortColumn") == "mz"
+    assert section.property("sortAscending") is False
+
+    search_field = find_visual_child(root, "spatialCorrelationNameSearchField")
+    search_field.setProperty("text", "caff")
+    qtbot.wait(50)
+
+    # Leave the tab — the section's Loader deactivates, destroying this
+    # exact QML item (verified: a fresh `find_visual_child` for the same
+    # objectName below returns a genuinely new instance).
+    _open_summary_tab(view, root, find_visual_child, qtbot)
+
+    section_2 = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
+    assert section_2 is not section
+
+    assert section_2.property("sortColumn") == "mz"
+    assert section_2.property("sortAscending") is False
+    assert search_field is not find_visual_child(root, "spatialCorrelationNameSearchField")
+    assert find_visual_child(root, "spatialCorrelationNameSearchField").property("text") == "caff"
+    rows = section_2.property("visibleRows")
+    assert len(rows) == 1
+    assert rows[0]["mz"] == 123.4567
 
 
 def test_show_spatial_distribution_jumps_to_visual_inspection(

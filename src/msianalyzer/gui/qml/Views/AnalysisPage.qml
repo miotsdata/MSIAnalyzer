@@ -29,6 +29,43 @@ Page {
     // re-apply a stale feature selection from a previous "Inspect visually".
     property real pendingInspectMz: NaN
 
+    // Set while waiting on AnalysisBridge.prefetchHeatmapSamples (see
+    // goToVisualInspection below) — true from the moment a switch to
+    // Visual Inspection is requested until heatmapPrefetchReady fires,
+    // during which sectionStack.currentIndex deliberately has NOT been
+    // changed yet. Folded into currentSectionReady so the existing
+    // sectionLoadingOverlay covers this waiting period too, instead of
+    // needing a second, separate spinner.
+    property bool switchingToVisual: false
+
+    // Every entry point that lands on Visual Inspection (the plain nav
+    // button, Annotations' "Inspect visually", Spatial Correlation's
+    // "Show spatial distribution") funnels through here instead of
+    // setting sectionStack.currentIndex directly — see
+    // HeatmapPrefetchWorker's own docstring for the freeze this avoids.
+    // `pendingMz` is optional (the plain nav button passes none).
+    function goToVisualInspection(pendingMz) {
+        if (pendingMz !== undefined) analysisPage.pendingInspectMz = pendingMz
+        if (!analysisPage.analysis || !analysisPage.analysis.analysisDbPath) {
+            sectionStack.currentIndex = 3
+            return
+        }
+        var sampleNames = AnalysisBridge.getSamples(analysisPage.analysis.analysisDbPath)
+                                        .slice(0, 4)  // matches VisualInspectionSection's own grid cap
+                                        .map(function (s) { return s.name })
+        analysisPage.switchingToVisual = true
+        AnalysisBridge.prefetchHeatmapSamples(analysisPage.analysis.analysisDbPath, sampleNames)
+    }
+
+    Connections {
+        target: AnalysisBridge
+        function onHeatmapPrefetchReady() {
+            if (!analysisPage.switchingToVisual) return  // stale/unrelated call
+            analysisPage.switchingToVisual = false
+            sectionStack.currentIndex = 3
+        }
+    }
+
     // Export > Image… (Main.qml) needs Visual Inspection's own live
     // control values, but that section is a lazily-active Loader
     // (visualLoader below) — only actually instantiated while its tab is
@@ -104,7 +141,10 @@ Page {
                         text: modelData
                         checkable: true
                         checked: sectionStack.currentIndex === index
-                        onClicked: sectionStack.currentIndex = index
+                        onClicked: {
+                            if (index === 3) analysisPage.goToVisualInspection()
+                            else sectionStack.currentIndex = index
+                        }
 
                         // "the buttons in analyses (MS1, Annotation
                         // etc)... should make the user understand that
@@ -220,8 +260,7 @@ Page {
                         // via its own pendingInspectMz binding once
                         // sectionStack.currentIndex flips its `active` on.
                         item.inspectVisuallyRequested.connect(function (mz) {
-                            analysisPage.pendingInspectMz = mz
-                            sectionStack.currentIndex = 3
+                            analysisPage.goToVisualInspection(mz)
                         })
                     }
                 }
@@ -257,8 +296,7 @@ Page {
                         // "Show spatial distribution" — identical handoff
                         // to Annotations' "Inspect visually" above (ADR 32).
                         item.showSpatialDistributionRequested.connect(function (mz) {
-                            analysisPage.pendingInspectMz = mz
-                            sectionStack.currentIndex = 3
+                            analysisPage.goToVisualInspection(mz)
                         })
                     }
                 }
@@ -281,6 +319,7 @@ Page {
     }
 
     readonly property bool currentSectionReady: {
+        if (analysisPage.switchingToVisual) return false
         switch (sectionStack.currentIndex) {
         case 0: return summaryLoader.status === Loader.Ready
         case 1: return ms1Loader.status === Loader.Ready

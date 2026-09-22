@@ -63,16 +63,18 @@ shim, consistent with every prior bump).
 
 ### GUI: new "Spatial Correlation" workspace tab
 
-A new `AnalysisBridge.requestSpatialCorrelation`/`spatialCorrelationReady`
-fire-and-forget pair (same `TableQueryWorker` background-thread pattern as
-`requestAnnotationTable`, since this does real per-sample `.h5ad` file I/O)
-backs a new `SpatialCorrelationSection.qml` tab, added to
-`AnalysisPage.qml` alongside Summary/MS1/Annotations/Visual Inspection.
-`_load_spatial_correlation_table` (new, `analysis_bridge.py`) reads
+A new `AnalysisBridge.getSpatialCorrelationModel` (originally a
+`requestSpatialCorrelation`/`spatialCorrelationReady` fire-and-forget
+pair — superseded by the model-based redesign below, same session) backs
+a new `SpatialCorrelationSection.qml` tab, added to `AnalysisPage.qml`
+alongside Summary/MS1/Annotations/Visual Inspection. Row fetching still
+uses `TableQueryWorker` (same background-thread pattern as
+`requestAnnotationTable`, since this does real per-sample `.h5ad` file
+I/O); `_load_spatial_correlation_table` (`analysis_bridge.py`) reads
 `load_samples` for the sample list, then each sample's own `.h5ad` for
-`uns["moranI"]` — flat `(mz, sample, moran_i)` rows, pivoted client-side in
-QML (same "flat rows in, QML pivots" shape `AnnotationsSection.qml`
-already uses).
+`uns["moranI"]` — flat `(mz, sample, moran_i)` rows, pivoted
+(`_pivot_spatial_correlation_rows`) into the model's own per-feature row
+shape.
 
 Per this round's discussion, v1 shipped with a per-sample top-N ranked
 list plus a plain sortable full table. After using it against real data,
@@ -111,17 +113,79 @@ with the full table — revised (same conversation, v1.1) to:
   the exact cross-tab handoff Annotations' "Inspect visually" already
   established (ADR 32), just now only on the full table's rows (the
   top-N panel it also lived on is gone).
-- **Caching across tab switches**: `AnalysisBridge.requestSpatialCorrelation`
-  gained a single-slot cache keyed by `analysis_db_path`. The section is
-  a lazy `Loader` (`active` only while its tab is current,
-  `AnalysisPage.qml`'s `spatialCorrLoader`) — its whole QML item,
-  including the fetched `rows`, is destroyed on every tab switch away, so
-  a per-QML-instance cache can't survive that; caching on the Python side
-  instead means only the *first* visit to the tab (per analysis) actually
-  re-reads every sample's `.h5ad` — switching tabs and back is instant.
-  A different analysis (different `analysis_db_path`) misses the cache
-  and re-fetches, matching "switching to a new analysis clears the
-  memory of the table".
+- **State (not just data) persists across tab switches** — `SpatialCorrelationModel`
+  (new, `spatial_correlation_model.py`), a small `QObject` owned by
+  `AnalysisBridge.getSpatialCorrelationModel(analysis_db_path)`
+  (single-slot cache keyed by path — a different analysis discards the
+  old model and builds a fresh one, matching "switching to a new
+  analysis clears the memory of the table"). This directly answers a
+  sharper version of the original complaint: an earlier version of this
+  fix only cached the fetched *rows* in Python, but the section's own
+  `sortColumn`/`sortAscending`/`nameQuery`/`mzQuery` still lived as plain
+  QML properties on the section item itself — which is destroyed every
+  time (`SpatialCorrelationSection.qml` is a lazy `Loader`, `active` only
+  while its tab is current). Reported directly: "when I told caching,
+  means cache the state. How can it be useful if when I go back I don't
+  have the same table as before (I might have sorted for a column)?"
+  `SpatialCorrelationModel` now owns the sort/filter state too
+  (`sortBy()`, `nameQuery`/`mzQuery` properties, `visibleRows` —
+  already sorted and filtered), so re-binding the section's `model`
+  property to the same instance on a later visit picks up exactly where
+  the user left off, with zero QML-side persistence logic.
+  **A `TableView` bound to a real `QAbstractTableModel` was tried
+  first** (the user's own suggestion — "is it maybe the time to
+  introduce a table model?") and would also have solved virtualizing
+  the (800-1200 row) table, but empirically **`TableView`/
+  `HorizontalHeaderView` never instantiate any delegate items at all
+  under this project's offscreen GUI test harness** — verified directly
+  (`contentWidth`/`topRow`/`bottomRow` compute correctly, `rows`/
+  `columns` counts are right, but zero delegate `QQuickItem`s are ever
+  created, with no warnings) — a real environment limitation, not a
+  usage mistake. Since this project's own testing culture puts real
+  weight on GUI tests actually exercising rendering (see this codebase's
+  existing Column/Repeater/Flickable-under-offscreen-platform notes for
+  a similar precedent), shipping a page that can't be tested this way
+  was judged worse than keeping the already-working
+  `Repeater`-in-`Flickable` rendering. `SpatialCorrelationModel` is
+  therefore a plain `QObject` exposing a `visibleRows` `QVariantList`
+  property (each row a dict with a precomputed `label` field), not a
+  `QAbstractTableModel` — sorting/filtering moved into Python (a real
+  win, since it's what actually survives the Loader's destroy/rebuild
+  cycle), but the QML rendering itself is close to unchanged from the
+  first version of this table.
+
+### Visual Inspection handoff no longer freezes the GUI thread
+
+The right-click "Show spatial distribution" (and, it turned out, the plain
+Visual Inspection nav button too, and Annotations' "Inspect visually" —
+all three land on the same tab) could freeze the UI, worst on the very
+first switch to Visual Inspection for an analysis. Root cause:
+`ZoomableImage.qml`'s `Image` is deliberately `asynchronous: false` (its
+own comment documents a real, reproduced hang with `asynchronous: true`
+and 2+ concurrent tiles — suspected matplotlib global state under
+concurrent access) — a reasonable call for the actual *rendering* step
+(small rasters, genuinely fast), but it means `HeatmapImageProvider._load_adata`'s
+`ad.read_h5ad()` for a **cold** sample runs synchronously on the GUI
+thread the instant the tab activates and its tiles start requesting
+`image://heatmap/...`.
+
+Fix: `AnalysisBridge.prefetchHeatmapSamples` (new) reads the same
+`.h5ad` files into `HeatmapImageProvider`'s existing cache on a
+background thread (`HeatmapPrefetchWorker`, new — pure `ad.read_h5ad`,
+no matplotlib, so it doesn't reintroduce the concurrency hazard
+`asynchronous: false` guards against) — called from a new
+`AnalysisPage.goToVisualInspection(pendingMz)` function that every
+entry point onto that tab now funnels through (the plain nav button,
+Annotations' handoff, this feature's handoff), *before*
+`sectionStack.currentIndex` actually changes. A new `switchingToVisual`
+property is folded into `currentSectionReady`, so the existing
+`sectionLoadingOverlay` (already used for "the destination tab is still
+loading") covers this waiting period too — no second, separate spinner
+needed. Only the first `min(4, sample count)` samples are prefetched,
+matching `VisualInspectionSection.qml`'s own grid cap (`gridCols:
+Math.min(4, samples.length)`) and `HeatmapImageProvider`'s own
+`_CACHE_SIZE = 4` — prefetching more would just evict what's about to
+be shown before it's ever displayed.
 
 ## Out of scope for this pass
 
@@ -136,14 +200,13 @@ with the full table — revised (same conversation, v1.1) to:
   redesign above); the fixed-width/wrapped-header/frozen-header rework
   addressed alignment and readability, but adding a gradient/heatmap-style
   background per cell is separate follow-on work.
-- **The right-click → Visual Inspection handoff can freeze the UI
-  momentarily** — the user reported this, explicitly flagged it as lower
-  priority ("optional now"), and it was not investigated or fixed this
-  round. Likely the same underlying cost as opening Visual Inspection
-  cold for any other reason (its own feature-list fetch + first heatmap
-  image render are not obviously backgrounded end-to-end) rather than
-  something this feature's handoff introduced — worth a dedicated look if
-  it keeps coming up.
+- **Table virtualization** — `Repeater`-in-`Flickable` instantiates every
+  row's delegate up front (800-1200+ features on a real project), not
+  just the visible ones. `TableView` would solve this but isn't usable
+  here (see above); a hand-rolled virtualized `Repeater` (only
+  instantiate rows within the visible `contentY` range) was considered
+  out of scope for this pass — no reported performance complaint yet,
+  just a known latent risk on a larger project.
 
 ## Consequences
 
@@ -162,6 +225,16 @@ with the full table — revised (same conversation, v1.1) to:
   size and hidden-imports handling has not been re-validated against this
   much larger dependency tree; flagged for a follow-up build-and-verify
   pass before this ships in a packaged release.
+- Switching to Visual Inspection is now genuinely asynchronous (a
+  background-thread round trip happens before `sectionStack.currentIndex`
+  changes), even when the prefetch itself resolves near-instantly (e.g.
+  no samples, or a warm cache). Several existing GUI tests that clicked
+  the Visual Inspection nav button and asserted on `controlsFlickable`
+  right after a flat `qtbot.wait(50)` needed to change to
+  `qtbot.waitUntil(...)` instead (`test_analysis_page.py`,
+  `test_visual_inspection_section.py`, `test_roi_design_window.py`,
+  `test_coregistration_window.py`) — a real, if small, test-suite-wide
+  ripple effect from what looked like a narrowly-scoped fix.
 
 ## Follow-ups (same conversation)
 

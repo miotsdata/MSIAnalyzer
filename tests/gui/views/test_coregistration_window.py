@@ -66,7 +66,12 @@ def _open_visual_tab(view, root, find_visual_child, qtbot):
     nav_button = find_visual_child(root, "navButton_3")
     center = nav_button.mapToScene(nav_button.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
-    qtbot.wait(50)
+    # The switch itself is async now (heatmap prefetch before the tab
+    # actually activates — see test_visual_inspection_section.py's
+    # identical helper comment for why).
+    qtbot.waitUntil(
+        lambda: find_visual_child(root, "controlsFlickable") is not None, timeout=2000
+    )
     controls = find_visual_child(root, "controlsFlickable")
     qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)
 

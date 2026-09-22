@@ -22,7 +22,14 @@ def _open_visual_tab(view, root, find_visual_child, qtbot):
     nav_button = find_visual_child(root, "navButton_3")
     center = nav_button.mapToScene(nav_button.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
-    qtbot.wait(50)
+    # The switch itself is async now: AnalysisPage.goToVisualInspection
+    # prefetches the heatmap cache on a background thread (see
+    # HeatmapPrefetchWorker) before flipping sectionStack.currentIndex,
+    # so visualLoader (and controlsFlickable inside it) doesn't exist
+    # yet the instant the button is clicked.
+    qtbot.waitUntil(
+        lambda: find_visual_child(root, "controlsFlickable") is not None, timeout=2000
+    )
     # `features` is fetched on a background thread now (see ADR 33) —
     # every caller of this helper needs the real list in place before
     # asserting against it, and needs the worker thread to have actually

@@ -338,10 +338,13 @@ def test_inspect_visually_switches_to_visual_tab_with_feature_selected(
     menu_item = row.findChild(object, "inspectVisuallyMenuItem_7")
     assert menu_item is not None
     menu_item.click()
-    qtbot.wait(50)
 
+    # The handoff now prefetches Visual Inspection's heatmap samples on a
+    # background thread before actually switching tabs (avoids a real
+    # freeze on a cold heatmap cache — see HeatmapPrefetchWorker) — the
+    # index flip itself is therefore async too.
     stack = root.findChild(QQuickItem, "sectionStack")
-    assert stack.property("currentIndex") == 3
+    qtbot.waitUntil(lambda: stack.property("currentIndex") == 3, timeout=2000)
 
     controls = find_visual_child(root, "controlsFlickable")
     # features is fetched on a background thread too — applyPendingInspect
