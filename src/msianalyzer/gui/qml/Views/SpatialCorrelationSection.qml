@@ -16,55 +16,49 @@ Item {
 
     property var analysis
 
-    // The persistent model backing this page — a plain QObject owned by
-    // AnalysisBridge (SpatialCorrelationModel), not something this
-    // section constructs or holds any real state in itself. This
+    // The persistent model backing this page — a QAbstractTableModel
+    // owned by AnalysisBridge (SpatialCorrelationModel), not something
+    // this section constructs or holds any real state in itself. This
     // section is a lazy Loader (AnalysisPage.qml's spatialCorrLoader,
     // `active` only while its tab is current) — its whole item is
     // destroyed on every tab switch away, so `model`'s rows/sort
     // column/search text living in Python (surviving that destruction)
     // is what actually makes "switch away and back" instant and
     // state-preserving, rather than a local `property var rows` that
-    // would just reset every time. See getSpatialCorrelationModel's own
-    // docstring for the full reasoning (including why this is a plain
-    // QObject + Repeater/Flickable, not a TableView + QAbstractTableModel
-    // — the latter doesn't render under this project's GUI test harness).
+    // would just reset every time. Rendered via TableView (not a
+    // Repeater, per an earlier version of this page) so sorting only
+    // touches visible cells, not every row's delegate — see
+    // getSpatialCorrelationModel's/SpatialCorrelationModel's own
+    // docstrings for the full reasoning.
     property var model: (analysis && analysis.analysisDbPath)
                          ? AnalysisBridge.getSpatialCorrelationModel(analysis.analysisDbPath)
                          : null
 
     property bool rowsLoading: spatialCorrelationSection.model
                                 ? spatialCorrelationSection.model.rowsLoading : false
-    readonly property var visibleRows: spatialCorrelationSection.model
-                                        ? spatialCorrelationSection.model.visibleRows : []
     readonly property var sampleNames: spatialCorrelationSection.model
                                         ? spatialCorrelationSection.model.samples : []
     readonly property string sortColumn: spatialCorrelationSection.model
                                           ? spatialCorrelationSection.model.sortColumn : "mz"
     readonly property bool sortAscending: spatialCorrelationSection.model
                                            ? spatialCorrelationSection.model.sortAscending : true
+    readonly property int rowCountVisible: spatialCorrelationSection.model
+                                            ? spatialCorrelationSection.model.rowCount() : 0
 
     function sortBy(column) {
         if (spatialCorrelationSection.model) spatialCorrelationSection.model.sortBy(column)
     }
 
+    readonly property string defaultFontFamily: Qt.application.font.family
     readonly property int featureColumnWidth: 240
     readonly property int sampleColumnWidth: 130
     readonly property int headerHeight: 56
     readonly property int rowHeight: 32
-    readonly property string defaultFontFamily: Qt.application.font.family
 
-    readonly property var tableColumns: {
-        var cols = [{key: "mz", label: "Feature", width: spatialCorrelationSection.featureColumnWidth}]
-        var samples = spatialCorrelationSection.sampleNames
-        for (var i = 0; i < samples.length; i++) {
-            cols.push({key: samples[i], label: samples[i], width: spatialCorrelationSection.sampleColumnWidth})
-        }
-        return cols
+    function columnWidth(column) {
+        return column === 0 ? spatialCorrelationSection.featureColumnWidth
+                             : spatialCorrelationSection.sampleColumnWidth
     }
-
-    readonly property int totalColumnsWidth: spatialCorrelationSection.tableColumns.reduce(
-        function (sum, c) { return sum + c.width }, 0)
 
     Label {
         objectName: "spatialCorrelationEmptyStateLabel"
@@ -74,7 +68,7 @@ Item {
         // spatialCorrelationSearchEmptyLabel below covers instead.
         visible: !spatialCorrelationSection.rowsLoading
                  && (!spatialCorrelationSection.model
-                     || spatialCorrelationSection.model.samples.length === 0)
+                     || spatialCorrelationSection.sampleNames.length === 0)
         anchors.centerIn: parent
         text: "No spatial correlation scores yet — enable `spatial_correlation` in the run config."
         color: Theme.mutedTextColor
@@ -86,14 +80,14 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 16
-        visible: spatialCorrelationSection.model && spatialCorrelationSection.model.samples.length > 0
+        visible: spatialCorrelationSection.sampleNames.length > 0
         spacing: 8
 
         RowLayout {
             Layout.fillWidth: true
 
             Label {
-                text: "Spatial correlation (Moran's I) — " + spatialCorrelationSection.visibleRows.length + " feature(s)"
+                text: "Spatial correlation (Moran's I) — " + spatialCorrelationSection.rowCountVisible + " feature(s)"
                 font.bold: true
                 font.pixelSize: 14
                 Layout.fillWidth: true
@@ -118,169 +112,137 @@ Item {
 
         Label {
             objectName: "spatialCorrelationSearchEmptyLabel"
-            visible: spatialCorrelationSection.model
-                     && spatialCorrelationSection.model.samples.length > 0
-                     && spatialCorrelationSection.visibleRows.length === 0
+            visible: spatialCorrelationSection.sampleNames.length > 0
+                     && spatialCorrelationSection.rowCountVisible === 0
             text: "No features match your search."
             color: Theme.mutedTextColor
             Layout.alignment: Qt.AlignHCenter
         }
 
-        // Header — its own non-vertically-scrolling Flickable, horizontal
-        // position slaved to the body's (headerFlickable.interactive is
-        // false: it never scrolls on its own, only follows bodyFlickable
-        // below) — a "frozen header row" over a scrolling body, both
-        // moving together horizontally when there are more sample
-        // columns than fit on screen (fixed column widths, per-column
-        // scroll rather than squeezed-to-fit — "6 samples max, then
-        // scrolling").
-        Flickable {
-            id: headerFlickable
-            objectName: "spatialCorrelationHeaderFlickable"
-            visible: spatialCorrelationSection.visibleRows.length > 0
+        // Header — HorizontalHeaderView keeps itself horizontally synced
+        // to tableView below (syncView); click-to-sort is hand-rolled
+        // (no native sort-indicator support in this Qt/PySide version —
+        // confirmed directly, nothing to wire up instead of building).
+        HorizontalHeaderView {
+            id: headerView
+            objectName: "spatialCorrelationHeaderView"
+            visible: spatialCorrelationSection.rowCountVisible > 0
             Layout.fillWidth: true
-            Layout.preferredHeight: spatialCorrelationSection.headerHeight
-            interactive: false
+            syncView: tableView
             clip: true
-            contentWidth: Math.max(width, spatialCorrelationSection.totalColumnsWidth)
-            contentX: bodyFlickable.contentX
 
-            Row {
-                id: headerRow
-                height: spatialCorrelationSection.headerHeight
+            delegate: Rectangle {
+                id: headerCell
+                objectName: "spatialCorrelationSortHeader_" + column
+                implicitWidth: spatialCorrelationSection.columnWidth(column)
+                implicitHeight: spatialCorrelationSection.headerHeight
+                color: "transparent"
+                border.color: palette.mid
+                border.width: 1
 
-                Repeater {
-                    model: spatialCorrelationSection.tableColumns
+                required property int column
+                required property var display
 
-                    delegate: Rectangle {
-                        objectName: "spatialCorrelationSortHeader_" + modelData.key
-                        width: modelData.width
-                        height: spatialCorrelationSection.headerHeight
-                        color: "transparent"
-                        border.color: palette.mid
-                        border.width: 1
+                readonly property string columnKey: column === 0 ? "mz" : spatialCorrelationSection.sampleNames[column - 1]
 
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: spatialCorrelationSection.sortBy(modelData.key)
-                        }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: spatialCorrelationSection.sortBy(headerCell.columnKey)
+                }
 
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 4
-                            spacing: 0
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    spacing: 0
 
-                            Label {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                text: modelData.label
-                                font.bold: true
-                                wrapMode: Text.WrapAnywhere
-                                elide: Text.ElideRight
-                                maximumLineCount: 3
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                horizontalAlignment: Text.AlignHCenter
-                                font.pixelSize: 11
-                                text: spatialCorrelationSection.sortColumn === modelData.key
-                                      ? (spatialCorrelationSection.sortAscending ? "▲" : "▼")
-                                      : " "
-                            }
-                        }
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        text: headerCell.display
+                        font.bold: true
+                        wrapMode: Text.WrapAnywhere
+                        elide: Text.ElideRight
+                        maximumLineCount: 3
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        font.pixelSize: 11
+                        text: spatialCorrelationSection.sortColumn === headerCell.columnKey
+                              ? (spatialCorrelationSection.sortAscending ? "▲" : "▼")
+                              : " "
                     }
                 }
             }
         }
 
-        // Body — scrolls both ways; horizontal scrollbar makes the
-        // "more samples than fit -> scroll" affordance visible even
-        // without a trackpad gesture.
-        Flickable {
-            id: bodyFlickable
-            objectName: "spatialCorrelationBodyFlickable"
-            visible: spatialCorrelationSection.visibleRows.length > 0
+        // Body — TableView only ever instantiates delegates for the
+        // visible viewport (plus a small overscan buffer), regardless of
+        // total row count — sorting/filtering only has to redraw what's
+        // on screen, not rebuild every row (the actual fix for "ordering
+        // the table is still super slow": the previous Repeater-based
+        // version rebuilt every row's delegate on every sort).
+        TableView {
+            id: tableView
+            objectName: "spatialCorrelationTableView"
+            visible: spatialCorrelationSection.rowCountVisible > 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            contentWidth: Math.max(width, spatialCorrelationSection.totalColumnsWidth)
-            contentHeight: spatialCorrelationSection.visibleRows.length * spatialCorrelationSection.rowHeight
             boundsBehavior: Flickable.StopAtBounds
+            columnSpacing: 0
+            rowSpacing: 0
+            model: spatialCorrelationSection.model
+            columnWidthProvider: function (column) { return spatialCorrelationSection.columnWidth(column) }
+            rowHeightProvider: function (row) { return spatialCorrelationSection.rowHeight }
 
             ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            Column {
-                id: bodyColumn
+            delegate: Rectangle {
+                id: cellDelegate
+                objectName: "spatialCorrelationCell_" + row + "_" + column
+                implicitWidth: spatialCorrelationSection.columnWidth(column)
+                implicitHeight: spatialCorrelationSection.rowHeight
+                color: "transparent"
+                border.color: palette.mid
+                border.width: 1
 
-                Repeater {
-                    objectName: "spatialCorrelationTableRepeater"
-                    model: spatialCorrelationSection.visibleRows
+                required property int row
+                required property int column
+                required property var display
+                required property real mz
 
-                    delegate: Rectangle {
-                        id: featureRowDelegate
-                        objectName: "spatialCorrelationRow_" + modelData.mz
-                        // Captured at this outer-Repeater scope, before
-                        // the inner Repeater's own `modelData` (one
-                        // table column, not this row) shadows it below.
-                        property var featureRow: modelData
-                        width: spatialCorrelationSection.totalColumnsWidth
-                        height: spatialCorrelationSection.rowHeight
-                        color: "transparent"
-                        border.color: palette.mid
-                        border.width: 1
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.RightButton
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: rowContextMenu.popup()
+                }
 
-                        MouseArea {
-                            anchors.fill: parent
-                            acceptedButtons: Qt.RightButton
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: fullTableRowContextMenu.popup()
-                        }
-
-                        Menu {
-                            id: fullTableRowContextMenu
-                            objectName: "spatialCorrelationRowContextMenu_" + featureRowDelegate.featureRow.mz
-                            MenuItem {
-                                objectName: "spatialCorrelationShowDistribution_" + featureRowDelegate.featureRow.mz
-                                text: "Show spatial distribution"
-                                onTriggered: spatialCorrelationSection.showSpatialDistributionRequested(
-                                    featureRowDelegate.featureRow.mz)
-                            }
-                        }
-
-                        Row {
-                            anchors.fill: parent
-
-                            Repeater {
-                                model: spatialCorrelationSection.tableColumns
-
-                                delegate: Item {
-                                    width: modelData.width
-                                    height: spatialCorrelationSection.rowHeight
-
-                                    Label {
-                                        anchors.fill: parent
-                                        anchors.leftMargin: 8
-                                        anchors.rightMargin: 8
-                                        verticalAlignment: Text.AlignVCenter
-                                        horizontalAlignment: modelData.key === "mz" ? Text.AlignLeft : Text.AlignRight
-                                        elide: Text.ElideRight
-                                        font.family: modelData.key === "mz"
-                                                      ? spatialCorrelationSection.defaultFontFamily : "monospace"
-                                        text: {
-                                            if (modelData.key === "mz")
-                                                return featureRowDelegate.featureRow.label
-                                            var v = featureRowDelegate.featureRow[modelData.key]
-                                            return (v !== undefined && v !== null) ? Number(v).toFixed(3) : "–"
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                Menu {
+                    id: rowContextMenu
+                    objectName: "spatialCorrelationRowContextMenu_" + cellDelegate.row
+                    MenuItem {
+                        objectName: "spatialCorrelationShowDistribution_" + cellDelegate.row
+                        text: "Show spatial distribution"
+                        onTriggered: spatialCorrelationSection.showSpatialDistributionRequested(cellDelegate.mz)
                     }
+                }
+
+                Label {
+                    anchors.fill: parent
+                    anchors.leftMargin: 8
+                    anchors.rightMargin: 8
+                    verticalAlignment: Text.AlignVCenter
+                    horizontalAlignment: cellDelegate.column === 0 ? Text.AlignLeft : Text.AlignRight
+                    elide: Text.ElideRight
+                    font.family: cellDelegate.column === 0
+                                 ? spatialCorrelationSection.defaultFontFamily : "monospace"
+                    text: cellDelegate.display
                 }
             }
         }

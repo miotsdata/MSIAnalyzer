@@ -114,7 +114,7 @@ with the full table — revised (same conversation, v1.1) to:
   established (ADR 32), just now only on the full table's rows (the
   top-N panel it also lived on is gone).
 - **State (not just data) persists across tab switches** — `SpatialCorrelationModel`
-  (new, `spatial_correlation_model.py`), a small `QObject` owned by
+  (new, `spatial_correlation_model.py`), owned by
   `AnalysisBridge.getSpatialCorrelationModel(analysis_db_path)`
   (single-slot cache keyed by path — a different analysis discards the
   old model and builds a fresh one, matching "switching to a new
@@ -128,31 +128,49 @@ with the full table — revised (same conversation, v1.1) to:
   means cache the state. How can it be useful if when I go back I don't
   have the same table as before (I might have sorted for a column)?"
   `SpatialCorrelationModel` now owns the sort/filter state too
-  (`sortBy()`, `nameQuery`/`mzQuery` properties, `visibleRows` —
-  already sorted and filtered), so re-binding the section's `model`
-  property to the same instance on a later visit picks up exactly where
-  the user left off, with zero QML-side persistence logic.
-  **A `TableView` bound to a real `QAbstractTableModel` was tried
-  first** (the user's own suggestion — "is it maybe the time to
-  introduce a table model?") and would also have solved virtualizing
-  the (800-1200 row) table, but empirically **`TableView`/
-  `HorizontalHeaderView` never instantiate any delegate items at all
-  under this project's offscreen GUI test harness** — verified directly
-  (`contentWidth`/`topRow`/`bottomRow` compute correctly, `rows`/
-  `columns` counts are right, but zero delegate `QQuickItem`s are ever
-  created, with no warnings) — a real environment limitation, not a
-  usage mistake. Since this project's own testing culture puts real
-  weight on GUI tests actually exercising rendering (see this codebase's
-  existing Column/Repeater/Flickable-under-offscreen-platform notes for
-  a similar precedent), shipping a page that can't be tested this way
-  was judged worse than keeping the already-working
-  `Repeater`-in-`Flickable` rendering. `SpatialCorrelationModel` is
-  therefore a plain `QObject` exposing a `visibleRows` `QVariantList`
-  property (each row a dict with a precomputed `label` field), not a
-  `QAbstractTableModel` — sorting/filtering moved into Python (a real
-  win, since it's what actually survives the Loader's destroy/rebuild
-  cycle), but the QML rendering itself is close to unchanged from the
-  first version of this table.
+  (`sortBy()`, `nameQuery`/`mzQuery` properties), so re-binding the
+  section's `model` property to the same instance on a later visit picks
+  up exactly where the user left off, with zero QML-side persistence
+  logic.
+- **v1.1 → v1.2, rendering revised again, this time for speed, not just
+  state**: v1.1 shipped `SpatialCorrelationModel` as a plain `QObject`
+  exposing a whole `visibleRows` list, rendered via the established
+  `Repeater`-in-`Flickable` pattern (`AnnotationsSection.qml`) — chosen
+  specifically *because* a `TableView`-based version was found not to
+  render any delegates at all under this project's offscreen GUI test
+  harness (verified directly: `contentWidth`/`topRow`/`bottomRow`
+  compute correctly, `rows`/`columns` counts are right, but zero
+  delegate `QQuickItem`s are ever created, with no warnings — a real
+  environment limitation, not a usage mistake). That rendering choice
+  turned out to be a real performance problem in the actual running app,
+  not just a test-only concern: **every sort/filter destroyed and
+  rebuilt every row's delegate** (a nested `Repeater` per row for the
+  sample columns too — hundreds to low thousands of `QQuickItem`s on a
+  real project), reported directly as "ordering the table is still super
+  slow." Re-litigated and reversed: `SpatialCorrelationModel` is now a
+  real `QAbstractTableModel` (`rowCount`/`columnCount`/`data`/
+  `headerData`/`roleNames`, `beginResetModel`/`endResetModel` around
+  every sort/filter), rendered via `TableView` + `HorizontalHeaderView`
+  (hand-rolled click-to-sort in the header delegate — no native
+  sort-indicator support in this Qt/PySide version, confirmed directly).
+  `TableView` only ever asks `data()` for whatever cells are currently
+  visible, so a sort/filter only redraws the viewport, not the whole
+  table.
+  **Traded away, explicitly and knowingly**: automated GUI-level
+  interaction tests for this page (click-to-sort, right-click) can no
+  longer run — no delegate renders in the offscreen harness to click on.
+  `tests/gui/views/test_spatial_correlation_section.py` now drives the
+  underlying model/signals directly (`model.sortBy(...)`,
+  `section.showSpatialDistributionRequested.emit(...)`) instead of
+  simulating clicks, which still exercises the QML-level wiring
+  (property bindings, the cross-tab handoff) but not the actual
+  clickable rendering. The model's own sort/filter/data logic is fully
+  covered by plain Python unit tests
+  (`tests/gui/utils/test_spatial_correlation_model.py`), independent of
+  QML entirely. Real-device verification in the actual app (this
+  project's established GUI workflow, given no display access in this
+  environment) is what actually confirms the rendering/interaction side
+  works — expected before trusting this page's UI, not a nice-to-have.
 
 ### Visual Inspection handoff no longer freezes the GUI thread
 
@@ -200,13 +218,9 @@ be shown before it's ever displayed.
   redesign above); the fixed-width/wrapped-header/frozen-header rework
   addressed alignment and readability, but adding a gradient/heatmap-style
   background per cell is separate follow-on work.
-- **Table virtualization** — `Repeater`-in-`Flickable` instantiates every
-  row's delegate up front (800-1200+ features on a real project), not
-  just the visible ones. `TableView` would solve this but isn't usable
-  here (see above); a hand-rolled virtualized `Repeater` (only
-  instantiate rows within the visible `contentY` range) was considered
-  out of scope for this pass — no reported performance complaint yet,
-  just a known latent risk on a larger project.
+- ~~**Table virtualization**~~ — resolved in v1.2 (see Decision above):
+  the table now renders via `TableView`, which only instantiates
+  visible-viewport delegates regardless of row count.
 
 ## Consequences
 

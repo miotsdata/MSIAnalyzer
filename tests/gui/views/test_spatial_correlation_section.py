@@ -5,6 +5,26 @@ import numpy as np
 import pandas as pd
 from PySide6.QtCore import Qt
 
+# NOTE on coverage in this file: SpatialCorrelationSection.qml renders its
+# table via TableView/HorizontalHeaderView (not the Repeater-in-Flickable
+# pattern most of this codebase's other tables use) — chosen for real
+# rendering performance ("ordering the table is still super slow" with the
+# Repeater version), at a real, verified cost: TableView/HorizontalHeaderView
+# never instantiate any delegate items at all under this project's offscreen
+# GUI test harness (contentWidth/rows/columns compute correctly, but zero
+# delegate QQuickItems are ever created, no warnings — see
+# SpatialCorrelationModel's own docstring). That means click-to-sort,
+# right-click-a-row, and anything else requiring an actual rendered cell
+# CANNOT be exercised here. What *can* still be tested, and is below:
+# - the model itself is fetched/bound correctly (AnalysisBridge.getSpatialCorrelationModel)
+# - the model's sort/filter/row logic (fully covered separately, no QML
+#   involved at all, in tests/gui/utils/test_spatial_correlation_model.py)
+# - the model's identity (and therefore its state) survives this section's
+#   Loader being destroyed and rebuilt on a tab switch
+# - the cross-tab handoff signal, invoked directly (standing in for an
+#   actual right-click, which can't render) — this real. app confirms with
+#   the user tests before we trust the rendering side.
+
 
 def _open_spatial_correlation_tab(view, root, find_visual_child, qtbot):
     nav_button = find_visual_child(root, "navButton_4")
@@ -44,29 +64,29 @@ def test_spatial_correlation_empty_state_without_h5ad(
     root = view.rootObject()
     section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
 
-    assert section.property("visibleRows") == []
+    assert section.property("rowCountVisible") == 0
     empty_label = find_visual_child(root, "spatialCorrelationEmptyStateLabel")
     assert empty_label.property("visible") is True
 
 
-def test_spatial_correlation_table_shows_moran_scores_with_compound_name(
+def test_spatial_correlation_model_bound_with_moran_scores_and_compound_name(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):
     # annotated_analysis_model already has feature_id=7, mz=123.4567
     # annotated as "Caffeine" — confirms the name join (matching Visual
-    # Inspection's own feature-picker convention) actually resolves.
+    # Inspection's own feature-picker convention) actually resolves, and
+    # that AnalysisBridge.getSpatialCorrelationModel's fetch reaches the
+    # QML-bound model correctly.
     _seed_moran_h5ad(annotated_analysis_model)
 
     view = analysis_view(annotated_analysis_model)
     root = view.rootObject()
     section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
 
-    rows = section.property("visibleRows")
-    assert len(rows) == 1
-    assert rows[0]["mz"] == 123.4567
-    assert rows[0]["s1"] == 0.75
-    assert rows[0]["compound_name"] == "Caffeine"
-    assert rows[0]["label"] == "123.4567: Caffeine"
+    model = section.property("model")
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 0)) == "123.4567: Caffeine"
+    assert model.data(model.index(0, 1)) == "0.750"
 
 
 def test_spatial_correlation_name_search_filters_table(
@@ -78,15 +98,15 @@ def test_spatial_correlation_name_search_filters_table(
     root = view.rootObject()
     section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
 
-    assert len(section.property("visibleRows")) == 2
+    assert section.property("model").rowCount() == 2
 
     search_field = find_visual_child(root, "spatialCorrelationNameSearchField")
     search_field.setProperty("text", "caff")
     qtbot.wait(50)
 
-    filtered = section.property("visibleRows")
-    assert len(filtered) == 1
-    assert filtered[0]["mz"] == 123.4567
+    model = section.property("model")
+    assert model.rowCount() == 1
+    assert model.mzForRow(0) == 123.4567
 
 
 def test_sort_and_search_state_survive_switching_tabs_away_and_back(
@@ -96,21 +116,22 @@ def test_sort_and_search_state_survive_switching_tabs_away_and_back(
     # don't have the same table as before, I might have sorted for a
     # column" — sort column/direction AND search text must both still be
     # there after leaving this tab (which destroys the section's QML
-    # item, since it's a lazy Loader) and coming back.
+    # item, since it's a lazy Loader) and coming back. Sorting is
+    # triggered by calling the model directly (sortBy), standing in for
+    # a header click, since no header delegate renders under this
+    # harness — see this file's top-of-module note.
     _seed_moran_h5ad(annotated_analysis_model, features=((123.4567, 0.75), (50.0, 0.2)))
 
     view = analysis_view(annotated_analysis_model)
     root = view.rootObject()
     section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
+    model = section.property("model")
 
     # Default sort is by mz ascending: 50.0 before 123.4567.
-    assert [r["mz"] for r in section.property("visibleRows")] == [50.0, 123.4567]
+    assert model.mzForRow(0) == 50.0
+    assert model.mzForRow(1) == 123.4567
 
-    mz_header = find_visual_child(root, "spatialCorrelationSortHeader_mz")
-    center = mz_header.mapToScene(mz_header.boundingRect().center()).toPoint()
-    # Already sorted by mz (the default) -> one click flips to descending.
-    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
-    qtbot.wait(50)
+    model.sortBy("mz")  # already sorted by mz -> flips to descending
     assert section.property("sortColumn") == "mz"
     assert section.property("sortAscending") is False
 
@@ -119,20 +140,22 @@ def test_sort_and_search_state_survive_switching_tabs_away_and_back(
     qtbot.wait(50)
 
     # Leave the tab — the section's Loader deactivates, destroying this
-    # exact QML item (verified: a fresh `find_visual_child` for the same
-    # objectName below returns a genuinely new instance).
+    # exact QML item (verified: a fresh find_visual_child for the same
+    # objectName below returns a genuinely new instance), while the
+    # model itself (owned by AnalysisBridge, not this item) survives.
     _open_summary_tab(view, root, find_visual_child, qtbot)
 
     section_2 = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
     assert section_2 is not section
+    model_2 = section_2.property("model")
+    assert model_2 is model
 
     assert section_2.property("sortColumn") == "mz"
     assert section_2.property("sortAscending") is False
     assert search_field is not find_visual_child(root, "spatialCorrelationNameSearchField")
     assert find_visual_child(root, "spatialCorrelationNameSearchField").property("text") == "caff"
-    rows = section_2.property("visibleRows")
-    assert len(rows) == 1
-    assert rows[0]["mz"] == 123.4567
+    assert model_2.rowCount() == 1
+    assert model_2.mzForRow(0) == 123.4567
 
 
 def test_show_spatial_distribution_jumps_to_visual_inspection(
@@ -140,22 +163,20 @@ def test_show_spatial_distribution_jumps_to_visual_inspection(
 ):
     # End-to-end, same shape as
     # test_inspect_visually_switches_to_visual_tab_with_feature_selected
-    # (test_analysis_page.py) for Annotations' identical handoff (ADR 32).
+    # (test_analysis_page.py) for Annotations' identical handoff (ADR 32)
+    # — but the signal is emitted directly (standing in for a right-click
+    # + "Show spatial distribution" click, which can't render under this
+    # harness) rather than driven through the actual context menu.
     _seed_moran_h5ad(annotated_analysis_model)
 
     view = analysis_view(annotated_analysis_model)
     root = view.rootObject()
-    _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
+    section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
 
-    row = find_visual_child(root, "spatialCorrelationRow_123.4567")
-    assert row is not None
-    menu_item = row.findChild(object, "spatialCorrelationShowDistribution_123.4567")
-    assert menu_item is not None
-    menu_item.click()
-    qtbot.wait(50)
+    section.showSpatialDistributionRequested.emit(123.4567)
 
     stack = root.findChild(object, "sectionStack")
-    assert stack.property("currentIndex") == 3
+    qtbot.waitUntil(lambda: stack.property("currentIndex") == 3, timeout=2000)
 
     controls = find_visual_child(root, "controlsFlickable")
     qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)

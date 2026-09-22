@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Property, Signal, Slot
+import math
+
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Property, Signal, Slot
 
 
-class SpatialCorrelationModel(QObject):
-    """Backs `SpatialCorrelationSection.qml`'s table — one row per feature,
-    one column (moran_i) per sample folded into that row's dict — plus the
+class SpatialCorrelationModel(QAbstractTableModel):
+    """Backs `SpatialCorrelationSection.qml`'s `TableView` — one row per
+    feature, one column per sample (column 0 is the feature itself:
+    representative compound name when annotated, else `m/z <value>`,
+    same convention as Visual Inspection's own feature picker) — plus the
     view state (sort column/order, name/m/z search text) that goes with
     it.
 
@@ -21,40 +25,88 @@ class SpatialCorrelationModel(QObject):
     might have sorted for a column"). Caching just the fetched *rows* in
     Python (an earlier version of this fix) wasn't enough on its own,
     because the sort/filter *state* still lived in the doomed QML item.
-    A plain, long-lived `QObject` carries both the rows and the current
-    sort/filter state together; re-binding the QML section's `model`
-    property to the same instance on a later visit picks up exactly where
-    the user left off, with no QML-side persistence logic at all.
+    A `QAbstractTableModel` instance owned here, by this long-lived
+    `AnalysisBridge`, carries both the rows and the current sort/filter
+    state together; re-binding `TableView.model` to the same instance on
+    a later visit picks up exactly where the user left off, with no
+    QML-side persistence logic at all.
 
-    Deliberately a plain `QObject` exposing a `visibleRows` list
-    property, not a `QAbstractTableModel` bound to a `TableView` — tried
-    that first, and `TableView`/`HorizontalHeaderView` turned out not to
-    instantiate any delegate items at all under this project's offscreen
-    GUI test harness (`contentWidth`/`topRow`/`bottomRow` compute
-    correctly, but zero delegate items are ever created, with no
-    warnings) — a real, verified environment limitation, not a modelling
-    mistake. Sorting/filtering here happens in Python instead of QML's
-    `Array.sort`/`filter` (still a real win — it's what actually
-    survives the Loader's destroy/rebuild cycle), but rendering stays on
-    the already-working, already-tested `Repeater`-in-`Flickable`
-    pattern this codebase's other sections use.
+    **Second revision, same as the state-persistence fix but for actual
+    table-rendering performance**: the first version of this table used a
+    plain `QObject` (not `QAbstractTableModel`) exposing a whole
+    `visibleRows` list, rendered via a `Repeater`-in-`Flickable` (the
+    established pattern elsewhere in this codebase, e.g.
+    `AnnotationsSection.qml`) because `TableView`/`HorizontalHeaderView`
+    were found not to instantiate any delegate items at all under this
+    project's *offscreen GUI test harness* (verified directly — see
+    `tests/gui/utils/test_spatial_correlation_model.py`'s git history for
+    the standalone repro). That rendering choice turned out to be a real
+    performance problem in the actual running app, not just a test-only
+    concern: every sort/filter destroyed and rebuilt *every* row's
+    delegate (a nested `Repeater` per row for the sample columns too —
+    hundreds to low thousands of `QQuickItem`s on a real project),
+    reported directly as "ordering the table is still super slow." A
+    `TableView` bound to a real `QAbstractTableModel` only asks `data()`
+    for whatever cells are currently visible (tens, not thousands) —
+    sorting/filtering here still fully re-sorts the Python-side list
+    (`beginResetModel`/`endResetModel`), but nothing QML-side has to
+    rebuild beyond the visible viewport. Traded away: automated GUI-level
+    interaction tests for this specific page (click-to-sort, right-click)
+    can't run in the offscreen harness, since no delegates render there
+    at all; the model's own sort/filter logic is still fully covered by
+    plain Python unit tests (no QML involved), and real-device
+    verification in the actual app is expected before trusting the
+    rendering side, per this project's usual GUI workflow.
     """
+
+    MzRole = Qt.UserRole + 1
 
     rowsLoadingChanged = Signal()
     queriesChanged = Signal()
     sortStateChanged = Signal()
-    visibleRowsChanged = Signal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._all_rows: list[dict] = []  # [{"mz", "compound_name", <sample>: moran_i, ...}]
         self._samples: list[str] = []
-        self._visible_rows: list[dict] = []
+        self._visible: list[dict] = []
         self._sort_column: str = "mz"
         self._sort_ascending: bool = True
         self._name_query: str = ""
         self._mz_query: str = ""
         self._rows_loading: bool = False
+
+    # ------------------------------------------------------------------
+    # QAbstractTableModel overrides
+    # ------------------------------------------------------------------
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._visible)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else 1 + len(self._samples)
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._visible[index.row()]
+        column = index.column()
+        if role == self.MzRole:
+            return row["mz"]
+        if role != Qt.DisplayRole:
+            return None
+        if column == 0:
+            return self._feature_label(row)
+        value = row.get(self._samples[column - 1])
+        return "–" if value is None else f"{value:.3f}"
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
+        if orientation != Qt.Horizontal or role != Qt.DisplayRole:
+            return None
+        return "Feature" if section == 0 else self._samples[section - 1]
+
+    def roleNames(self) -> dict:
+        return {Qt.DisplayRole: b"display", self.MzRole: b"mz"}
 
     # ------------------------------------------------------------------
     # Data plumbing
@@ -91,11 +143,11 @@ class SpatialCorrelationModel(QObject):
             rows = [r for r in rows if r.get("compound_name") and q in r["compound_name"].lower()]
         if self._mz_query.strip():
             rows = [r for r in rows if _matches_mz(self._mz_query, r["mz"])]
-        sorted_rows = sorted(rows, key=self._sort_key(self._sort_column, self._sort_ascending))
-        self._visible_rows = [
-            {**r, "label": self._feature_label(r)} for r in sorted_rows
-        ]
-        self.visibleRowsChanged.emit()
+        self.beginResetModel()
+        self._visible = sorted(
+            rows, key=self._sort_key(self._sort_column, self._sort_ascending)
+        )
+        self.endResetModel()
 
     def setRows(self, rows: list[dict], samples: list[str]) -> None:
         """Replace the model's data wholesale — the current sort/filter
@@ -121,15 +173,20 @@ class SpatialCorrelationModel(QObject):
         self._apply_filter_and_sort()
         self.sortStateChanged.emit()
 
-    def _get_visible_rows(self) -> list:
-        return self._visible_rows
-
-    visibleRows = Property("QVariantList", _get_visible_rows, notify=visibleRowsChanged)
+    @Slot(int, result=float)
+    def mzForRow(self, row: int) -> float:
+        """The underlying feature m/z for a *visible* row index — for the
+        right-click "Show spatial distribution" menu, which needs the
+        real m/z regardless of which column/row the click landed on or
+        how the table is currently sorted."""
+        if 0 <= row < len(self._visible):
+            return float(self._visible[row]["mz"])
+        return math.nan
 
     def _get_samples(self) -> list:
         return self._samples
 
-    samples = Property("QVariantList", _get_samples, notify=visibleRowsChanged)
+    samples = Property("QVariantList", _get_samples, notify=sortStateChanged)
 
     def _get_name_query(self) -> str:
         return self._name_query

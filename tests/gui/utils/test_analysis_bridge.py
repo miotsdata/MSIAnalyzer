@@ -474,10 +474,9 @@ def test_get_spatial_correlation_model_reads_moran_scores_with_name(tmp_path, qt
     qtbot.waitUntil(lambda: not model.rowsLoading, timeout=2000)
 
     assert model.samples == ["s1"]
-    assert len(model.visibleRows) == 1
-    row = model.visibleRows[0]
-    assert row["label"] == "123.4567: Caffeine"
-    assert row["s1"] == 0.75
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 0)) == "123.4567: Caffeine"
+    assert model.data(model.index(0, 1)) == "0.750"
 
 
 def test_get_spatial_correlation_model_returns_same_instance_for_same_analysis(tmp_path, qtbot):
@@ -529,12 +528,12 @@ def test_get_spatial_correlation_model_new_analysis_replaces_model(tmp_path, qtb
     bridge = AnalysisBridge()
     model_a = bridge.getSpatialCorrelationModel(str(db_a))
     qtbot.waitUntil(lambda: not model_a.rowsLoading, timeout=2000)
-    assert model_a.visibleRows[0]["mz"] == 100.0
+    assert model_a.mzForRow(0) == 100.0
 
     model_b = bridge.getSpatialCorrelationModel(str(db_b))
     assert model_b is not model_a
     qtbot.waitUntil(lambda: not model_b.rowsLoading, timeout=2000)
-    assert model_b.visibleRows[0]["mz"] == 200.0
+    assert model_b.mzForRow(0) == 200.0
 
 
 def test_get_feature_top_hits_for_feature(tmp_path):

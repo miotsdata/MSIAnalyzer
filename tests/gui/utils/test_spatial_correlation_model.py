@@ -1,3 +1,7 @@
+import math
+
+from PySide6.QtCore import QModelIndex, Qt
+
 from msianalyzer.gui.utils.spatial_correlation_model import SpatialCorrelationModel
 
 
@@ -9,15 +13,30 @@ def _rows():
     ]
 
 
+def _index(model, row, col):
+    return model.index(row, col, QModelIndex())
+
+
 def _labels(model):
-    return [r["label"] for r in model.visibleRows]
+    return [model.data(_index(model, i, 0)) for i in range(model.rowCount())]
+
+
+def test_shape_and_headers():
+    model = SpatialCorrelationModel()
+    model.setRows(_rows(), ["s1", "s2"])
+
+    assert model.rowCount() == 3
+    assert model.columnCount() == 3  # Feature + s1 + s2
+    assert model.samples == ["s1", "s2"]
+    assert model.headerData(0, Qt.Horizontal) == "Feature"
+    assert model.headerData(1, Qt.Horizontal) == "s1"
+    assert model.headerData(2, Qt.Horizontal) == "s2"
 
 
 def test_visible_rows_default_sort_by_mz_ascending():
     model = SpatialCorrelationModel()
     model.setRows(_rows(), ["s1", "s2"])
 
-    assert model.samples == ["s1", "s2"]
     assert _labels(model) == [
         "100.0000: Caffeine",
         "m/z 200.0000",
@@ -25,12 +44,12 @@ def test_visible_rows_default_sort_by_mz_ascending():
     ]
 
 
-def test_missing_value_present_in_row_dict_as_none():
+def test_missing_value_renders_as_dash():
     model = SpatialCorrelationModel()
     model.setRows(_rows(), ["s1", "s2"])
 
-    glucose_row = next(r for r in model.visibleRows if r["mz"] == 300.0)
-    assert glucose_row.get("s2") is None
+    row = next(i for i in range(3) if model.data(_index(model, i, 0)).startswith("300"))
+    assert model.data(_index(model, row, 2)) == "–"
 
 
 def test_sort_by_sample_column_missing_values_sort_last_both_directions():
@@ -90,6 +109,15 @@ def test_mz_query_range_filters():
     assert _labels(model) == ["m/z 200.0000"]
 
 
+def test_mz_for_row_uses_visible_not_all_rows():
+    model = SpatialCorrelationModel()
+    model.setRows(_rows(), ["s1", "s2"])
+    model.nameQuery = "gluc"
+
+    assert model.mzForRow(0) == 300.0
+    assert math.isnan(model.mzForRow(1))  # out of range once filtered to 1 row
+
+
 def test_rows_loading_property_and_signal():
     model = SpatialCorrelationModel()
     received = []
@@ -103,10 +131,10 @@ def test_rows_loading_property_and_signal():
     assert received == [True]
 
 
-def test_visible_rows_changed_emitted_on_setrows_and_filter():
+def test_model_reset_emitted_on_setrows_and_filter():
     model = SpatialCorrelationModel()
     received = []
-    model.visibleRowsChanged.connect(lambda: received.append(None))
+    model.modelReset.connect(lambda: received.append(None))
 
     model.setRows(_rows(), ["s1", "s2"])
     assert len(received) == 1
