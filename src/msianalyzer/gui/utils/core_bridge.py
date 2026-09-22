@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, Signal
+from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core.config import Config
 from msianalyzer.core.project.project import Project, create_project_folder
@@ -26,6 +26,17 @@ class CoreBridge(QObject):
         super().__init__(parent)
         # Kept alive while running — nothing else holds a reference to it.
         self._run_worker: RunWorker | None = None
+
+    @Slot(result=bool)
+    def isRunActive(self) -> bool:
+        """Whether an analysis run is currently executing on `_run_worker`.
+
+        Backs `Main.qml`'s close-confirmation — quitting mid-run abandons
+        the pipeline (including any `ProcessPoolExecutor` workers it
+        spawned) rather than cancelling it cleanly, so the window asks
+        first instead of silently discarding an in-progress analysis.
+        """
+        return self._run_worker is not None and self._run_worker.isRunning()
 
     @Property(list, constant=True)
     def RUN_STEPS(self) -> list[str]:

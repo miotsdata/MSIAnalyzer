@@ -30,6 +30,19 @@ ApplicationWindow {
     // of which page is on top of stackView.
     property var currentAnalysis: null
 
+    // Set by quitDuringRunDialog's "Yes" before re-issuing Qt.quit() — lets
+    // onClosing tell "closing after the user already confirmed" apart from
+    // the first close attempt, without asking CoreBridge.isRunActive()
+    // again (the run is still active either way; the answer wouldn't change).
+    property bool forceQuit: false
+
+    onClosing: (close) => {
+        if (!forceQuit && CoreBridge.isRunActive()) {
+            close.accepted = false
+            quitDuringRunDialog.open()
+        }
+    }
+
     // The Nth-most-recent run of the current project, or null — used to
     // fill the "Analyses > Open" submenu's fixed 5 slots. A plain
     // function over a Repeater: this codebase's test harness has a
@@ -609,5 +622,26 @@ ApplicationWindow {
         objectName: "exportResultDialog"
         buttons: MessageDialog.Ok
         modality: Qt.ApplicationModal
+    }
+
+    Dialog {
+        id: quitDuringRunDialog
+        objectName: "quitDuringRunDialog"
+        title: "Analysis is still running"
+        modal: true
+        standardButtons: Dialog.Yes | Dialog.No
+        anchors.centerIn: Overlay.overlay
+
+        Label {
+            width: 320
+            wrapMode: Text.WordWrap
+            text: "An analysis is still running. Quitting now stops it before "
+                + "it finishes, including any files it's still writing. Quit anyway?"
+        }
+
+        onAccepted: {
+            window.forceQuit = true
+            Qt.quit()
+        }
     }
 }

@@ -126,7 +126,23 @@ def main() -> int:
 
     single_instance.connect_activation(server, _activate_existing_window)
 
-    return app.exec()
+    exit_code = app.exec()
+
+    # `app.exec()` returning means every window closed (or the user
+    # confirmed quitting mid-run, see Main.qml's quitDuringRunDialog) —
+    # the app is done as far as anyone watching the window is concerned.
+    # But a `RunWorker`/`MirrorPlotWorker`/etc. QThread left running past
+    # that point (an abandoned analysis, a slow export) is still a live
+    # non-daemon thread, and CPython's normal interpreter shutdown blocks
+    # on those before the process actually exits — which is exactly the
+    # "closed the window, it kept running" symptom this is fixing.
+    # `os._exit` skips that wait (and Python's own atexit/cleanup) and
+    # kills the process immediately; any `ProcessPoolExecutor` workers a
+    # stuck `Run` spawned die right behind it too, since they watch for
+    # their parent going away. There is deliberately nothing left to flush
+    # here (temp plot HTML files are disposable, not real output) that
+    # would make a clean shutdown worth waiting for.
+    os._exit(exit_code)
 
 
 if __name__ == "__main__":
