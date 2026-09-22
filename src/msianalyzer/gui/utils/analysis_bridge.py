@@ -381,6 +381,15 @@ class AnalysisBridge(QObject):
         background worker needs that set before it can resolve any
         sample name to a `.h5ad` path at all.
 
+        Beyond the `.h5ad` read, this also pre-*renders* each sample's
+        default tile (lowest-m/z feature, matching
+        `HeatmapControlsPanel.qml`'s own default state) — the matplotlib
+        render itself, not just the disk read, was the rest of the
+        "several seconds of a blank grid after the loading spinner"
+        complaint. See `HeatmapPrefetchWorker`'s own docstring for why
+        this is still safe against the concurrency hazard
+        `asynchronous: false` originally guarded against.
+
         Args:
             analysis_db_path: The analysis' SQLite database.
             sample_names: Which samples to prefetch — normally every
@@ -391,7 +400,9 @@ class AnalysisBridge(QObject):
         if not sample_names:
             self.heatmapPrefetchReady.emit()
             return
-        worker = HeatmapPrefetchWorker(self.heatmap_provider, sample_names, self)
+        features = analysis_db.load_feature_list(analysis_db_path)
+        default_mz = float(features.iloc[0]["mz"]) if not features.empty else None
+        worker = HeatmapPrefetchWorker(self.heatmap_provider, sample_names, default_mz, self)
         worker.succeeded.connect(self._onHeatmapPrefetchSucceeded)
         worker.failed.connect(self._onHeatmapPrefetchFailed)
         self._heatmap_prefetch_worker = worker

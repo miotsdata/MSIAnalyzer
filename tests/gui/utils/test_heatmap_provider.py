@@ -118,6 +118,73 @@ def test_invalidate_forces_a_fresh_read_after_the_file_changes(tmp_path):
     assert len(colors) == 1
 
 
+def test_repeated_request_for_same_tile_only_renders_once(tmp_path):
+    # ZoomableImage.qml sets `cache: false` on its own Image (Qt's own
+    # image cache is off there), so re-showing an already-viewed tile
+    # relies entirely on this provider's own render cache.
+    from msianalyzer.core.plotting import heatmap as heatmap_module
+
+    _write_sample_h5ad(tmp_path / "s1.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    with patch(
+        "msianalyzer.gui.utils.heatmap_provider.render_heatmap_by_target",
+        wraps=heatmap_module.render_heatmap_by_target,
+    ) as spy:
+        provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
+        provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
+        assert spy.call_count == 1
+
+        # A different id (different vmax) is a genuinely different tile —
+        # still renders.
+        provider.requestImage("s1|100.0|raw|viridis|0|100", None, None)
+        assert spy.call_count == 2
+
+
+def test_invalidate_clears_cached_renders_for_that_sample(tmp_path):
+    from msianalyzer.core.plotting import heatmap as heatmap_module
+
+    _write_sample_h5ad(tmp_path / "s1.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    with patch(
+        "msianalyzer.gui.utils.heatmap_provider.render_heatmap_by_target",
+        wraps=heatmap_module.render_heatmap_by_target,
+    ) as spy:
+        provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
+        assert spy.call_count == 1
+
+        provider.invalidate("s1")
+
+        provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
+        assert spy.call_count == 2  # re-rendered, not served from the stale cache
+
+
+def test_prefetch_render_target_populates_cache_for_a_later_request_image_call(tmp_path):
+    # The exact mechanism AnalysisBridge.prefetchHeatmapSamples relies on:
+    # pre-populating the render cache from a background thread so the
+    # real (synchronous, GUI-thread) requestImage call that follows is a
+    # cache hit, not a fresh matplotlib render.
+    from msianalyzer.core.plotting import heatmap as heatmap_module
+
+    _write_sample_h5ad(tmp_path / "s1.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    parts = ["s1", "100.0", "raw", "viridis", "0", "15"]
+    provider._render_target("s1", "100.0", parts)
+
+    with patch(
+        "msianalyzer.gui.utils.heatmap_provider.render_heatmap_by_target",
+        wraps=heatmap_module.render_heatmap_by_target,
+    ) as spy:
+        image = provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
+        assert spy.call_count == 0  # served straight from the prefetch's cache
+        assert not image.isNull()
+
+
 def test_invalidate_is_a_no_op_when_sample_never_cached(tmp_path):
     provider = HeatmapImageProvider()
     provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))

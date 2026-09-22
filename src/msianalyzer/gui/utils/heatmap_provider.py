@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import anndata as ad
+import numpy as np
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickImageProvider
@@ -21,6 +22,7 @@ from msianalyzer.core.plotting.heatmap import (
 logger = logging.getLogger(__name__)
 
 _CACHE_SIZE = 4
+_RENDER_CACHE_SIZE = 16
 
 
 class HeatmapImageProvider(QQuickImageProvider):
@@ -48,18 +50,35 @@ class HeatmapImageProvider(QQuickImageProvider):
 
     Keeps a small LRU cache of opened `AnnData` objects (keyed by `.h5ad`
     path) so switching feature/colormap/range within the same sample set
-    doesn't re-read from disk on every request; Qt's own `Image` caching
-    (by the full id string) already avoids re-requesting an unchanged tile.
+    doesn't re-read from disk on every request. A second, separate LRU
+    cache holds already-*rendered* RGBA arrays, keyed by the exact
+    request id — `ZoomableImage.qml`'s `Image` sets `cache: false`
+    (Qt's own image cache is disabled there), so without this, re-showing
+    a tile you've already viewed (e.g. flipping back to a feature) redid
+    the full matplotlib render every time. It also lets
+    `AnalysisBridge.prefetchHeatmapSamples` pre-render the default tile
+    on a background thread (`_render_target`, shared with `requestImage`)
+    before Visual Inspection's `ZoomableImage`s ever request it — the
+    render cost (not just the `.h5ad` read `_load_adata` alone covers) is
+    what was still causing several seconds of a blank grid after the
+    loading overlay disappeared.
     """
 
     def __init__(self) -> None:
         super().__init__(QQuickImageProvider.ImageType.Image)
         self._analysis_db_path: str | None = None
         self._cache: OrderedDict[str, ad.AnnData] = OrderedDict()
+        self._render_cache: OrderedDict[str, np.ndarray] = OrderedDict()
 
     def setAnalysisDbPath(self, analysis_db_path: str) -> None:
         if analysis_db_path != self._analysis_db_path:
             self._cache.clear()
+            # A request id (e.g. "s1|100.0|raw|viridis|0|15") says nothing
+            # about which analysis it came from — without also clearing
+            # this, switching to a different analysis that happens to
+            # share a sample name and request the same tile would
+            # silently serve the OLD analysis's rendered pixels.
+            self._render_cache.clear()
         self._analysis_db_path = analysis_db_path
 
     def _load_adata(self, sample_name: str) -> ad.AnnData | None:
@@ -85,12 +104,44 @@ class HeatmapImageProvider(QQuickImageProvider):
         tile request re-reads the file instead of serving the stale
         in-memory obs/uns this LRU cache is still holding.
 
+        Also drops every cached *render* for that sample (`_render_cache`
+        keys start with `"<sample_name>|"`) — a stale rendered tile would
+        otherwise keep being served from cache even after the underlying
+        data changed (e.g. a new ROI drawn).
+
         A no-op if the sample was never cached, or no analysis is set.
         """
         if not self._analysis_db_path:
             return
         h5ad_path = Path(self._analysis_db_path).parent / f"{sample_name}.h5ad"
         self._cache.pop(str(h5ad_path), None)
+        prefix = f"{sample_name}|"
+        for key in [k for k in self._render_cache if k.startswith(prefix)]:
+            del self._render_cache[key]
+
+    def _render_target(self, sample_name: str, target: str, parts: list[str]) -> np.ndarray | None:
+        """Render (or return the cached render of) one tile — shared by
+        `requestImage` and `AnalysisBridge.prefetchHeatmapSamples`'s
+        background pre-render, so both populate/consume the exact same
+        cache under the exact same key (the full request id).
+        """
+        cache_key = "|".join(parts)
+        if cache_key in self._render_cache:
+            self._render_cache.move_to_end(cache_key)
+            return self._render_cache[cache_key]
+
+        if sample_name == "colorbar":
+            rgba = render_colorbar(target)
+        else:
+            adata = self._load_adata(sample_name)
+            if adata is None:
+                return None
+            rgba = render_heatmap_by_target(adata, target, parts)
+
+        self._render_cache[cache_key] = rgba
+        if len(self._render_cache) > _RENDER_CACHE_SIZE:
+            self._render_cache.popitem(last=False)
+        return rgba
 
     def getFeatureValueRange(
         self, sample_names: list[str], mz: float, layer: str
@@ -217,20 +268,9 @@ class HeatmapImageProvider(QQuickImageProvider):
             # with spaces or other reserved characters need this too.
             parts = unquote(id).split("|")
             sample_name, target = parts[0], parts[1]
-
-            if sample_name == "colorbar":
-                rgba = render_colorbar(target)
-                height, width, _ = rgba.shape
-                image = QImage(
-                    rgba.data, width, height, width * 4, QImage.Format.Format_RGBA8888
-                )
-                return image.copy()
-
-            adata = self._load_adata(sample_name)
-            if adata is None:
+            rgba = self._render_target(sample_name, target, parts)
+            if rgba is None:
                 return QImage()
-
-            rgba = render_heatmap_by_target(adata, target, parts)
         except Exception:
             logger.exception("heatmap render failed for request id %r", id)
             return QImage()
