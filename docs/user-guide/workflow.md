@@ -126,7 +126,15 @@ feature (`squidpy.gr.spatial_autocorr`) against `spatial_correlation.layer`
 rather than scattering at random, computed independently per sample (never
 pooled across samples). Results are written directly into that sample's
 own `.h5ad` (`adata.uns["moranI"]`, squidpy's own convention) — no new
-analysis-database table. See [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md).
+analysis-database table. See [Concepts](concepts.md) for what the score
+means and [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md)
+for the full computation details.
+
+Visual Inspection separately offers **Local Moran's I** as an on-demand
+heatmap layer — a *per-pixel* version of the same score, computed the
+moment it's selected. It doesn't need this pipeline stage enabled at all
+(it builds its own neighbor graph on the fly), so it's available
+regardless of `spatial_correlation.enabled`. See [Concepts](concepts.md).
 
 ## Stage 13 — Summary report (→ out_dir)
 

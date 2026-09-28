@@ -131,6 +131,41 @@ def test_rows_loading_property_and_signal():
     assert received == [True]
 
 
+def test_moran_i_for_mz_exact_match():
+    model = SpatialCorrelationModel()
+    model.setRows(_rows(), ["s1", "s2"])
+
+    assert model.moranIForMz(100.0) == {"s1": 0.9, "s2": 0.8}
+
+
+def test_moran_i_for_mz_nearest_within_tolerance():
+    model = SpatialCorrelationModel()
+    model.setRows(_rows(), ["s1", "s2"])
+
+    assert model.moranIForMz(100.005) == {"s1": 0.9, "s2": 0.8}
+
+
+def test_moran_i_for_mz_no_match_returns_empty():
+    model = SpatialCorrelationModel()
+    model.setRows(_rows(), ["s1", "s2"])
+
+    assert model.moranIForMz(150.0) == {}
+
+
+def test_moran_i_for_mz_empty_model_returns_empty():
+    model = SpatialCorrelationModel()
+
+    assert model.moranIForMz(100.0) == {}
+
+
+def test_moran_i_for_mz_omits_unscored_samples():
+    model = SpatialCorrelationModel()
+    model.setRows(_rows(), ["s1", "s2"])
+
+    # mz 300 (Glucose) has no s2 score at all.
+    assert model.moranIForMz(300.0) == {"s1": 0.5}
+
+
 def test_model_reset_emitted_on_setrows_and_filter():
     model = SpatialCorrelationModel()
     received = []

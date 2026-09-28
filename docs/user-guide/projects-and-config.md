@@ -277,20 +277,40 @@ compresses the result.
 
 ### `spatial_correlation` — per-feature spatial autocorrelation (opt-in, off by default)
 
-Computes Moran's I (via `squidpy`) for every feature, independently per
-sample — how much a feature's pixel intensities cluster spatially rather
-than scattering at random, a proxy for "is this a real, spatially
-organized signal or noise." Runs after `normalization`, once every
-per-sample `.h5ad` exists; results are written directly into each sample's
-own `.h5ad` (`adata.uns["moranI"]`, squidpy's own convention), not into
-the analysis database. Browsable in the GUI's **Spatial Correlation** tab.
+Two independent, opt-in sub-passes — see [Concepts](concepts.md) for what
+each score actually means.
+
+**Global** (`enabled`): computes Moran's I (via `squidpy`) for every
+feature, independently per sample — how much a feature's pixel
+intensities cluster spatially rather than scattering at random, a proxy
+for "is this a real, spatially organized signal or noise." Runs after
+`normalization`, once every per-sample `.h5ad` exists; results are
+written directly into each sample's own `.h5ad` (`adata.uns["moranI"]`,
+squidpy's own convention), not into the analysis database. Browsable in
+the GUI's **Spatial Correlation** tab.
+
+**Local** (`local_enabled`): a separate, hand-rolled pass computing
+*local* (per-pixel) Moran's I for every feature, written in full to
+`adata.layers["localMoranI"]` (not a pre-thresholded summary) — the
+GUI's **Spatial Correlation** tab turns this into a "% of pixels above a
+threshold" table on the fly, and that threshold is freely adjustable
+right there, live, with no re-run: `local_threshold` below only sets what
+the table shows when it first opens. Independent of `enabled`: either,
+both, or neither can be on. Visual Inspection's **Local Moran's I**
+heatmap layer computes the same per-pixel score live, on demand, and
+never needs this pass (or `enabled`) to have run at all — this pass only
+exists to pre-compute the per-pixel *data* the summary table reads.
+
 See [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md).
 
 | key | default | meaning |
 |---|---|---|
-| `enabled` | `false` | run this stage. Off by default — it's an optional, fairly heavy extra pass (spatial neighbor graph + per-feature autocorrelation for every sample) that most runs don't need. |
-| `layer` | `"TIC"` | which `.h5ad` layer's intensities to score — TIC-normalized by default for comparability across samples, falling back to raw `.X` when the named layer isn't present (e.g. `normalization.enabled: false`). |
-| `n_jobs` | `null` | parallel workers squidpy uses to score features *within* one sample (samples are still processed one at a time). `null` lets squidpy/joblib pick its own worker count. |
+| `enabled` | `false` | run the global pass. Off by default — it's an optional, fairly heavy extra pass (spatial neighbor graph + per-feature autocorrelation for every sample) that most runs don't need. |
+| `layer` | `"TIC"` | which `.h5ad` layer's intensities to score (both passes) — TIC-normalized by default for comparability across samples, falling back to raw `.X` when the named layer isn't present (e.g. `normalization.enabled: false`). |
+| `n_jobs` | `null` | parallel workers squidpy uses to score features *within* one sample for the global pass (samples are still processed one at a time). `null` lets squidpy/joblib pick its own worker count. |
+| `local_enabled` | `false` | run the local per-pixel pass. Off by default, independently of `enabled` — scoring every pixel for every feature is heavier than the global per-feature score. |
+| `local_threshold` | `1.0` | **not a pipeline parameter** — only the value the GUI's local-summary table starts at when it first opens; adjustable live in the GUI afterward with no re-run needed. **Not bounded to -1–1** like the global score — see the in-app field help (or [Concepts](concepts.md)) for what values mean. |
+| `local_n_workers` | `null` | worker processes scoring features in parallel for the local pass — it has no built-in parallelism of its own the way `n_jobs` gives the global pass, so every feature's score is split across worker processes instead. `null` uses `os.cpu_count()`; `1` forces a fully serial run. Independent of `n_jobs`, which only affects the global pass. |
 
 ### `analysis` — per-analysis database
 

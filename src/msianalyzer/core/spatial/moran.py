@@ -30,7 +30,7 @@ def compute_spatial_autocorr(
 
     Args:
         h5ad_path: Path to one sample's `.h5ad` (as built by
-            `create_spatial_adata` / normalized by `run_tic_normalization`).
+            `create_spatial_adata` / normalized by `run_normalization`).
             Overwritten in place with the Moran's I results added.
         layer: Which `.h5ad` layer's intensities to score. Falls back to
             raw `.X` when the layer isn't present (e.g.

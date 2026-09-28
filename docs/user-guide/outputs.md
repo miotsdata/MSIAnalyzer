@@ -71,12 +71,22 @@ Key tables (full schema in the
 import anndata as ad
 adata = ad.read_h5ad("results/<sample>.h5ad")
 adata.X                  # pixels × features intensities (raw)
-adata.layers["raw"]      # same as .X, explicitly labelled
-adata.layers["TIC"]      # TIC-normalized, log1p-compressed
-adata.var_names          # feature m/z
-adata.obs                # pixel x / y coordinates, obs["tic"] is the per-pixel TIC used for normalization
-adata.uns["moranI"]      # per-feature Moran's I (+ p-values), only when spatial_correlation.enabled: true
+adata.layers["raw"]        # same as .X, explicitly labelled
+adata.layers["TIC"]        # TIC-normalized, log1p-compressed
+adata.layers["localMoranI"]  # per-pixel, per-feature local Moran's I, only when spatial_correlation.local_enabled: true
+adata.var_names            # feature m/z
+adata.obs                  # pixel x / y coordinates, obs["tic"] is the per-pixel TIC used for normalization
+adata.uns["moranI"]        # per-feature global Moran's I (+ p-values), only when spatial_correlation.enabled: true
 ```
+
+`layers["localMoranI"]` is the *full* per-pixel local Moran's I, same
+`(pixels, features)` shape as `.X` — not a pre-thresholded summary. The
+GUI's Spatial Correlation page reads it directly to build its "% of
+pixels above a threshold" table, recomputing that percentage for whatever
+threshold you currently have set in the GUI. Visual Inspection's own
+**Local Moran's I** layer is unrelated to this file — it's always
+recomputed live, on demand, whether or not this pass has run. See
+[Concepts](concepts.md).
 
 ## Re-running
 

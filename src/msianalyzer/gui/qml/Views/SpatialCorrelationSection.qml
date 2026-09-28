@@ -13,6 +13,10 @@ Item {
     // inspectVisuallyRequested already uses (ADR 32) — see
     // AnalysisPage.qml's spatialCorrLoader.onLoaded.
     signal showSpatialDistributionRequested(real mz)
+    // Same handoff, from the local-summary table below — also switches
+    // Visual Inspection's heatmap layer to Local Moran's I, not just the
+    // feature (see AnalysisPage.qml's own handling of this signal).
+    signal showLocalSpatialDistributionRequested(real mz)
 
     property var analysis
 
@@ -34,8 +38,24 @@ Item {
                          ? AnalysisBridge.getSpatialCorrelationModel(analysis.analysisDbPath)
                          : null
 
-    property bool rowsLoading: spatialCorrelationSection.model
-                                ? spatialCorrelationSection.model.rowsLoading : false
+    // Same model shape, backed by the local Moran's I summary instead
+    // (`spatial_correlation.local_enabled`) — see
+    // AnalysisBridge.getLocalMoranSummaryModel. A second, independent
+    // table below the global one; gated on `local_enabled` having
+    // actually run for a sample the same way the global table is gated
+    // on `enabled`, not on each other.
+    property var localModel: (analysis && analysis.analysisDbPath)
+                              ? AnalysisBridge.getLocalMoranSummaryModel(analysis.analysisDbPath)
+                              : null
+
+    // True while *either* table's fetch is still in flight — AnalysisPage's
+    // currentSectionReady reads this one property, so both tables gate the
+    // same loading overlay without AnalysisPage needing to know there are
+    // two of them.
+    property bool rowsLoading: (spatialCorrelationSection.model
+                                 && spatialCorrelationSection.model.rowsLoading)
+                                || (spatialCorrelationSection.localModel
+                                    && spatialCorrelationSection.localModel.rowsLoading)
     readonly property var sampleNames: spatialCorrelationSection.model
                                         ? spatialCorrelationSection.model.samples : []
     readonly property string sortColumn: spatialCorrelationSection.model
@@ -45,8 +65,21 @@ Item {
     readonly property int rowCountVisible: spatialCorrelationSection.model
                                             ? spatialCorrelationSection.model.rowCount() : 0
 
+    readonly property var localSampleNames: spatialCorrelationSection.localModel
+                                             ? spatialCorrelationSection.localModel.samples : []
+    readonly property string localSortColumn: spatialCorrelationSection.localModel
+                                               ? spatialCorrelationSection.localModel.sortColumn : "mz"
+    readonly property bool localSortAscending: spatialCorrelationSection.localModel
+                                                ? spatialCorrelationSection.localModel.sortAscending : true
+    readonly property int localRowCountVisible: spatialCorrelationSection.localModel
+                                                 ? spatialCorrelationSection.localModel.rowCount() : 0
+
     function sortBy(column) {
         if (spatialCorrelationSection.model) spatialCorrelationSection.model.sortBy(column)
+    }
+
+    function sortLocalBy(column) {
+        if (spatialCorrelationSection.localModel) spatialCorrelationSection.localModel.sortBy(column)
     }
 
     readonly property string defaultFontFamily: Qt.application.font.family
@@ -60,189 +93,422 @@ Item {
                              : spatialCorrelationSection.sampleColumnWidth
     }
 
-    Label {
-        objectName: "spatialCorrelationEmptyStateLabel"
-        // No samples ever had `spatial_correlation` run on them for this
-        // analysis (or there's no analysis/model at all yet) — distinct
-        // from "the table is there but a search matched nothing", which
-        // spatialCorrelationSearchEmptyLabel below covers instead.
-        visible: !spatialCorrelationSection.rowsLoading
-                 && (!spatialCorrelationSection.model
-                     || spatialCorrelationSection.sampleNames.length === 0)
-        anchors.centerIn: parent
-        text: "No spatial correlation scores yet — enable `spatial_correlation` in the run config."
-        color: Theme.mutedTextColor
-        wrapMode: Text.Wrap
-        width: parent.width * 0.6
-        horizontalAlignment: Text.AlignHCenter
-    }
-
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 16
-        visible: spatialCorrelationSection.sampleNames.length > 0
-        spacing: 8
+        spacing: 16
 
-        RowLayout {
-            Layout.fillWidth: true
-
-            Label {
-                text: "Spatial correlation (Moran's I) — " + spatialCorrelationSection.rowCountVisible + " feature(s)"
-                font.bold: true
-                font.pixelSize: 14
-                Layout.fillWidth: true
-            }
-            TextField {
-                id: spatialCorrelationNameSearchField
-                objectName: "spatialCorrelationNameSearchField"
-                Layout.preferredWidth: 200
-                placeholderText: "Search name…"
-                text: spatialCorrelationSection.model ? spatialCorrelationSection.model.nameQuery : ""
-                onTextChanged: if (spatialCorrelationSection.model) spatialCorrelationSection.model.nameQuery = text
-            }
-            TextField {
-                id: spatialCorrelationMzSearchField
-                objectName: "spatialCorrelationMzSearchField"
-                Layout.preferredWidth: 100
-                placeholderText: "m/z…"
-                text: spatialCorrelationSection.model ? spatialCorrelationSection.model.mzQuery : ""
-                onTextChanged: if (spatialCorrelationSection.model) spatialCorrelationSection.model.mzQuery = text
-            }
-        }
-
-        Label {
-            objectName: "spatialCorrelationSearchEmptyLabel"
-            visible: spatialCorrelationSection.sampleNames.length > 0
-                     && spatialCorrelationSection.rowCountVisible === 0
-            text: "No features match your search."
-            color: Theme.mutedTextColor
-            Layout.alignment: Qt.AlignHCenter
-        }
-
-        // Header — HorizontalHeaderView keeps itself horizontally synced
-        // to tableView below (syncView); click-to-sort is hand-rolled
-        // (no native sort-indicator support in this Qt/PySide version —
-        // confirmed directly, nothing to wire up instead of building).
-        HorizontalHeaderView {
-            id: headerView
-            objectName: "spatialCorrelationHeaderView"
-            visible: spatialCorrelationSection.rowCountVisible > 0
-            Layout.fillWidth: true
-            syncView: tableView
-            clip: true
-
-            delegate: Rectangle {
-                id: headerCell
-                objectName: "spatialCorrelationSortHeader_" + column
-                implicitWidth: spatialCorrelationSection.columnWidth(column)
-                implicitHeight: spatialCorrelationSection.headerHeight
-                color: "transparent"
-                border.color: palette.mid
-                border.width: 1
-
-                required property int column
-                required property var display
-
-                readonly property string columnKey: column === 0 ? "mz" : spatialCorrelationSection.sampleNames[column - 1]
-
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: spatialCorrelationSection.sortBy(headerCell.columnKey)
-                }
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 4
-                    spacing: 0
-
-                    Label {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        text: headerCell.display
-                        font.bold: true
-                        wrapMode: Text.WrapAnywhere
-                        elide: Text.ElideRight
-                        maximumLineCount: 3
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        horizontalAlignment: Text.AlignHCenter
-                        font.pixelSize: 11
-                        text: spatialCorrelationSection.sortColumn === headerCell.columnKey
-                              ? (spatialCorrelationSection.sortAscending ? "▲" : "▼")
-                              : " "
-                    }
-                }
-            }
-        }
-
-        // Body — TableView only ever instantiates delegates for the
-        // visible viewport (plus a small overscan buffer), regardless of
-        // total row count — sorting/filtering only has to redraw what's
-        // on screen, not rebuild every row (the actual fix for "ordering
-        // the table is still super slow": the previous Repeater-based
-        // version rebuilt every row's delegate on every sort).
-        TableView {
-            id: tableView
-            objectName: "spatialCorrelationTableView"
-            visible: spatialCorrelationSection.rowCountVisible > 0
+        // ============================================================
+        // Global Moran's I — one score per feature per sample.
+        // ============================================================
+        ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            columnSpacing: 0
-            rowSpacing: 0
-            model: spatialCorrelationSection.model
-            columnWidthProvider: function (column) { return spatialCorrelationSection.columnWidth(column) }
-            rowHeightProvider: function (row) { return spatialCorrelationSection.rowHeight }
+            spacing: 8
 
-            ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            Label {
+                objectName: "spatialCorrelationEmptyStateLabel"
+                // No samples ever had `spatial_correlation` run on them
+                // for this analysis (or there's no analysis/model at all
+                // yet) — distinct from "the table is there but a search
+                // matched nothing", which spatialCorrelationSearchEmptyLabel
+                // below covers instead.
+                visible: !spatialCorrelationSection.rowsLoading
+                         && (!spatialCorrelationSection.model
+                             || spatialCorrelationSection.sampleNames.length === 0)
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                text: "No spatial correlation scores yet — enable `spatial_correlation` in the run config."
+                color: Theme.mutedTextColor
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
 
-            delegate: Rectangle {
-                id: cellDelegate
-                objectName: "spatialCorrelationCell_" + row + "_" + column
-                implicitWidth: spatialCorrelationSection.columnWidth(column)
-                implicitHeight: spatialCorrelationSection.rowHeight
-                color: "transparent"
-                border.color: palette.mid
-                border.width: 1
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: spatialCorrelationSection.sampleNames.length > 0
+                spacing: 8
 
-                required property int row
-                required property int column
-                required property var display
-                required property real mz
+                RowLayout {
+                    Layout.fillWidth: true
 
-                MouseArea {
-                    anchors.fill: parent
-                    acceptedButtons: Qt.RightButton
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: rowContextMenu.popup()
-                }
-
-                Menu {
-                    id: rowContextMenu
-                    objectName: "spatialCorrelationRowContextMenu_" + cellDelegate.row
-                    MenuItem {
-                        objectName: "spatialCorrelationShowDistribution_" + cellDelegate.row
-                        text: "Show spatial distribution"
-                        onTriggered: spatialCorrelationSection.showSpatialDistributionRequested(cellDelegate.mz)
+                    Label {
+                        text: "Spatial correlation (Moran's I) — " + spatialCorrelationSection.rowCountVisible + " feature(s)"
+                        font.bold: true
+                        font.pixelSize: 14
+                        Layout.fillWidth: true
+                    }
+                    TextField {
+                        id: spatialCorrelationNameSearchField
+                        objectName: "spatialCorrelationNameSearchField"
+                        Layout.preferredWidth: 200
+                        placeholderText: "Search name…"
+                        text: spatialCorrelationSection.model ? spatialCorrelationSection.model.nameQuery : ""
+                        onTextChanged: if (spatialCorrelationSection.model) spatialCorrelationSection.model.nameQuery = text
+                    }
+                    TextField {
+                        id: spatialCorrelationMzSearchField
+                        objectName: "spatialCorrelationMzSearchField"
+                        Layout.preferredWidth: 100
+                        placeholderText: "m/z…"
+                        text: spatialCorrelationSection.model ? spatialCorrelationSection.model.mzQuery : ""
+                        onTextChanged: if (spatialCorrelationSection.model) spatialCorrelationSection.model.mzQuery = text
                     }
                 }
 
                 Label {
-                    anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 8
-                    verticalAlignment: Text.AlignVCenter
-                    horizontalAlignment: cellDelegate.column === 0 ? Text.AlignLeft : Text.AlignRight
-                    elide: Text.ElideRight
-                    font.family: cellDelegate.column === 0
-                                 ? spatialCorrelationSection.defaultFontFamily : "monospace"
-                    text: cellDelegate.display
+                    objectName: "spatialCorrelationSearchEmptyLabel"
+                    visible: spatialCorrelationSection.sampleNames.length > 0
+                             && spatialCorrelationSection.rowCountVisible === 0
+                    text: "No features match your search."
+                    color: Theme.mutedTextColor
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                // Header — HorizontalHeaderView keeps itself horizontally
+                // synced to tableView below (syncView); click-to-sort is
+                // hand-rolled (no native sort-indicator support in this
+                // Qt/PySide version — confirmed directly, nothing to wire
+                // up instead of building).
+                HorizontalHeaderView {
+                    id: headerView
+                    objectName: "spatialCorrelationHeaderView"
+                    visible: spatialCorrelationSection.rowCountVisible > 0
+                    Layout.fillWidth: true
+                    syncView: tableView
+                    clip: true
+
+                    delegate: Rectangle {
+                        id: headerCell
+                        objectName: "spatialCorrelationSortHeader_" + column
+                        implicitWidth: spatialCorrelationSection.columnWidth(column)
+                        implicitHeight: spatialCorrelationSection.headerHeight
+                        color: "transparent"
+                        border.color: palette.mid
+                        border.width: 1
+
+                        required property int column
+                        required property var display
+
+                        readonly property string columnKey: column === 0 ? "mz" : spatialCorrelationSection.sampleNames[column - 1]
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: spatialCorrelationSection.sortBy(headerCell.columnKey)
+                        }
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            spacing: 0
+
+                            Label {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                text: headerCell.display
+                                font.bold: true
+                                wrapMode: Text.WrapAnywhere
+                                elide: Text.ElideRight
+                                maximumLineCount: 3
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                font.pixelSize: 11
+                                text: spatialCorrelationSection.sortColumn === headerCell.columnKey
+                                      ? (spatialCorrelationSection.sortAscending ? "▲" : "▼")
+                                      : " "
+                            }
+                        }
+                    }
+                }
+
+                // Body — TableView only ever instantiates delegates for
+                // the visible viewport (plus a small overscan buffer),
+                // regardless of total row count — sorting/filtering only
+                // has to redraw what's on screen, not rebuild every row
+                // (the actual fix for "ordering the table is still super
+                // slow": the previous Repeater-based version rebuilt
+                // every row's delegate on every sort).
+                TableView {
+                    id: tableView
+                    objectName: "spatialCorrelationTableView"
+                    visible: spatialCorrelationSection.rowCountVisible > 0
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    columnSpacing: 0
+                    rowSpacing: 0
+                    model: spatialCorrelationSection.model
+                    columnWidthProvider: function (column) { return spatialCorrelationSection.columnWidth(column) }
+                    rowHeightProvider: function (row) { return spatialCorrelationSection.rowHeight }
+
+                    ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                    delegate: Rectangle {
+                        id: cellDelegate
+                        objectName: "spatialCorrelationCell_" + row + "_" + column
+                        implicitWidth: spatialCorrelationSection.columnWidth(column)
+                        implicitHeight: spatialCorrelationSection.rowHeight
+                        color: "transparent"
+                        border.color: palette.mid
+                        border.width: 1
+
+                        required property int row
+                        required property int column
+                        required property var display
+                        required property real mz
+
+                        MouseArea {
+                            anchors.fill: parent
+                            acceptedButtons: Qt.RightButton
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: rowContextMenu.popup()
+                        }
+
+                        Menu {
+                            id: rowContextMenu
+                            objectName: "spatialCorrelationRowContextMenu_" + cellDelegate.row
+                            MenuItem {
+                                objectName: "spatialCorrelationShowDistribution_" + cellDelegate.row
+                                text: "Show spatial distribution"
+                                onTriggered: spatialCorrelationSection.showSpatialDistributionRequested(cellDelegate.mz)
+                            }
+                        }
+
+                        Label {
+                            anchors.fill: parent
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            verticalAlignment: Text.AlignVCenter
+                            horizontalAlignment: cellDelegate.column === 0 ? Text.AlignLeft : Text.AlignRight
+                            elide: Text.ElideRight
+                            font.family: cellDelegate.column === 0
+                                         ? spatialCorrelationSection.defaultFontFamily : "monospace"
+                            text: cellDelegate.display
+                        }
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // Local Moran's I — per feature, % of pixels above threshold.
+        // Same shape as the table above, deliberately not factored into
+        // a shared component: only two of these exist, and each is small
+        // enough on its own that a shared abstraction wouldn't meaningfully
+        // reduce the QML here (see LocalMoranSummaryModel's own docstring
+        // for the equivalent reasoning on the Python side).
+        // ============================================================
+        ColumnLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: 8
+
+            Label {
+                objectName: "localMoranSummaryEmptyStateLabel"
+                visible: !spatialCorrelationSection.rowsLoading
+                         && (!spatialCorrelationSection.localModel
+                             || spatialCorrelationSection.localSampleNames.length === 0)
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                text: "No local Moran's I summary yet — enable `spatial_correlation.local_enabled` in the run config."
+                color: Theme.mutedTextColor
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: spatialCorrelationSection.localSampleNames.length > 0
+                spacing: 8
+
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    Label {
+                        text: "Local Moran's I — % of pixels above threshold — "
+                              + spatialCorrelationSection.localRowCountVisible + " feature(s)"
+                        font.bold: true
+                        font.pixelSize: 14
+                        Layout.fillWidth: true
+                    }
+                    Label {
+                        text: "Threshold:"
+                    }
+                    TextField {
+                        id: localMoranThresholdField
+                        objectName: "localMoranThresholdField"
+                        Layout.preferredWidth: 70
+                        // Seeded from SpatialCorrelationConfig.local_threshold
+                        // (this analysis' own run) via
+                        // AnalysisBridge.getLocalMoranSummaryModel — editing
+                        // this only re-thresholds the already-loaded data
+                        // (LocalMoranSummaryModel.threshold), no re-fetch,
+                        // no re-run. Committed on Enter/focus-loss (a
+                        // numeric field, unlike the live-as-you-type search
+                        // fields below), same convention as
+                        // HeatmapControlsPanel.qml's vmin/vmax fields.
+                        text: spatialCorrelationSection.localModel
+                              ? spatialCorrelationSection.localModel.threshold.toFixed(2) : ""
+                        onEditingFinished: {
+                            if (!spatialCorrelationSection.localModel) return
+                            var v = parseFloat(text)
+                            if (!isNaN(v)) spatialCorrelationSection.localModel.threshold = v
+                        }
+                    }
+                    TextField {
+                        id: localMoranSummaryNameSearchField
+                        objectName: "localMoranSummaryNameSearchField"
+                        Layout.preferredWidth: 200
+                        placeholderText: "Search name…"
+                        text: spatialCorrelationSection.localModel ? spatialCorrelationSection.localModel.nameQuery : ""
+                        onTextChanged: if (spatialCorrelationSection.localModel) spatialCorrelationSection.localModel.nameQuery = text
+                    }
+                    TextField {
+                        id: localMoranSummaryMzSearchField
+                        objectName: "localMoranSummaryMzSearchField"
+                        Layout.preferredWidth: 100
+                        placeholderText: "m/z…"
+                        text: spatialCorrelationSection.localModel ? spatialCorrelationSection.localModel.mzQuery : ""
+                        onTextChanged: if (spatialCorrelationSection.localModel) spatialCorrelationSection.localModel.mzQuery = text
+                    }
+                }
+
+                Label {
+                    objectName: "localMoranSummarySearchEmptyLabel"
+                    visible: spatialCorrelationSection.localSampleNames.length > 0
+                             && spatialCorrelationSection.localRowCountVisible === 0
+                    text: "No features match your search."
+                    color: Theme.mutedTextColor
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                HorizontalHeaderView {
+                    id: localHeaderView
+                    objectName: "localMoranSummaryHeaderView"
+                    visible: spatialCorrelationSection.localRowCountVisible > 0
+                    Layout.fillWidth: true
+                    syncView: localTableView
+                    clip: true
+
+                    delegate: Rectangle {
+                        id: localHeaderCell
+                        objectName: "localMoranSummarySortHeader_" + column
+                        implicitWidth: spatialCorrelationSection.columnWidth(column)
+                        implicitHeight: spatialCorrelationSection.headerHeight
+                        color: "transparent"
+                        border.color: palette.mid
+                        border.width: 1
+
+                        required property int column
+                        required property var display
+
+                        readonly property string columnKey: column === 0 ? "mz" : spatialCorrelationSection.localSampleNames[column - 1]
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: spatialCorrelationSection.sortLocalBy(localHeaderCell.columnKey)
+                        }
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            spacing: 0
+
+                            Label {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                text: localHeaderCell.display
+                                font.bold: true
+                                wrapMode: Text.WrapAnywhere
+                                elide: Text.ElideRight
+                                maximumLineCount: 3
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                font.pixelSize: 11
+                                text: spatialCorrelationSection.localSortColumn === localHeaderCell.columnKey
+                                      ? (spatialCorrelationSection.localSortAscending ? "▲" : "▼")
+                                      : " "
+                            }
+                        }
+                    }
+                }
+
+                TableView {
+                    id: localTableView
+                    objectName: "localMoranSummaryTableView"
+                    visible: spatialCorrelationSection.localRowCountVisible > 0
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    columnSpacing: 0
+                    rowSpacing: 0
+                    model: spatialCorrelationSection.localModel
+                    columnWidthProvider: function (column) { return spatialCorrelationSection.columnWidth(column) }
+                    rowHeightProvider: function (row) { return spatialCorrelationSection.rowHeight }
+
+                    ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                    delegate: Rectangle {
+                        id: localCellDelegate
+                        objectName: "localMoranSummaryCell_" + row + "_" + column
+                        implicitWidth: spatialCorrelationSection.columnWidth(column)
+                        implicitHeight: spatialCorrelationSection.rowHeight
+                        color: "transparent"
+                        border.color: palette.mid
+                        border.width: 1
+
+                        required property int row
+                        required property int column
+                        required property var display
+                        required property real mz
+
+                        MouseArea {
+                            anchors.fill: parent
+                            acceptedButtons: Qt.RightButton
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: localRowContextMenu.popup()
+                        }
+
+                        Menu {
+                            id: localRowContextMenu
+                            objectName: "localMoranSummaryRowContextMenu_" + localCellDelegate.row
+                            MenuItem {
+                                objectName: "localMoranSummaryShowDistribution_" + localCellDelegate.row
+                                text: "Show spatial distribution"
+                                onTriggered: spatialCorrelationSection.showLocalSpatialDistributionRequested(localCellDelegate.mz)
+                            }
+                        }
+
+                        Label {
+                            anchors.fill: parent
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            verticalAlignment: Text.AlignVCenter
+                            horizontalAlignment: localCellDelegate.column === 0 ? Text.AlignLeft : Text.AlignRight
+                            elide: Text.ElideRight
+                            font.family: localCellDelegate.column === 0
+                                         ? spatialCorrelationSection.defaultFontFamily : "monospace"
+                            text: localCellDelegate.display
+                        }
+                    }
                 }
             }
         }

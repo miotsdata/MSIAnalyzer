@@ -292,6 +292,34 @@ def test_get_feature_value_range_defaults_when_no_samples_resolve(tmp_path):
     assert result == {"vmin": 0.0, "vmax": 1.0}
 
 
+def _write_3x3_sample_h5ad(path):
+    # squidpy's spatial_neighbors_grid needs more pixels than the 2x2
+    # fixture elsewhere in this file has (n_neighs=4 requires n_samples > 4).
+    obs = pd.DataFrame(index=[f"px{i}" for i in range(9)])
+    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+    X = csr_matrix(np.arange(9, dtype=np.float32).reshape(-1, 1))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    coords = [(x, y) for y in (0.0, 1.0, 2.0) for x in (0.0, 1.0, 2.0)]
+    adata.obsm["spatial"] = np.array(coords, dtype=float)
+    adata.write_h5ad(path)
+
+
+def test_request_image_renders_local_moran_layer(tmp_path):
+    # The "localMoran" dataLayer sentinel (HeatmapControlsPanel.qml) round-
+    # trips through the same image://heatmap/... request-id shape as
+    # raw/TIC — see render_heatmap_by_target's dispatch.
+    _write_3x3_sample_h5ad(tmp_path / "s1.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    image = provider.requestImage("s1|100.0|localMoran|coolwarm|auto|auto", None, None)
+
+    assert not image.isNull()
+    assert image.width() == 3
+    assert image.height() == 3
+    assert image.format() == QImage.Format.Format_RGBA8888
+
+
 def test_get_obs_columns_reads_from_first_resolvable_sample(tmp_path):
     _write_sample_h5ad(
         tmp_path / "s1.h5ad",

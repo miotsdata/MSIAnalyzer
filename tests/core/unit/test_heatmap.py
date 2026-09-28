@@ -359,6 +359,27 @@ def test_render_heatmap_by_target_feature_autoscale_tokens():
     np.testing.assert_array_equal(dispatched, direct)
 
 
+def test_render_heatmap_by_target_local_moran_dispatches_to_render_local_moran_heatmap():
+    # Local import inside render_heatmap_by_target (core/spatial/local_moran
+    # pulls in squidpy) — imported here, not at module scope, to match.
+    from msianalyzer.core.spatial.local_moran import render_local_moran_heatmap
+
+    # squidpy's neighbor graph needs more pixels than the 2x2 fixture
+    # elsewhere in this file has (n_neighs=4 requires n_samples > 4) — a
+    # small 3x3 grid instead, just for this dispatch smoke test.
+    adata = _make_grid_adata(
+        list(range(9)), xs=(0.0, 1.0, 2.0), ys=(0.0, 1.0, 2.0)
+    )
+    parts = ["s1", "100.0", "localMoran", "coolwarm", "auto", "auto"]
+
+    dispatched = render_heatmap_by_target(adata, parts[1], parts)
+    direct = render_local_moran_heatmap(
+        adata, mz=100.0, colormap="coolwarm", vmin=None, vmax=None
+    )
+
+    np.testing.assert_array_equal(dispatched, direct)
+
+
 def test_render_heatmap_by_target_numeric_obs():
     adata = _make_grid_adata(
         [0.0, 0.0, 0.0, 0.0], obs_columns={"tic": [0.0, 10.0, 5.0, 15.0]}

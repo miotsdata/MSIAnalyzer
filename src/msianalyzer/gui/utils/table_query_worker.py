@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-import pandas as pd
 from PySide6.QtCore import QThread, Signal
 
 logger = logging.getLogger(__name__)
@@ -29,14 +28,21 @@ class TableQueryWorker(QThread):
     figure on the worker thread reproducibly crashed); untested here
     whether a DataFrame->records conversion would have the same problem,
     so it isn't asked to.
+
+    Also reused, more loosely, by `getLocalMoranSummaryModel` with
+    `_load_local_moran_layer_data` — that loader returns a plain
+    `(feature_rows, samples)` tuple, not a `DataFrame`; `Signal(object)`
+    carries either just as well, so this class works as "run one
+    single-argument function on a background thread and hand back
+    whatever it returns" in general, not strictly DataFrame-only.
     """
 
-    succeeded = Signal(object)  # a pandas DataFrame
+    succeeded = Signal(object)  # a pandas DataFrame, or another plain result
     failed = Signal(str)  # human-readable error message
 
     def __init__(
         self,
-        query_fn: Callable[[str], pd.DataFrame],
+        query_fn: Callable[[str], object],
         analysis_db_path: str,
         parent=None,
     ) -> None:

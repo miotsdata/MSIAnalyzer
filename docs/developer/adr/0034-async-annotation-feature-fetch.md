@@ -96,3 +96,16 @@ Extending the same, already-proven pattern to
 - Scoped to `getAnnotationTable`/`getFeatureList` only — `getSamples`/
   `getObsColumns` (`.h5ad`-backed, not `ms2_annotations`-backed, and not
   implicated by the actual slowness report) are left synchronous.
+
+**Superseded, in part (ADR 48, round 3)**: `getObsColumns` — along with
+`getFeatureValueRange`/`getObsValueRange`/`getObsCategories`, all
+`.h5ad`-backed calls from `HeatmapControlsPanel.qml` — was later found to
+be a real, direct cause of Visual Inspection's freeze-on-open (investigated
+after the render-cache prefetch fix alone didn't resolve a persisting
+freeze report), and converted to the same fire-and-forget async pattern
+this ADR established. The reasoning above (not `ms2_annotations`-backed,
+not implicated at the time) was correct for what this ADR was actually
+investigating; it just turned out not to generalize to every `.h5ad`-backed
+call once Visual Inspection's own freeze was investigated directly. See
+ADR 48 for the full account. `getSamples` remains synchronous — still not
+implicated by any subsequent investigation.

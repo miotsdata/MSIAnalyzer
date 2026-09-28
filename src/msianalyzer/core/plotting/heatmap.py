@@ -20,6 +20,11 @@ _EXCLUDED_OBS_COLUMNS = {"x", "y", "scan_id", "polarity"}
 # every tile and the legend index into this one palette by the same
 # category order so colors agree across tiles.
 _CATEGORY_PALETTE = "tab20"
+#: Reserved `layer` value (never a real `.h5ad` layer name) meaning
+#: "render this feature's per-pixel local Moran's I instead of its raw
+#: intensity" — see `render_heatmap_by_target`'s dispatch and
+#: `core.spatial.local_moran`.
+_LOCAL_MORAN_LAYER = "localMoran"
 
 
 def _feature_column_index(adata: ad.AnnData, mz: float) -> int:
@@ -371,6 +376,17 @@ def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -
     mz_str, layer, colormap, vmin_str, vmax_str = parts[1:6]
     vmin = None if vmin_str == "auto" else float(vmin_str)
     vmax = None if vmax_str == "auto" else float(vmax_str)
+    if layer == _LOCAL_MORAN_LAYER:
+        # Local import: core.spatial.local_moran pulls in squidpy (heavy —
+        # scanpy/numba), and this module is on the GUI's startup path via
+        # heatmap_provider.py; deferring the import keeps that cost paid
+        # only when a local Moran's I render is actually requested. See
+        # that module for the computation itself.
+        from msianalyzer.core.spatial.local_moran import render_local_moran_heatmap
+
+        return render_local_moran_heatmap(
+            adata, float(mz_str), colormap=colormap, vmin=vmin, vmax=vmax
+        )
     return render_feature_heatmap(
         adata, float(mz_str), layer=layer, colormap=colormap, vmin=vmin, vmax=vmax,
     )

@@ -85,3 +85,67 @@ just the surviving precursor. That is a signal about the analyte, not a reason t
 throw the scan away. MSIAnalyzer keeps every MS2 scan and flags the ones where
 the base peak sits on the precursor and carries most of the intensity
 (`precursor_only`). See [MS2 annotation](ms2-annotation.md).
+
+## Spatial autocorrelation (Moran's I)
+
+A feature's per-pixel intensities can either form a real spatial pattern (e.g.
+concentrated where the tissue is) or look basically like noise scattered at
+random. **Moran's I** is a score that tells the two apart by comparing each
+pixel's value to its neighbors':
+
+- Close to **+1** — neighboring pixels have similar values: the feature is
+  spatially organized.
+- Close to **0** — no relationship between neighbors: looks like noise.
+- Close to **−1** — neighbors tend to have *opposite* values (checkerboard-like):
+  unusual in real MSI data.
+
+MSIAnalyzer computes one Moran's I **per feature, per sample** (never pooled
+across samples — a metabolite organized in one slide isn't assumed to be
+organized in another), via the opt-in `spatial_correlation` pipeline stage
+(see [Workflow](workflow.md)'s "Spatial correlation" stage). Browse every
+feature's score per sample in the **Spatial Correlation** tab, or see the
+currently-selected feature's score next to each sample's name in **Visual
+Inspection**.
+
+### Local Moran's I — *where*, not just *whether*
+
+The score above is **global**: one number for the whole sample. If a sample's
+image contains both bare matrix and actual tissue (a common setup), a high
+global score might just mean "the tissue and the matrix look different" — it
+doesn't say whether the signal is *also* organized *within* the tissue itself.
+
+**Local Moran's I** answers that. Instead of one score per sample, it's one
+score *per pixel*, comparing each pixel only to its own immediate neighbors.
+Select **Local Moran's I** as a layer in Visual Inspection to see it as a
+heatmap: a sharp band right at a matrix/tissue boundary is a visibly different
+pattern from scattered clusters *inside* the tissue, letting you tell coarse
+matrix-vs-tissue structure apart from genuine within-tissue organization. It's
+computed on the fly the moment you select it — not stored on disk, and it
+doesn't require the `spatial_correlation` pipeline stage to have been run at
+all.
+
+Local Moran's I is **not** bounded to −1–1 the way the global score is — a
+pixel and its neighborhood sitting about one standard deviation from the
+sample's own mean, together, scores around **±1**; a stronger, more unusual
+local concentration scores higher still. There's no single "high" value that
+applies everywhere — look at a sample's own color scale (it's centered on 0,
+so a pixel's color already tells you roughly how extreme it is) before
+picking a number to compare against.
+
+If you'd rather see "which feature has the *most* high-value pixels" as a
+sortable table instead of eyeballing each feature's map one at a time, the
+opt-in `spatial_correlation.local_enabled` pipeline pass computes every
+feature's full per-pixel local Moran's I once (this is the only place
+local Moran's I is ever written to disk — the Visual Inspection layer
+above is always computed live) — the **Spatial Correlation** tab then
+turns that into a "% of pixels above a threshold" table, sortable by any
+sample's column. Crucially, the threshold itself is a **live GUI control**,
+not baked into the pipeline run: type a different number into the table's
+threshold field and every percentage updates instantly from the same
+already-loaded data, no re-run needed. `local_threshold` in the config
+only sets what number that field starts at when the page first opens —
+if your first guess turns out to be too high or too low (e.g. showing 0
+features above it), just change it right there.
+
+See [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md) for the
+full computation details (both scores).
