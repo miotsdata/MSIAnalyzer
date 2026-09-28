@@ -38,11 +38,13 @@ from .plotting.roi import load_sample_rois
 
 logger = logging.getLogger(__name__)
 
-#: Column order in the exported file, and the DataFrame column each comes
-#: from (see `load_feature_representative_annotations`'s own docstring for
-#: what's populated per tier). `feature_id`/`mz` are the only numeric
+#: Column order in the exported file (see
+#: `load_feature_representative_annotations`'s own docstring for what's
+#: populated per tier). `feature_id`/`mz`/`score` are the only numeric
 #: columns — every other field is free text, some of it library-supplied
 #: and never guaranteed comma-free (a compound name, in particular).
+#: `score` is the MS2 representative's spectral score, blank for a
+#: target-list/predicted/unidentified row (none of those has one).
 _ANNOTATION_EXPORT_COLUMNS = [
     "feature_id",
     "mz",
@@ -54,7 +56,11 @@ _ANNOTATION_EXPORT_COLUMNS = [
     "hmdb",
     "library_name",
     "source",
+    "score",
 ]
+
+#: Export column -> DataFrame column, where the two names differ.
+_ANNOTATION_EXPORT_SOURCE_COLUMNS = {"score": "best_score"}
 
 _NUMERIC_ANNOTATION_EXPORT_COLUMNS = {"feature_id", "mz"}
 
@@ -80,8 +86,9 @@ def export_annotation_table(db_path: str | Path, dest_path: str | Path) -> None:
     strictly needs to be — a compound name is free text from a library
     file and isn't guaranteed comma-free, so this isn't optional the way
     `csv`'s own default (quote only when the delimiter/quote character/a
-    newline is actually present) would make it. `feature_id`/`mz` are the
-    only fields written unquoted.
+    newline is actually present) would make it. `feature_id`/`mz`/`score`
+    are the only fields written unquoted (a missing `score` is an empty
+    cell).
     """
     dest_path = Path(dest_path)
     df = load_feature_representative_annotations(db_path, include_unidentified=True)
@@ -95,13 +102,26 @@ def export_annotation_table(db_path: str | Path, dest_path: str | Path) -> None:
         for record in df.to_dict("records"):
             writer.writerow(
                 [
-                    _numeric_or_blank(record.get(col))
-                    if col in _NUMERIC_ANNOTATION_EXPORT_COLUMNS
-                    else _text_or_blank(record.get(col))
+                    _export_annotation_cell(col, record)
                     for col in _ANNOTATION_EXPORT_COLUMNS
                 ]
             )
     logger.info("exported annotation table (%d features) to %s", len(df), dest_path)
+
+
+def _export_annotation_cell(col: str, record: dict):
+    """One cell of the Annotation export. `score` is numeric but genuinely
+    optional (only the ms2 tier has one), so a missing score is written
+    as an empty cell rather than `_numeric_or_blank`'s `0` — a `0` would
+    read as a real (terrible) score."""
+    value = record.get(_ANNOTATION_EXPORT_SOURCE_COLUMNS.get(col, col))
+    if col == "score":
+        if value is None or (isinstance(value, float) and value != value):  # NaN
+            return None
+        return float(value)
+    if col in _NUMERIC_ANNOTATION_EXPORT_COLUMNS:
+        return _numeric_or_blank(value)
+    return _text_or_blank(value)
 
 
 def _numeric_or_blank(value):
