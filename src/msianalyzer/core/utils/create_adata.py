@@ -16,62 +16,32 @@ from msianalyzer.core.utils.logging_utils import log_call, worker_logging
 logger = logging.getLogger(__name__)
 
 
-@log_call(source="db_path")
-def create_spatial_adata(
-    db_path: str | Path,
-    target_mz_set: set[float] | list[float] | np.ndarray,
-    project_id: UUID,
-    integration_ppm: float = 5.0,
-    batch_size: int = 1000,
-    scan_handling: str = "average",
-    n_workers: int | None = None,
-) -> ad.AnnData:
-    """Quantify a set of target m/z values across MS1 spectra belonging to spatial pixels.
+def _fetch_scan_rows(
+    db_path: str | Path, scan_handling: str, batch_size: int = 1000
+) -> list[list[tuple]]:
+    """Fetch pixel-mapped MS1 scan rows from `db_path`, batched.
 
-    Reads pixel-mapped MS1 scans from a SQLite database, quantifies each
-    target m/z per pixel in parallel across worker processes, and assembles
-    the result into an `AnnData` object with pixel coordinates in `.obsm["spatial"]`.
+    Factored out of `create_spatial_adata` so the query/row shape exists in
+    exactly one place.
 
     Args:
         db_path: Path to SQLite database containing `ms1_scans` and
             `pixel_ms1_scans` tables.
-        target_mz_set: Target m/z values to quantify.
-        project_id: Identifier of the project this data belongs to, stored
-            in `AnnData.uns["project_id"]`.
-        integration_ppm: PPM tolerance for peak matching. Defaults to 5.0.
-        batch_size: Number of spectra per processing chunk. Defaults to 1000.
-        scan_handling: Either `"average"` (average spectral intensities
-            across multiple MS1 scans per pixel) or `"first"` (use only the
-            first MS1 scan acquired for each pixel). Defaults to `"average"`.
-        n_workers: Number of parallel CPU workers. Defaults to
-            `os.cpu_count()` if not provided.
+        scan_handling: `"average"` (every MS1 scan per pixel) or `"first"`
+            (only the first MS1 scan acquired for each pixel).
+        batch_size: Number of rows per fetched batch.
 
     Returns:
-        An `AnnData` object with pixels as observations, target m/z values
-        as variables, and matched intensities as `.X`.
+        A list of batches, each a list of
+        `(pixel_id, x, y, scan_id, rt, tic, polarity, mz_bytes, int_bytes)`
+        row tuples — the shape `process_spectrum_batch` expects.
 
     Raises:
-        ValueError: If `scan_handling` is not `"average"` or `"first"`, or
-            if no MS1 scans are found matching spatial pixels in
-            `pixel_ms1_scans`.
+        ValueError: `scan_handling` is invalid, or no rows were found.
     """
     if scan_handling not in ("average", "first"):
         raise ValueError("scan_handling must be either 'average' or 'first'")
 
-    if n_workers is None:
-        n_workers = os.cpu_count() or 1
-
-    logger.debug(
-        "Started creating anndata object with %d workers.",
-        n_workers,
-        extra={"source_file": db_path},
-    )
-
-    # Convert target m/zs to sorted numpy array for fast search
-    target_mzs = np.sort(np.fromiter(target_mz_set, dtype=np.float64))
-    n_vars = len(target_mzs)
-
-    # 1. Fetch metadata and byte arrays from SQLite for pixel-mapped scans only
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -131,6 +101,66 @@ def create_spatial_adata(
         raise ValueError(
             "No MS1 scans found matching spatial pixels in 'pixel_ms1_scans'."
         )
+    return batches
+
+
+@log_call(source="db_path")
+def create_spatial_adata(
+    db_path: str | Path,
+    target_mz_set: set[float] | list[float] | np.ndarray,
+    project_id: UUID,
+    integration_ppm: float = 5.0,
+    batch_size: int = 1000,
+    scan_handling: str = "average",
+    n_workers: int | None = None,
+) -> ad.AnnData:
+    """Quantify a set of target m/z values across MS1 spectra belonging to spatial pixels.
+
+    Reads pixel-mapped MS1 scans from a SQLite database, quantifies each
+    target m/z per pixel in parallel across worker processes, and assembles
+    the result into an `AnnData` object with pixel coordinates in `.obsm["spatial"]`.
+
+    Args:
+        db_path: Path to SQLite database containing `ms1_scans` and
+            `pixel_ms1_scans` tables.
+        target_mz_set: Target m/z values to quantify.
+        project_id: Identifier of the project this data belongs to, stored
+            in `AnnData.uns["project_id"]`.
+        integration_ppm: PPM tolerance for peak matching. Defaults to 5.0.
+        batch_size: Number of spectra per processing chunk. Defaults to 1000.
+        scan_handling: Either `"average"` (average spectral intensities
+            across multiple MS1 scans per pixel) or `"first"` (use only the
+            first MS1 scan acquired for each pixel). Defaults to `"average"`.
+        n_workers: Number of parallel CPU workers. Defaults to
+            `os.cpu_count()` if not provided.
+
+    Returns:
+        An `AnnData` object with pixels as observations, target m/z values
+        as variables, and matched intensities as `.X`.
+
+    Raises:
+        ValueError: If `scan_handling` is not `"average"` or `"first"`, or
+            if no MS1 scans are found matching spatial pixels in
+            `pixel_ms1_scans`.
+    """
+    if scan_handling not in ("average", "first"):
+        raise ValueError("scan_handling must be either 'average' or 'first'")
+
+    if n_workers is None:
+        n_workers = os.cpu_count() or 1
+
+    logger.debug(
+        "Started creating anndata object with %d workers.",
+        n_workers,
+        extra={"source_file": db_path},
+    )
+
+    # Convert target m/zs to sorted numpy array for fast search
+    target_mzs = np.sort(np.fromiter(target_mz_set, dtype=np.float64))
+    n_vars = len(target_mzs)
+
+    # 1. Fetch metadata and byte arrays from SQLite for pixel-mapped scans only
+    batches = _fetch_scan_rows(db_path, scan_handling, batch_size)
 
     # 2. Parallel Processing across Spectrum Batches
     raw_obs_list = []

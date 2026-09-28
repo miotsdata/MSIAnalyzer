@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,9 @@ from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
 from msianalyzer.gui.utils.analysis_bridge import (
     AnalysisBridge,
     _categorize_peaks,
+    _load_local_moran_layer_data,
+    _load_local_moran_threshold_default,
+    _load_normalized_layer_name,
     _load_spatial_correlation_table,
 )
 import numpy as np
@@ -189,6 +193,48 @@ def test_export_integration_tables_failure_emits_export_failed(tmp_path, qtbot):
         bridge.exportIntegrationTables(
             str(tmp_path / "does_not_exist.db"), str(dest_folder), "TIC", "csv"
         )
+
+
+def test_export_calibration_results_writes_files_and_emits_finished(tmp_path, qtbot):
+    from msianalyzer.core.analysis_db import upsert_calibration_point
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    upsert_calibration_point(
+        db_path, sample_id=None, roi_name="std_a", amount=10.0, amount_unit="pmol",
+        pixel_size=0.1, pixel_size_unit="mm", area=0.02, concentration=500.0,
+        mean_intensity=100.0, n_pixels=2,
+    )
+    dest_folder = tmp_path / "out"
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.exportFinished, timeout=2000) as spy:
+        bridge.exportCalibrationResults(str(db_path), str(dest_folder))
+
+    assert (dest_folder / "calibration_standards.csv").exists()
+    assert "1 file" in spy.args[0]
+
+
+def test_export_calibration_results_no_data_reports_zero_files(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    dest_folder = tmp_path / "out"
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.exportFinished, timeout=2000) as spy:
+        bridge.exportCalibrationResults(str(db_path), str(dest_folder))
+
+    assert "No calibration results" in spy.args[0]
+
+
+def test_export_calibration_results_failure_emits_export_failed(tmp_path, qtbot):
+    bridge = AnalysisBridge()
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    dest_folder = blocker / "out"
+
+    with qtbot.waitSignal(bridge.exportFailed, timeout=2000):
+        bridge.exportCalibrationResults(str(tmp_path / "does_not_exist.db"), str(dest_folder))
 
 
 def test_export_visual_inspection_images_writes_files_and_emits_finished(tmp_path, qtbot):
@@ -597,6 +643,220 @@ def test_get_spatial_correlation_model_new_analysis_replaces_model(tmp_path, qtb
     assert model_b.mzForRow(0) == 200.0
 
 
+def test_get_moran_i_for_feature_reads_from_cached_model(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.commit()
+    _seed_moran_h5ad(tmp_path, "s1", mz=100.0, moran_i=0.75)
+
+    bridge = AnalysisBridge()
+    model = bridge.getSpatialCorrelationModel(str(db_path))
+    qtbot.waitUntil(lambda: not model.rowsLoading, timeout=2000)
+
+    assert bridge.getMoranIForFeature(str(db_path), 100.0) == {"s1": 0.75}
+
+
+def test_get_moran_i_for_feature_does_not_trigger_a_load(tmp_path):
+    # Cache miss (no prior getSpatialCorrelationModel call for this path)
+    # must return {} without kicking off a background .h5ad fetch — this
+    # is meant to be a cheap in-memory lookup only, never a surprise I/O.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    assert bridge.getMoranIForFeature(str(db_path), 100.0) == {}
+    assert bridge._spatial_correlation_model_path is None
+
+
+def test_get_moran_i_for_feature_different_analysis_returns_empty(tmp_path, qtbot):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    db_a = tmp_path / "a" / "a.db"
+    db_b = tmp_path / "b" / "b.db"
+    init_analysis_db(db_a).close()
+    init_analysis_db(db_b).close()
+    with sqlite3.connect(db_a) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.commit()
+    _seed_moran_h5ad(db_a.parent, "s1", mz=100.0, moran_i=0.5)
+
+    bridge = AnalysisBridge()
+    model = bridge.getSpatialCorrelationModel(str(db_a))
+    qtbot.waitUntil(lambda: not model.rowsLoading, timeout=2000)
+
+    assert bridge.getMoranIForFeature(str(db_b), 100.0) == {}
+
+
+#: Pixel count for synthetic localMoranI fixtures below — divisible enough
+#: (200) that every percentage these tests actually use (42.5, 10.0, 20.0,
+#: 30.0, 90.0) is realizable as an exact whole number of pixels.
+_LOCAL_MORAN_FIXTURE_N_PIXELS = 200
+
+
+def _seed_local_moran_h5ad(out_dir: Path, sample_name: str, mz: float, pct: float) -> None:
+    _seed_local_moran_h5ad_multi(out_dir, sample_name, [(mz, pct)])
+
+
+def _seed_local_moran_h5ad_multi(out_dir: Path, sample_name: str, features: list) -> None:
+    """`features`: `[(mz, pct_above_threshold), ...]` — realized as a
+    synthetic `adata.layers["localMoranI"]` column per feature (some
+    pixels at `2.0`, above the model's default `1.0` threshold, the rest
+    at `0.0`) rather than a stored scalar summary — see
+    `_load_local_moran_layer_data`'s own docstring for why this `.h5ad`
+    format holds full per-pixel arrays now, not a pre-thresholded number.
+    `pct_above_threshold` is realized exactly (see
+    `_LOCAL_MORAN_FIXTURE_N_PIXELS`), assuming the model reading it back
+    uses the same default `1.0` threshold (true here — none of these
+    tests seed a `commands` row overriding it).
+    """
+    n = _LOCAL_MORAN_FIXTURE_N_PIXELS
+    var_names = [f"mz_test_{i}" for i in range(len(features))]
+    var = pd.DataFrame({"mz": [f[0] for f in features]}, index=var_names)
+    adata = ad.AnnData(X=np.zeros((n, len(features))), var=var)
+    layer = np.zeros((n, len(features)))
+    for col, (_, pct) in enumerate(features):
+        n_above = round(pct / 100.0 * n)
+        layer[:n_above, col] = 2.0
+    adata.layers["localMoranI"] = layer
+    adata.write_h5ad(out_dir / f"{sample_name}.h5ad")
+
+
+def test_get_local_moran_summary_model_reads_percentages_with_name(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)  # registers sample "s1", annotates feature 7 as "Caffeine"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 123.4567, '{}')"
+        )
+        con.commit()
+    _seed_local_moran_h5ad(tmp_path, "s1", mz=123.4567, pct=42.5)
+
+    bridge = AnalysisBridge()
+    model = bridge.getLocalMoranSummaryModel(str(db_path))
+    assert model.rowsLoading is True
+    qtbot.waitUntil(lambda: not model.rowsLoading, timeout=2000)
+
+    assert model.samples == ["s1"]
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 0)) == "123.4567: Caffeine"
+    assert model.data(model.index(0, 1)) == "42.5%"
+
+
+def test_get_local_moran_summary_model_returns_same_instance_for_same_analysis(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.commit()
+    _seed_local_moran_h5ad(tmp_path, "s1", mz=100.0, pct=10.0)
+
+    bridge = AnalysisBridge()
+    model_1 = bridge.getLocalMoranSummaryModel(str(db_path))
+    qtbot.waitUntil(lambda: not model_1.rowsLoading, timeout=2000)
+    model_1.nameQuery = "something the user typed"
+
+    model_2 = bridge.getLocalMoranSummaryModel(str(db_path))
+    assert model_2 is model_1
+    assert model_2.nameQuery == "something the user typed"
+
+
+def test_get_local_moran_summary_model_new_analysis_replaces_model(tmp_path, qtbot):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    db_a = tmp_path / "a" / "a.db"
+    db_b = tmp_path / "b" / "b.db"
+    init_analysis_db(db_a).close()
+    init_analysis_db(db_b).close()
+    for db_path, mz, pct in [(db_a, 100.0, 10.0), (db_b, 200.0, 90.0)]:
+        with sqlite3.connect(db_path) as con:
+            con.execute(
+                "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+                "VALUES (1, 's1', 'a.db', 'positive')"
+            )
+            con.commit()
+        _seed_local_moran_h5ad(db_path.parent, "s1", mz=mz, pct=pct)
+
+    bridge = AnalysisBridge()
+    model_a = bridge.getLocalMoranSummaryModel(str(db_a))
+    qtbot.waitUntil(lambda: not model_a.rowsLoading, timeout=2000)
+    assert model_a.mzForRow(0) == 100.0
+
+    model_b = bridge.getLocalMoranSummaryModel(str(db_b))
+    assert model_b is not model_a
+    qtbot.waitUntil(lambda: not model_b.rowsLoading, timeout=2000)
+    assert model_b.mzForRow(0) == 200.0
+
+
+def test_load_local_moran_layer_data_reads_every_feature_not_just_the_last(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (1, 's1', 'a.db', 'positive')"
+        )
+        con.commit()
+    _seed_local_moran_h5ad_multi(
+        tmp_path, "s1", [(100.0, 10.0), (200.0, 20.0), (300.0, 30.0)]
+    )
+
+    feature_rows, samples = _load_local_moran_layer_data(str(db_path))
+
+    assert samples == ["s1"]
+    assert len(feature_rows) == 3
+    assert sorted(row["mz"] for row in feature_rows) == [100.0, 200.0, 300.0]
+    # Each row's per-sample value is the raw per-pixel array, not a scalar.
+    row_100 = next(r for r in feature_rows if r["mz"] == 100.0)
+    assert isinstance(row_100["s1"], np.ndarray)
+    assert row_100["s1"].shape == (_LOCAL_MORAN_FIXTURE_N_PIXELS,)
+
+
+def test_load_local_moran_threshold_default_reads_from_commands_arguments(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO commands (command_name, datetime, arguments, run_id) "
+            "VALUES ('spatial_correlation', '2026-01-01T00:00:00', ?, 'run1')",
+            (json.dumps({"local_threshold": 2.5}),),
+        )
+        con.commit()
+
+    assert _load_local_moran_threshold_default(str(db_path)) == 2.5
+
+
+def test_load_local_moran_threshold_default_falls_back_when_never_run(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    assert _load_local_moran_threshold_default(str(db_path)) == 1.0
+
+
+def test_load_local_moran_threshold_default_falls_back_on_malformed_arguments(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO commands (command_name, datetime, arguments, run_id) "
+            "VALUES ('spatial_correlation', '2026-01-01T00:00:00', 'not json', 'run1')"
+        )
+        con.commit()
+
+    assert _load_local_moran_threshold_default(str(db_path)) == 1.0
+
+
 def test_get_feature_top_hits_for_feature(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
@@ -921,16 +1181,8 @@ def test_get_samples_empty_for_missing_db(tmp_path):
     assert bridge.getSamples(str(tmp_path / "nope.db")) == []
 
 
-def test_get_feature_value_range_delegates_to_heatmap_provider(tmp_path):
-    import anndata as ad
-    import pandas as pd
-    from scipy.sparse import csr_matrix
-
-    db_path = tmp_path / "analysis.db"
-    init_analysis_db(db_path).close()
-
-    obs = pd.DataFrame(index=["a", "b", "c", "d"])
-    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
+def _write_heatmap_fixture_h5ad(tmp_path: Path, obs: pd.DataFrame, mz: float = 100.0) -> None:
+    var = pd.DataFrame({"mz": [mz]}, index=["mz_test"])
     X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
     adata = ad.AnnData(X=X, obs=obs, var=var)
     adata.obsm["spatial"] = np.array(
@@ -938,94 +1190,167 @@ def test_get_feature_value_range_delegates_to_heatmap_provider(tmp_path):
     )
     adata.write_h5ad(tmp_path / "s1.h5ad")
 
-    bridge = AnalysisBridge()
-    bridge.setHeatmapAnalysis(str(db_path))
 
-    result = bridge.getFeatureValueRange(["s1"], 100.0, "raw")
-
-    assert result == {"vmin": 5.0, "vmax": 20.0}
-
-
-def test_get_obs_columns_delegates_to_heatmap_provider(tmp_path):
-    import anndata as ad
-    import pandas as pd
-    from scipy.sparse import csr_matrix
-
+def test_request_feature_value_range_emits_range_from_heatmap_provider(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
-
-    obs = pd.DataFrame(
-        {"tic": [1.0, 2.0, 3.0, 4.0], "region": ["a", "a", "b", "b"]},
-        index=["a", "b", "c", "d"],
-    )
-    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
-    X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
-    adata = ad.AnnData(X=X, obs=obs, var=var)
-    adata.obsm["spatial"] = np.array(
-        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
-    )
-    adata.write_h5ad(tmp_path / "s1.h5ad")
+    _write_heatmap_fixture_h5ad(tmp_path, pd.DataFrame(index=["a", "b", "c", "d"]))
 
     bridge = AnalysisBridge()
     bridge.setHeatmapAnalysis(str(db_path))
 
-    columns = {c["name"]: c["numeric"] for c in bridge.getObsColumns(["s1"])}
+    with qtbot.waitSignal(bridge.featureValueRangeReady, timeout=2000) as spy:
+        bridge.requestFeatureValueRange(["s1"], 100.0, "raw")
 
+    assert spy.args[0] == {"vmin": 5.0, "vmax": 20.0}
+
+
+def test_request_feature_value_range_stale_request_is_discarded(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_heatmap_fixture_h5ad(tmp_path, pd.DataFrame(index=["a", "b", "c", "d"]))
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+    received = []
+    bridge.featureValueRangeReady.connect(received.append)
+
+    bridge.requestFeatureValueRange(["s1"], 100.0, "raw")
+    first_worker = bridge._feature_value_range_worker
+    bridge.requestFeatureValueRange(["s1"], 100.0, "raw")
+
+    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+    qtbot.wait(50)  # give a stray first-request signal a chance to (wrongly) arrive too
+
+    assert len(received) == 1
+
+
+def test_request_obs_columns_emits_columns_from_heatmap_provider(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_heatmap_fixture_h5ad(
+        tmp_path,
+        pd.DataFrame(
+            {"tic": [1.0, 2.0, 3.0, 4.0], "region": ["a", "a", "b", "b"]},
+            index=["a", "b", "c", "d"],
+        ),
+    )
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+
+    with qtbot.waitSignal(bridge.obsColumnsReady, timeout=2000) as spy:
+        bridge.requestObsColumns(["s1"])
+
+    columns = {c["name"]: c["numeric"] for c in spy.args[0]}
     assert columns["tic"] is True
     assert columns["region"] is False
 
 
-def test_get_obs_value_range_delegates_to_heatmap_provider(tmp_path):
-    import anndata as ad
-    import pandas as pd
-    from scipy.sparse import csr_matrix
-
+def test_request_obs_columns_stale_request_is_discarded(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
-
-    obs = pd.DataFrame({"tic": [1.0, 2.0, 3.0, 40.0]}, index=["a", "b", "c", "d"])
-    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
-    X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
-    adata = ad.AnnData(X=X, obs=obs, var=var)
-    adata.obsm["spatial"] = np.array(
-        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
+    _write_heatmap_fixture_h5ad(
+        tmp_path, pd.DataFrame({"tic": [1.0, 2.0, 3.0, 4.0]}, index=["a", "b", "c", "d"])
     )
-    adata.write_h5ad(tmp_path / "s1.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+    received = []
+    bridge.obsColumnsReady.connect(received.append)
+
+    bridge.requestObsColumns(["s1"])
+    first_worker = bridge._obs_columns_worker
+    bridge.requestObsColumns(["s1"])
+
+    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+    qtbot.wait(50)
+
+    assert len(received) == 1
+
+
+def test_request_obs_value_range_emits_range_from_heatmap_provider(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_heatmap_fixture_h5ad(
+        tmp_path, pd.DataFrame({"tic": [1.0, 2.0, 3.0, 40.0]}, index=["a", "b", "c", "d"])
+    )
 
     bridge = AnalysisBridge()
     bridge.setHeatmapAnalysis(str(db_path))
 
-    result = bridge.getObsValueRange(["s1"], "tic")
+    with qtbot.waitSignal(bridge.obsValueRangeReady, timeout=2000) as spy:
+        bridge.requestObsValueRange(["s1"], "tic")
 
-    assert result == {"vmin": 1.0, "vmax": 40.0}
+    assert spy.args[0] == {"vmin": 1.0, "vmax": 40.0}
 
 
-def test_get_obs_categories_delegates_to_heatmap_provider(tmp_path):
-    import anndata as ad
-    import pandas as pd
-    from scipy.sparse import csr_matrix
-
+def test_request_obs_value_range_stale_request_is_discarded(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
+    _write_heatmap_fixture_h5ad(
+        tmp_path, pd.DataFrame({"tic": [1.0, 2.0, 3.0, 40.0]}, index=["a", "b", "c", "d"])
+    )
 
-    obs = pd.DataFrame(
-        {"polarity": ["positive", "positive", "negative", "negative"]},
-        index=["a", "b", "c", "d"],
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+    received = []
+    bridge.obsValueRangeReady.connect(received.append)
+
+    bridge.requestObsValueRange(["s1"], "tic")
+    first_worker = bridge._obs_value_range_worker
+    bridge.requestObsValueRange(["s1"], "tic")
+
+    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+    qtbot.wait(50)
+
+    assert len(received) == 1
+
+
+def test_request_obs_categories_emits_categories_from_heatmap_provider(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_heatmap_fixture_h5ad(
+        tmp_path,
+        pd.DataFrame(
+            {"polarity": ["positive", "positive", "negative", "negative"]},
+            index=["a", "b", "c", "d"],
+        ),
     )
-    var = pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"])
-    X = csr_matrix(np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32).reshape(-1, 1))
-    adata = ad.AnnData(X=X, obs=obs, var=var)
-    adata.obsm["spatial"] = np.array(
-        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], dtype=float
-    )
-    adata.write_h5ad(tmp_path / "s1.h5ad")
 
     bridge = AnalysisBridge()
     bridge.setHeatmapAnalysis(str(db_path))
 
-    result = bridge.getObsCategories(["s1"], "polarity")
+    with qtbot.waitSignal(bridge.obsCategoriesReady, timeout=2000) as spy:
+        bridge.requestObsCategories(["s1"], "polarity")
 
-    assert [c["category"] for c in result] == ["negative", "positive"]
+    assert [c["category"] for c in spy.args[0]] == ["negative", "positive"]
+
+
+def test_request_obs_categories_stale_request_is_discarded(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_heatmap_fixture_h5ad(
+        tmp_path, pd.DataFrame({"polarity": ["positive", "negative"] * 2}, index=["a", "b", "c", "d"])
+    )
+
+    bridge = AnalysisBridge()
+    bridge.setHeatmapAnalysis(str(db_path))
+    received = []
+    bridge.obsCategoriesReady.connect(received.append)
+
+    bridge.requestObsCategories(["s1"], "polarity")
+    first_worker = bridge._obs_categories_worker
+    bridge.requestObsCategories(["s1"], "polarity")
+
+    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
+    qtbot.wait(50)
+
+    assert len(received) == 1
 
 
 def test_categorize_peaks_matches_nearest_feature():
@@ -1331,7 +1656,10 @@ def test_save_roi_invalidates_heatmap_provider_cache(tmp_path):
 
     bridge = AnalysisBridge()
     bridge.setHeatmapAnalysis(str(db_path))
-    bridge.getFeatureValueRange(["s1"], 100.0, "raw")  # populates the cache
+    # Straight to the provider, not through the (now-async) bridge Slot —
+    # this test only cares that saveRoi() invalidates the provider's own
+    # cache, not about the request/response plumbing on top of it.
+    bridge.heatmap_provider.getFeatureValueRange(["s1"], 100.0, "raw")  # populates the cache
     assert str(tmp_path / "s1.h5ad") in bridge.heatmap_provider._cache
 
     bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
@@ -1686,3 +2014,546 @@ def test_predict_formulas_stale_request_is_discarded(tmp_path, qtbot):
         qtbot.wait(50)
 
     assert len(received) == 1
+
+
+# ==============================================================================
+# TESTS FOR _load_normalized_layer_name / getNormalizedLayerName
+# ==============================================================================
+
+
+def test_load_normalized_layer_name_defaults_to_tic_when_never_run(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    assert _load_normalized_layer_name(str(db_path)) == "TIC"
+
+
+def test_load_normalized_layer_name_tic_mode(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO commands (command_name, datetime, arguments, run_id) "
+            "VALUES ('normalize_tic', '2026-01-01T00:00:00', ?, 'run1')",
+            (json.dumps({"mode": "tic"}),),
+        )
+        con.commit()
+
+    assert _load_normalized_layer_name(str(db_path)) == "TIC"
+
+
+def test_load_normalized_layer_name_reference_mz_mode(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO commands (command_name, datetime, arguments, run_id) "
+            "VALUES ('normalize_tic', '2026-01-01T00:00:00', ?, 'run1')",
+            (json.dumps({"mode": "reference_mz", "reference_mz": 154.0863}),),
+        )
+        con.commit()
+
+    assert _load_normalized_layer_name(str(db_path)) == "mz_154.0863"
+
+
+def test_load_normalized_layer_name_falls_back_on_malformed_arguments(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO commands (command_name, datetime, arguments, run_id) "
+            "VALUES ('normalize_tic', '2026-01-01T00:00:00', 'not json', 'run1')"
+        )
+        con.commit()
+
+    assert _load_normalized_layer_name(str(db_path)) == "TIC"
+
+
+def test_get_normalized_layer_name_delegates_for_valid_db(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO commands (command_name, datetime, arguments, run_id) "
+            "VALUES ('normalize_tic', '2026-01-01T00:00:00', ?, 'run1')",
+            (json.dumps({"mode": "reference_mz", "reference_mz": 154.0863}),),
+        )
+        con.commit()
+
+    bridge = AnalysisBridge()
+    assert bridge.getNormalizedLayerName(str(db_path)) == "mz_154.0863"
+
+
+def test_get_normalized_layer_name_missing_db_returns_tic(tmp_path):
+    bridge = AnalysisBridge()
+    assert bridge.getNormalizedLayerName(str(tmp_path / "nope.db")) == "TIC"
+
+
+# ==============================================================================
+# TESTS FOR calibration curve quantification (targeted analyses)
+# ==============================================================================
+
+
+#: Constant across every pixel in `_seed_calibration_fixture`'s h5ad, so a
+#: standard/unknown's internal-standard-corrected `mean_intensity` (analyte
+#: ratio to this) is just each pixel's raw analyte value / 5.0 — easy to
+#: hand-compute for assertions.
+_SEED_REFERENCE_MZ = 259.0
+_SEED_REFERENCE_VALUE = 5.0
+
+
+def _seed_calibration_h5ad(
+    tmp_path: Path, sample_name: str, mz: float, values, roi_masks,
+    reference_mz: float = _SEED_REFERENCE_MZ,
+):
+    n = len(values)
+    obs = pd.DataFrame(index=[str(i) for i in range(n)])
+    for name, mask in roi_masks.items():
+        obs[f"roi_{name}"] = mask
+    # Two features: the analyte, and a reference/internal-standard channel
+    # — addCalibrationPoint/addCalibrationUnknown compute their signal as
+    # analyte/reference per pixel (roi_internal_standard_signal), not bare
+    # analyte intensity, so a real second column is required for that
+    # computation to mean anything (with only one column, the "reference"
+    # lookup would silently nearest-match the analyte itself).
+    var = pd.DataFrame(
+        {"mz": [mz, reference_mz]}, index=[f"mz_{mz:.4f}", f"mz_{reference_mz:.4f}"]
+    )
+    reference_values = [_SEED_REFERENCE_VALUE] * n
+    X = csr_matrix(np.column_stack([values, reference_values]).astype(np.float32))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array([(float(i), 0.0) for i in range(n)], dtype=float)
+    adata.layers["raw"] = X.copy()
+    adata.write_h5ad(tmp_path / f"{sample_name}.h5ad")
+
+
+def _seed_calibration_fixture(tmp_path: Path) -> Path:
+    """Analysis DB + one sample "s1" whose .h5ad already carries an
+    analyte column (mz=200.0), a reference/internal-standard column
+    (mz=259.0, constant 5.0 at every pixel), and two ROI masks —
+    "std_high" (analyte mean 15.0 -> signal 3.0, 2 pixels) and "std_low"
+    (analyte mean 6.5 -> signal 1.3, 2 pixels). Also logs a `normalize_tic`
+    command recording `reference_mz` — the provenance
+    `_load_calibration_reference_mz` reads, same as a real targeted run
+    would leave behind."""
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
+    log_command(
+        db_path,
+        command_name="normalize_tic",
+        arguments={
+            "enabled": True, "mode": "tic",
+            "reference_mz": _SEED_REFERENCE_MZ, "reference_ppm": 5.0,
+            "analyte_mzs": [200.0],
+        },
+        run_id="test-run",
+    )
+    _seed_calibration_h5ad(
+        tmp_path, "s1", mz=200.0,
+        values=[10.0, 20.0, 5.0, 8.0],
+        roi_masks={
+            "std_high": [True, True, False, False],
+            "std_low": [False, False, True, True],
+        },
+    )
+    return db_path
+
+
+def test_amount_units_and_pixel_size_units_properties():
+    bridge = AnalysisBridge()
+    assert bridge.amountUnits == ["pmol", "nmol", "umol", "mmol", "mol"]
+    assert bridge.pixelSizeUnits == ["um", "mm"]
+
+
+def test_get_calibration_points_empty_when_none_added(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    assert bridge.getCalibrationPoints(str(db_path)) == []
+
+
+def test_add_calibration_point_computes_mean_intensity_and_concentration(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationPoint(
+        str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm",
+    )
+
+    assert result == {"ok": True}
+    points = bridge.getCalibrationPoints(str(db_path))
+    assert len(points) == 1
+    row = points[0]
+    assert row["sample_name"] == "s1"
+    assert row["mean_intensity"] == pytest.approx(3.0)  # analyte/reference: mean(10/5, 20/5)
+    assert row["n_pixels"] == 2
+    assert row["area"] == pytest.approx(2 * 0.1**2)
+    assert row["concentration"] == pytest.approx(10.0 / (2 * 0.1**2))
+
+
+def test_add_calibration_point_missing_reference_mz_returns_error(tmp_path):
+    # An analysis with an h5ad but no recorded `normalize_tic` command at
+    # all (e.g. an untargeted analysis, or a targeted one from before this
+    # internal-standard correction existed) has no reference channel to
+    # divide by.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
+    _seed_calibration_h5ad(
+        tmp_path, "s1", mz=200.0, values=[10.0, 20.0, 5.0, 8.0],
+        roi_masks={"std_high": [True, True, False, False]},
+    )
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationPoint(
+        str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm",
+    )
+    assert result["ok"] is False
+    assert "reference" in result["error"].lower()
+
+
+def test_add_calibration_point_reference_channel_all_zero_returns_error(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
+    log_command(
+        db_path, command_name="normalize_tic",
+        arguments={"mode": "tic", "reference_mz": _SEED_REFERENCE_MZ},
+        run_id="test-run",
+    )
+    n = 4
+    obs = pd.DataFrame(index=[str(i) for i in range(n)])
+    obs["roi_std_high"] = [True, True, False, False]
+    var = pd.DataFrame(
+        {"mz": [200.0, _SEED_REFERENCE_MZ]},
+        index=["mz_200.0000", f"mz_{_SEED_REFERENCE_MZ:.4f}"],
+    )
+    X = csr_matrix(np.array(
+        [[10.0, 0.0], [20.0, 0.0], [5.0, 0.0], [8.0, 0.0]], dtype=np.float32
+    ))
+    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata.obsm["spatial"] = np.array([(float(i), 0.0) for i in range(n)], dtype=float)
+    adata.layers["raw"] = X.copy()
+    adata.write_h5ad(tmp_path / "s1.h5ad")
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationPoint(
+        str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm",
+    )
+    assert result["ok"] is False
+    assert "reference channel" in result["error"].lower()
+
+
+def test_add_calibration_point_upserts_on_same_roi_name(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 20.0, "pmol", 0.1, "mm")
+
+    points = bridge.getCalibrationPoints(str(db_path))
+    assert len(points) == 1
+    assert points[0]["amount"] == 20.0
+
+
+def test_add_calibration_point_missing_analysis_db_returns_error(tmp_path):
+    bridge = AnalysisBridge()
+    result = bridge.addCalibrationPoint(
+        str(tmp_path / "nope.db"), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm",
+    )
+    assert result["ok"] is False
+    assert "No analysis database" in result["error"]
+
+
+def test_add_calibration_point_missing_h5ad_returns_error(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationPoint(
+        str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm",
+    )
+    assert result["ok"] is False
+    assert "no .h5ad file" in result["error"]
+
+
+def test_add_calibration_point_invalid_amount_unit_returns_error(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationPoint(
+        str(db_path), "s1", "std_high", 200.0, 10.0, "grams", 0.1, "mm",
+    )
+    assert result["ok"] is False
+    assert "amount_unit" in result["error"]
+
+
+def test_add_calibration_point_missing_roi_returns_error(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationPoint(
+        str(db_path), "s1", "does_not_exist", 200.0, 10.0, "pmol", 0.1, "mm",
+    )
+    assert result["ok"] is False
+    assert "no pixels" in result["error"]
+
+
+def test_add_calibration_point_invalid_pixel_size_unit_returns_error(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationPoint(
+        str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "cm",
+    )
+    assert result["ok"] is False
+    assert "pixel_size_unit" in result["error"]
+
+
+def test_delete_calibration_point(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+
+    removed = bridge.deleteCalibrationPoint(str(db_path), "std_high")
+
+    assert removed is True
+    assert bridge.getCalibrationPoints(str(db_path)) == []
+
+
+def test_delete_calibration_point_missing_returns_false(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    assert bridge.deleteCalibrationPoint(str(db_path), "nope") is False
+
+
+def test_fit_calibration_curve_requires_at_least_two_standards(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+
+    result = bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+
+    assert result["ok"] is False
+    assert "At least 2" in result["error"]
+
+
+def test_fit_calibration_curve_rejects_mismatched_units(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 1.0, "nmol", 0.1, "mm")
+
+    result = bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+
+    assert result["ok"] is False
+    assert "same amount and pixel-size units" in result["error"]
+
+
+def test_fit_calibration_curve_success_persists_and_returns_curve(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
+
+    result = bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+
+    assert result["ok"] is True
+    assert result["fit_type"] == "linear"
+    assert result["concentration_unit"] == "pmol/mm2"
+    assert result["n_points"] == 2
+
+    curve = bridge.getCalibrationCurve(str(db_path))
+    assert curve["id"] == result["id"]
+
+
+def test_fit_calibration_curve_invalid_fit_type_returns_error(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
+
+    result = bridge.fitCalibrationCurve(str(db_path), 200.0, "quadratic", "")
+
+    assert result["ok"] is False
+
+
+def test_fit_calibration_curve_reinterpolates_existing_unknowns(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    # Two standards define a real (non-degenerate) curve — this test is
+    # about reinterpolation happening once a curve exists, not the
+    # resulting numbers.
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
+
+    # unknown added before any curve exists
+    unk_result = bridge.addCalibrationUnknown(str(db_path), "s1", "std_low", 200.0, 0.1, "mm")
+    assert unk_result["ok"] is True
+    unknowns = bridge.getCalibrationUnknowns(str(db_path))
+    assert unknowns[0]["interpolated_conc"] is None
+
+    bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+
+    unknowns = bridge.getCalibrationUnknowns(str(db_path))
+    assert unknowns[0]["interpolated_conc"] is not None
+    assert unknowns[0]["amount"] is not None
+
+
+def test_add_calibration_unknown_missing_h5ad_returns_error(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationUnknown(str(db_path), "s1", "spot", 200.0, 0.1, "mm")
+    assert result["ok"] is False
+    assert "no .h5ad file" in result["error"]
+
+
+def test_add_calibration_unknown_missing_reference_mz_returns_error(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
+    _seed_calibration_h5ad(
+        tmp_path, "s1", mz=200.0, values=[10.0, 20.0, 5.0, 8.0],
+        roi_masks={"spot": [True, True, False, False]},
+    )
+    bridge = AnalysisBridge()
+
+    result = bridge.addCalibrationUnknown(str(db_path), "s1", "spot", 200.0, 0.1, "mm")
+    assert result["ok"] is False
+    assert "reference" in result["error"].lower()
+
+
+def test_delete_calibration_unknown(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationUnknown(str(db_path), "s1", "std_low", 200.0, 0.1, "mm")
+    unknown_id = bridge.getCalibrationUnknowns(str(db_path))[0]["id"]
+
+    removed = bridge.deleteCalibrationUnknown(str(db_path), unknown_id)
+
+    assert removed is True
+    assert bridge.getCalibrationUnknowns(str(db_path)) == []
+
+
+def test_get_calibration_plot_url_empty_without_curve(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    assert bridge.getCalibrationPlotUrl(str(db_path)) == ""
+
+
+def test_get_calibration_plot_url_returns_file_url_after_fit(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
+    bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+
+    url = bridge.getCalibrationPlotUrl(str(db_path))
+
+    assert url.startswith("file://")
+    assert "concentration" in _read_url(url).lower() or "Concentration" in _read_url(url)
+
+
+def test_get_calibration_plot_url_converts_to_requested_display_area_unit(tmp_path):
+    # Reported directly: toggling CalibrationSection.qml's "Report area/
+    # concentration per" combo did nothing for an already-fitted curve —
+    # the plot always rendered in whatever unit the curve was originally
+    # fit in. `display_area_unit` makes this a live, non-destructive
+    # redisplay: same underlying fit, converted axis/values.
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
+    bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+
+    # Plotly's embedded JSON escapes "/" as "/" (json.dumps-style
+    # encoding, not a literal slash) — match its own encoding rather than
+    # a plain "/".
+    html_native = _read_url(bridge.getCalibrationPlotUrl(str(db_path)))
+    assert "pmol\\u002fmm2" in html_native
+
+    html_converted = _read_url(bridge.getCalibrationPlotUrl(str(db_path), "um"))
+    assert "pmol\\u002fum2" in html_converted
+    assert "pmol\\u002fmm2" not in html_converted
+
+
+def test_get_calibration_plot_url_display_area_unit_matching_native_is_a_noop(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
+    bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+
+    html_default = _read_url(bridge.getCalibrationPlotUrl(str(db_path)))
+    html_explicit_mm = _read_url(bridge.getCalibrationPlotUrl(str(db_path), "mm"))
+    assert "pmol\\u002fmm2" in html_default
+    assert "pmol\\u002fmm2" in html_explicit_mm
+
+
+def test_get_calibration_analyte_mz_none_recorded_yet(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    assert bridge.getCalibrationAnalyteMz(str(db_path)) == -1.0
+
+
+def test_get_calibration_analyte_mz_recorded_after_first_standard(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
+
+    assert bridge.getCalibrationAnalyteMz(str(db_path)) == pytest.approx(200.0)
+
+
+def test_get_calibration_analyte_mz_missing_db_returns_sentinel(tmp_path):
+    bridge = AnalysisBridge()
+    assert bridge.getCalibrationAnalyteMz(str(tmp_path / "nope.db")) == -1.0
+
+
+def test_get_sample_pixel_size_reads_from_raw_db_metadata(tmp_path):
+    from msianalyzer.core.parser.mzml_parser import write_raw_metadata
+
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    raw_db_path = tmp_path / "s1.db"
+    with sqlite3.connect(raw_db_path) as conn:
+        conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
+        conn.commit()
+    register_sample(db_path, name="s1", raw_db_path=str(raw_db_path))
+    write_raw_metadata(raw_db_path, {"pixel_size_x": 0.05, "pixel_size_unit": "mm"})
+
+    bridge = AnalysisBridge()
+    result = bridge.getSamplePixelSize(str(db_path), "s1")
+
+    assert result == {"pixel_size": pytest.approx(0.05), "pixel_size_unit": "mm"}
+
+
+def test_get_sample_pixel_size_empty_dict_when_raster_xml_had_no_raster_config(tmp_path):
+    # The raw DB exists and is otherwise fully valid — it just never had
+    # pixel_size_x/pixel_size_unit written (an XML with no <rasterConfig>
+    # section) — exactly the "user must define it themselves" case this
+    # already had, not an error.
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    raw_db_path = tmp_path / "s1.db"
+    with sqlite3.connect(raw_db_path) as conn:
+        conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
+        conn.commit()
+    register_sample(db_path, name="s1", raw_db_path=str(raw_db_path))
+
+    bridge = AnalysisBridge()
+    assert bridge.getSamplePixelSize(str(db_path), "s1") == {}
+
+
+def test_get_sample_pixel_size_empty_dict_for_unknown_sample(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+
+    bridge = AnalysisBridge()
+    assert bridge.getSamplePixelSize(str(db_path), "does_not_exist") == {}
+
+
+def test_get_sample_pixel_size_empty_dict_missing_analysis_db(tmp_path):
+    bridge = AnalysisBridge()
+    assert bridge.getSamplePixelSize(str(tmp_path / "nope.db"), "s1") == {}

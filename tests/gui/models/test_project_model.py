@@ -71,6 +71,20 @@ def test_runs_list_display_fields_are_relative_and_minute_precision():
     assert entry["config_path_display"] == "configs/run_0.yaml"
     assert entry["start_date"] == "2026-01-01 12:34:56"
     assert entry["start_date_display"] == "2026-01-01 12:34"
+    assert entry["analysis_type"] == "untargeted"
+
+
+def test_runs_list_analysis_type_reads_targeted():
+    p = Project(name="test_proj")
+    p.runs["run-0"] = {
+        "id": "run-0",
+        "start_date": "2026-01-01 12:00:00",
+        "config": {"io": {"out_dir": "/tmp/proj/output_0"}, "analysis_type": "targeted"},
+        "config_path": "",
+    }
+    model = ProjectModel(p, "/tmp/proj")
+
+    assert model.runsList[0]["analysis_type"] == "targeted"
 
 
 def test_mzml_files_lists_only_mzml_extension_case_insensitively(tmp_path):

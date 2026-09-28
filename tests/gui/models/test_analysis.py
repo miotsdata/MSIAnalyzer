@@ -50,3 +50,16 @@ def test_analysis_model_missing_out_dir_yields_empty_db_path(project):
 def test_analysis_model_no_project_model_yields_empty_project_name():
     model = AnalysisModel(None, "run-123", {})
     assert model.projectName == ""
+
+
+def test_analysis_model_analysis_type_defaults_to_untargeted(project):
+    project_model = ProjectModel(project, "/tmp/proj")
+    model = AnalysisModel(project_model, "run-123", {})
+    assert model.analysisType == "untargeted"
+
+
+def test_analysis_model_analysis_type_reads_targeted(project):
+    project_model = ProjectModel(project, "/tmp/proj")
+    run_dict = {"config": {"analysis_type": "targeted"}}
+    model = AnalysisModel(project_model, "run-123", run_dict)
+    assert model.analysisType == "targeted"

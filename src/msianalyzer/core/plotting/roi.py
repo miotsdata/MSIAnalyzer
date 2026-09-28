@@ -87,7 +87,7 @@ def save_roi_to_sample(
     membership column (`adata.obs[roi_obs_column(name)]`) and the border
     polygon (`adata.uns["rois"][name]`), then write the file back to the
     SAME path — same read/mutate/write-back shape as
-    `tic_normalization.run_tic_normalization`, but a single interactive
+    `tic_normalization.run_normalization`, but a single interactive
     save rather than a pipeline command.
 
     Args:
@@ -196,7 +196,7 @@ def sync_roi_to_merged(
     mask: np.ndarray,
 ) -> bool:
     """Patch one sample's ROI into an existing `merged.h5ad`
-    (`core/utils/tic_normalization.py::run_tic_normalization`'s
+    (`core/utils/tic_normalization.py::run_normalization`'s
     `ad.concat(..., label="sample", ...)` output) in place, WITHOUT
     re-running the concat — `ad.concat`'s `uns_merge="unique"` would
     silently drop `uns["rois"]` entirely the moment it differs across
@@ -213,7 +213,7 @@ def sync_roi_to_merged(
         merged_path: The analysis' `merged.h5ad` (`Path(analysis_db_path)
             .parent / "merged.h5ad"`).
         sample_name: Which sample's rows to update (`merged.obs["sample"]`
-            values, as set by `run_tic_normalization`'s `label="sample"`).
+            values, as set by `run_normalization`'s `label="sample"`).
         name: The ROI's name.
         color: `"#rrggbb"`.
         vertices: This sample's polygon, `[[col, row], ...]`.

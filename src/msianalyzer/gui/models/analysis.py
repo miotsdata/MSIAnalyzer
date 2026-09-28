@@ -40,6 +40,15 @@ class AnalysisModel(QObject):
         return io.get("out_dir") or ""
 
     @Property(str, constant=True)
+    def analysisType(self) -> str:
+        """`"untargeted"` (default) or `"targeted"` — read straight from
+        the saved config, same as `Config.analysis_type`. Drives which
+        `AnalysisPage.qml` tabs show (e.g. `CalibrationSection` only for
+        `"targeted"`)."""
+        config = self._run_dict.get("config") or {}
+        return config.get("analysis_type") or "untargeted"
+
+    @Property(str, constant=True)
     def analysisDbPath(self) -> str:
         out_dir = self.outDir
         if not out_dir:

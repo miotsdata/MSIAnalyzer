@@ -69,9 +69,11 @@ class Application(QObject):
     def _on_run_analysis_requested(self, project, config_dict):
         self.core_bridge.run_analysis(config_dict, self.project_folder)
 
-    def _on_run_started(self, run_id: str):
+    def _on_run_started(self, run_id: str, analysis_type: str):
         self.current_run_id = run_id
-        self.router.showRunningPageRequested.emit(self.project_model, run_id)
+        self.router.showRunningPageRequested.emit(
+            self.project_model, run_id, analysis_type
+        )
 
     def _on_run_completed(self, run_id: str):
         # Reload from disk so the new run shows up in ProjectModel.runsList —

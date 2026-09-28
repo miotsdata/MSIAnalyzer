@@ -1,18 +1,38 @@
 import base64
+import json
 import logging
 import os
 import sqlite3
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import anndata as ad
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core import analysis_db
 from msianalyzer.core import export as core_export
+from msianalyzer.core.parser import load_raw_metadata_value
 from msianalyzer.core.annotation.formula_prediction import FormulaPredictionSettings
+from msianalyzer.core.calibration.curve_fit import (
+    fit_calibration_curve,
+    interpolate_concentration,
+)
+from msianalyzer.core.calibration.roi_intensity import (
+    roi_internal_standard_signal,
+    roi_pixel_count,
+)
+from msianalyzer.core.calibration.units import (
+    AMOUNT_UNITS,
+    PIXEL_SIZE_UNITS,
+    amount_from_concentration,
+    area_conversion_factor,
+    concentration_from_amount,
+    concentration_unit as calibration_concentration_unit,
+    pixel_area,
+)
 from msianalyzer.core.plotting import roi
 from msianalyzer.core.plotting.heatmap import category_color
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
@@ -29,6 +49,8 @@ from msianalyzer.gui.utils.he_image_provider import HEImageProvider
 from msianalyzer.gui.utils.he_overlay_provider import HEOverlayImageProvider
 from msianalyzer.gui.utils.heatmap_prefetch_worker import HeatmapPrefetchWorker
 from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
+from msianalyzer.gui.utils.heatmap_query_worker import HeatmapQueryWorker
+from msianalyzer.gui.utils.local_moran_summary_model import LocalMoranSummaryModel
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
 from msianalyzer.gui.utils.spatial_correlation_model import SpatialCorrelationModel
 from msianalyzer.gui.utils.table_query_worker import TableQueryWorker
@@ -113,18 +135,26 @@ def _nearest_compound_name(mz: float, feature_mzs: np.ndarray, feature_names: np
     return None if pd.isna(name) else name
 
 
-def _pivot_spatial_correlation_rows(flat_rows: list[dict]) -> tuple[list[dict], list[str]]:
-    """`_load_spatial_correlation_table`'s flat `(mz, sample, moran_i,
-    compound_name)` rows -> one dict per feature, that sample's score
+def _pivot_spatial_correlation_rows(
+    flat_rows: list[dict], value_key: str = "moran_i"
+) -> tuple[list[dict], list[str]]:
+    """`_load_spatial_correlation_table`'s flat `(mz, sample, <value_key>,
+    compound_name)` rows -> one dict per feature, that sample's value
     folded in as `row[sample_name]` — the shape
-    `SpatialCorrelationModel.setRows` expects (one row per feature,
-    one column per sample), and `sorted(set(...))` sample names for its
-    column list.
+    `SpatialCorrelationModel.setRows` expects (one row per feature, one
+    column per sample), and `sorted(set(...))` sample names for the
+    column list. `value_key` defaults to `"moran_i"`, its only caller
+    today.
+
+    The local Moran's I table has its own, differently-shaped loader,
+    `_load_local_moran_layer_data` — its rows hold raw per-pixel arrays,
+    not scalars, so pivoting them isn't a fit for this function; it builds
+    its own pivoted structure directly instead of reusing this one.
     """
     by_mz: dict[float, dict] = {}
     for r in flat_rows:
         row = by_mz.setdefault(r["mz"], {"mz": r["mz"], "compound_name": r["compound_name"]})
-        row[r["sample"]] = r["moran_i"]
+        row[r["sample"]] = r[value_key]
     samples = sorted({r["sample"] for r in flat_rows})
     return list(by_mz.values()), samples
 
@@ -203,6 +233,173 @@ def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
             adata.file.close()
 
     return pd.DataFrame(rows, columns=columns)
+
+
+def _load_local_moran_layer_data(analysis_db_path: str) -> tuple[list[dict], list[str]]:
+    """Reads every sample's `adata.layers["localMoranI"]` (written by
+    `core.spatial.local_moran.compute_local_moran_layer`) and assembles
+    the `LocalMoranSummaryModel.setRows` shape directly — one dict per
+    feature, that sample's *raw per-pixel local Moran's I array* (not a
+    pre-thresholded percentage) folded in as `row[sample_name]`, plus its
+    representative compound name.
+
+    Unlike `_load_spatial_correlation_table`, this doesn't go through the
+    flat-DataFrame/`_pivot_spatial_correlation_rows` convention — that
+    convention exists to keep values QML-safe via `_dataframe_to_records`,
+    but the raw arrays here never reach QML directly (only the formatted
+    percentage strings `LocalMoranSummaryModel.data()` computes from them
+    do), so there's nothing to scrub and no reason to round-trip through a
+    DataFrame just to pivot it straight back apart.
+
+    Args:
+        analysis_db_path: The analysis' SQLite database.
+
+    Returns:
+        `(feature_rows, samples)` — empty/empty when no sample's `.h5ad`
+        has ever had `spatial_correlation.local_enabled` run on it.
+    """
+    samples = analysis_db.load_samples(analysis_db_path)
+    if samples.empty:
+        return [], []
+
+    features = analysis_db.load_feature_list(analysis_db_path)
+    feature_mzs = features["mz"].to_numpy() if not features.empty else np.array([])
+    feature_names = features["compound_name"].to_numpy() if not features.empty else np.array([])
+
+    by_mz: dict[float, dict] = {}
+    sample_names_with_data: set[str] = set()
+    for name in samples["name"]:
+        h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name)
+        if not h5ad_path.exists():
+            continue
+        # backed="r" still avoids loading X/other layers — only
+        # localMoranI (materialized explicitly below) is read into memory.
+        adata = ad.read_h5ad(h5ad_path, backed="r")
+        try:
+            if "localMoranI" not in adata.layers:
+                continue
+            layer = adata.layers["localMoranI"][:]
+            if hasattr(layer, "toarray"):
+                layer = layer.toarray()
+            mz_by_var = adata.var["mz"]
+            sample_names_with_data.add(name)
+            for col_idx, var_name in enumerate(adata.var_names):
+                mz = float(mz_by_var.loc[var_name])
+                row = by_mz.setdefault(
+                    mz,
+                    {
+                        "mz": mz,
+                        "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
+                    },
+                )
+                row[name] = np.asarray(layer[:, col_idx], dtype=float)
+        finally:
+            adata.file.close()
+
+    return list(by_mz.values()), sorted(sample_names_with_data)
+
+
+def _load_local_moran_threshold_default(analysis_db_path: str) -> float:
+    """The `local_threshold` this analysis' `spatial_correlation` pipeline
+    stage was actually run with, recovered from `commands.arguments` —
+    same provenance-recovery pattern `Plotter._get_scoring_params` (or
+    similar) uses for `noise_threshold`/`fragment_ppm`. Seeds
+    `LocalMoranSummaryModel.threshold`'s initial value when a fresh model
+    is created, so the page opens showing what the config said before the
+    user adjusts it live (see `getLocalMoranSummaryModel`).
+
+    Falls back to `SpatialCorrelationConfig.local_threshold`'s own
+    dataclass default (`1.0`) if this analysis never ran that stage, ran
+    an older version that didn't record it, or the value can't be parsed.
+    """
+    fallback = 1.0
+    try:
+        with sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True) as con:
+            row = con.execute(
+                "SELECT arguments FROM commands WHERE command_name = 'spatial_correlation' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return fallback
+        args = json.loads(row[0])
+        value = args.get("local_threshold")
+        return float(value) if value is not None else fallback
+    except (sqlite3.OperationalError, ValueError, TypeError, json.JSONDecodeError):
+        return fallback
+
+
+def _load_normalized_layer_name(analysis_db_path: str) -> str:
+    """The `adata.layers` key this analysis' normalized layer actually
+    lives under — `"TIC"` when `normalization.mode == "tic"`, or
+    `f"mz_{reference_mz:.4f}"` for `mode == "reference_mz"` (see
+    `core.utils.tic_normalization.run_normalization`'s dynamic layer
+    naming). Recovered from `commands.arguments`, same provenance-recovery
+    pattern as `_load_local_moran_threshold_default`.
+
+    Anything the GUI needs to point at "the normalized layer" (the second
+    `HeatmapControlsPanel.qml` data-layer button, `SpatialCorrelationConfig`
+    display, the Integration export's Raw/TIC option) calls this rather
+    than assuming `"TIC"`, since a reference-m/z-normalized analysis' layer
+    is never actually called that.
+
+    Falls back to `"TIC"` if this analysis never ran normalization, ran an
+    older version that didn't record `mode`/`reference_mz`, or the value
+    can't be parsed — every analysis before this feature existed was
+    TIC-only, so this is the correct fallback, not just a safe default.
+    """
+    fallback = "TIC"
+    try:
+        with sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True) as con:
+            row = con.execute(
+                "SELECT arguments FROM commands WHERE command_name = 'normalize_tic' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return fallback
+        args = json.loads(row[0])
+        mode = args.get("mode", "tic")
+        if mode != "reference_mz":
+            return fallback
+        reference_mz = args.get("reference_mz")
+        if reference_mz is None:
+            return fallback
+        return f"mz_{float(reference_mz):.4f}"
+    except (sqlite3.OperationalError, ValueError, TypeError, json.JSONDecodeError):
+        return fallback
+
+
+def _load_calibration_reference_mz(analysis_db_path: str) -> float | None:
+    """This targeted analysis' `NormalizationConfig.reference_mz` — the
+    internal-standard channel `addCalibrationPoint`/`addCalibrationUnknown`
+    divide the analyte's own intensity by (see
+    `core.calibration.roi_intensity.roi_internal_standard_signal`), read
+    regardless of `mode` ("tic" or "reference_mz"): a calibration curve's
+    standards and unknowns can legitimately live on different samples, so
+    this correction always applies, independent of which layer the run's
+    *own* normalization stage happened to produce.
+
+    Same provenance-recovery pattern as `_load_normalized_layer_name` (same
+    `commands` row, in fact — `reference_mz` is always recorded there for
+    a targeted run, since `Config.__init__` requires it regardless of
+    `mode`).
+
+    Returns:
+        The recorded `reference_mz`, or `None` if this analysis never ran
+        normalization, ran an untargeted pipeline (no `reference_mz` at
+        all), or the value can't be parsed.
+    """
+    try:
+        with sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True) as con:
+            row = con.execute(
+                "SELECT arguments FROM commands WHERE command_name = 'normalize_tic' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        reference_mz = json.loads(row[0]).get("reference_mz")
+        return float(reference_mz) if reference_mz is not None else None
+    except (sqlite3.OperationalError, ValueError, TypeError, json.JSONDecodeError):
+        return None
 
 
 def _categorize_peaks(mz_array: np.ndarray, feature_categories: pd.DataFrame) -> np.ndarray:
@@ -316,6 +513,10 @@ class AnalysisBridge(QObject):
     exportFinished = Signal(str)  # human-readable "done" message
     exportFailed = Signal(str)  # human-readable error message
     heatmapPrefetchReady = Signal()
+    obsColumnsReady = Signal(list)
+    featureValueRangeReady = Signal(dict)
+    obsValueRangeReady = Signal(dict)
+    obsCategoriesReady = Signal(list)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -327,6 +528,10 @@ class AnalysisBridge(QObject):
         # method's own docstring for why.
         self._spatial_correlation_model_path: str | None = None
         self._spatial_correlation_model: "SpatialCorrelationModel | None" = None
+        # Same single-slot cache pattern, for the local Moran's I summary
+        # table — see getLocalMoranSummaryModel.
+        self._local_moran_summary_model_path: str | None = None
+        self._local_moran_summary_model: "LocalMoranSummaryModel | None" = None
         # Single-slot cache for requestFeatureList — see that method's
         # own docstring for why.
         self._feature_list_cache_path: str | None = None
@@ -349,6 +554,8 @@ class AnalysisBridge(QObject):
         self._spectrum_prev_path: Path | None = None
         self._mirror_plot_counter = 0
         self._mirror_plot_prev_path: Path | None = None
+        self._calibration_plot_counter = 0
+        self._calibration_plot_prev_path: Path | None = None
         # Kept alive while running — nothing else holds a reference to it
         # (same pattern as CoreBridge._run_worker). Replacing it (a new
         # request before the previous one finished) is also how a stale
@@ -366,6 +573,16 @@ class AnalysisBridge(QObject):
         # was still fetching.
         self._annotation_table_worker: TableQueryWorker | None = None
         self._feature_list_worker: TableQueryWorker | None = None
+        # One slot each for HeatmapControlsPanel.qml's four .h5ad-backed
+        # fetches — see requestObsColumns/requestFeatureValueRange/
+        # requestObsValueRange/requestObsCategories. Four separate
+        # attributes (not one shared slot) because these legitimately run
+        # concurrently: switching inspectionMode fires refreshAutoRange()
+        # and refreshObsCategoryLegend() in the same tick.
+        self._obs_columns_worker: HeatmapQueryWorker | None = None
+        self._feature_value_range_worker: HeatmapQueryWorker | None = None
+        self._obs_value_range_worker: HeatmapQueryWorker | None = None
+        self._obs_categories_worker: HeatmapQueryWorker | None = None
         # Same pattern once more — one slot shared by every Export menu
         # action, since only one export can sensibly run at a time from
         # one workspace.
@@ -455,65 +672,156 @@ class AnalysisBridge(QObject):
         self.he_image_provider.setAnalysisDbPath(analysis_db_path)
         self.he_overlay_provider.setAnalysisDbPath(analysis_db_path)
 
-    @Slot(list, float, str, result=dict)
-    def getFeatureValueRange(self, sample_names: list, mz: float, layer: str) -> dict:
-        """The real (min, max) of one feature's values across `sample_names`
-        — what autoscale is actually using for the Visual Inspection grid.
-        See `HeatmapImageProvider.getFeatureValueRange`.
+    @Slot(list, float, str)
+    def requestFeatureValueRange(self, sample_names: list, mz: float, layer: str) -> None:
+        """Start fetching the real (min, max) of one feature's values
+        across `sample_names` on a background thread — what autoscale is
+        actually using for the Visual Inspection grid. Result arrives via
+        `featureValueRangeReady({"vmin": ..., "vmax": ...})`.
+
+        Used to be a synchronous `@Slot` returning the range directly,
+        called from `HeatmapControlsPanel.qml`'s `refreshAutoRange()` —
+        real `.h5ad`-backed work on the GUI thread, one of several real
+        remaining causes of Visual Inspection's freeze-on-open (ADR 48
+        round 3; tile rendering itself was already fixed). Fire-and-forget
+        rather than a return value, same reasoning as `requestFeatureList`
+        — see the class docstring. No result caching: `mz`/`layer`/
+        `sample_names` change on nearly every call, so a single-slot cache
+        would rarely hit.
 
         Args:
             sample_names: Samples to combine — normally the currently
                 visible ones.
             mz: The feature's consensus m/z.
             layer: `"raw"` or `"TIC"`.
-
-        Returns:
-            `{"vmin": ..., "vmax": ...}`.
         """
-        return self.heatmap_provider.getFeatureValueRange(sample_names, mz, layer)
+        worker = HeatmapQueryWorker(
+            self.heatmap_provider.getFeatureValueRange, sample_names, mz, layer, parent=self
+        )
+        worker.succeeded.connect(self._onFeatureValueRangeSucceeded)
+        worker.failed.connect(self._onFeatureValueRangeFailed)
+        self._feature_value_range_worker = worker
+        worker.start()
 
-    @Slot(list, result=list)
-    def getObsColumns(self, sample_names: list) -> list:
-        """`adata.obs` columns Visual Inspection can overlay instead of a
-        feature — e.g. `tic`, `rt`. See `HeatmapImageProvider.getObsColumns`.
+    @Slot(object)
+    def _onFeatureValueRangeSucceeded(self, value_range: dict) -> None:
+        if self.sender() is not self._feature_value_range_worker:
+            return  # superseded by a newer request — discard
+        self.featureValueRangeReady.emit(value_range)
+
+    @Slot(str)
+    def _onFeatureValueRangeFailed(self, message: str) -> None:
+        if self.sender() is not self._feature_value_range_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("feature value range load failed: %s", message)
+        self.featureValueRangeReady.emit({"vmin": 0, "vmax": 1})
+
+    @Slot(list)
+    def requestObsColumns(self, sample_names: list) -> None:
+        """Start fetching `adata.obs` columns Visual Inspection can
+        overlay instead of a feature (e.g. `tic`, `rt`) on a background
+        thread; result arrives via `obsColumnsReady(columns)`. See
+        `requestFeatureValueRange`'s docstring for why this is async now
+        (ADR 48 round 3) and `HeatmapImageProvider.getObsColumns` for the
+        actual read.
 
         Args:
             sample_names: Samples to look for a readable `.h5ad` in —
                 normally every sample of the analysis (the schema is the
                 same across all of them), not just the visible ones.
-
-        Returns:
-            `[{"name": ..., "numeric": bool}, ...]`.
         """
-        return self.heatmap_provider.getObsColumns(sample_names)
+        worker = HeatmapQueryWorker(self.heatmap_provider.getObsColumns, sample_names, parent=self)
+        worker.succeeded.connect(self._onObsColumnsSucceeded)
+        worker.failed.connect(self._onObsColumnsFailed)
+        self._obs_columns_worker = worker
+        worker.start()
 
-    @Slot(list, str, result=dict)
-    def getObsValueRange(self, sample_names: list, obs_column: str) -> dict:
-        """The real (min, max) of one numeric `obs` column across
-        `sample_names` — the `obs`-column analogue of `getFeatureValueRange`.
-        See `HeatmapImageProvider.getObsValueRange`.
+    @Slot(object)
+    def _onObsColumnsSucceeded(self, columns: list) -> None:
+        if self.sender() is not self._obs_columns_worker:
+            return  # superseded by a newer request — discard
+        self.obsColumnsReady.emit(columns)
 
-        Returns:
-            `{"vmin": ..., "vmax": ...}`.
+    @Slot(str)
+    def _onObsColumnsFailed(self, message: str) -> None:
+        if self.sender() is not self._obs_columns_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("obs columns load failed: %s", message)
+        self.obsColumnsReady.emit([])
+
+    @Slot(list, str)
+    def requestObsValueRange(self, sample_names: list, obs_column: str) -> None:
+        """Start fetching the real (min, max) of one numeric `obs` column
+        across `sample_names` on a background thread — the `obs`-column
+        analogue of `requestFeatureValueRange`; result arrives via
+        `obsValueRangeReady({"vmin": ..., "vmax": ...})`. See
+        `HeatmapImageProvider.getObsValueRange` for the actual read.
         """
-        return self.heatmap_provider.getObsValueRange(sample_names, obs_column)
+        worker = HeatmapQueryWorker(
+            self.heatmap_provider.getObsValueRange, sample_names, obs_column, parent=self
+        )
+        worker.succeeded.connect(self._onObsValueRangeSucceeded)
+        worker.failed.connect(self._onObsValueRangeFailed)
+        self._obs_value_range_worker = worker
+        worker.start()
 
-    @Slot(list, str, result=list)
-    def getObsCategories(self, sample_names: list, obs_column: str) -> list:
-        """Every distinct category of one discrete `obs` column, combined
-        across `sample_names`, colored in the fixed order every tile's
-        render call must also use. See
-        `HeatmapImageProvider.getObsCategories`.
+    @Slot(object)
+    def _onObsValueRangeSucceeded(self, value_range: dict) -> None:
+        if self.sender() is not self._obs_value_range_worker:
+            return  # superseded by a newer request — discard
+        self.obsValueRangeReady.emit(value_range)
+
+    @Slot(str)
+    def _onObsValueRangeFailed(self, message: str) -> None:
+        if self.sender() is not self._obs_value_range_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("obs value range load failed: %s", message)
+        self.obsValueRangeReady.emit({"vmin": 0, "vmax": 1})
+
+    @Slot(list, str)
+    def requestObsCategories(self, sample_names: list, obs_column: str) -> None:
+        """Start fetching every distinct category of one discrete `obs`
+        column, combined across `sample_names`, on a background thread —
+        colored in the fixed order every tile's render call must also use.
+        Result arrives via `obsCategoriesReady(categories)`. See
+        `HeatmapImageProvider.getObsCategories` for the actual read.
 
         Args:
             sample_names: Normally every sample of the analysis, not just
                 the visible ones, so colors stay stable as visibility is
                 toggled.
-
-        Returns:
-            `[{"category": ..., "color": "#rrggbb"}, ...]`, sorted.
         """
-        return self.heatmap_provider.getObsCategories(sample_names, obs_column)
+        worker = HeatmapQueryWorker(
+            self.heatmap_provider.getObsCategories, sample_names, obs_column, parent=self
+        )
+        worker.succeeded.connect(self._onObsCategoriesSucceeded)
+        worker.failed.connect(self._onObsCategoriesFailed)
+        self._obs_categories_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _onObsCategoriesSucceeded(self, categories: list) -> None:
+        if self.sender() is not self._obs_categories_worker:
+            return  # superseded by a newer request — discard
+        self.obsCategoriesReady.emit(categories)
+
+    @Slot(str)
+    def _onObsCategoriesFailed(self, message: str) -> None:
+        if self.sender() is not self._obs_categories_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("obs categories load failed: %s", message)
+        self.obsCategoriesReady.emit([])
+
+    @Slot(str, result=str)
+    def getNormalizedLayerName(self, analysis_db_path: str) -> str:
+        """This analysis' actual normalized-layer key — see
+        `_load_normalized_layer_name`. Cheap, synchronous `commands` read,
+        same as `getLocalMoranSummaryModel`'s threshold seed — no
+        background thread needed for one small provenance lookup.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return "TIC"
+        return _load_normalized_layer_name(analysis_db_path)
 
     @Slot(str)
     def ensureSchemaCurrent(self, analysis_db_path: str) -> None:
@@ -691,6 +999,93 @@ class AnalysisBridge(QObject):
         if self._spatial_correlation_model is not None:
             self._spatial_correlation_model.setRowsLoading(False)
 
+    @Slot(str, result=QObject)
+    def getLocalMoranSummaryModel(self, analysis_db_path: str) -> LocalMoranSummaryModel:
+        """The `LocalMoranSummaryModel` for this analysis — the local
+        Moran's I analogue of `getSpatialCorrelationModel`, same single-
+        slot cache/background-fetch/state-survives-tab-switch reasoning in
+        full (see that method's own docstring), just backed by
+        `_load_local_moran_layer_data`/`adata.layers["localMoranI"]`
+        instead of `adata.uns["moranI"]` — and, unlike that table, this one
+        seeds its `threshold` from `_load_local_moran_threshold_default`
+        (this analysis' own recorded `spatial_correlation.local_threshold`)
+        on creation, before any rows arrive, so the page opens at the
+        configured default rather than the model's own generic fallback.
+        Adjusting `threshold` afterward is a live, in-memory recompute —
+        see `LocalMoranSummaryModel.setThreshold` — never a new fetch.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+
+        Returns:
+            The (possibly still-loading — see `model.rowsLoading`)
+            `LocalMoranSummaryModel` for this analysis, or a fresh empty
+            one for an invalid/missing path.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return LocalMoranSummaryModel(self)
+        if analysis_db_path == self._local_moran_summary_model_path:
+            return self._local_moran_summary_model
+
+        if self._local_moran_summary_model is not None:
+            self._local_moran_summary_model.deleteLater()
+        model = LocalMoranSummaryModel(self)
+        model.setThreshold(_load_local_moran_threshold_default(analysis_db_path))
+        model.setRowsLoading(True)
+        self._local_moran_summary_model_path = analysis_db_path
+        self._local_moran_summary_model = model
+
+        worker = TableQueryWorker(_load_local_moran_layer_data, analysis_db_path, self)
+        worker.succeeded.connect(self._onLocalMoranSummarySucceeded)
+        worker.failed.connect(self._onLocalMoranSummaryFailed)
+        self._local_moran_summary_worker = worker
+        worker.start()
+        return model
+
+    @Slot(object)
+    def _onLocalMoranSummarySucceeded(self, result: tuple) -> None:
+        worker = self.sender()
+        if worker is not self._local_moran_summary_worker:
+            return  # superseded by a newer request — discard
+        if self._local_moran_summary_model is None:
+            return  # analysis switched again before this landed
+        feature_rows, samples = result
+        self._local_moran_summary_model.setRows(feature_rows, samples)
+        self._local_moran_summary_model.setRowsLoading(False)
+
+    @Slot(str)
+    def _onLocalMoranSummaryFailed(self, message: str) -> None:
+        if self.sender() is not self._local_moran_summary_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("local Moran's I layer load failed: %s", message)
+        if self._local_moran_summary_model is not None:
+            self._local_moran_summary_model.setRowsLoading(False)
+
+    @Slot(str, float, result=dict)
+    def getMoranIForFeature(self, analysis_db_path: str, mz: float) -> dict:
+        """Per-sample Moran's I scores for one feature, for Visual
+        Inspection's per-sample-name label — a plain in-memory dict scan
+        over the already-cached `SpatialCorrelationModel`'s rows, **not**
+        a new fetch. Unlike the four heatmap-controls calls this same
+        session made async (real `.h5ad` I/O each time), this is safe to
+        keep synchronous: `getSpatialCorrelationModel` eagerly warms this
+        cache at analysis-open time, so by the time the user is looking at
+        a feature in Visual Inspection the data is normally already
+        sitting in RAM.
+
+        Deliberately does **not** trigger a load if the cache is missing
+        or belongs to a different analysis — returns `{}` instead, since
+        triggering one here would mean this "cheap" call could silently
+        become a background `.h5ad` fetch, which is exactly the kind of
+        surprise this split is meant to avoid.
+        """
+        if (
+            analysis_db_path != self._spatial_correlation_model_path
+            or self._spatial_correlation_model is None
+        ):
+            return {}
+        return self._spatial_correlation_model.moranIForMz(mz)
+
     @Slot(str, result=list)
     def getFeaturesForPrediction(self, analysis_db_path: str) -> list:
         """Every feature, with its current representative identity (if
@@ -833,6 +1228,17 @@ class AnalysisBridge(QObject):
         if self._mirror_plot_prev_path is not None:
             self._mirror_plot_prev_path.unlink(missing_ok=True)
         self._mirror_plot_prev_path = path
+        return path.as_uri()
+
+    def _write_calibration_plot_html(self, html: str) -> str:
+        self._calibration_plot_counter += 1
+        path = Path(tempfile.gettempdir()) / (
+            f"msianalyzer_calibration_plot_{os.getpid()}_{self._calibration_plot_counter}.html"
+        )
+        path.write_text(html, encoding="utf-8")
+        if self._calibration_plot_prev_path is not None:
+            self._calibration_plot_prev_path.unlink(missing_ok=True)
+        self._calibration_plot_prev_path = path
         return path.as_uri()
 
     @Slot(str, int, result=str)
@@ -1498,6 +1904,526 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         return {"ok": True, "rmse": fit.rmse, "landmarks": self._landmarks_to_rows(fit)}
 
     # -----------------------------------------------------------------
+    # Calibration curve quantification (targeted analyses)
+    # -----------------------------------------------------------------
+
+    @Property(list, constant=True)
+    def amountUnits(self) -> list:
+        """`core.calibration.units.AMOUNT_UNITS`, for
+        CalibrationSection.qml's amount-unit picker — one source of truth
+        rather than a hand-copied QML list."""
+        return list(AMOUNT_UNITS)
+
+    @Property(list, constant=True)
+    def pixelSizeUnits(self) -> list:
+        """`core.calibration.units.PIXEL_SIZE_UNITS`, for
+        CalibrationSection.qml's pixel-size-unit picker."""
+        return list(PIXEL_SIZE_UNITS)
+
+    @Slot(str, result=list)
+    def getCalibrationPoints(self, analysis_db_path: str) -> list:
+        """Every calibration standard for this analysis —
+        CalibrationSection.qml's Standards table (v1: one analysis-wide
+        set, not scoped per curve — see `analysis_db`'s own schema comment).
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+
+        Returns:
+            Records from `analysis_db.load_calibration_points`, each with
+            a `sample_name` column resolved from `sample_id` (joined here
+            in Python — this table is always small, no need for a SQL
+            join). Empty when there are no standards yet.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        df = analysis_db.load_calibration_points(analysis_db_path)
+        if df.empty:
+            return []
+        samples = analysis_db.load_samples(analysis_db_path)
+        id_to_name = (
+            dict(zip(samples["sample_id"], samples["name"])) if not samples.empty else {}
+        )
+        df = df.copy()
+        df["sample_name"] = df["sample_id"].map(id_to_name).fillna("")
+        return _dataframe_to_records(df)
+
+    @Slot(str, result=list)
+    def getCalibrationUnknowns(self, analysis_db_path: str) -> list:
+        """Every quantified ROI result for this analysis —
+        CalibrationSection.qml's Unknowns table.
+
+        Returns:
+            Records from `analysis_db.load_calibration_unknowns`, with
+            `sample_name` resolved the same way as `getCalibrationPoints`.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        df = analysis_db.load_calibration_unknowns(analysis_db_path)
+        if df.empty:
+            return []
+        samples = analysis_db.load_samples(analysis_db_path)
+        id_to_name = (
+            dict(zip(samples["sample_id"], samples["name"])) if not samples.empty else {}
+        )
+        df = df.copy()
+        df["sample_name"] = df["sample_id"].map(id_to_name).fillna("")
+        return _dataframe_to_records(df)
+
+    @Slot(str, result=float)
+    def getCalibrationAnalyteMz(self, analysis_db_path: str) -> float:
+        """The analyte m/z this analysis' calibration is built around, if
+        any standard has ever been added (see `addCalibrationPoint`'s own
+        `write_metadata` call) — lets CalibrationSection.qml preselect it
+        in the analyte picker on a later visit instead of asking the user
+        to reselect it every time the tab is reopened.
+
+        Returns:
+            The stored m/z, or `-1.0` (never a real m/z) if none is
+            recorded yet — simpler for QML to check than round-tripping a
+            `None`/`NaN` across the bridge boundary.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return -1.0
+        value = analysis_db.load_metadata_value(analysis_db_path, "calibration_analyte_mz")
+        return float(value) if value is not None else -1.0
+
+    @Slot(str, str, result=dict)
+    def getSamplePixelSize(self, analysis_db_path: str, sample_name: str) -> dict:
+        """This sample's own raster pixel size, if the raw database has
+        one on record (`core.parser.mzml_parser.write_raw_metadata`,
+        written during the run from the raster XML's `<rasterConfig>`
+        section — see `Run._process_one_sample`) — lets
+        CalibrationSection.qml *default* its pixel-size field to the
+        acquisition's own real value instead of asking the user to know
+        and type it in, while still leaving it fully editable (a default,
+        never a locked-in value).
+
+        Uses `pixel_size_x` as *the* pixel size (calibration assumes
+        square pixels — see `core.calibration.units.pixel_area`'s own
+        docstring); `pixel_size_y` is recorded on the raw DB too but not
+        surfaced here, since v1 has nowhere to use a second value.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_name: Which sample to look up.
+
+        Returns:
+            `{"pixel_size": float, "pixel_size_unit": str}` if both are on
+            record for this sample's raw database, or `{}` — never a
+            partial dict — if there's no analysis database, no such
+            sample, no raw database on record for it, or the raster XML
+            it was parsed from had no `<rasterConfig>` section (exactly
+            the "user must define it themselves" case this already had).
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {}
+        raw_db_path = analysis_db.get_sample_raw_db_path(analysis_db_path, sample_name)
+        if not raw_db_path or not Path(raw_db_path).exists():
+            return {}
+        pixel_size = load_raw_metadata_value(raw_db_path, "pixel_size_x")
+        pixel_size_unit = load_raw_metadata_value(raw_db_path, "pixel_size_unit")
+        if pixel_size is None or pixel_size_unit is None:
+            return {}
+        return {"pixel_size": float(pixel_size), "pixel_size_unit": pixel_size_unit}
+
+    @Slot(str, result=dict)
+    def getCalibrationCurve(self, analysis_db_path: str) -> dict:
+        """The most recently fitted calibration curve for this analysis.
+
+        Returns:
+            A dict of every `calibration_curves` column (see
+            `analysis_db.load_calibration_curve`), or `{}` if no curve has
+            been fit yet (or the db path doesn't exist).
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {}
+        curve = analysis_db.load_calibration_curve(analysis_db_path)
+        return curve or {}
+
+    @Slot(str, str, str, float, float, str, float, str, result=dict)
+    def addCalibrationPoint(
+        self,
+        analysis_db_path: str,
+        sample_name: str,
+        roi_name: str,
+        analyte_mz: float,
+        amount: float,
+        amount_unit: str,
+        pixel_size: float,
+        pixel_size_unit: str,
+    ) -> dict:
+        """Register (or update) one calibration standard —
+        CalibrationSection.qml's "Add Standard" flow: called right after
+        `RoiDesignWindow.roiSaved` fires, from a small popup asking for
+        `amount`/`amount_unit`/`pixel_size`/`pixel_size_unit` immediately
+        while the spot is fresh.
+
+        Computes this ROI's pixel count and signal straight from the
+        sample's already-written `.h5ad` (the analyte's column is already
+        there — every `NormalizationConfig.analyte_mzs` value was
+        quantified for every sample back when the targeted run itself
+        assembled its `.h5ad` files). The signal itself is an
+        internal-standard-corrected ratio, not bare intensity — see
+        `core.calibration.roi_intensity.roi_internal_standard_signal` —
+        since a standard and an unknown quantified against the same curve
+        can legitimately live on different samples/acquisitions, where raw
+        intensity alone carries no correction for ionization-efficiency
+        drift between them. Derives area/concentration (see
+        `core.calibration.units`), and upserts — re-adding the same ROI
+        name (e.g. correcting a typo'd amount) updates it in place rather
+        than duplicating.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            sample_name: Which sample the ROI was drawn on.
+            roi_name: The ROI's name.
+            analyte_mz: The analyte's m/z — matched to the nearest
+                `.var["mz"]`.
+            amount: Total quantity of the analyte in the spot, as entered.
+            amount_unit: One of `core.calibration.units.AMOUNT_UNITS`.
+            pixel_size: This ROI's pixel edge length (assumed square).
+            pixel_size_unit: `"um"` or `"mm"`.
+
+        Returns:
+            `{"ok": True}` on success, or `{"ok": False, "error":
+            "<message>"}` (no analysis database, no `.h5ad` for that
+            sample, an invalid unit, the ROI has no pixels on that sample,
+            this analysis has no recorded `reference_mz`, or every pixel
+            in the ROI has a non-positive reference-channel value).
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {"ok": False, "error": "No analysis database."}
+        if amount_unit not in AMOUNT_UNITS:
+            return {"ok": False, "error": f"amount_unit must be one of {AMOUNT_UNITS}."}
+        h5ad_path = self._sample_h5ad_path(analysis_db_path, sample_name)
+        if not h5ad_path.exists():
+            return {"ok": False, "error": f"Sample {sample_name!r} has no .h5ad file."}
+        reference_mz = _load_calibration_reference_mz(analysis_db_path)
+        if reference_mz is None:
+            return {
+                "ok": False,
+                "error": "No reference m/z on record for this analysis — re-run "
+                "it as a targeted analysis first.",
+            }
+
+        adata = ad.read_h5ad(h5ad_path)
+        n_pixels = roi_pixel_count(adata, roi_name)
+        if n_pixels == 0:
+            return {
+                "ok": False,
+                "error": f"ROI {roi_name!r} has no pixels on sample {sample_name!r}.",
+            }
+        mean_intensity = roi_internal_standard_signal(
+            adata, roi_name, analyte_mz, reference_mz, layer="raw"
+        )
+        if mean_intensity is None:
+            return {
+                "ok": False,
+                "error": f"Reference channel has no positive signal in ROI {roi_name!r} "
+                f"on sample {sample_name!r}.",
+            }
+
+        try:
+            area = pixel_area(n_pixels, pixel_size, pixel_size_unit)
+            concentration = concentration_from_amount(amount, area)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+        analysis_db.init_analysis_db(analysis_db_path).close()
+        sample_id = analysis_db.get_sample_id(analysis_db_path, sample_name)
+        analysis_db.upsert_calibration_point(
+            analysis_db_path,
+            sample_id=sample_id,
+            roi_name=roi_name,
+            amount=amount,
+            amount_unit=amount_unit,
+            pixel_size=pixel_size,
+            pixel_size_unit=pixel_size_unit,
+            area=area,
+            concentration=concentration,
+            mean_intensity=mean_intensity,
+            n_pixels=n_pixels,
+        )
+        # v1 is single-analyte-per-analysis — remembered here (not just
+        # implied by whatever mz the GUI happens to have loaded right now)
+        # so CalibrationSection.qml can restore it on a later visit
+        # (getCalibrationAnalyteMz) instead of asking the user to retype it.
+        analysis_db.write_metadata(
+            analysis_db_path, {"calibration_analyte_mz": analyte_mz}
+        )
+        return {"ok": True}
+
+    @Slot(str, str, result=bool)
+    def deleteCalibrationPoint(self, analysis_db_path: str, roi_name: str) -> bool:
+        """Remove one calibration standard.
+
+        Returns:
+            True if it existed.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return False
+        return analysis_db.delete_calibration_point(analysis_db_path, roi_name)
+
+    @Slot(str, float, str, str, result=dict)
+    def fitCalibrationCurve(
+        self, analysis_db_path: str, analyte_mz: float, fit_type: str, weighting: str
+    ) -> dict:
+        """Fit a calibration curve from every current standard, persist it
+        (append-only fit history — a re-fit adds a new row, never
+        overwrites), and re-interpolate every existing unknown against the
+        fresh fit.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            analyte_mz: The analyte's m/z, recorded on the new
+                `calibration_curves` row.
+            fit_type: `"linear"` or `"weighted_linear"`.
+            weighting: `"1/x"`/`"1/x2"` for a weighted fit — ignored (pass
+                `""`) for `"linear"`.
+
+        Returns:
+            The new curve as a dict (see
+            `analysis_db.load_calibration_curve`, plus `"ok": True`), or
+            `{"ok": False, "error": "<message>"}` — fewer than 2
+            standards, standards whose amount/pixel-size units don't all
+            match, or an invalid `fit_type`/`weighting`.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {"ok": False, "error": "No analysis database."}
+
+        points_df = analysis_db.load_calibration_points(analysis_db_path)
+        if len(points_df) < 2:
+            return {"ok": False, "error": "At least 2 calibration standards are required."}
+
+        amount_units = points_df["amount_unit"].unique()
+        pixel_size_units = points_df["pixel_size_unit"].unique()
+        if len(amount_units) > 1 or len(pixel_size_units) > 1:
+            return {
+                "ok": False,
+                "error": (
+                    "All standards must use the same amount and pixel-size units "
+                    "to be fit together."
+                ),
+            }
+
+        points = list(zip(points_df["concentration"], points_df["mean_intensity"]))
+        weighting_arg = weighting if weighting else None
+        try:
+            fit = fit_calibration_curve(points, fit_type=fit_type, weighting=weighting_arg)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+        conc_unit = calibration_concentration_unit(
+            str(amount_units[0]), str(pixel_size_units[0])
+        )
+        run_id = analysis_db.load_metadata_value(analysis_db_path, "analysis_id") or "unknown"
+        command_id = analysis_db.log_command(
+            analysis_db_path,
+            command_name="fit_calibration_curve",
+            arguments={"analyte_mz": analyte_mz, "fit_type": fit_type, "weighting": weighting_arg},
+            run_id=run_id,
+        )
+        curve_id = analysis_db.register_calibration_curve(
+            analysis_db_path,
+            analyte_mz=analyte_mz,
+            fit_type=fit_type,
+            weighting=weighting_arg,
+            concentration_unit=conc_unit,
+            slope=fit.slope,
+            intercept=fit.intercept,
+            r_squared=fit.r_squared,
+            lod=fit.lod,
+            loq=fit.loq,
+            n_points=fit.n_points,
+            command_id=command_id,
+        )
+
+        if fit.slope != 0:
+            for _, row in analysis_db.load_calibration_unknowns(analysis_db_path).iterrows():
+                new_conc = interpolate_concentration(fit, row["mean_intensity"])
+                new_amount = amount_from_concentration(new_conc, row["area"])
+                analysis_db.update_calibration_unknown_result(
+                    analysis_db_path, row["roi_name"], curve_id, new_conc, new_amount
+                )
+
+        curve = analysis_db.load_calibration_curve(analysis_db_path, curve_id)
+        curve["ok"] = True
+        return curve
+
+    @Slot(str, str, str, float, float, str, result=dict)
+    def addCalibrationUnknown(
+        self,
+        analysis_db_path: str,
+        sample_name: str,
+        roi_name: str,
+        analyte_mz: float,
+        pixel_size: float,
+        pixel_size_unit: str,
+    ) -> dict:
+        """Register (or update) one quantified ROI —
+        CalibrationSection.qml's "Add Sample to Quantify" flow, called
+        right after `RoiDesignWindow.roiSaved` fires (a separate trigger
+        from "Add Standard" — see the calibration workflow's own docs).
+
+        Computes this ROI's pixel count/area/signal the same way
+        `addCalibrationPoint` does — including the same internal-standard
+        (`reference_mz`-ratio) correction, so an unknown quantified against
+        a curve fit on a *different* sample stays comparable to it — and,
+        if a calibration curve already exists, interpolates immediately. If
+        not, the result is still recorded, with a null
+        `interpolated_conc`/`amount` — the GUI shows "no curve yet" for it
+        until `fitCalibrationCurve` runs and updates every existing unknown
+        in place.
+
+        Returns:
+            `{"ok": True}` on success, or `{"ok": False, "error":
+            "<message>"}`.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {"ok": False, "error": "No analysis database."}
+        h5ad_path = self._sample_h5ad_path(analysis_db_path, sample_name)
+        if not h5ad_path.exists():
+            return {"ok": False, "error": f"Sample {sample_name!r} has no .h5ad file."}
+        reference_mz = _load_calibration_reference_mz(analysis_db_path)
+        if reference_mz is None:
+            return {
+                "ok": False,
+                "error": "No reference m/z on record for this analysis — re-run "
+                "it as a targeted analysis first.",
+            }
+
+        adata = ad.read_h5ad(h5ad_path)
+        n_pixels = roi_pixel_count(adata, roi_name)
+        if n_pixels == 0:
+            return {
+                "ok": False,
+                "error": f"ROI {roi_name!r} has no pixels on sample {sample_name!r}.",
+            }
+        mean_intensity = roi_internal_standard_signal(
+            adata, roi_name, analyte_mz, reference_mz, layer="raw"
+        )
+        if mean_intensity is None:
+            return {
+                "ok": False,
+                "error": f"Reference channel has no positive signal in ROI {roi_name!r} "
+                f"on sample {sample_name!r}.",
+            }
+
+        try:
+            area = pixel_area(n_pixels, pixel_size, pixel_size_unit)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+        curve = analysis_db.load_calibration_curve(analysis_db_path)
+        curve_id = interpolated_conc = amount = None
+        if curve is not None and curve["slope"] != 0:
+            curve_id = curve["id"]
+            fit_like = SimpleNamespace(slope=curve["slope"], intercept=curve["intercept"])
+            interpolated_conc = interpolate_concentration(fit_like, mean_intensity)
+            amount = amount_from_concentration(interpolated_conc, area)
+
+        analysis_db.init_analysis_db(analysis_db_path).close()
+        sample_id = analysis_db.get_sample_id(analysis_db_path, sample_name)
+        analysis_db.upsert_calibration_unknown(
+            analysis_db_path,
+            sample_id=sample_id,
+            roi_name=roi_name,
+            pixel_size=pixel_size,
+            pixel_size_unit=pixel_size_unit,
+            area=area,
+            mean_intensity=mean_intensity,
+            n_pixels=n_pixels,
+            curve_id=curve_id,
+            interpolated_conc=interpolated_conc,
+            amount=amount,
+        )
+        return {"ok": True}
+
+    @Slot(str, int, result=bool)
+    def deleteCalibrationUnknown(self, analysis_db_path: str, unknown_id: int) -> bool:
+        """Remove one quantified ROI result.
+
+        Returns:
+            True if it existed.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return False
+        return analysis_db.delete_calibration_unknown(analysis_db_path, unknown_id)
+
+    @Slot(str, result=str)
+    def getCalibrationPlotUrl(self, analysis_db_path: str, display_area_unit: str = "") -> str:
+        """The fitted calibration curve, as a `file://` URL for a
+        `WebEngineView` — CalibrationSection.qml's Step 2 chart.
+
+        Cheap enough (a handful of points, no raw spectrum I/O) to build
+        synchronously — unlike `requestMirrorPlot`, no background worker.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            display_area_unit: `"um"` or `"mm"` — redisplay the curve in
+                this square-length unit instead of whatever unit it was
+                actually fit in (`curve["concentration_unit"]`'s own area
+                part), converting concentrations/slope/LOD/LOQ via
+                `area_conversion_factor`. A live, non-destructive display
+                choice (CalibrationSection.qml's
+                `concentrationAreaUnitCombo`) — nothing stored changes.
+                `""` (the default) or a value matching the curve's own
+                unit already is a no-op.
+
+        Returns:
+            The plot's URL, or `""` if there's no analysis database, no
+            curve has been fit yet, or it has no standards on record.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return ""
+        curve = analysis_db.load_calibration_curve(analysis_db_path)
+        if curve is None:
+            return ""
+        points_df = analysis_db.load_calibration_points(analysis_db_path)
+        if points_df.empty:
+            return ""
+        points = list(zip(points_df["concentration"], points_df["mean_intensity"]))
+        slope, intercept, lod, loq = curve["slope"], curve["intercept"], curve["lod"], curve["loq"]
+        concentration_unit_label = curve["concentration_unit"]
+
+        # concentration_unit_label looks like "pmol/mm2" — the area unit is
+        # everything after the "/", minus the trailing "2".
+        curve_area_unit = concentration_unit_label.split("/")[-1].rstrip("2")
+        if display_area_unit and display_area_unit in PIXEL_SIZE_UNITS \
+                and display_area_unit != curve_area_unit:
+            # `factor` = how many `display_area_unit`-squared fit in one
+            # `curve_area_unit`-squared. A concentration is amount/area, so
+            # redisplaying it in a unit with MORE of it per physical area
+            # (curve_area_unit -> display_area_unit, factor > 1) makes the
+            # concentration NUMBER SMALLER (divide by factor) — e.g.
+            # 2.667e-7 pmol/um2 becomes 0.2667 pmol/mm2, factor = 1e-6
+            # (um -> mm), 2.667e-7 / 1e-6 = 0.2667. Slope inverts that
+            # (multiply by factor) so slope*concentration is unchanged;
+            # LOD/LOQ are concentration-like, so they scale like
+            # concentration does.
+            factor = area_conversion_factor(curve_area_unit, display_area_unit)
+            points = [(x / factor, y) for x, y in points]
+            slope = slope * factor
+            lod = lod / factor if lod is not None else None
+            loq = loq / factor if loq is not None else None
+            amount_unit_part = concentration_unit_label.split("/")[0]
+            concentration_unit_label = calibration_concentration_unit(
+                amount_unit_part, display_area_unit
+            )
+
+        fit = SimpleNamespace(slope=slope, intercept=intercept, r_squared=curve["r_squared"])
+        fig = Plotter.plot_calibration_curve(points, fit, concentration_unit_label)
+        fig.update_layout(autosize=True)
+        fig.layout.height = None
+        html = fig.to_html(full_html=False, include_plotlyjs=True, config={"responsive": True})
+        html += (
+            "<style>html, body { margin: 0; padding: 0; "
+            "height: 100%; overflow: hidden; }</style>"
+        )
+        return self._write_calibration_plot_html(html)
+
+    # -----------------------------------------------------------------
     # Export menu
     # -----------------------------------------------------------------
 
@@ -1571,6 +2497,27 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
                 analysis_db_path, dest_folder, layer, file_format
             )
             return f"Integration tables exported for {n} sample(s) to {dest_folder}"
+
+        self._run_export(_do_export)
+
+    @Slot(str, str)
+    def exportCalibrationResults(self, analysis_db_path: str, dest_folder: str) -> None:
+        """Start writing a targeted analysis' calibration results
+        (standards/curve/unknowns, see `core.export.export_calibration_results`)
+        on a background thread; completion arrives via
+        `exportFinished(message)`/`exportFailed(message)`.
+
+        Args:
+            analysis_db_path: The analysis' SQLite database.
+            dest_folder: Destination folder — up to 3 CSV files are
+                written into it (whichever of standards/curve/unknowns
+                actually exist).
+        """
+        def _do_export() -> str:
+            n = core_export.export_calibration_results(analysis_db_path, dest_folder)
+            if n == 0:
+                return "No calibration results to export yet."
+            return f"Calibration results ({n} file(s)) exported to {dest_folder}"
 
         self._run_export(_do_export)
 

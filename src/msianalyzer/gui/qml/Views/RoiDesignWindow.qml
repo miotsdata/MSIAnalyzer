@@ -67,6 +67,15 @@ Window {
     // there; this window never needs its own copy of those controls.
     property var controls: null
 
+    // Fired right after a successful save (below, in closePolygon()) —
+    // lets an owner that needs to react to a *specific* new ROI do so
+    // (e.g. CalibrationSection.qml's "immediately ask for this standard's
+    // amount" popup) without polling `roiWindow.savedRois`. Every opener
+    // still gets this signal regardless of why it opened the window; one
+    // that doesn't care (e.g. Visual Inspection's plain "Draw ROI") just
+    // never connects a handler to it.
+    signal roiSaved(string sampleName, string roiName)
+
     property int selectedSampleIndex: 0
     readonly property var selectedSample: (roiWindow.samples.length > roiWindow.selectedSampleIndex)
                                            ? roiWindow.samples[roiWindow.selectedSampleIndex] : null
@@ -278,9 +287,12 @@ Window {
             roiWindow.analysis.analysisDbPath, roiWindow.selectedSample.name,
             roiWindow.draftName, roiWindow.draftColor.toString(), roiWindow.draftVertices)
         if (result.ok) {
+            var savedSampleName = roiWindow.selectedSample.name
+            var savedRoiName = roiWindow.draftName
             roiWindow.resetDraft()
             roiWindow.refreshSavedRois()
             roiWindow.refreshCatalogRois()
+            roiWindow.roiSaved(savedSampleName, savedRoiName)
         } else {
             roiWindow.saveError = result.error
         }

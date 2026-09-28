@@ -184,9 +184,15 @@ ApplicationWindow {
 
             AppMenuItem {
                 objectName: "newAnalysisMenuItem"
-                text: "New"
+                text: "New Untargeted…"
                 enabled: window.currentProject !== null
-                onTriggered: Router.newAnalysisPageRequested(window.currentProject)
+                onTriggered: Router.newAnalysisPageRequested(window.currentProject, "untargeted")
+            }
+            AppMenuItem {
+                objectName: "newTargetedAnalysisMenuItem"
+                text: "New Targeted…"
+                enabled: window.currentProject !== null
+                onTriggered: Router.newAnalysisPageRequested(window.currentProject, "targeted")
             }
             Menu {
                 objectName: "openAnalysisMenu"
@@ -240,19 +246,32 @@ ApplicationWindow {
         // project is open, for the same reason ("I actually want the
         // entire menu item disabled").
         Menu {
+            id: exportMenu
             objectName: "exportMenu"
             title: "Export"
             enabled: window.currentAnalysis !== null
 
+            // Annotation/Integration/Image all assume the untargeted
+            // pipeline's own output (MS2 annotations, an aligned
+            // multi-feature intensity matrix, Visual Inspection's live
+            // plots) — none of it exists for a targeted analysis, so
+            // these are hidden outright for one, not just disabled
+            // (reported directly: "we can only export calibration...
+            // [the rest] should be hidden from menu").
+            readonly property bool isTargetedAnalysis: window.currentAnalysis
+                                                        && window.currentAnalysis.analysisType === "targeted"
+
             AppMenuItem {
                 objectName: "exportAnnotationMenuItem"
                 text: "Annotation…"
+                visible: !exportMenu.isTargetedAnalysis
                 enabled: window.currentAnalysis !== null
                 onTriggered: exportAnnotationDialog.open()
             }
             AppMenuItem {
                 objectName: "exportIntegrationMenuItem"
                 text: "Integration…"
+                visible: !exportMenu.isTargetedAnalysis
                 enabled: window.currentAnalysis !== null
                 onTriggered: exportIntegrationDialog.open()
             }
@@ -265,10 +284,20 @@ ApplicationWindow {
             AppMenuItem {
                 objectName: "exportImageMenuItem"
                 text: "Image…"
+                visible: !exportMenu.isTargetedAnalysis
                 enabled: window.currentAnalysis !== null
                          && stackView.currentItem
                          && stackView.currentItem.visualInspectionActive === true
                 onTriggered: exportImageDialog.open()
+            }
+            // Only meaningful for a targeted analysis — hidden the other
+            // way around, symmetric with the three above.
+            AppMenuItem {
+                objectName: "exportCalibrationMenuItem"
+                text: "Calibration…"
+                visible: exportMenu.isTargetedAnalysis
+                enabled: window.currentAnalysis !== null
+                onTriggered: exportCalibrationFolderDialog.open()
             }
         }
 
@@ -343,16 +372,18 @@ ApplicationWindow {
             stackView.push("qrc:/Views/CreateProjectPage.qml")
         }
 
-        function onNewAnalysisPageRequested(project) {
+        function onNewAnalysisPageRequested(project, analysisType) {
             window.currentProject = project
             window.currentAnalysis = null
-            stackView.push("qrc:/Views/NewAnalysisPage.qml", {"project": project})
+            stackView.push("qrc:/Views/NewAnalysisPage.qml",
+                            {"project": project, "analysisType": analysisType})
         }
 
-        function onShowRunningPageRequested(project, runId) {
+        function onShowRunningPageRequested(project, runId, analysisType) {
             window.currentProject = project
             window.currentAnalysis = null
-            stackView.push("qrc:/Views/RunningAnalysisPage.qml", {"project": project, "runId": runId})
+            stackView.push("qrc:/Views/RunningAnalysisPage.qml",
+                            {"project": project, "runId": runId, "analysisType": analysisType})
         }
 
         function onShowAnalysisRequested(analysis) {
@@ -510,6 +541,18 @@ ApplicationWindow {
                 Router.toLocalPath(selectedFolder),
                 exportIntegrationDialog.layer,
                 exportIntegrationDialog.format)
+        }
+    }
+
+    // Calibration export needs only a destination folder — no format/layer
+    // choice, unlike Integration above — so a bare FolderDialog is enough.
+    FolderDialog {
+        id: exportCalibrationFolderDialog
+        objectName: "exportCalibrationFolderDialog"
+        options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
+        onAccepted: {
+            AnalysisBridge.exportCalibrationResults(
+                window.currentAnalysis.analysisDbPath, Router.toLocalPath(selectedFolder))
         }
     }
 

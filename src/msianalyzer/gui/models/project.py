@@ -58,12 +58,14 @@ class ProjectModel(QObject):
         """`self._project.runs` flattened to a list, newest first.
 
         Each entry: `{id, start_date, start_date_display, end_date, status,
-        out_dir, out_dir_display, config_path, config_path_display}`, read
-        out of the `Run.to_dict()`-shaped nested dict every run is stored
-        as. The `_display` fields are what Project Home actually shows —
-        `out_dir`/`config_path` relative to the project folder, `start_date`
-        truncated to minute precision — while the plain fields stay the
-        full absolute path / timestamp, e.g. for a "copy full path" action.
+        out_dir, out_dir_display, config_path, config_path_display,
+        analysis_type}`, read out of the `Run.to_dict()`-shaped nested dict
+        every run is stored as. The `_display` fields are what Project Home
+        actually shows — `out_dir`/`config_path` relative to the project
+        folder, `start_date` truncated to minute precision — while the
+        plain fields stay the full absolute path / timestamp, e.g. for a
+        "copy full path" action. `analysis_type` is `"untargeted"` for
+        every run predating this field (see `Config.analysis_type`).
         """
         entries = []
         for run_id, run in self._project.runs.items():
@@ -83,6 +85,7 @@ class ProjectModel(QObject):
                     "out_dir_display": _relative_to_folder(out_dir, self._folder),
                     "config_path": config_path,
                     "config_path_display": _relative_to_folder(config_path, self._folder),
+                    "analysis_type": config.get("analysis_type") or "untargeted",
                 }
             )
         entries.sort(key=lambda e: e["start_date"], reverse=True)

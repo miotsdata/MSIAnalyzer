@@ -12,9 +12,16 @@ import pandas as pd
 import pytest
 from scipy.sparse import csr_matrix
 
-from msianalyzer.core.analysis_db import init_analysis_db, register_sample
+from msianalyzer.core.analysis_db import (
+    init_analysis_db,
+    register_calibration_curve,
+    register_sample,
+    upsert_calibration_point,
+    upsert_calibration_unknown,
+)
 from msianalyzer.core.export import (
     export_annotation_table,
+    export_calibration_results,
     export_integration_tables,
     export_visual_inspection_images,
 )
@@ -399,3 +406,80 @@ def test_export_visual_inspection_images_creates_destination_directory(tmp_path)
     )
 
     assert (tmp_path / "nested" / "dir" / "sampleA.png").exists()
+
+
+# ---------------------------------------------------------------------------
+# export_calibration_results
+# ---------------------------------------------------------------------------
+
+
+def test_export_calibration_results_writes_nothing_when_analysis_is_empty(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    written = export_calibration_results(db, tmp_path / "out")
+
+    assert written == 0
+    assert not (tmp_path / "out" / "calibration_standards.csv").exists()
+
+
+def test_export_calibration_results_writes_standards_curve_and_unknowns(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    upsert_calibration_point(
+        db, sample_id=None, roi_name="std_a", amount=10.0, amount_unit="pmol",
+        pixel_size=0.1, pixel_size_unit="mm", area=0.02, concentration=500.0,
+        mean_intensity=100.0, n_pixels=2,
+    )
+    curve_id = register_calibration_curve(
+        db, analyte_mz=200.0, fit_type="linear", weighting=None,
+        concentration_unit="pmol/mm2", slope=0.2, intercept=0.0, r_squared=0.99,
+        lod=1.0, loq=3.0, n_points=2,
+    )
+    upsert_calibration_unknown(
+        db, sample_id=None, roi_name="spot_1", pixel_size=0.1, pixel_size_unit="mm",
+        area=0.02, mean_intensity=50.0, n_pixels=2, curve_id=curve_id,
+        interpolated_conc=250.0, amount=5.0,
+    )
+
+    written = export_calibration_results(db, tmp_path / "out")
+
+    assert written == 3
+    standards = pd.read_csv(tmp_path / "out" / "calibration_standards.csv")
+    assert list(standards["roi_name"]) == ["std_a"]
+    curve = pd.read_csv(tmp_path / "out" / "calibration_curve.csv")
+    assert curve.iloc[0]["slope"] == pytest.approx(0.2)
+    unknowns = pd.read_csv(tmp_path / "out" / "calibration_unknowns.csv")
+    assert unknowns.iloc[0]["roi_name"] == "spot_1"
+    assert unknowns.iloc[0]["interpolated_conc"] == pytest.approx(250.0)
+
+
+def test_export_calibration_results_only_writes_existing_tables(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    upsert_calibration_point(
+        db, sample_id=None, roi_name="std_a", amount=10.0, amount_unit="pmol",
+        pixel_size=0.1, pixel_size_unit="mm", area=0.02, concentration=500.0,
+        mean_intensity=100.0, n_pixels=2,
+    )
+
+    written = export_calibration_results(db, tmp_path / "out")
+
+    assert written == 1
+    assert (tmp_path / "out" / "calibration_standards.csv").exists()
+    assert not (tmp_path / "out" / "calibration_curve.csv").exists()
+    assert not (tmp_path / "out" / "calibration_unknowns.csv").exists()
+
+
+def test_export_calibration_results_creates_destination_directory(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    upsert_calibration_point(
+        db, sample_id=None, roi_name="std_a", amount=10.0, amount_unit="pmol",
+        pixel_size=0.1, pixel_size_unit="mm", area=0.02, concentration=500.0,
+        mean_intensity=100.0, n_pixels=2,
+    )
+
+    export_calibration_results(db, tmp_path / "nested" / "dir")
+
+    assert (tmp_path / "nested" / "dir" / "calibration_standards.csv").exists()

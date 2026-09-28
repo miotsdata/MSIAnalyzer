@@ -12,11 +12,18 @@ from msianalyzer.core.analysis_db import (
     analysis_db_path,
     append_injected_features,
     attach_raw,
+    delete_calibration_curve,
+    delete_calibration_point,
+    delete_calibration_unknown,
     delete_roi_catalog_entry,
     find_nearest_feature,
+    get_sample_id,
     get_sample_raw_db_path,
     init_analysis_db,
     is_command_already_run,
+    load_calibration_curve,
+    load_calibration_points,
+    load_calibration_unknowns,
     load_feature_categories,
     load_feature_compound_scores,
     load_feature_ids_and_mzs,
@@ -35,12 +42,16 @@ from msianalyzer.core.analysis_db import (
     load_summary_counts,
     load_target_list_matches_for_feature,
     log_command,
+    register_calibration_curve,
     register_roi,
     register_sample,
     save_features,
     save_predicted_formulas,
     save_target_list_compounds,
     save_target_list_matches,
+    update_calibration_unknown_result,
+    upsert_calibration_point,
+    upsert_calibration_unknown,
     write_metadata,
 )
 from msianalyzer.core.annotation.formula_prediction import PredictedFormula
@@ -781,6 +792,21 @@ def test_get_sample_raw_db_path_none_when_samples_table_missing(tmp_path: Path):
     db.touch()
 
     assert get_sample_raw_db_path(db, "s1") is None
+
+
+def test_get_sample_id_returns_stored_id(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    sample_id = register_sample(db, name="s1", raw_db_path=tmp_path / "s1.db")
+
+    assert get_sample_id(db, "s1") == sample_id
+
+
+def test_get_sample_id_none_for_unknown_sample(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert get_sample_id(db, "nope") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1648,3 +1674,296 @@ def test_load_top_predicted_formulas_empty_for_unknown_feature(tmp_path: Path):
     init_analysis_db(db).close()
 
     assert load_top_predicted_formulas_for_feature(db, 999, top_n=5).empty
+
+
+# ---------------------------------------------------------------------------
+# Calibration curve quantification (targeted analyses)
+# ---------------------------------------------------------------------------
+
+
+def _register_curve(db, **overrides):
+    kwargs = dict(
+        analyte_mz=154.0863,
+        fit_type="linear",
+        weighting=None,
+        concentration_unit="pmol/mm2",
+        slope=2.0,
+        intercept=1.0,
+        r_squared=0.99,
+        lod=0.1,
+        loq=0.3,
+        n_points=3,
+        command_id=None,
+    )
+    kwargs.update(overrides)
+    return register_calibration_curve(db, **kwargs)
+
+
+def _upsert_point(db, roi_name, **overrides):
+    kwargs = dict(
+        sample_id=None,
+        amount=10.0,
+        amount_unit="pmol",
+        pixel_size=0.05,
+        pixel_size_unit="mm",
+        area=1.0,
+        concentration=10.0,
+        mean_intensity=100.0,
+        n_pixels=5,
+    )
+    kwargs.update(overrides)
+    return upsert_calibration_point(db, roi_name=roi_name, **kwargs)
+
+
+def _upsert_unknown(db, roi_name, **overrides):
+    kwargs = dict(
+        sample_id=None,
+        pixel_size=0.05,
+        pixel_size_unit="mm",
+        area=1.0,
+        mean_intensity=50.0,
+        n_pixels=4,
+    )
+    kwargs.update(overrides)
+    return upsert_calibration_unknown(db, roi_name=roi_name, **kwargs)
+
+
+def test_register_and_load_calibration_curve(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    curve_id = _register_curve(db)
+
+    curve = load_calibration_curve(db)
+    assert curve["id"] == curve_id
+    assert curve["analyte_mz"] == 154.0863
+    assert curve["fit_type"] == "linear"
+    assert curve["weighting"] is None
+    assert curve["concentration_unit"] == "pmol/mm2"
+    assert curve["slope"] == 2.0
+    assert curve["n_points"] == 3
+
+
+def test_load_calibration_curve_defaults_to_most_recent(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _register_curve(db, slope=1.0)
+    second_id = _register_curve(db, slope=2.0)
+
+    curve = load_calibration_curve(db)
+    assert curve["id"] == second_id
+    assert curve["slope"] == 2.0
+
+
+def test_load_calibration_curve_by_explicit_id(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    first_id = _register_curve(db, slope=1.0)
+    _register_curve(db, slope=2.0)
+
+    curve = load_calibration_curve(db, curve_id=first_id)
+    assert curve["slope"] == 1.0
+
+
+def test_load_calibration_curve_none_when_never_fit(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_calibration_curve(db) is None
+
+
+def test_register_calibration_curve_rejects_invalid_fit_type(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _register_curve(db, fit_type="quadratic")
+
+
+def test_upsert_calibration_point_rejects_invalid_pixel_size_unit(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _upsert_point(db, "std", pixel_size_unit="cm")
+
+
+def test_upsert_calibration_unknown_rejects_invalid_pixel_size_unit(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _upsert_unknown(db, "spot", pixel_size_unit="cm")
+
+
+def test_upsert_and_load_calibration_points(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    sample_id = register_sample(db, "s1", tmp_path / "s1.db")
+
+    _upsert_point(
+        db, "std_high", sample_id=sample_id,
+        amount=100.0, area=10.0, concentration=10.0,
+        mean_intensity=100.0, n_pixels=5,
+    )
+    _upsert_point(
+        db, "std_low", sample_id=sample_id,
+        amount=1.0, area=1.0, concentration=1.0,
+        mean_intensity=12.0, n_pixels=3,
+    )
+
+    df = load_calibration_points(db)
+    assert len(df) == 2
+    # ordered by concentration
+    assert list(df["roi_name"]) == ["std_low", "std_high"]
+    assert list(df["n_pixels"]) == [3, 5]
+    assert list(df["amount_unit"]) == ["pmol", "pmol"]
+    assert list(df["pixel_size_unit"]) == ["mm", "mm"]
+
+
+def test_upsert_calibration_point_updates_existing_roi_in_place(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    first_id = _upsert_point(db, "std", amount=1.0, concentration=1.0)
+    second_id = _upsert_point(db, "std", amount=2.0, concentration=2.0)
+
+    assert first_id == second_id
+    df = load_calibration_points(db)
+    assert len(df) == 1
+    assert df.iloc[0]["amount"] == 2.0
+
+
+def test_load_calibration_points_empty_when_none_added(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert load_calibration_points(db).empty
+
+
+def test_delete_calibration_point(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _upsert_point(db, "std")
+
+    removed = delete_calibration_point(db, "std")
+
+    assert removed is True
+    assert load_calibration_points(db).empty
+
+
+def test_delete_calibration_point_missing_name_returns_false(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert delete_calibration_point(db, "never_existed") is False
+
+
+def test_upsert_and_load_calibration_unknown(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    sample_id = register_sample(db, "s1", tmp_path / "s1.db")
+    curve_id = _register_curve(db)
+
+    unknown_id = _upsert_unknown(
+        db, "spot_1", sample_id=sample_id, curve_id=curve_id,
+        area=2.0, interpolated_conc=24.5, amount=49.0,
+    )
+
+    df = load_calibration_unknowns(db)
+    assert len(df) == 1
+    assert df.iloc[0]["id"] == unknown_id
+    assert df.iloc[0]["interpolated_conc"] == 24.5
+    assert df.iloc[0]["amount"] == 49.0
+    assert df.iloc[0]["area"] == 2.0
+
+
+def test_upsert_calibration_unknown_without_curve_yet_allows_null_interpolation(
+    tmp_path: Path,
+):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    sample_id = register_sample(db, "s1", tmp_path / "s1.db")
+
+    _upsert_unknown(db, "spot_1", sample_id=sample_id)
+
+    df = load_calibration_unknowns(db)
+    assert pd.isna(df.iloc[0]["curve_id"])
+    assert pd.isna(df.iloc[0]["interpolated_conc"])
+    assert pd.isna(df.iloc[0]["amount"])
+
+
+def test_upsert_calibration_unknown_updates_existing_roi_in_place(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    first_id = _upsert_unknown(db, "spot_1", mean_intensity=10.0)
+    second_id = _upsert_unknown(db, "spot_1", mean_intensity=20.0)
+
+    assert first_id == second_id
+    df = load_calibration_unknowns(db)
+    assert len(df) == 1
+    assert df.iloc[0]["mean_intensity"] == 20.0
+
+
+def test_update_calibration_unknown_result_fills_in_after_a_late_fit(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    curve_id = _register_curve(db)
+    _upsert_unknown(db, "spot_1", area=2.0)
+
+    update_calibration_unknown_result(
+        db, "spot_1", curve_id=curve_id, interpolated_conc=24.5, amount=49.0
+    )
+
+    df = load_calibration_unknowns(db)
+    assert df.iloc[0]["curve_id"] == curve_id
+    assert df.iloc[0]["interpolated_conc"] == 24.5
+    assert df.iloc[0]["amount"] == 49.0
+
+
+def test_delete_calibration_unknown(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    unknown_id = _upsert_unknown(db, "spot_1")
+
+    removed = delete_calibration_unknown(db, unknown_id)
+
+    assert removed is True
+    assert load_calibration_unknowns(db).empty
+
+
+def test_delete_calibration_unknown_missing_id_returns_false(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert delete_calibration_unknown(db, 999) is False
+
+
+def test_delete_calibration_curve_leaves_points_and_unknowns_untouched(tmp_path: Path):
+    # v1: calibration_points/calibration_unknowns are one analysis-wide
+    # set, not scoped per curve — deleting a curve from the fit history
+    # doesn't remove them, only detaches the now-dangling curve_id FK.
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    curve_id = _register_curve(db)
+    _upsert_point(db, "std")
+    _upsert_unknown(db, "spot", curve_id=curve_id, interpolated_conc=1.0, amount=1.0)
+
+    removed = delete_calibration_curve(db, curve_id)
+
+    assert removed is True
+    assert load_calibration_curve(db, curve_id) is None
+    assert len(load_calibration_points(db)) == 1
+    unknowns = load_calibration_unknowns(db)
+    assert len(unknowns) == 1
+    assert pd.isna(unknowns.iloc[0]["curve_id"])
+    # last-computed result untouched, only the curve reference detached
+    assert unknowns.iloc[0]["interpolated_conc"] == 1.0
+
+
+def test_delete_calibration_curve_missing_id_returns_false(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+
+    assert delete_calibration_curve(db, 999) is False

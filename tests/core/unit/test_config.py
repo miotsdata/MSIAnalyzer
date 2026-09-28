@@ -18,6 +18,7 @@ from msianalyzer.core.config.config import (
     ReportConfig,
     H5adConfig,
     NormalizationConfig,
+    SpatialCorrelationConfig,
     AnalysisConfig,
     Config,
     GROUPS,
@@ -201,7 +202,99 @@ def test_default_dataclass_initializations():
     assert AnnotateConfig(library_path=["a.db", "b.db"]).library_path == ["a.db", "b.db"]
     assert H5adConfig().scan_handling == "average"
     assert NormalizationConfig().enabled is True
+    assert NormalizationConfig().mode == "tic"
+    assert NormalizationConfig().reference_mz is None
+    assert NormalizationConfig().reference_ppm == 5.0
     assert AnalysisConfig().db_name is None
+
+
+# ===========================================================================
+# NormalizationConfig validation
+# ===========================================================================
+
+
+def test_normalization_config_rejects_invalid_mode():
+    with pytest.raises(ValueError, match="mode must be 'tic' or 'reference_mz'"):
+        NormalizationConfig(mode="sideways")
+
+
+def test_normalization_config_reference_mz_mode_requires_reference_mz():
+    with pytest.raises(ValueError, match="reference_mz is required"):
+        NormalizationConfig(mode="reference_mz")
+
+
+def test_normalization_config_reference_mz_mode_accepts_reference_mz():
+    cfg = NormalizationConfig(mode="reference_mz", reference_mz=154.0863)
+    assert cfg.reference_mz == 154.0863
+
+
+# ===========================================================================
+# Config.analysis_type
+# ===========================================================================
+
+
+def test_config_defaults_to_untargeted(sample_io_config: IOConfig):
+    config = Config(io=sample_io_config)
+    assert config.analysis_type == "untargeted"
+
+
+def test_config_rejects_invalid_analysis_type(sample_io_config: IOConfig):
+    with pytest.raises(ValueError, match="analysis_type must be"):
+        Config(io=sample_io_config, analysis_type="sideways")
+
+
+def test_config_targeted_requires_reference_mz(sample_io_config: IOConfig):
+    with pytest.raises(ValueError, match="requires normalization.reference_mz"):
+        Config(io=sample_io_config, analysis_type="targeted")
+
+
+def test_config_targeted_accepts_reference_mz(sample_io_config: IOConfig):
+    config = Config(
+        io=sample_io_config,
+        analysis_type="targeted",
+        normalization=NormalizationConfig(
+            mode="reference_mz", reference_mz=154.0863, analyte_mzs=[200.0]
+        ),
+    )
+    assert config.analysis_type == "targeted"
+
+
+def test_config_targeted_accepts_tic_mode_plus_reference_mz(sample_io_config: IOConfig):
+    # analysis_type="targeted" only requires reference_mz to be *set* — it
+    # doesn't force mode="reference_mz" (a targeted run could still
+    # normalize by TIC while using reference_mz just to seed its .h5ad).
+    config = Config(
+        io=sample_io_config,
+        analysis_type="targeted",
+        normalization=NormalizationConfig(reference_mz=154.0863, analyte_mzs=[200.0]),
+    )
+    assert config.normalization.mode == "tic"
+
+
+def test_spatial_correlation_layer_auto_corrects_when_reference_mz_normalized(
+    sample_io_config: IOConfig,
+):
+    config = Config(
+        io=sample_io_config,
+        normalization=NormalizationConfig(mode="reference_mz", reference_mz=154.0863),
+    )
+    assert config.spatial_correlation.layer == "mz_154.0863"
+
+
+def test_spatial_correlation_layer_not_overridden_when_explicitly_set(
+    sample_io_config: IOConfig,
+):
+    config = Config(
+        io=sample_io_config,
+        normalization=NormalizationConfig(mode="reference_mz", reference_mz=154.0863),
+        spatial_correlation=SpatialCorrelationConfig(layer="raw"),
+    )
+    assert config.spatial_correlation.layer == "raw"
+
+
+def test_spatial_correlation_layer_unaffected_by_tic_mode(sample_io_config: IOConfig):
+    config = Config(io=sample_io_config)
+    assert config.spatial_correlation.layer == "TIC"
 
 
 # ===========================================================================
@@ -225,7 +318,8 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     d = config.to_dict()
 
-    assert d["version"] == 18
+    assert d["version"] == 22
+    assert d["analysis_type"] == "untargeted"
     assert isinstance(d["io"]["project_folder"], str)
     assert isinstance(d["io"]["mzml_paths"][0], str)
     assert d["ms1"]["chunk_size"] == 2000
@@ -234,7 +328,7 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
 def test_config_from_dict_success(sample_io_config: IOConfig):
     """Verify creating Config from a valid dictionary."""
     raw_data = {
-        "version": 18,
+        "version": 22,
         "io": {
             "project_folder": str(sample_io_config.project_folder),
             "mzml_paths": [str(p) for p in sample_io_config.mzml_paths],
@@ -249,6 +343,60 @@ def test_config_from_dict_success(sample_io_config: IOConfig):
     assert isinstance(config.io, IOConfig)
     assert config.ms1.chunk_size == 1000
     assert config.peak.peak_height_threshold == 1000.0  # Uses default
+    assert config.analysis_type == "untargeted"  # not in raw_data, defaults
+
+
+def test_config_to_dict_from_dict_roundtrip_preserves_analysis_type(
+    sample_io_config: IOConfig,
+):
+    config = Config(
+        io=sample_io_config,
+        analysis_type="targeted",
+        normalization=NormalizationConfig(
+            mode="reference_mz", reference_mz=154.0863, analyte_mzs=[200.0]
+        ),
+    )
+    roundtripped = Config.from_dict(config.to_dict())
+    assert roundtripped.analysis_type == "targeted"
+    assert roundtripped.normalization.reference_mz == 154.0863
+    assert roundtripped.normalization.analyte_mzs == [200.0]
+
+
+def test_config_from_dict_targeted_without_reference_mz_raises(
+    sample_io_config: IOConfig,
+):
+    raw_data = {
+        "version": 22,
+        "analysis_type": "targeted",
+        "io": {
+            "project_folder": str(sample_io_config.project_folder),
+            "mzml_paths": [str(p) for p in sample_io_config.mzml_paths],
+            "xml_paths": [],
+            "db_paths": [str(p) for p in sample_io_config.db_paths],
+            "out_dir": str(sample_io_config.out_dir),
+        },
+    }
+    with pytest.raises(ValueError, match="requires normalization.reference_mz"):
+        Config.from_dict(raw_data)
+
+
+def test_config_from_dict_targeted_without_analyte_mzs_raises(
+    sample_io_config: IOConfig,
+):
+    raw_data = {
+        "version": 22,
+        "analysis_type": "targeted",
+        "io": {
+            "project_folder": str(sample_io_config.project_folder),
+            "mzml_paths": [str(p) for p in sample_io_config.mzml_paths],
+            "xml_paths": [],
+            "db_paths": [str(p) for p in sample_io_config.db_paths],
+            "out_dir": str(sample_io_config.out_dir),
+        },
+        "normalization": {"reference_mz": 154.0863},
+    }
+    with pytest.raises(ValueError, match="requires at least one"):
+        Config.from_dict(raw_data)
 
 
 def test_config_from_dict_version_mismatch():
@@ -260,7 +408,7 @@ def test_config_from_dict_version_mismatch():
 
 def test_config_from_dict_missing_required_io_fields():
     """Verify TypeError inside dataclasses wraps cleanly into ValueError."""
-    bad_data = {"version": 18, "io": {}}  # Missing required IO fields
+    bad_data = {"version": 22, "io": {}}  # Missing required IO fields
     with pytest.raises(ValueError, match="Invalid or incomplete config"):
         Config.from_dict(bad_data)
 
@@ -321,7 +469,7 @@ def test_config_str_representation(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     output = str(config)
 
-    assert "Config(version=18)" in output
+    assert "Config(version=22, analysis_type='untargeted')" in output
     assert "input/output:" in output
     assert "detect centroids:" in output
     assert "group MS2:" in output
@@ -383,7 +531,7 @@ def test_create_config_file_force_overwrite(tmp_path: Path):
     )
 
     loaded = Config.load(config_file)
-    assert loaded.version == 18
+    assert loaded.version == 22
 
 
 def test_create_config_file_nonexistent_project_folder(tmp_path: Path):

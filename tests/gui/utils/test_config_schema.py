@@ -50,10 +50,19 @@ def test_schema_group_has_title():
         (str | None, "optional_str"),
         (list[str] | None, "optional_str_list"),
         (str | list[str] | None, "path_list"),
+        (list[float], "float_list"),
     ],
 )
 def test_classify_known_shapes(annotation, expected_kind):
     assert _classify(annotation) == expected_kind
+
+
+def test_normalization_group_classifies_analyte_mzs_as_float_list():
+    schema = build_config_schema()
+    normalization = next(g for g in schema if g["key"] == "normalization")
+    fields_by_name = {f["name"]: f for f in normalization["fields"]}
+
+    assert fields_by_name["analyte_mzs"]["kind"] == "float_list"
 
 
 def test_classify_unknown_shape_raises():
@@ -254,3 +263,16 @@ def test_config_schema_provider_exposes_polarity_filtered_adduct_lists():
 def test_config_schema_provider_target_list_schema_matches_module_function():
     provider = ConfigSchemaProvider()
     assert provider.targetListSchema == build_target_list_schema()
+
+
+def test_config_schema_provider_targeted_groups_is_the_expected_subset():
+    provider = ConfigSchemaProvider()
+    keys = [g["key"] for g in provider.targetedGroups]
+    assert keys == ["normalization", "analysis"]
+
+
+def test_config_schema_provider_targeted_groups_are_from_the_same_schema():
+    provider = ConfigSchemaProvider()
+    by_key = {g["key"]: g for g in provider.groups}
+    for group in provider.targetedGroups:
+        assert group == by_key[group["key"]]

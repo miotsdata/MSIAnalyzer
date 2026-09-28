@@ -8,9 +8,9 @@ from msianalyzer.gui.models.project import ProjectModel
 from msianalyzer.gui.utils.config_schema import build_config_schema
 
 
-def _make_page(new_analysis_view, project):
+def _make_page(new_analysis_view, project, analysis_type="untargeted"):
     model = ProjectModel(project, "/tmp/proj")
-    view = new_analysis_view(model)
+    view = new_analysis_view(model, analysis_type)
     return view, view.rootObject(), model
 
 
@@ -482,6 +482,47 @@ def test_run_click_emits_multiple_library_paths_as_a_list(
     assert config_dict["annotate"]["library_path"] == ["/libs/a.db", "/libs/b.db"]
 
 
+def test_targeted_analyte_mzs_field_has_a_comma_separated_placeholder(
+    new_analysis_view, project, find_visual_child
+):
+    # Nothing about a plain TextField says "you can type more than one
+    # here" — reported directly: a user typed exactly one m/z into this
+    # field and had no way to tell more were supported, even though the
+    # comma-parsing itself (parseFieldValue's "float_list" case) already
+    # worked correctly the whole time.
+    _, root, _ = _make_page(new_analysis_view, project, analysis_type="targeted")
+
+    control = find_visual_child(root, "field_normalization_analyte_mzs")
+    assert control is not None
+    assert "comma" in control.property("placeholderText").lower()
+
+
+def test_targeted_analyte_mzs_field_round_trips_multiple_comma_separated_values(
+    new_analysis_view, project, application, qtbot, find_visual_child
+):
+    view, root, model = _make_page(new_analysis_view, project, analysis_type="targeted")
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/sample1.mzML")
+    root.setSampleField(0, "xml", "/data/sample1.xml")
+
+    reference_field = find_visual_child(root, "field_normalization_reference_mz")
+    reference_field.setProperty("text", "154.0863")
+    analyte_field = find_visual_child(root, "field_normalization_analyte_mzs")
+    analyte_field.setProperty("text", "154.0863, 200.1234, 305.25")
+
+    application.core_bridge.run_analysis = MagicMock()
+    spy = QSignalSpy(application.router.runAnalysisRequested)
+    button_center = run_button.mapToScene(run_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    _, config_dict = spy.at(0)
+
+    assert config_dict["normalization"]["analyte_mzs"] == [154.0863, 200.1234, 305.25]
+
+
 def test_run_click_emits_config_with_mixed_mzml_and_db_only_samples(
     new_analysis_view, project, application, qtbot
 ):
@@ -785,3 +826,103 @@ def test_template_combo_hidden_when_project_has_no_previous_runs(
     row = find_visual_child(root, "templateRow")
     assert row is not None
     assert row.property("visible") is False
+
+
+# ==============================================================================
+# TESTS FOR analysisType="targeted"
+# ==============================================================================
+
+
+def test_untargeted_title_and_target_list_tab_visible_by_default(
+    new_analysis_view, project, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    title = find_visual_child(root, "newAnalysisTitleLabel")
+    assert title.property("text").startswith("New Analysis")
+    tab = find_visual_child(root, "tabButton_target_list")
+    assert tab is not None
+    assert tab.property("visible") is True
+
+
+def test_targeted_mode_title_says_targeted(new_analysis_view, project, find_visual_child):
+    _, root, _ = _make_page(new_analysis_view, project, "targeted")
+
+    title = find_visual_child(root, "newAnalysisTitleLabel")
+    assert title.property("text").startswith("New Targeted Analysis")
+
+
+def test_targeted_mode_hides_target_list_tab(new_analysis_view, project, find_visual_child):
+    _, root, _ = _make_page(new_analysis_view, project, "targeted")
+
+    tab = find_visual_child(root, "tabButton_target_list")
+    assert tab is not None
+    assert tab.property("visible") is False
+
+
+def test_targeted_mode_only_shows_targeted_group_tabs(
+    new_analysis_view, project, find_visual_child
+):
+    from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
+
+    _, root, _ = _make_page(new_analysis_view, project, "targeted")
+
+    provider = ConfigSchemaProvider()
+    targeted_keys = {g["key"] for g in provider.targetedGroups}
+    all_keys = {g["key"] for g in build_config_schema()}
+
+    for key in targeted_keys:
+        assert find_visual_child(root, "tabButton_" + key) is not None
+    for key in all_keys - targeted_keys:
+        assert find_visual_child(root, "tabButton_" + key) is None
+
+
+def test_untargeted_mode_shows_every_group_tab(new_analysis_view, project, find_visual_child):
+    _, root, _ = _make_page(new_analysis_view, project, "untargeted")
+
+    for group in build_config_schema():
+        assert find_visual_child(root, "tabButton_" + group["key"]) is not None
+
+
+def test_run_click_emits_analysis_type_targeted(
+    new_analysis_view, project, application, qtbot
+):
+    view, root, model = _make_page(new_analysis_view, project, "targeted")
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/sample1.mzML")
+    root.setSampleField(0, "xml", "/data/sample1.xml")
+
+    application.core_bridge.run_analysis = MagicMock()
+    spy = QSignalSpy(application.router.runAnalysisRequested)
+    button_center = run_button.mapToScene(run_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    _, config_dict = spy.at(0)
+
+    assert config_dict["analysis_type"] == "targeted"
+
+
+def test_run_click_emits_analysis_type_untargeted_by_default(
+    new_analysis_view, project, application, qtbot
+):
+    view, root, model = _make_page(new_analysis_view, project)
+    run_button = root.findChild(QQuickItem, "runButton")
+
+    root.addSampleRow()
+    root.setSampleField(0, "mzml", "/data/sample1.mzML")
+    root.setSampleField(0, "xml", "/data/sample1.xml")
+
+    application.core_bridge.run_analysis = MagicMock()
+    spy = QSignalSpy(application.router.runAnalysisRequested)
+    button_center = run_button.mapToScene(run_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    _, config_dict = spy.at(0)
+
+    assert config_dict["analysis_type"] == "untargeted"
+
+

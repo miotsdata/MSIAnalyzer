@@ -59,7 +59,36 @@ Flickable {
         }
     }
 
-    onAnalysisChanged: controlsFlickable.refreshFeatures()
+    // The `adata.layers` key the normalized layer actually lives under —
+    // "TIC" for a TIC-normalized analysis, or e.g. "mz_154.0863" for a
+    // reference-m/z-normalized one (see
+    // core.utils.tic_normalization.run_normalization's dynamic layer
+    // naming). Seeded from the analysis' own recorded normalization mode
+    // rather than assumed, so a reference-mz analysis' second dataLayer
+    // button points at a layer that actually exists.
+    property string normalizedLayerName: "TIC"
+
+    function refreshNormalizedLayerName() {
+        if (controlsFlickable.analysis && controlsFlickable.analysis.analysisDbPath) {
+            // dataLayer still pointing at the *previous* analysis' own
+            // normalized layer name counts as "still at its default" —
+            // follow it to the new analysis' real name too. An explicit
+            // "raw"/"localMoran" selection is left alone.
+            var followDefault = controlsFlickable.dataLayer === controlsFlickable.normalizedLayerName
+            controlsFlickable.normalizedLayerName = AnalysisBridge.getNormalizedLayerName(
+                controlsFlickable.analysis.analysisDbPath)
+            if (followDefault)
+                controlsFlickable.dataLayer = controlsFlickable.normalizedLayerName
+        } else {
+            controlsFlickable.normalizedLayerName = "TIC"
+        }
+    }
+
+    onAnalysisChanged: {
+        controlsFlickable.refreshNormalizedLayerName()
+        controlsFlickable.refreshFeatures()
+        controlsFlickable.refreshObsColumns()
+    }
 
     Connections {
         target: AnalysisBridge
@@ -73,11 +102,39 @@ Flickable {
     // `adata.obs` column, e.g. `tic`/`rt` — not tied to any one feature).
     // Mutually exclusive with the feature selector below.
     property string inspectionMode: "feature"
-    property var obsColumns: (controlsFlickable.analysis && controlsFlickable.analysis.analysisDbPath
-                               && controlsFlickable.samples.length > 0)
-                              ? AnalysisBridge.getObsColumns(
-                                    controlsFlickable.samples.map(function (s) { return s.name }))
-                              : []
+
+    // Used to be a synchronous property binding straight onto
+    // AnalysisBridge.getObsColumns — a direct blocking .h5ad read on the
+    // GUI thread every time analysis/samples changed. Fetched on a
+    // background thread instead (requestObsColumns/obsColumnsReady, same
+    // fire-and-forget pattern as `features`/`featuresLoading` above),
+    // part of tracking down Visual Inspection's freeze-on-open persisting
+    // even after tile rendering itself was fixed (ADR 48 round 3).
+    property var obsColumns: []
+    property bool obsColumnsLoading: false
+
+    function refreshObsColumns() {
+        if (controlsFlickable.analysis && controlsFlickable.analysis.analysisDbPath
+                && controlsFlickable.samples.length > 0) {
+            controlsFlickable.obsColumnsLoading = true
+            AnalysisBridge.requestObsColumns(
+                controlsFlickable.samples.map(function (s) { return s.name }))
+        } else {
+            controlsFlickable.obsColumns = []
+            controlsFlickable.obsColumnsLoading = false
+        }
+    }
+
+    onSamplesChanged: controlsFlickable.refreshObsColumns()
+
+    Connections {
+        target: AnalysisBridge
+        function onObsColumnsReady(receivedColumns) {
+            controlsFlickable.obsColumns = receivedColumns
+            controlsFlickable.obsColumnsLoading = false
+        }
+    }
+
     property var obsColumnLabels: controlsFlickable.obsColumns.map(function (c) {
         return c.numeric ? c.name : (c.name + " (categories)")
     })
@@ -94,6 +151,18 @@ Flickable {
             }
         }
         controlsFlickable.selectedObsIndex = ticIndex
+        // obsColumns now arrives asynchronously (see refreshObsColumns
+        // above), so isSelectedObsNumeric can briefly default to `true`
+        // (selectedObsColumnInfo still null) if the user switches into
+        // obs mode before this list has loaded — refreshAutoRange/
+        // refreshObsCategoryLegend may already have run once with that
+        // wrong default (one, real: sent a categorical column to
+        // getObsValueRange, which errored and logged; the other:
+        // silently left obsCategoryLegend empty for a categorical column,
+        // never retried). Re-run both now that isSelectedObsNumeric is
+        // finally correct — harmless no-ops in feature mode.
+        controlsFlickable.refreshAutoRange()
+        controlsFlickable.refreshObsCategoryLegend()
     }
     property var selectedObsColumnInfo: (controlsFlickable.obsColumns.length > controlsFlickable.selectedObsIndex)
                                          ? controlsFlickable.obsColumns[controlsFlickable.selectedObsIndex] : null
@@ -108,6 +177,10 @@ Flickable {
     property bool showsColorScale: controlsFlickable.inspectionMode === "feature"
                                     || (controlsFlickable.inspectionMode === "obs" && controlsFlickable.isSelectedObsNumeric)
 
+    // Fetched asynchronously (requestObsCategories/obsCategoriesReady) —
+    // same reasoning as `obsColumns` above (ADR 48 round 3): this used to
+    // call AnalysisBridge.getObsCategories synchronously, real .h5ad work
+    // on the GUI thread.
     property var obsCategoryLegend: []
     function refreshObsCategoryLegend() {
         if (controlsFlickable.inspectionMode !== "obs" || !controlsFlickable.selectedObsColumn
@@ -120,8 +193,20 @@ Flickable {
         // toggling visibility would reshuffle colors underneath tiles
         // still on screen.
         var allNames = controlsFlickable.samples.map(function (s) { return s.name })
-        controlsFlickable.obsCategoryLegend = AnalysisBridge.getObsCategories(
-            allNames, controlsFlickable.selectedObsColumn)
+        AnalysisBridge.requestObsCategories(allNames, controlsFlickable.selectedObsColumn)
+    }
+
+    Connections {
+        target: AnalysisBridge
+        function onObsCategoriesReady(categories) {
+            // Only apply if still in obs mode with a column selected —
+            // guards against a slower, now-superseded request from before
+            // a quick mode/column switch landing after a newer one.
+            if (controlsFlickable.inspectionMode === "obs" && controlsFlickable.selectedObsColumn
+                    && !controlsFlickable.isSelectedObsNumeric) {
+                controlsFlickable.obsCategoryLegend = categories
+            }
+        }
     }
 
     // "mz" (the bridge's own order — already ascending) or "name" (every
@@ -199,6 +284,16 @@ Flickable {
             .map(function (s) { return s.name })
     }
 
+    // Dispatches requestObsValueRange/requestFeatureValueRange
+    // (fire-and-forget, ADR 48 round 3 — used to call
+    // getObsValueRange/getFeatureValueRange synchronously here, real
+    // .h5ad work on the GUI thread) rather than assigning `autoRange`
+    // directly; the two Connections handlers below apply the result once
+    // it lands. Safe to leave `autoRange` briefly stale while a request is
+    // in flight — it's purely a UI-display value (the vmin/vmax labels
+    // and the manual-range seed), never part of a tile's own render
+    // request (see `vminToken()`/`vmaxToken()`, which return the literal
+    // string "auto" whenever autoScale is on, independent of this).
     function refreshAutoRange() {
         // Reads inspectionMode/isSelectedObsNumeric directly rather than
         // the cached showsColorScale property: this function runs
@@ -228,16 +323,47 @@ Flickable {
                 controlsFlickable.autoRange = {"vmin": 0, "vmax": 1}
                 return
             }
-            controlsFlickable.autoRange = AnalysisBridge.getObsValueRange(
-                names, controlsFlickable.selectedObsColumn)
+            AnalysisBridge.requestObsValueRange(names, controlsFlickable.selectedObsColumn)
             return
         }
         if (!controlsFlickable.selectedFeature) {
             controlsFlickable.autoRange = {"vmin": 0, "vmax": 1}
             return
         }
-        controlsFlickable.autoRange = AnalysisBridge.getFeatureValueRange(
+        if (controlsFlickable.dataLayer === "localMoran") {
+            // getFeatureValueRange reads a real .h5ad layer's raw
+            // intensities — meaningless for a value that's computed
+            // on-the-fly (local Moran's I isn't stored as a layer at
+            // all), and would silently fall back to raw .X, showing a
+            // real-looking but wrong number. No cheap way to get local
+            // Moran's I's own min/max without computing the full per-
+            // pixel array — exactly what rendering the tile already does
+            // — so this mode's vmin/vmax display just reads "auto"
+            // literally instead (see the Label bindings below) rather
+            // than paying for a second full computation just for a label.
+            controlsFlickable.autoRange = {"vmin": 0, "vmax": 1}
+            return
+        }
+        AnalysisBridge.requestFeatureValueRange(
             names, controlsFlickable.selectedFeature.mz, controlsFlickable.dataLayer)
+    }
+
+    Connections {
+        target: AnalysisBridge
+        function onObsValueRangeReady(valueRange) {
+            // Guard against a slower obs-mode request landing after the
+            // user has since switched to feature mode (each dispatches
+            // through a different bridge call/signal, so there's no
+            // shared staleness guard between the two on the Python side).
+            if (controlsFlickable.inspectionMode === "obs") {
+                controlsFlickable.autoRange = valueRange
+            }
+        }
+        function onFeatureValueRangeReady(valueRange) {
+            if (controlsFlickable.inspectionMode === "feature") {
+                controlsFlickable.autoRange = valueRange
+            }
+        }
     }
 
     // Switching layers/mode/obs-column changes the data's whole scale —
@@ -246,6 +372,13 @@ Flickable {
     // real range (autoRange) rather than carrying over a stale one.
     onDataLayerChanged: {
         controlsFlickable.autoScale = true
+        // Local Moran's I values are signed — the sequential colormaps
+        // (viridis/magma/...) that suit a one-sided intensity scale would
+        // hide the sign; switch to the one diverging option automatically
+        // rather than making the user remember to pick it themselves.
+        if (controlsFlickable.dataLayer === "localMoran") {
+            controlsFlickable.colormap = "coolwarm"
+        }
         controlsFlickable.refreshAutoRange()
     }
     onInspectionModeChanged: {
@@ -563,9 +696,14 @@ Flickable {
             Button {
                 id: ticLayerButton
                 objectName: "ticLayerButton"
-                text: "TIC"
-                highlighted: controlsFlickable.dataLayer === "TIC"
-                onClicked: controlsFlickable.dataLayer = "TIC"
+                // Friendlier label than the raw layer key: "TIC" for a
+                // TIC-normalized analysis, "m/z 154.0863" for a
+                // reference-m/z-normalized one — dataLayer's actual value
+                // (normalizedLayerName) still matches the real layer key.
+                text: controlsFlickable.normalizedLayerName === "TIC"
+                      ? "TIC" : "m/z " + controlsFlickable.normalizedLayerName.replace("mz_", "")
+                highlighted: controlsFlickable.dataLayer === controlsFlickable.normalizedLayerName
+                onClicked: controlsFlickable.dataLayer = controlsFlickable.normalizedLayerName
                 background: Rectangle {
                     radius: 4
                     color: ticLayerButton.highlighted ? palette.highlight : palette.button
@@ -583,6 +721,44 @@ Flickable {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            Button {
+                id: localMoranLayerButton
+                objectName: "localMoranLayerButton"
+                text: "Local Moran's I"
+                // "localMoran" is a reserved dataLayer value recognized by
+                // render_heatmap_by_target (core/plotting/heatmap.py) —
+                // see that dispatch and core/spatial/local_moran.py for
+                // the actual per-pixel computation. Fits here as a third
+                // dataLayer option (not a third inspectionMode) since it's
+                // still scored against whichever feature is already
+                // selected, same as raw/TIC.
+                highlighted: controlsFlickable.dataLayer === "localMoran"
+                onClicked: controlsFlickable.dataLayer = "localMoran"
+                // A per-pixel view of spatial clustering, unlike the
+                // single per-sample score shown elsewhere (e.g. next to
+                // each sample's name) — see the user guide's "Spatial
+                // autocorrelation" section for the full explanation.
+                ToolTip.visible: hovered
+                ToolTip.text: "Per-pixel spatial autocorrelation: where a "
+                    + "feature clusters within the tissue, not just whether "
+                    + "it does overall. See the user guide for details."
+                background: Rectangle {
+                    radius: 4
+                    color: localMoranLayerButton.highlighted ? palette.highlight : palette.button
+                    border.color: palette.mid
+                }
+                contentItem: Label {
+                    text: localMoranLayerButton.text
+                    color: localMoranLayerButton.highlighted ? palette.highlightedText : palette.buttonText
+                    font.bold: localMoranLayerButton.highlighted
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                HoverHandler {
+                    objectName: "localMoranLayerButtonHover"
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
         }
 
         Label {
@@ -595,7 +771,12 @@ Flickable {
             objectName: "colormapCombo"
             Layout.fillWidth: true
             visible: controlsFlickable.showsColorScale
-            model: ["viridis", "magma", "inferno", "plasma", "cividis", "gray"]
+            // "coolwarm" is the one diverging option — local Moran's I
+            // values are signed (positive: clustering; negative: spatial
+            // outlier), unlike every other option here, which are all
+            // sequential and only make sense for a one-sided intensity
+            // scale.
+            model: ["viridis", "magma", "inferno", "plasma", "cividis", "gray", "coolwarm"]
             currentIndex: model.indexOf(controlsFlickable.colormap)
             onActivated: (index) => controlsFlickable.colormap = model[index]
             HoverHandler {
@@ -640,8 +821,12 @@ Flickable {
                 objectName: "vminValueLabel"
                 // Shows what autoscale is using while it's on (so
                 // it's not just a mystery), the manual draft while off.
+                // Local Moran's I has no cheap real range to show here
+                // (see refreshAutoRange's own comment) — literal "auto"
+                // rather than a real-looking but wrong number.
                 text: "vmin: " + (controlsFlickable.autoScale
-                                   ? controlsFlickable.autoRange.vmin.toFixed(3)
+                                   ? (controlsFlickable.dataLayer === "localMoran"
+                                      ? "auto" : controlsFlickable.autoRange.vmin.toFixed(3))
                                    : controlsFlickable.draftVmin.toFixed(3))
             }
             RowLayout {
@@ -681,7 +866,8 @@ Flickable {
             Label {
                 objectName: "vmaxValueLabel"
                 text: "vmax: " + (controlsFlickable.autoScale
-                                   ? controlsFlickable.autoRange.vmax.toFixed(3)
+                                   ? (controlsFlickable.dataLayer === "localMoran"
+                                      ? "auto" : controlsFlickable.autoRange.vmax.toFixed(3))
                                    : controlsFlickable.draftVmax.toFixed(3))
             }
             RowLayout {

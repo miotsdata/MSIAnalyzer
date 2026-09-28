@@ -70,8 +70,19 @@ Page {
                     Button {
                         id: newAnalysisButton
                         objectName: "newAnalysisButton"
-                        text: "New Analysis"
-                        onClicked: Router.newAnalysisPageRequested(project)
+                        text: "New Untargeted Analysis"
+                        onClicked: Router.newAnalysisPageRequested(project, "untargeted")
+
+                        HoverHandler {
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                    }
+
+                    Button {
+                        id: newTargetedAnalysisButton
+                        objectName: "newTargetedAnalysisButton"
+                        text: "New Targeted Analysis"
+                        onClicked: Router.newAnalysisPageRequested(project, "targeted")
 
                         HoverHandler {
                             cursorShape: Qt.PointingHandCursor
@@ -200,10 +211,34 @@ Page {
                                     anchors.margins: 8
                                     spacing: 2
 
-                                    Label {
-                                        objectName: "runRowDate"
-                                        text: modelData.start_date_display
-                                        font.bold: true
+                                    RowLayout {
+                                        spacing: 6
+
+                                        Label {
+                                            objectName: "runRowDate"
+                                            text: modelData.start_date_display
+                                            font.bold: true
+                                        }
+
+                                        // Untargeted (the common case) stays
+                                        // unlabeled — only a targeted run
+                                        // gets called out.
+                                        Rectangle {
+                                            objectName: "runRowTargetedBadge"
+                                            visible: modelData.analysis_type === "targeted"
+                                            radius: 3
+                                            color: Theme.primaryColor
+                                            implicitWidth: targetedBadgeLabel.implicitWidth + 8
+                                            implicitHeight: targetedBadgeLabel.implicitHeight + 2
+
+                                            Label {
+                                                id: targetedBadgeLabel
+                                                anchors.centerIn: parent
+                                                text: "Targeted"
+                                                font.pixelSize: 10
+                                                color: "white"
+                                            }
+                                        }
                                     }
                                     Label {
                                         objectName: "runRowOutDir"

@@ -185,14 +185,16 @@ def new_analysis_view(application):
     views = []
     schema_provider = ConfigSchemaProvider()
 
-    def _make(project_model):
+    def _make(project_model, analysis_type="untargeted"):
         view = QQuickView()
         view.engine().rootContext().setContextProperty("Router", application.router)
         view.engine().rootContext().setContextProperty(
             "CoreBridge", application.core_bridge
         )
         view.engine().rootContext().setContextProperty("ConfigSchema", schema_provider)
-        view.setInitialProperties({"project": project_model})
+        view.setInitialProperties(
+            {"project": project_model, "analysisType": analysis_type}
+        )
         view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
         view.setSource(QUrl("qrc:/Views/NewAnalysisPage.qml"))
         view.resize(900, 700)
@@ -213,13 +215,15 @@ def running_analysis_view(application):
     """Factory: build a standalone RunningAnalysisPage view."""
     views = []
 
-    def _make(project_model, run_id="run-1"):
+    def _make(project_model, run_id="run-1", analysis_type="untargeted"):
         view = QQuickView()
         view.engine().rootContext().setContextProperty("Router", application.router)
         view.engine().rootContext().setContextProperty(
             "CoreBridge", application.core_bridge
         )
-        view.setInitialProperties({"project": project_model, "runId": run_id})
+        view.setInitialProperties(
+            {"project": project_model, "runId": run_id, "analysisType": analysis_type}
+        )
         view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
         view.setSource(QUrl("qrc:/Views/RunningAnalysisPage.qml"))
         view.resize(800, 600)

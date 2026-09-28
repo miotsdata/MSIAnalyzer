@@ -44,6 +44,37 @@ NO_PIXELS_XML_CONTENT = """<?xml version="1.0" encoding="UTF-8"?>
 </raster>
 """
 
+# The real AP-MALDI target-raster format — a <rasterConfig> with
+# namespaced <spacingX>/<spacingY> units="mm">, matching an actual sample
+# file (tests/core/examples/isolation/1_isolation_04.xml).
+WITH_RASTER_CONFIG_XML_CONTENT = """<?xml version="1.0" encoding="UTF-8"?>
+<targetRaster xmlns="http://www.apmaldi.com/target_raster-1.0.0" startTime="2026-07-20T09:43:03Z">
+    <rasterConfig>
+        <spacing units="mm">0.05</spacing>
+        <spacingX units="mm">0.05</spacingX>
+        <spacingY units="mm">0.07</spacingY>
+    </rasterConfig>
+    <image width="2" height="1" pixelWidth="0.05" pixelHeight="0.07" timeShift="0">
+        <pixel x="0" y="0" offset="0" duration="600"/>
+        <pixel x="1" y="0" offset="600" duration="600"/>
+    </image>
+</targetRaster>
+"""
+
+NO_RASTER_CONFIG_XML_CONTENT = NON_NAMESPACED_XML_CONTENT
+
+WITH_RASTER_CONFIG_UNKNOWN_UNIT_XML_CONTENT = """<?xml version="1.0" encoding="UTF-8"?>
+<targetRaster xmlns="http://www.apmaldi.com/target_raster-1.0.0" startTime="2026-07-20T09:43:03Z">
+    <rasterConfig>
+        <spacingX units="furlongs">0.05</spacingX>
+        <spacingY units="furlongs">0.05</spacingY>
+    </rasterConfig>
+    <image width="1" height="1" timeShift="0">
+        <pixel x="0" y="0" offset="0" duration="600"/>
+    </image>
+</targetRaster>
+"""
+
 EXPECTED_COLUMNS = [
     "x",
     "y",
@@ -158,6 +189,43 @@ def test_parse_raster_xml_no_pixels(tmp_path: Path):
     assert metadata["grid_height"] == 4
     assert isinstance(df_pixels, pd.DataFrame)
     assert df_pixels.empty
+
+
+def test_parse_raster_xml_extracts_pixel_size_from_raster_config(tmp_path: Path):
+    xml_file = tmp_path / "with_raster_config.xml"
+    xml_file.write_text(WITH_RASTER_CONFIG_XML_CONTENT, encoding="utf-8")
+
+    _, metadata = parse_raster_xml(xml_file)
+
+    assert metadata["pixel_size_x"] == pytest.approx(0.05)
+    assert metadata["pixel_size_y"] == pytest.approx(0.07)
+    assert metadata["pixel_size_unit"] == "mm"
+
+
+def test_parse_raster_xml_no_raster_config_gives_none_pixel_size(tmp_path: Path):
+    # The pre-existing sample formats (no <rasterConfig> at all) must keep
+    # working exactly as before — pixel size just isn't offered as a
+    # default, same as before this metadata existed.
+    xml_file = tmp_path / "no_raster_config.xml"
+    xml_file.write_text(NO_RASTER_CONFIG_XML_CONTENT, encoding="utf-8")
+
+    _, metadata = parse_raster_xml(xml_file)
+
+    assert metadata["pixel_size_x"] is None
+    assert metadata["pixel_size_y"] is None
+    assert metadata["pixel_size_unit"] is None
+
+
+def test_parse_raster_xml_unrecognized_unit_gives_none_unit_not_a_crash(tmp_path: Path):
+    xml_file = tmp_path / "unknown_unit.xml"
+    xml_file.write_text(WITH_RASTER_CONFIG_UNKNOWN_UNIT_XML_CONTENT, encoding="utf-8")
+
+    _, metadata = parse_raster_xml(xml_file)
+
+    # The numeric spacing is still there — only the unit is unrecognized —
+    # but pixel_size_unit stays None rather than guessing wrong.
+    assert metadata["pixel_size_x"] == pytest.approx(0.05)
+    assert metadata["pixel_size_unit"] is None
 
 
 def test_parse_raster_xml_invalid_file_raises_error(tmp_path: Path):

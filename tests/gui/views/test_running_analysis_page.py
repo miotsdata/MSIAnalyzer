@@ -1,12 +1,12 @@
 from PySide6.QtQuick import QQuickItem
 
 from msianalyzer.gui.models.project import ProjectModel
-from msianalyzer.core.run.run import RUN_STEPS
+from msianalyzer.core.run.run import RUN_STEPS, TARGETED_RUN_STEPS
 
 
-def _make_page(running_analysis_view, project):
+def _make_page(running_analysis_view, project, analysis_type="untargeted"):
     model = ProjectModel(project, "/tmp/proj")
-    view = running_analysis_view(model, "run-1")
+    view = running_analysis_view(model, "run-1", analysis_type)
     return view, view.rootObject(), model
 
 
@@ -149,3 +149,18 @@ def test_run_failed_shows_error_banner(
     from PySide6.QtGui import QColor
 
     assert error_text.property("color") == QColor("#e06c75")
+
+
+def test_targeted_run_shows_targeted_step_list(
+    running_analysis_view, project, find_visual_child
+):
+    _, root, _ = _make_page(running_analysis_view, project, "targeted")
+
+    for step in TARGETED_RUN_STEPS:
+        status = find_visual_child(root, "stepStatus_" + step)
+        assert status is not None
+        assert status.property("text") == "pending"
+
+    # untargeted-only steps must not be rendered at all
+    for step in set(RUN_STEPS) - set(TARGETED_RUN_STEPS):
+        assert find_visual_child(root, "stepStatus_" + step) is None

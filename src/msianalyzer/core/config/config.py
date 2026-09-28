@@ -1242,58 +1242,159 @@ class AnalysisConfig:
 
 @dataclass
 class NormalizationConfig:
-    """Make feature intensities comparable across pixels and samples.
+    """Make feature intensities comparable across pixels and samples — and,
+    for a `targeted` analysis, name the m/z values that analysis actually
+    quantifies.
 
     `core.utils.tic_normalization`: runs after `h5ad` assembly, once every
     per-sample `.h5ad` file exists. Raw intensity at a pixel depends partly
-    on how much total ion signal that pixel happened to produce (tissue
-    thickness, ionization efficiency) rather than purely on how much of a
-    given compound is there — this stage corrects for that. It compares
-    each pixel's total ion current (`obs['tic']`, already recorded on every
-    `.h5ad`) to the median TIC across every pixel of every sample in the
-    analysis, scales each feature's raw intensity by that ratio, then
-    applies a log1p compression so the result stays on a usable, roughly
-    intensity-like scale rather than a raw ratio. Writes the result back as
-    a new `layers['TIC']` on every per-sample `.h5ad` (`layers['raw']` keeps
-    the untouched original for comparison), and also persists the full
-    cross-sample concatenation as `merged.h5ad` in `io.out_dir` — computing
-    the median already requires loading every sample at once, so saving
-    that combined object is essentially free and is reused by later
-    cross-sample analyses.
+    on how much total ion signal (or how much of a chosen reference
+    compound) that pixel happened to produce (tissue thickness, ionization
+    efficiency) rather than purely on how much of a given compound is
+    there — this stage corrects for that. It compares each pixel's
+    reference value (TIC, or a reference feature's own intensity — see
+    `mode`) to the reference value's median across every pixel of every
+    sample in the analysis, scales each feature's raw intensity by that
+    ratio, then applies a log1p compression so the result stays on a
+    usable, roughly intensity-like scale rather than a raw ratio. Writes
+    the result back as a new layer on every per-sample `.h5ad`
+    (`layers['raw']` keeps the untouched original for comparison) —
+    named `layers['TIC']` when `mode="tic"`, or `layers['mz_<value>']`
+    (e.g. `layers['mz_154.0863']`) when `mode="reference_mz"`, so the
+    layer's own name always says what it was actually normalized against
+    rather than defaulting to a "TIC" label that would be wrong for a
+    reference-m/z run. Also persists the full cross-sample concatenation
+    as `merged.h5ad` in `io.out_dir` — computing the reference median
+    already requires loading every sample at once, so saving that combined
+    object is essentially free and is reused by later cross-sample
+    analyses.
+
+    `analyte_mzs` (below) lives here rather than in a bespoke group because
+    it answers the exact same question `reference_mz` already answers for
+    normalization: "which m/z values does a `targeted` run need to
+    guarantee exist in every sample's `.h5ad` at run time?" — a targeted
+    run has no feature-discovery stage to fall back on, so every m/z it
+    will ever need (the reference channel, and every compound the user
+    wants to quantify) has to be named up front, in config, so `run_core`
+    can quantify all of them in one already-parallel `create_spatial_adata`
+    pass instead of the GUI extracting them one at a time, on demand, after
+    the run (slow, and defeats the point of a "run").
 
     Attributes:
-        enabled: Run this stage. When off, no `TIC` layer is added to the
-            per-sample `.h5ad` files (only the original `raw` intensities
-            remain) and no `merged.h5ad` is written. Turning this off is
-            reasonable if TIC normalization doesn't make sense for your
-            acquisition method, or simply to save the extra processing
-            time/disk space when you only need raw intensities. Default
-            `True`.
+        enabled: Run this stage. When off, no normalized layer is added to
+            the per-sample `.h5ad` files (only the original `raw`
+            intensities remain) and no `merged.h5ad` is written. Turning
+            this off is reasonable if normalization doesn't make sense for
+            your acquisition method, or simply to save the extra
+            processing time/disk space when you only need raw intensities.
+            Default `True`.
 
             **Interaction:** Downstream views/exports (Visual Inspection's
-            TIC layer, Integration export's TIC option) have nothing to
-            show when this is off.
+            normalized layer, Integration export's normalized option)
+            have nothing to show when this is off. Ignored entirely for a
+            `targeted` analysis's own normalization needs, since `mode`/
+            `reference_mz` below are what a targeted run actually reads —
+            `enabled` only ever gates whether this stage runs at all.
+        mode: Which per-pixel reference value to normalize against.
+            `"tic"` uses each pixel's own total ion current (`obs['tic']`,
+            already recorded on every `.h5ad`) — the original, and still
+            default, behavior. `"reference_mz"` instead uses a single
+            reference feature's own per-pixel intensity (`reference_mz`
+            below) — useful when TIC itself isn't a reliable stand-in for
+            local signal (e.g. a spiked internal standard is a better
+            reference than total ion current), and this is the *only*
+            normalization mode a `targeted` analysis can use, since a
+            targeted run's `.h5ad` has no other pre-computed reference
+            available at run time. Default `"tic"`.
+
+            **Interaction:** `reference_mz` is required (and validated at
+            `Config` construction time) whenever `mode="reference_mz"`,
+            and whenever `analysis_type="targeted"` regardless of `mode`
+            — a targeted run has no aligned feature list to fall back to,
+            so `reference_mz` doubles as the one m/z guaranteed to exist
+            in that analysis's `.h5ad` from the start.
+        reference_mz: The reference feature's consensus m/z, used only
+            when `mode="reference_mz"` (or always, for a targeted
+            analysis — see `mode`'s own Interaction note). Matched to the
+            nearest existing feature within `reference_ppm`, the same
+            nearest-match convention used throughout this app for m/z
+            lookups (a raw-to-`.h5ad` round-trip isn't guaranteed
+            bit-exact). Default `None`.
+
+            **Interaction:** Ignored when `mode="tic"` on an *untargeted*
+            analysis; required otherwise (see `mode`).
+        reference_ppm: Matching tolerance for `reference_mz`.
+
+            Range: **1**-**50** ppm is typical; narrower risks missing the
+            reference feature due to ordinary calibration drift, wider
+            risks silently matching an unrelated nearby feature instead.
+            Default **5.0**.
+
+            **Interaction:** Only used when `reference_mz` is set.
+        analyte_mzs: One or more m/z values (comma-separated in the GUI —
+            not limited to a single value) that a `targeted` run should
+            quantify at every pixel of every sample, in addition to
+            `reference_mz` — e.g. every compound you want a calibration
+            curve for. Baked into every sample's `.h5ad` at run time
+            (unioned with `reference_mz` into `create_spatial_adata`'s
+            target set), then registered as browsable features
+            (`features.origin = 'injected'`, the same mechanism an
+            untargeted run's target-list matches use) so the Calibration
+            workspace's analyte picker has something to show without any
+            further extraction. Ignored for an `untargeted` analysis.
+            Default `[]`.
+
+            **Interaction:** Required (at least one value) whenever
+            `analysis_type="targeted"` — validated at `Config` construction
+            time, same as `reference_mz`.
     """
 
     enabled: bool = True
+    mode: str = "tic"
+    reference_mz: float | None = None
+    reference_ppm: float = 5.0
+    analyte_mzs: list[float] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("tic", "reference_mz"):
+            raise ValueError(
+                f"normalization: mode must be 'tic' or 'reference_mz', "
+                f"got {self.mode!r}"
+            )
+        if self.mode == "reference_mz" and self.reference_mz is None:
+            raise ValueError(
+                "normalization: reference_mz is required when mode='reference_mz'"
+            )
 
 
 @dataclass
 class SpatialCorrelationConfig:
-    """Per-feature, per-sample spatial autocorrelation (Moran's I).
+    """Per-feature, per-sample spatial autocorrelation (Moran's I) — two
+    independent, opt-in passes.
 
-    `core.spatial.moran`: runs after `normalization`, once every per-sample
-    `.h5ad` file exists. For each sample independently (never pooled across
-    samples — a feature's spatial organization in one slide says nothing
-    about another), builds a spatial neighbor graph over that sample's
-    pixels (`squidpy.gr.spatial_neighbors`) and computes Moran's I for every
-    feature (`squidpy.gr.spatial_autocorr`, `mode="moran"`) — how much a
-    feature's high/low pixel values cluster near each other spatially,
-    rather than being scattered at random. Results are written directly
-    into that sample's `.h5ad` (`adata.uns["moranI"]`, squidpy's own
-    convention), not into the analysis database — this stage is purely an
-    `.h5ad` enrichment step, read back on demand by the GUI's Spatial
-    Correlation page.
+    `core.spatial.moran` (`enabled`): runs after `normalization`, once
+    every per-sample `.h5ad` file exists. For each sample independently
+    (never pooled across samples — a feature's spatial organization in one
+    slide says nothing about another), builds a spatial neighbor graph
+    over that sample's pixels (`squidpy.gr.spatial_neighbors`) and
+    computes Moran's I for every feature (`squidpy.gr.spatial_autocorr`,
+    `mode="moran"`) — how much a feature's high/low pixel values cluster
+    near each other spatially, rather than being scattered at random.
+    Results are written directly into that sample's `.h5ad`
+    (`adata.uns["moranI"]`, squidpy's own convention), not into the
+    analysis database — this stage is purely an `.h5ad` enrichment step,
+    read back on demand by the GUI's Spatial Correlation page.
+
+    `core.spatial.local_moran` (`local_enabled`): a separate, hand-rolled
+    pass computing *local* (per-pixel) Moran's I for every feature —
+    see that field's own docstring for why this is a genuinely different
+    question from the global score above. Written to
+    `adata.layers["localMoranI"]` as full per-pixel values, not a single
+    collapsed number — the GUI's Spatial Correlation page turns this into
+    a "% of pixels above a threshold" summary table on the fly, for
+    whatever threshold the user currently has set (`local_threshold` only
+    seeds that threshold's *initial* value; changing it in the GUI needs
+    no re-run).
 
     Attributes:
         enabled: Run this stage. Off by default — it's an optional,
@@ -1323,11 +1424,95 @@ class SpatialCorrelationConfig:
             with many features, more CPU/RAM used at once.
 
             **Interaction:** None.
+        local_enabled: Run `core.spatial.local_moran`'s per-pixel pass —
+            for every feature, every pixel's *local* Moran's I, written to
+            `adata.layers["localMoranI"]`. The global score above
+            (`enabled`) is one number per feature per sample; local
+            Moran's I is one number *per pixel*, so a single sample can be
+            spatially organized overall while that organization is
+            concentrated in only a small part of the image (e.g. real
+            tissue vs. surrounding bare matrix captured in the same
+            acquisition) — this tells you *how much* of the image that
+            concentration covers, feature by feature, once the GUI turns
+            it into a "% of pixels above a threshold" table. A separate,
+            independent toggle from `enabled`: scoring every pixel for
+            every feature is real extra work most runs won't need, and
+            neither score depends on the other having run. Default
+            `False`.
+
+            **Interaction:** The GUI's Spatial Correlation page shows a
+            second, threshold-adjustable table for this pass, below the
+            global one, only for samples it has enriched. Visual
+            Inspection's "Local Moran's I" heatmap layer is unaffected
+            either way — it computes the same per-pixel score on demand,
+            live, and has never needed this stage to have run (see
+            ADR 48).
+        local_threshold: The local Moran's I value the GUI's Spatial
+            Correlation page starts with when it first opens — a pixel
+            must exceed it (strictly — not equal) to count as "high" in
+            that page's local-summary table. **Not a pipeline parameter**:
+            this pass always writes the full per-pixel values (see
+            `local_enabled`), and the GUI recomputes "% above threshold"
+            live from them the moment you type a different number in —
+            this field only saves you from re-typing the same starting
+            value every time you open the page.
+
+            `I_i = (z_i / m2) * sum_j w_ij * z_j`, where `z_i` is that
+            pixel's value minus the sample's mean, `m2` is the mean
+            squared deviation across every pixel (the sample's own
+            variance), and `w_ij` are that pixel's row-standardized
+            spatial-neighbor weights. Unlike the global score above,
+            local Moran's I is **not** bounded to **-1**–**1** — it
+            scales with how far a pixel *and* its neighbors sit from the
+            sample's mean, relative to that same sample's own spread.
+
+            Range: any real number; no fixed bound, and no single value
+            that's universally "right" — the useful scale is specific to
+            each feature and sample. As a rough anchor: a pixel and its
+            immediate neighbors sitting about one standard deviation from
+            the sample's mean, together, in the same direction, scores
+            close to **1**; several standard deviations together scores
+            much higher (**5**, **10**, ...) — a stronger, more unusual
+            local concentration. Near **0**: no meaningful local
+            structure (the typical/background case for most pixels).
+            Negative: a local spatial *outlier* (this pixel diverges
+            sharply from its own neighbors), not clustering — rarely
+            what "high" should mean here. Default **1.0**, a moderate
+            starting point, not a validated cutoff for your data — since
+            it's now freely adjustable in the GUI without a re-run, feel
+            free to just try a few values there directly.
+
+            **Interaction:** Only used when `local_enabled` is `True`
+            (nothing to show a threshold for otherwise). Changing it here
+            needs a re-run only to change what the page *starts* at —
+            adjusting the threshold for data you already have never does.
+        local_n_workers: How many worker processes score features in
+            parallel for the local summary pass. `core.spatial.local_moran`
+            has no built-in parallelism of its own the way squidpy's
+            `spatial_autocorr` does (that's what `n_jobs` above controls,
+            for the *global* pass) — every feature is scored on its own
+            worker process instead, each loading this sample's `.h5ad`
+            once and scoring its share of the features against it.
+
+            Range: `None`/**0** (the default, uses `os.cpu_count()`) or
+            **1** and up (**1** forces a fully serial run, no worker
+            processes at all — useful for debugging). Automatically
+            capped at the number of features in the sample. Higher:
+            faster on a sample with many features, more CPU/RAM used at
+            once (each worker holds its own full copy of the sample's
+            `.h5ad` in memory).
+
+            **Interaction:** Only used when `local_enabled` is `True`.
+            Independent of `n_jobs` above — that one only affects the
+            global pass.
     """
 
     enabled: bool = False
     layer: str = "TIC"
     n_jobs: int | None = None
+    local_enabled: bool = False
+    local_threshold: float = 1.0
+    local_n_workers: int | None = None
 
 
 # Maps group name (used as the nested key in dicts/files) -> dataclass type,
@@ -1364,7 +1549,7 @@ GROUP_TITLES: dict[str, str] = {
     "consensus": "MS2 consensus",
     "report": "summary report",
     "h5ad": "create h5ad",
-    "normalization": "TIC normalization",
+    "normalization": "normalization",
     "spatial_correlation": "spatial correlation",
     "analysis": "analysis database",
 }
@@ -1381,24 +1566,46 @@ class Config:
 
     Attributes:
         version: Config schema version; checked on load.
+        analysis_type: `"untargeted"` (the original, full pipeline —
+            feature discovery, alignment, optional MS2 matching/annotation)
+            or `"targeted"` (MS1-only, no feature discovery — the reference
+            m/z and every analyte of interest, all named up front in
+            `normalization.reference_mz`/`analyte_mzs`, are quantified at
+            run time; the workspace afterward is just the interactive
+            Calibration page — draw ROIs, enter amounts, fit a curve). Not
+            a `GROUPS` dataclass field since it decides which groups even
+            apply, not a stage's own parameter. Default `"untargeted"`.
         io: Input/output paths.
-        ms1: Averaged MS1 spectrum parameters.
-        centroid: Centroid detection parameters.
-        peak: Peak filtering parameters.
-        align: Cross-sample m/z alignment parameters.
-        target_list: Target-compound-list matching parameters.
-        group_ms2: MS2-to-feature association parameters.
-        purity: Precursor-ion-purity parameters.
-        annotate: MS2 spectral-library annotation parameters.
-        consensus: Per-feature MS2 consensus parameters.
-        report: End-of-run summary report parameters.
+        ms1: Averaged MS1 spectrum parameters. Ignored for `targeted` runs
+            (no unknown-peak discovery — the reference/analyte m/z are
+            given directly, never detected).
+        centroid: Centroid detection parameters. Ignored for `targeted` runs.
+        peak: Peak filtering parameters. Ignored for `targeted` runs.
+        align: Cross-sample m/z alignment parameters. Ignored for
+            `targeted` runs (nothing to align — a single user-specified
+            m/z has no cross-sample drift-correction step).
+        target_list: Target-compound-list matching parameters. Ignored for
+            `targeted` runs (compound-list matching against aligned
+            features is meaningless without alignment).
+        group_ms2: MS2-to-feature association parameters. Ignored for
+            `targeted` runs (MS1-only by definition).
+        purity: Precursor-ion-purity parameters. Ignored for `targeted` runs.
+        annotate: MS2 spectral-library annotation parameters. Ignored for
+            `targeted` runs.
+        consensus: Per-feature MS2 consensus parameters. Ignored for
+            `targeted` runs.
+        report: End-of-run summary report parameters. Ignored for
+            `targeted` runs (its content assumes the untargeted
+            MS2/alignment machinery).
         h5ad: Spatial `AnnData` assembly parameters.
-        normalization: TIC-normalization parameters.
+        normalization: Normalization parameters (TIC, or a reference
+            feature's own intensity). The only normalization option for a
+            `targeted` run — see `NormalizationConfig.mode`.
         spatial_correlation: Spatial autocorrelation (Moran's I) parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 18
+    version: int = 22
 
     def __init__(
         self,
@@ -1417,7 +1624,14 @@ class Config:
         normalization: NormalizationConfig | None = None,
         spatial_correlation: SpatialCorrelationConfig | None = None,
         analysis: AnalysisConfig | None = None,
+        analysis_type: str = "untargeted",
     ) -> None:
+        if analysis_type not in ("untargeted", "targeted"):
+            raise ValueError(
+                f"analysis_type must be 'untargeted' or 'targeted', "
+                f"got {analysis_type!r}"
+            )
+        self.analysis_type: str = analysis_type
         self.io: IOConfig = io
         self.ms1: MS1Config = ms1 or MS1Config()
         self.centroid: CentroidConfig = centroid or CentroidConfig()
@@ -1438,6 +1652,32 @@ class Config:
         )
         self.analysis: AnalysisConfig = analysis or AnalysisConfig()
 
+        if self.analysis_type == "targeted" and self.normalization.reference_mz is None:
+            raise ValueError(
+                "analysis_type='targeted' requires normalization.reference_mz "
+                "to be set — a targeted run has no other m/z to seed its "
+                "own .h5ad with at run time"
+            )
+        if self.analysis_type == "targeted" and not self.normalization.analyte_mzs:
+            raise ValueError(
+                "analysis_type='targeted' requires at least one "
+                "normalization.analyte_mzs value — a targeted run has no "
+                "feature-discovery stage, so every compound to quantify "
+                "must be named up front"
+            )
+        # SpatialCorrelationConfig.layer defaults to "TIC", which doesn't
+        # exist on a reference-mz-normalized .h5ad — auto-correct rather
+        # than let Moran's I silently try to score a layer that was never
+        # written. Only touches the field if it's still at its untouched
+        # default, so an explicit user choice is never overridden.
+        if (
+            self.normalization.mode == "reference_mz"
+            and self.spatial_correlation.layer == "TIC"
+        ):
+            self.spatial_correlation.layer = (
+                f"mz_{self.normalization.reference_mz:.4f}"
+            )
+
     # ------------------------------------------------------------------ #
     # (de)serialization helpers
     # ------------------------------------------------------------------ #
@@ -1454,7 +1694,7 @@ class Config:
                 return [str(v) if isinstance(v, Path) else v for v in value]
             return value
 
-        d: dict[str, Any] = {"version": self.version}
+        d: dict[str, Any] = {"version": self.version, "analysis_type": self.analysis_type}
         for group_name in GROUPS:
             group_obj = getattr(self, group_name)
             d[group_name] = {
@@ -1491,15 +1731,17 @@ class Config:
                 f"expected version {cls.version!r}"
             )
 
+        analysis_type = data.pop("analysis_type", "untargeted")
+
         try:
             group_instances = {
                 group_name: group_type(**data.get(group_name, {}))
                 for group_name, group_type in GROUPS.items()
             }
 
-            config = cls(**group_instances)
+            config = cls(**group_instances, analysis_type=analysis_type)
 
-        except TypeError as e:
+        except (TypeError, ValueError) as e:
             raise ValueError(f"Invalid or incomplete config: {e}") from e
 
         return config
@@ -1610,7 +1852,7 @@ class Config:
             len(f.name) for group_type in GROUPS.values() for f in fields(group_type)
         )
 
-        lines = [f"Config(version={self.version})"]
+        lines = [f"Config(version={self.version}, analysis_type={self.analysis_type!r})"]
         for group_name, title in GROUP_TITLES.items():
             group_obj = getattr(self, group_name)
             lines.append(f"  {title}:")

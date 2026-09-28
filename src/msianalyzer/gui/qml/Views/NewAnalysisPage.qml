@@ -9,6 +9,17 @@ Page {
     objectName: "newAnalysisPage"
 
     property var project
+    // "untargeted" (default, full pipeline) or "targeted" (MS1-only
+    // calibration-curve quantification) — set at push time by
+    // Router.newAnalysisPageRequested's second argument. Drives which
+    // config-group tabs are shown (see visibleGroups) and whether
+    // target_list matching is offered at all.
+    property string analysisType: "untargeted"
+    // The generic-groups tab set both the tab-button Repeater and the
+    // stack-page Repeater below iterate — same list for both, so their
+    // indices (tabBar.currentIndex === index + 2) always line up.
+    readonly property var visibleGroups: analysisType === "targeted"
+        ? ConfigSchema.targetedGroups : ConfigSchema.groups
     property var sampleRows: []
     // Already-parsed samples: each entry here is a raw .db path that
     // skips the parse/pixel-map pipeline stages entirely (see ADR — core
@@ -287,6 +298,9 @@ Page {
                 return null
             return text.split(",").map(function (s) { return s.trim() })
                        .filter(function (s) { return s.length > 0 })
+        case "float_list":
+            return text.split(",").map(function (s) { return parseFloat(s.trim()) })
+                       .filter(function (s) { return !isNaN(s) })
         case "path_list":
             if (text === "")
                 return null
@@ -320,6 +334,9 @@ Page {
         case "optional_str_list":
             control.text = (value && value.length > 0) ? value.join(", ") : ""
             return
+        case "float_list":
+            control.text = (value && value.length > 0) ? value.join(", ") : ""
+            return
         case "path_list":
             control.text = normalizePathListValue(value).join("; ")
             return
@@ -345,6 +362,7 @@ Page {
         }
 
         var configDict = {}
+        configDict["analysis_type"] = newAnalysisPage.analysisType
         configDict["io"] = {
             "project_folder": project ? project.folder : "",
             "mzml_paths": mzmlPaths,
@@ -555,7 +573,10 @@ Page {
             Layout.fillWidth: true
 
             Label {
-                text: "New Analysis — " + (project ? project.name : "")
+                objectName: "newAnalysisTitleLabel"
+                text: (newAnalysisPage.analysisType === "targeted"
+                       ? "New Targeted Analysis — " : "New Analysis — ")
+                      + (project ? project.name : "")
                 font.pixelSize: 16
                 font.bold: true
                 Layout.fillWidth: true
@@ -658,6 +679,13 @@ Page {
                 // gui/utils/config_schema.py's module docstring.
                 objectName: "tabButton_target_list"
                 text: "target list matching"
+                // Meaningless for a targeted analysis (MS1-only, no
+                // aligned feature list to match compounds against) — see
+                // Config's own docstring. Its StackLayout page (index 1)
+                // stays in place either way so tabBar.currentIndex's
+                // fixed offsets (generic groups start at index + 2) never
+                // need to shift; it's just unreachable via this button.
+                visible: newAnalysisPage.analysisType !== "targeted"
                 checkable: true
                 checked: tabBar.currentIndex === 1
                 highlighted: checked
@@ -668,7 +696,7 @@ Page {
                 }
             }
             Repeater {
-                model: ConfigSchema.groups
+                model: newAnalysisPage.visibleGroups
                 delegate: Button {
                     objectName: "tabButton_" + modelData.key
                     text: modelData.title
@@ -1124,9 +1152,10 @@ Page {
             }
 
             // --- Generic, schema-driven tabs (every group but io and
-            // target_list) ---
+            // target_list) --- same model as the tab-button Repeater
+            // above (visibleGroups), so indices stay aligned.
             Repeater {
-                model: ConfigSchema.groups
+                model: newAnalysisPage.visibleGroups
                 delegate: Flickable {
                     id: groupTab
                     objectName: "groupTab_" + modelData.key
@@ -1213,6 +1242,21 @@ Page {
                                     visible: modelData.kind !== "bool" && modelData.kind !== "path_list"
                                     text: (modelData.default === null || modelData.default === undefined)
                                           ? "" : String(modelData.default)
+                                    // "float_list"/"optional_str_list" look
+                                    // identical to a plain single-value
+                                    // field otherwise — nothing on screen
+                                    // says "you can type more than one,
+                                    // comma-separated" (reported: a user
+                                    // typed exactly one m/z into
+                                    // NormalizationConfig.analyte_mzs and
+                                    // had no way to tell more were
+                                    // supported, even though collectConfig
+                                    // already parsed a comma list
+                                    // correctly all along).
+                                    placeholderText: modelData.kind === "float_list"
+                                                     ? "comma-separated, e.g. 154.0863, 200.1234"
+                                                     : (modelData.kind === "optional_str_list"
+                                                        ? "comma-separated" : "")
                                     Layout.fillWidth: true
                                 }
 

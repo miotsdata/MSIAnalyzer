@@ -24,6 +24,9 @@ ms2_annotations      one row per (MS2 scan, library candidate) comparison
 target_list_compounds one row per parsed target-list compound (name/formula/InChIKey)
 target_list_matches  one row per (target compound, adduct) matched to a feature
 rois                 analysis-wide ROI name/color catalog (geometry lives per-sample in h5ad)
+calibration_curves   fitted calibration curves (targeted analyses), append-only history
+calibration_points   one row per calibration standard ROI feeding a curve
+calibration_unknowns one row per quantified ROI (interpolated against a curve)
 """
 
 from __future__ import annotations
@@ -573,6 +576,89 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             name       TEXT    NOT NULL UNIQUE,
             color      TEXT    NOT NULL,
             created_at TEXT    NOT NULL
+        )
+    """)
+
+    # --- Calibration curve quantification (targeted analyses) -------------
+    # v1 is single-analyte/single-curve per analysis (see the feature's own
+    # ADR) — calibration_points/calibration_unknowns each hold one
+    # analysis-wide set (not scoped per curve_id: there's only ever one
+    # "current" set of standards/results), while calibration_curves is
+    # append-only fit *history* over that one set (a re-fit adds a new row,
+    # same "keep history" convention as predicted_formulas). ROI geometry
+    # is unchanged, still per-sample h5ad uns["rois"] + the `rois` catalog
+    # table above — these tables only add concentration/measurement/fit
+    # metadata referencing ROI names.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS calibration_curves (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            analyte_mz         REAL    NOT NULL,
+            fit_type           TEXT    NOT NULL DEFAULT 'linear'
+                CHECK (fit_type IN ('linear', 'weighted_linear')),
+            weighting          TEXT CHECK (weighting IS NULL OR weighting IN ('1/x', '1/x2')),
+            concentration_unit TEXT    NOT NULL,
+            slope              REAL    NOT NULL,
+            intercept          REAL    NOT NULL,
+            r_squared          REAL    NOT NULL,
+            lod                REAL,
+            loq                REAL,
+            n_points           INTEGER NOT NULL,
+            command_id         INTEGER REFERENCES commands(id),
+            created_at         TEXT    NOT NULL
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_calcurve_analyte ON calibration_curves(analyte_mz)"
+    )
+    # A standard's known quantity is entered as a total *amount* in the
+    # spot (e.g. pmol), not a concentration directly — concentration
+    # (this table's own `concentration`, the curve's actual x-value) is
+    # derived from `amount / area`, `area` from the ROI's own pixel count
+    # times a user-provided (assumed square) pixel edge length. All of
+    # amount/pixel_size/area are kept per point (not just derived and
+    # discarded) so every row is independently auditable/exportable
+    # without needing to look anything else up. `UNIQUE(roi_name)` — one
+    # ROI is one standard; re-adding the same ROI updates it (see
+    # upsert_calibration_point) rather than duplicating.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS calibration_points (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            sample_id       INTEGER REFERENCES samples(sample_id),
+            roi_name        TEXT    NOT NULL UNIQUE,
+            amount          REAL    NOT NULL,
+            amount_unit     TEXT    NOT NULL,
+            pixel_size      REAL    NOT NULL,
+            pixel_size_unit TEXT    NOT NULL CHECK (pixel_size_unit IN ('um', 'mm')),
+            area            REAL    NOT NULL,
+            concentration   REAL    NOT NULL,
+            mean_intensity  REAL    NOT NULL,
+            n_pixels        INTEGER NOT NULL,
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    # Same amount/area bookkeeping as calibration_points, but derived in
+    # the other direction: `interpolated_conc` (from the curve fit) times
+    # this ROI's own `area` gives `amount` — "how much analyte is in this
+    # region", not just "how concentrated" — both null together until a
+    # curve actually exists to interpolate against (see
+    # save_calibration_unknown); `curve_id` records which fit produced the
+    # current result, updated in place on every re-fit
+    # (update_calibration_unknown_result) rather than versioned, since v1
+    # has only one curve active at a time.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS calibration_unknowns (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            sample_id         INTEGER REFERENCES samples(sample_id),
+            roi_name          TEXT    NOT NULL UNIQUE,
+            pixel_size        REAL    NOT NULL,
+            pixel_size_unit   TEXT    NOT NULL CHECK (pixel_size_unit IN ('um', 'mm')),
+            area              REAL    NOT NULL,
+            mean_intensity    REAL    NOT NULL,
+            n_pixels          INTEGER NOT NULL,
+            curve_id          INTEGER REFERENCES calibration_curves(id),
+            interpolated_conc REAL,
+            amount            REAL,
+            created_at        TEXT    NOT NULL
         )
     """)
 
@@ -1466,6 +1552,26 @@ def get_sample_raw_db_path(db_path: Path | str, sample_name: str) -> str | None:
 
 
 @log_call(source="db_path")
+def get_sample_id(db_path: Path | str, sample_name: str) -> int | None:
+    """One sample's `sample_id` — how GUI code (e.g. calibration point/
+    unknown bookkeeping) resolves a sample name to the id
+    `calibration_points.sample_id`/`calibration_unknowns.sample_id`
+    reference, the same as `get_sample_raw_db_path`'s lookup shape.
+
+    Returns:
+        The sample's id, or `None` if no sample named `sample_name` exists.
+    """
+    with connect(db_path) as con:
+        try:
+            row = con.execute(
+                "SELECT sample_id FROM samples WHERE name = ?", (sample_name,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    return int(row[0]) if row else None
+
+
+@log_call(source="db_path")
 def find_nearest_feature(db_path: Path | str, mz: float) -> dict | None:
     """The feature whose consensus m/z is closest to `mz`.
 
@@ -1671,6 +1777,373 @@ def delete_roi_catalog_entry(db_path: Path | str, name: str) -> bool:
         cur = safe_execute(
             con, "DELETE FROM rois WHERE name = ?", (name,),
             table="rois", logger=logger, source=db_path,
+        )
+        con.commit()
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Calibration curve quantification (targeted analyses)
+# ---------------------------------------------------------------------------
+
+
+@log_call(source="db_path")
+def register_calibration_curve(
+    db_path: Path | str,
+    analyte_mz: float,
+    fit_type: str,
+    weighting: str | None,
+    concentration_unit: str,
+    slope: float,
+    intercept: float,
+    r_squared: float,
+    lod: float | None,
+    loq: float | None,
+    n_points: int,
+    command_id: int | None = None,
+) -> int:
+    """Insert a new calibration curve row and return its id.
+
+    Append-only, like `predicted_formulas` — re-fitting never overwrites a
+    previous curve, it adds a new row (`load_calibration_curve` defaults to
+    the most recent one).
+
+    Args:
+        db_path: The analysis database.
+        analyte_mz: The m/z the curve quantifies.
+        fit_type: `"linear"` or `"weighted_linear"`.
+        weighting: `"1/x"`/`"1/x2"` for a weighted fit, `None` otherwise.
+        concentration_unit: e.g. `"pmol/mm2"` — see
+            `core.calibration.units.concentration_unit`. Every point
+            feeding this curve must share this same unit (checked before
+            fitting, not here — this is just where it's recorded).
+        slope, intercept, r_squared, lod, loq, n_points: See
+            `core.calibration.curve_fit.CalibrationFitResult`.
+        command_id: The `fit_calibration_curve` command's id, if logged.
+
+    Returns:
+        The new `calibration_curves.id`.
+    """
+    with connect(db_path) as con:
+        cur = safe_execute(
+            con,
+            "INSERT INTO calibration_curves "
+            "(analyte_mz, fit_type, weighting, concentration_unit, slope, "
+            "intercept, r_squared, lod, loq, n_points, command_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                analyte_mz, fit_type, weighting, concentration_unit,
+                slope, intercept, r_squared, lod, loq, n_points, command_id,
+                datetime.now().astimezone().isoformat(),
+            ),
+            table="calibration_curves",
+            logger=logger,
+            source=db_path,
+        )
+        con.commit()
+        return int(cur.lastrowid)
+
+
+@log_call(source="db_path")
+def load_calibration_curve(db_path: Path | str, curve_id: int | None = None) -> dict | None:
+    """One calibration curve — the most recently fitted one by default.
+
+    Args:
+        db_path: The analysis database.
+        curve_id: A specific `calibration_curves.id`, or `None` for the
+            most recent curve (by `id`, which is also insertion order).
+
+    Returns:
+        A dict of every column, or `None` if no curve exists yet (or
+        `curve_id` doesn't match one).
+    """
+    sql = (
+        "SELECT id, analyte_mz, fit_type, weighting, concentration_unit, "
+        "slope, intercept, r_squared, lod, loq, n_points, command_id, created_at "
+        "FROM calibration_curves "
+    )
+    with connect(db_path) as con:
+        try:
+            if curve_id is None:
+                row = con.execute(sql + "ORDER BY id DESC LIMIT 1").fetchone()
+            else:
+                row = con.execute(sql + "WHERE id = ?", (curve_id,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+
+    if row is None:
+        return None
+    columns = [
+        "id", "analyte_mz", "fit_type", "weighting", "concentration_unit",
+        "slope", "intercept", "r_squared", "lod", "loq", "n_points",
+        "command_id", "created_at",
+    ]
+    return dict(zip(columns, row))
+
+
+@log_call(source="db_path")
+def upsert_calibration_point(
+    db_path: Path | str,
+    sample_id: int | None,
+    roi_name: str,
+    amount: float,
+    amount_unit: str,
+    pixel_size: float,
+    pixel_size_unit: str,
+    area: float,
+    concentration: float,
+    mean_intensity: float,
+    n_pixels: int,
+) -> int:
+    """Insert one calibration standard, or replace it if `roi_name`
+    already has one (`UNIQUE(roi_name)`) — re-adding the same ROI (e.g.
+    correcting its concentration) updates in place rather than
+    duplicating. One row at a time, not bulk: standards accumulate one
+    "Add Standard" action at a time (see the calibration workflow's own
+    docs), unlike e.g. `save_target_list_matches`.
+
+    Args:
+        db_path: The analysis database.
+        sample_id: The sample the ROI was drawn on.
+        roi_name: The ROI's name (from the `rois` catalog).
+        amount: Total quantity of the analyte in the spot, as entered.
+        amount_unit: One of `core.calibration.units.AMOUNT_UNITS`.
+        pixel_size: This ROI's pixel edge length.
+        pixel_size_unit: `"um"` or `"mm"`.
+        area: `core.calibration.units.pixel_area(n_pixels, pixel_size, pixel_size_unit)`.
+        concentration: `core.calibration.units.concentration_from_amount(amount, area)`
+            — the curve's actual x-value. Computed by the caller, not here.
+        mean_intensity: The ROI's mean intensity (see
+            `core.calibration.roi_intensity.roi_mean_intensity`).
+        n_pixels: The ROI's pixel count.
+
+    Returns:
+        The new (or existing, on update) `calibration_points.id`.
+    """
+    with connect(db_path) as con:
+        safe_execute(
+            con,
+            "INSERT INTO calibration_points "
+            "(sample_id, roi_name, amount, amount_unit, pixel_size, pixel_size_unit, "
+            "area, concentration, mean_intensity, n_pixels, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(roi_name) DO UPDATE SET "
+            "sample_id = excluded.sample_id, amount = excluded.amount, "
+            "amount_unit = excluded.amount_unit, pixel_size = excluded.pixel_size, "
+            "pixel_size_unit = excluded.pixel_size_unit, area = excluded.area, "
+            "concentration = excluded.concentration, "
+            "mean_intensity = excluded.mean_intensity, n_pixels = excluded.n_pixels",
+            (
+                sample_id, roi_name, amount, amount_unit, pixel_size, pixel_size_unit,
+                area, concentration, mean_intensity, n_pixels,
+                datetime.now().astimezone().isoformat(),
+            ),
+            table="calibration_points",
+            logger=logger,
+            source=db_path,
+        )
+        con.commit()
+        row = con.execute(
+            "SELECT id FROM calibration_points WHERE roi_name = ?", (roi_name,)
+        ).fetchone()
+        return int(row[0])
+
+
+@log_call(source="db_path")
+def load_calibration_points(db_path: Path | str) -> pd.DataFrame:
+    """Every calibration standard point for this analysis (v1: one
+    analysis-wide set, not scoped per curve — see the schema's own
+    comment).
+
+    Returns:
+        A DataFrame with `id`, `sample_id`, `roi_name`, `amount`,
+        `amount_unit`, `pixel_size`, `pixel_size_unit`, `area`,
+        `concentration`, `mean_intensity`, `n_pixels`, `created_at`,
+        ordered by `concentration`. Empty when there are no standards yet.
+    """
+    sql = (
+        "SELECT id, sample_id, roi_name, amount, amount_unit, pixel_size, "
+        "pixel_size_unit, area, concentration, mean_intensity, n_pixels, "
+        "created_at FROM calibration_points ORDER BY concentration"
+    )
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def delete_calibration_point(db_path: Path | str, roi_name: str) -> bool:
+    """Remove one calibration standard.
+
+    Returns:
+        True if a row was actually deleted.
+    """
+    with connect(db_path) as con:
+        cur = safe_execute(
+            con, "DELETE FROM calibration_points WHERE roi_name = ?", (roi_name,),
+            table="calibration_points", logger=logger, source=db_path,
+        )
+        con.commit()
+        return cur.rowcount > 0
+
+
+@log_call(source="db_path")
+def delete_calibration_curve(db_path: Path | str, curve_id: int) -> bool:
+    """Remove one calibration curve from the fit history.
+
+    Does NOT touch `calibration_points` — those aren't scoped per curve
+    (v1: one analysis-wide set, see the schema's own comment).
+    `calibration_unknowns.curve_id` has a real `FOREIGN KEY` though, so
+    any unknown still pointing at this curve has it cleared to `NULL`
+    first (its last-computed `interpolated_conc`/`amount` are left
+    untouched — only the now-dangling curve reference is detached) until
+    the next re-fit updates it.
+
+    Returns:
+        True if the curve was actually deleted.
+    """
+    with connect(db_path) as con:
+        safe_execute(
+            con, "UPDATE calibration_unknowns SET curve_id = NULL WHERE curve_id = ?",
+            (curve_id,), table="calibration_unknowns", logger=logger, source=db_path,
+        )
+        cur = safe_execute(
+            con, "DELETE FROM calibration_curves WHERE id = ?", (curve_id,),
+            table="calibration_curves", logger=logger, source=db_path,
+        )
+        con.commit()
+        return cur.rowcount > 0
+
+
+@log_call(source="db_path")
+def upsert_calibration_unknown(
+    db_path: Path | str,
+    sample_id: int | None,
+    roi_name: str,
+    pixel_size: float,
+    pixel_size_unit: str,
+    area: float,
+    mean_intensity: float,
+    n_pixels: int,
+    curve_id: int | None = None,
+    interpolated_conc: float | None = None,
+    amount: float | None = None,
+) -> int:
+    """Insert one quantified ROI's result, or replace it if `roi_name`
+    already has one (`UNIQUE(roi_name)`).
+
+    `curve_id`/`interpolated_conc`/`amount` may be `None` together — an
+    unknown ROI can be drawn (and its mean intensity/area recorded)
+    before any curve has been fit yet; the GUI shows "no curve yet" for
+    it until `fitCalibrationCurve` runs and re-interpolates every
+    existing unknown against the fresh fit
+    (`update_calibration_unknown_result`).
+
+    Args:
+        db_path: The analysis database.
+        sample_id: The sample the ROI was drawn on.
+        roi_name: The ROI's name.
+        pixel_size: This ROI's pixel edge length (same units as the
+            standards it'll be interpolated against).
+        pixel_size_unit: `"um"` or `"mm"`.
+        area: This ROI's physical area (`core.calibration.units.pixel_area`).
+        mean_intensity: The ROI's mean intensity.
+        n_pixels: The ROI's pixel count.
+        curve_id: The `calibration_curves.id` this result was interpolated
+            against, or `None` if no curve exists yet.
+        interpolated_conc: The interpolated concentration, or `None`.
+        amount: `interpolated_conc * area`, or `None` alongside it.
+
+    Returns:
+        The new (or existing, on update) `calibration_unknowns.id`.
+    """
+    with connect(db_path) as con:
+        safe_execute(
+            con,
+            "INSERT INTO calibration_unknowns "
+            "(sample_id, roi_name, pixel_size, pixel_size_unit, area, "
+            "mean_intensity, n_pixels, curve_id, interpolated_conc, amount, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(roi_name) DO UPDATE SET "
+            "sample_id = excluded.sample_id, pixel_size = excluded.pixel_size, "
+            "pixel_size_unit = excluded.pixel_size_unit, area = excluded.area, "
+            "mean_intensity = excluded.mean_intensity, n_pixels = excluded.n_pixels, "
+            "curve_id = excluded.curve_id, interpolated_conc = excluded.interpolated_conc, "
+            "amount = excluded.amount",
+            (
+                sample_id, roi_name, pixel_size, pixel_size_unit, area,
+                mean_intensity, n_pixels, curve_id, interpolated_conc, amount,
+                datetime.now().astimezone().isoformat(),
+            ),
+            table="calibration_unknowns",
+            logger=logger,
+            source=db_path,
+        )
+        con.commit()
+        row = con.execute(
+            "SELECT id FROM calibration_unknowns WHERE roi_name = ?", (roi_name,)
+        ).fetchone()
+        return int(row[0])
+
+
+@log_call(source="db_path")
+def update_calibration_unknown_result(
+    db_path: Path | str, roi_name: str, curve_id: int, interpolated_conc: float, amount: float
+) -> None:
+    """Fill in `curve_id`/`interpolated_conc`/`amount` for an existing
+    unknown — called once per existing unknown every time
+    `fitCalibrationCurve` (re-)fits, so a re-fit updates every unknown's
+    result in place rather than requiring them to be re-drawn.
+    """
+    with connect(db_path) as con:
+        safe_execute(
+            con,
+            "UPDATE calibration_unknowns "
+            "SET curve_id = ?, interpolated_conc = ?, amount = ? WHERE roi_name = ?",
+            (curve_id, interpolated_conc, amount, roi_name),
+            table="calibration_unknowns",
+            logger=logger,
+            source=db_path,
+        )
+        con.commit()
+
+
+@log_call(source="db_path")
+def load_calibration_unknowns(db_path: Path | str) -> pd.DataFrame:
+    """Every quantified ROI result for this analysis (v1: one
+    analysis-wide set, not scoped per curve).
+
+    Returns:
+        A DataFrame with `id`, `sample_id`, `roi_name`, `pixel_size`,
+        `pixel_size_unit`, `area`, `mean_intensity`, `n_pixels`,
+        `curve_id`, `interpolated_conc`, `amount`, `created_at`, ordered
+        by `created_at`. Empty when there are no results yet.
+    """
+    sql = (
+        "SELECT id, sample_id, roi_name, pixel_size, pixel_size_unit, area, "
+        "mean_intensity, n_pixels, curve_id, interpolated_conc, amount, created_at "
+        "FROM calibration_unknowns ORDER BY created_at"
+    )
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def delete_calibration_unknown(db_path: Path | str, unknown_id: int) -> bool:
+    """Remove one quantified ROI result.
+
+    Returns:
+        True if a row was actually deleted.
+    """
+    with connect(db_path) as con:
+        cur = safe_execute(
+            con, "DELETE FROM calibration_unknowns WHERE id = ?", (unknown_id,),
+            table="calibration_unknowns", logger=logger, source=db_path,
         )
         con.commit()
         return cur.rowcount > 0

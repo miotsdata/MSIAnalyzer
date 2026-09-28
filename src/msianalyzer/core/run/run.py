@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import numpy as np
@@ -23,7 +24,13 @@ from msianalyzer.core.annotation.precursor_purity import run_precursor_purity
 from msianalyzer.core.annotation.target_list import run_target_list_matching
 from msianalyzer.core.report.summary import build_summary_report
 from msianalyzer.core.config import Config
-from msianalyzer.core.parser import MzmlParser, log_command, parse_raster_xml
+from msianalyzer.core.parser import (
+    MzmlParser,
+    load_raw_metadata_value,
+    log_command,
+    parse_raster_xml,
+    write_raw_metadata,
+)
 from msianalyzer.core.plotting.plotter import Plotter
 from msianalyzer.core.project import Project
 from msianalyzer.core.spectra.average_spectra import (
@@ -33,12 +40,13 @@ from msianalyzer.core.spectra.average_spectra import (
     load_aggregated_spectra,
     save_aggregated_spectra,
 )
+from msianalyzer.core.spatial.local_moran import compute_local_moran_layer
 from msianalyzer.core.spatial.moran import compute_spatial_autocorr
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 from msianalyzer.core.utils.create_adata import create_spatial_adata
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
 from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
-from msianalyzer.core.utils.tic_normalization import run_tic_normalization
+from msianalyzer.core.utils.tic_normalization import run_normalization
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +82,96 @@ class SampleResult:
 
     Attributes:
         out_db_path: Path to the sample's raw SQLite database.
-        peaks_mzs: Filtered MS1 peak m/z values for the sample.
+        peaks_mzs: Filtered MS1 peak m/z values for the sample. Empty for a
+            `targeted` sample — targeted mode has no peak-discovery suffix
+            to produce them (see `Run._process_one_sample`'s `targeted`
+            flag).
     """
 
     out_db_path: Path
     peaks_mzs: np.ndarray
+
+
+def _write_pixel_size_metadata(raw_db_path: Path, raster_metadata: dict) -> None:
+    """Write `parse_raster_xml`'s pixel-size fields onto a raw database's
+    `metadata` table, if it actually has one (`<rasterConfig>` present,
+    recognized units) — a no-op otherwise.
+    """
+    if raster_metadata.get("pixel_size_x") is None:
+        return
+    write_raw_metadata(
+        raw_db_path,
+        {
+            k: v
+            for k, v in (
+                ("pixel_size_x", raster_metadata["pixel_size_x"]),
+                ("pixel_size_y", raster_metadata["pixel_size_y"]),
+                ("pixel_size_unit", raster_metadata["pixel_size_unit"]),
+            )
+            if v is not None
+        },
+    )
+
+
+def _backfill_pixel_size_metadata(raw_db_path: Path, xml_path: Path) -> None:
+    """Re-derive and write pixel size for an already-mapped raw database
+    that doesn't have it on record yet — the "already mapped, skip it"
+    branch of `_process_one_sample`'s pixel-mapping step used to skip the
+    one-time write along with everything else in that block, so re-running
+    against a raw database parsed before this metadata existed (a normal,
+    expected workflow here: raw databases are meant to be reused across
+    analyses) silently never picked it up at all.
+
+    Cheap to call unconditionally on every "already mapped" pass — this is
+    a small XML re-read (`parse_raster_xml`), never the expensive
+    per-pixel database write `map_pixels_to_db` itself does, and a no-op
+    (via the `load_raw_metadata_value` check) once the value is already on
+    record.
+    """
+    if load_raw_metadata_value(raw_db_path, "pixel_size_x") is not None:
+        return
+    _, raster_metadata = parse_raster_xml(xml_path)
+    _write_pixel_size_metadata(raw_db_path, raster_metadata)
+
+
+#: Canonical, ordered list of `_run_core_targeted`'s stages — a subset of
+#: `RUN_STEPS`, since targeted mode skips feature discovery/alignment and
+#: everything downstream of it. No `spatial_correlation` stage — pointless
+#: for this workflow's ROI/calibration focus (per user feedback), unlike
+#: the untargeted pipeline.
+TARGETED_RUN_STEPS: tuple[str, ...] = (
+    "process_samples",
+    "assemble_adata",
+    "normalize_tic",
+)
+
+
+@dataclass
+class _SampleProcessingHead:
+    """Shared setup + parallel sample processing, common to every analysis
+    type — the output of `Run._run_pipeline_head`.
+
+    Attributes:
+        out_dir: Analysis output folder.
+        run_id: Project-scoped id, used for raw-DB bookkeeping/caching.
+        analysis_id: This run's id, used for analysis-DB identity.
+        adb_path: Path to this run's analysis database.
+        raw_db_paths: Each sample's raw database path, in submission order.
+        sample_ids: Each sample's row id in the analysis `samples` table,
+            same order as `raw_db_paths`.
+        out_db_paths: Each `SampleResult.out_db_path`, same order.
+        all_peaks_mzs: Each `SampleResult.peaks_mzs`, same order — empty
+            arrays throughout for a `targeted` run.
+    """
+
+    out_dir: Path
+    run_id: str
+    analysis_id: str
+    adb_path: Path
+    raw_db_paths: list[Path]
+    sample_ids: list[int]
+    out_db_paths: list[Path]
+    all_peaks_mzs: list[np.ndarray]
 
 
 class Run:
@@ -300,9 +393,11 @@ class Run:
         run_id: str,
         analysis_id: str,
         analysis_db_path: Path,
+        targeted: bool = False,
     ) -> SampleResult:
         """Process one sample: parse + map pixels (raw DB), then average /
-        centroid / filter MS1 peaks (analysis DB).
+        centroid / filter MS1 peaks (analysis DB) — the latter suffix
+        skipped entirely for a `targeted` sample (see `targeted`).
 
         Args:
             mzml_path: Source mzML file, or `None` for an already-parsed,
@@ -321,6 +416,11 @@ class Run:
             run_id: Project-scoped id used for raw-DB command bookkeeping.
             analysis_id: This run's id, used for analysis-DB bookkeeping.
             analysis_db_path: Path to the run's analysis database.
+            targeted: When True, skip the average/centroid/filter suffix
+                entirely — a targeted run has no unknown-peak discovery to
+                do (the analyte/reference m/z are user-specified, not
+                detected), so parse + pixel-map is all this sample needs
+                before `assemble_adata`.
 
         Raises:
             FileNotFoundError: `mzml_path` is None (an already-parsed
@@ -367,7 +467,7 @@ class Run:
 
             # --- MAP PIXELS (raw DB) ---
             if not Run.is_command_already_run("map_pixels_to_db", run_id, out_db_path):
-                df_pixels, _ = parse_raster_xml(xml_path)
+                df_pixels, raster_metadata = parse_raster_xml(xml_path)
                 map_pixels_to_db(db_path=out_db_path, df_pixels=df_pixels)
                 log_command(
                     db_path=out_db_path,
@@ -375,12 +475,35 @@ class Run:
                     command_name="map_pixels_to_db",
                     arguments={},
                 )
+                # The raster XML's own pixel size (<rasterConfig>), when it
+                # has one — a default a targeted analysis' Calibration
+                # workspace can offer for its pixel-size field, still
+                # overridable by the user (and, for an XML without this
+                # section, simply absent — the field stays exactly as
+                # user-defined as it always was). Ground-truth acquisition
+                # info belongs on the raw DB, not the analysis DB — see
+                # write_raw_metadata's own docstring.
+                _write_pixel_size_metadata(out_db_path, raster_metadata)
                 logger.info(
                     "%s: mapped %d pixels", sample_stem, df_pixels.shape[0],
                     extra={"source_file": raw_db_path},
                 )
             else:
                 logger.debug("%s: Already run map_pixels_to_db", sample_stem)
+                # Backfill pixel size for a raw db that was already mapped
+                # before this metadata existed — a real gap, not
+                # hypothetical: reusing already-parsed raw databases
+                # across analyses is the normal workflow here, and the
+                # "already mapped" branch above used to skip the one-time
+                # write entirely along with everything else in that block.
+                _backfill_pixel_size_metadata(out_db_path, xml_path)
+
+        if targeted:
+            logger.debug(
+                "%s: targeted run — skipping average/centroid/filter suffix",
+                sample_stem,
+            )
+            return SampleResult(out_db_path=out_db_path, peaks_mzs=np.array([]))
 
         # --- GET AVERAGE MS1 SPECTRA (analysis DB) ---
         if not analysis_db.is_command_already_run(
@@ -562,15 +685,22 @@ class Run:
         if self.on_sample_progress is not None:
             self.on_sample_progress(done, total)
 
-    @log_call
-    def run_core(self) -> None:
-        """Run the pipeline across all samples and assemble outputs.
+    def _run_pipeline_head(self, *, targeted: bool) -> _SampleProcessingHead:
+        """Shared setup + parallel sample processing, common to every
+        analysis type.
 
-        Creates the analysis database, registers every sample, processes
-        each mzML/XML pair in parallel, aligns peak m/z values across
-        samples (persisting them to `features` and `aligned_mzs.csv`), and
-        writes one spatial `AnnData` (.h5ad) file per sample. Steps whose
-        outputs already exist are skipped.
+        Creates the analysis database, registers every sample, and
+        processes each mzML/XML pair in parallel (parse + pixel-map, plus —
+        for an `untargeted` run only — average/centroid/filter MS1 peaks;
+        see `_process_one_sample`'s `targeted` flag). Steps whose outputs
+        already exist are skipped.
+
+        Args:
+            targeted: Forwarded to `_process_one_sample` for every sample.
+
+        Returns:
+            A `_SampleProcessingHead` with everything the caller's
+            analysis-type-specific stages need next.
         """
         config = self.config
         project = self.project
@@ -623,6 +753,7 @@ class Run:
             run_id=run_id,
             analysis_id=analysis_id,
             analysis_db_path=adb_path,
+            targeted=targeted,
         )
 
         total_samples = len(config.io.mzml_paths)
@@ -684,6 +815,223 @@ class Run:
 
         out_db_paths = [r.out_db_path for r in results]
         all_peaks_mzs = [r.peaks_mzs for r in results]
+
+        return _SampleProcessingHead(
+            out_dir=out_dir,
+            run_id=run_id,
+            analysis_id=analysis_id,
+            adb_path=adb_path,
+            raw_db_paths=raw_db_paths,
+            sample_ids=sample_ids,
+            out_db_paths=out_db_paths,
+            all_peaks_mzs=all_peaks_mzs,
+        )
+
+    def _run_normalization_stage(self, head: _SampleProcessingHead) -> None:
+        """Normalize every sample's `.h5ad`, if `config.normalization` is
+        enabled — shared verbatim by both `untargeted` and `targeted` runs.
+        """
+        config = self.config
+        norm_cfg = getattr(config, "normalization", None)
+        if norm_cfg is not None and getattr(norm_cfg, "enabled", True):
+            self._emit_step("normalize_tic", "started")
+            if not analysis_db.is_command_already_run(
+                "normalize_tic", head.analysis_id, head.adb_path
+            ):
+                analysis_db.log_command(
+                    head.adb_path,
+                    command_name="normalize_tic",
+                    arguments={**vars(norm_cfg)},
+                    run_id=head.analysis_id,
+                )
+                sample_h5ad_paths = {
+                    db_path.stem: head.out_dir / f"{db_path.stem}.h5ad"
+                    for db_path in head.out_db_paths
+                }
+                norm_result = run_normalization(
+                    sample_h5ad_paths,
+                    out_dir=head.out_dir,
+                    mode=norm_cfg.mode,
+                    reference_mz=norm_cfg.reference_mz,
+                    reference_ppm=norm_cfg.reference_ppm,
+                )
+                logger.info(
+                    "run %s: normalized (%s) %d sample(s), %d pixel(s), "
+                    "reference median %.3g -> layer %s -> %s",
+                    head.analysis_id,
+                    norm_cfg.mode,
+                    norm_result.n_samples,
+                    norm_result.n_pixels,
+                    norm_result.reference_median,
+                    norm_result.layer_name,
+                    norm_result.merged_path.name,
+                )
+            else:
+                logger.debug("Already run normalize_tic")
+            self._emit_step("normalize_tic", "completed")
+        else:
+            logger.info("Normalization disabled; skipping")
+            self._emit_step("normalize_tic", "skipped")
+
+    def _run_spatial_correlation_stage(self, head: _SampleProcessingHead) -> None:
+        """Compute Moran's I (global and/or local) for every sample's
+        `.h5ad`, if `config.spatial_correlation` enables either sub-pass —
+        shared verbatim by both `untargeted` and `targeted` runs.
+
+        Two independent sub-passes, `enabled` (global, per-sample score)
+        and `local_enabled` (per-pixel summary) — either, both, or neither
+        can be on; see `SpatialCorrelationConfig`'s own docstring for why
+        they're separate. Sharing one "spatial_correlation" step/command
+        name (rather than two) matches every other stage's granularity in
+        this pipeline and is safe here too: `analysis_id` is a fresh UUID
+        per `Run` instance (see `self.id`), so `is_command_already_run`
+        only ever matters for resuming *this* run if it crashes mid-way —
+        it's never a stale "already ran with different config" check
+        across separate invocations.
+        """
+        config = self.config
+        spatial_corr_cfg = getattr(config, "spatial_correlation", None)
+        run_global_moran = spatial_corr_cfg is not None and getattr(
+            spatial_corr_cfg, "enabled", False
+        )
+        run_local_moran = spatial_corr_cfg is not None and getattr(
+            spatial_corr_cfg, "local_enabled", False
+        )
+        if run_global_moran or run_local_moran:
+            self._emit_step("spatial_correlation", "started")
+            if not analysis_db.is_command_already_run(
+                "spatial_correlation", head.analysis_id, head.adb_path
+            ):
+                analysis_db.log_command(
+                    head.adb_path,
+                    command_name="spatial_correlation",
+                    arguments={**vars(spatial_corr_cfg)},
+                    run_id=head.analysis_id,
+                )
+                for db_path in head.out_db_paths:
+                    out_adata_path = head.out_dir / f"{db_path.stem}.h5ad"
+                    if run_global_moran:
+                        compute_spatial_autocorr(
+                            out_adata_path,
+                            layer=spatial_corr_cfg.layer,
+                            n_jobs=spatial_corr_cfg.n_jobs,
+                        )
+                        logger.info(
+                            "%s: computed Moran's I -> %s",
+                            db_path,
+                            out_adata_path.name,
+                            extra={"source_file": db_path},
+                        )
+                    if run_local_moran:
+                        compute_local_moran_layer(
+                            out_adata_path,
+                            layer=spatial_corr_cfg.layer,
+                            n_workers=spatial_corr_cfg.local_n_workers,
+                        )
+                        logger.info(
+                            "%s: computed local Moran's I layer -> %s",
+                            db_path,
+                            out_adata_path.name,
+                            extra={"source_file": db_path},
+                        )
+            else:
+                logger.debug("Already run spatial_correlation")
+            self._emit_step("spatial_correlation", "completed")
+        else:
+            logger.info("Spatial correlation disabled; skipping")
+            self._emit_step("spatial_correlation", "skipped")
+
+    @log_call
+    def _run_core_targeted(self) -> None:
+        """Run the MS1-only, calibration-curve-oriented pipeline.
+
+        Shared sample processing (parse + pixel-map only, no peak
+        discovery) -> assemble one `.h5ad` per sample around the reference
+        m/z *and* every configured analyte -> normalize. No alignment,
+        target-list matching, MS2 association/annotation, spatial
+        correlation, or summary report — see `TARGETED_RUN_STEPS`. Every
+        analyte is quantified here, at run time, in this one already-
+        parallel `create_spatial_adata` pass — not extracted on demand
+        later by the GUI (that used to make picking an analyte to visualize
+        painfully slow, since it re-read the raw database from scratch on
+        every "Load" click).
+        """
+        config = self.config
+        head = self._run_pipeline_head(targeted=True)
+
+        # --- SPATIAL AnnData PER SAMPLE (reference m/z + every analyte) ---
+        self._emit_step("assemble_adata", "started")
+        analyte_mzs = list(config.normalization.analyte_mzs)
+        target_mz_set = {config.normalization.reference_mz, *analyte_mzs}
+        for db_path in head.out_db_paths:
+            out_adata_path = head.out_dir / f"{db_path.stem}.h5ad"
+            if not out_adata_path.exists():
+                tmp_adata = create_spatial_adata(
+                    db_path=db_path,
+                    target_mz_set=target_mz_set,
+                    project_id=head.analysis_id,
+                    **vars(config.h5ad),
+                )
+                tmp_adata.write_h5ad(out_adata_path)
+                logger.info(
+                    "%s: wrote %s (%d pixels x %d features)",
+                    db_path,
+                    out_adata_path.name,
+                    tmp_adata.n_obs,
+                    tmp_adata.n_vars,
+                    extra={"source_file": db_path},
+                )
+            else:
+                logger.debug("%s: Already created adata object", db_path)
+
+        # Register the analytes (never the reference channel — that's a
+        # normalization detail, not a compound of interest) as browsable
+        # "injected" features, exactly like an untargeted run's target-list
+        # matches — see CalibrationSection.qml's analyte picker, which is
+        # otherwise just Visual Inspection's ordinary feature dropdown.
+        if analyte_mzs and not analysis_db.is_command_already_run(
+            "register_calibration_analytes", head.analysis_id, head.adb_path
+        ):
+            command_id = analysis_db.log_command(
+                head.adb_path,
+                command_name="register_calibration_analytes",
+                arguments={"analyte_mzs": analyte_mzs},
+                run_id=head.analysis_id,
+            )
+            analysis_db.append_injected_features(
+                head.adb_path,
+                [SimpleNamespace(mz=mz, members_json="{}") for mz in analyte_mzs],
+                command_id=command_id,
+            )
+        self._emit_step("assemble_adata", "completed")
+
+        self._run_normalization_stage(head)
+
+    @log_call
+    def run_core(self) -> None:
+        """Run the pipeline across all samples and assemble outputs.
+
+        Dispatches to `_run_core_targeted` when
+        `config.analysis_type == "targeted"`. Otherwise: creates the
+        analysis database, registers every sample, processes each mzML/XML
+        pair in parallel, aligns peak m/z values across samples
+        (persisting them to `features` and `aligned_mzs.csv`), and writes
+        one spatial `AnnData` (.h5ad) file per sample. Steps whose outputs
+        already exist are skipped.
+        """
+        if self.config.analysis_type == "targeted":
+            self._run_core_targeted()
+            return
+
+        config = self.config
+        head = self._run_pipeline_head(targeted=False)
+        out_dir = head.out_dir
+        analysis_id = head.analysis_id
+        adb_path = head.adb_path
+        raw_db_paths = head.raw_db_paths
+        sample_ids = head.sample_ids
+        out_db_paths = head.out_db_paths
+        all_peaks_mzs = head.all_peaks_mzs
 
         # --- ALIGN m/z ACROSS SAMPLES ---
         self._emit_step("align_mz", "started")
@@ -765,6 +1113,15 @@ class Run:
             logger.info("No target list configured; skipping")
             self._emit_step("match_target_list", "skipped")
             target_mz_set = set(mzs_df.index)
+
+        # A reference-m/z normalization needs that m/z present in every
+        # sample's .h5ad too, exactly like an injected target-list compound
+        # above — union it in here, before assemble_adata.
+        if (
+            getattr(config, "normalization", None) is not None
+            and config.normalization.mode == "reference_mz"
+        ):
+            target_mz_set = target_mz_set | {config.normalization.reference_mz}
 
         # --- ASSOCIATE MS2 SCANS WITH FEATURES (analysis DB) ---
         self._emit_step("group_ms2", "started")
@@ -927,72 +1284,8 @@ class Run:
                 logger.debug("%s: Already created adata object", db_path)
         self._emit_step("assemble_adata", "completed")
 
-        # --- TIC NORMALIZATION (writes layers into each .h5ad + merged.h5ad) ---
-        norm_cfg = getattr(config, "normalization", None)
-        if norm_cfg is not None and getattr(norm_cfg, "enabled", True):
-            self._emit_step("normalize_tic", "started")
-            if not analysis_db.is_command_already_run(
-                "normalize_tic", analysis_id, adb_path
-            ):
-                analysis_db.log_command(
-                    adb_path,
-                    command_name="normalize_tic",
-                    arguments={**vars(norm_cfg)},
-                    run_id=analysis_id,
-                )
-                sample_h5ad_paths = {
-                    db_path.stem: out_dir / f"{db_path.stem}.h5ad"
-                    for db_path in out_db_paths
-                }
-                norm_result = run_tic_normalization(sample_h5ad_paths, out_dir=out_dir)
-                logger.info(
-                    "run %s: TIC-normalized %d sample(s), %d pixel(s), "
-                    "median TIC %.3g -> %s",
-                    analysis_id,
-                    norm_result.n_samples,
-                    norm_result.n_pixels,
-                    norm_result.median_tic,
-                    norm_result.merged_path.name,
-                )
-            else:
-                logger.debug("Already run normalize_tic")
-            self._emit_step("normalize_tic", "completed")
-        else:
-            logger.info("TIC normalization disabled; skipping")
-            self._emit_step("normalize_tic", "skipped")
-
-        # --- SPATIAL CORRELATION (Moran's I, writes into each .h5ad) ---
-        spatial_corr_cfg = getattr(config, "spatial_correlation", None)
-        if spatial_corr_cfg is not None and getattr(spatial_corr_cfg, "enabled", False):
-            self._emit_step("spatial_correlation", "started")
-            if not analysis_db.is_command_already_run(
-                "spatial_correlation", analysis_id, adb_path
-            ):
-                analysis_db.log_command(
-                    adb_path,
-                    command_name="spatial_correlation",
-                    arguments={**vars(spatial_corr_cfg)},
-                    run_id=analysis_id,
-                )
-                for db_path in out_db_paths:
-                    out_adata_path = out_dir / f"{db_path.stem}.h5ad"
-                    compute_spatial_autocorr(
-                        out_adata_path,
-                        layer=spatial_corr_cfg.layer,
-                        n_jobs=spatial_corr_cfg.n_jobs,
-                    )
-                    logger.info(
-                        "%s: computed Moran's I -> %s",
-                        db_path,
-                        out_adata_path.name,
-                        extra={"source_file": db_path},
-                    )
-            else:
-                logger.debug("Already run spatial_correlation")
-            self._emit_step("spatial_correlation", "completed")
-        else:
-            logger.info("Spatial correlation disabled; skipping")
-            self._emit_step("spatial_correlation", "skipped")
+        self._run_normalization_stage(head)
+        self._run_spatial_correlation_stage(head)
 
         # --- SUMMARY REPORT ---
         report_cfg = getattr(config, "report", None)

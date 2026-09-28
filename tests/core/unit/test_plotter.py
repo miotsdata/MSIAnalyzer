@@ -527,3 +527,53 @@ def test_plot_ms2_annotation_rejects_invalid_source(tmp_path):
         Plotter().plot_ms2_annotation(db, annotation_id, emp_source="nope")
     with pytest.raises(ValueError, match="lib_source"):
         Plotter().plot_ms2_annotation(db, annotation_id, lib_source="nope")
+
+
+def test_plot_calibration_curve_has_standards_and_fit_traces():
+    from msianalyzer.core.calibration.curve_fit import fit_calibration_curve
+
+    points = [(1.0, 2.1), (2.0, 4.0), (5.0, 10.2), (10.0, 20.1)]
+    fit = fit_calibration_curve(points, fit_type="linear")
+
+    fig = Plotter.plot_calibration_curve(points, fit, "pmol/mm2")
+
+    assert len(fig.data) == 2
+    standards_trace, fit_trace = fig.data
+    assert standards_trace.mode == "markers"
+    assert standards_trace.name == "Standards"
+    assert list(standards_trace.x) == [p[0] for p in points]
+    assert fit_trace.mode == "lines"
+    assert fit_trace.name == "Fit"
+    # the line extends past the standards' own range on both ends
+    assert min(fit_trace.x) < 1.0
+    assert max(fit_trace.x) > 10.0
+
+
+def test_plot_calibration_curve_axis_and_title_reflect_unit_and_fit():
+    from msianalyzer.core.calibration.curve_fit import fit_calibration_curve
+
+    points = [(0.0, 3.0), (1.0, 5.0), (2.0, 7.0)]
+    fit = fit_calibration_curve(points, fit_type="linear")
+
+    fig = Plotter.plot_calibration_curve(points, fit, "nmol/um2")
+
+    assert fig.layout.xaxis.title.text == "Concentration (nmol/um2)"
+    assert fig.layout.yaxis.title.text == "Signal (analyte / reference)"
+    assert "R²" in fig.layout.title.text
+
+
+def test_plot_calibration_curve_axes_use_plain_tickformat_not_si_prefix():
+    # Reported directly: tiny concentration values (pmol/um2 for a
+    # realistic MSI pixel size) rendered as "0.5µ", "1µ" on the x-axis —
+    # Plotly's default SI-prefix auto-formatting, easily misread as a
+    # literal unit alongside the axis title's own real unit. An explicit
+    # tickformat (not Plotly's "s"/SI type) avoids that.
+    from msianalyzer.core.calibration.curve_fit import fit_calibration_curve
+
+    points = [(2.6e-7, 0.01), (2.8e-6, 0.35)]
+    fit = fit_calibration_curve(points, fit_type="linear")
+
+    fig = Plotter.plot_calibration_curve(points, fit, "pmol/um2")
+
+    assert fig.layout.xaxis.tickformat == ".3g"
+    assert fig.layout.yaxis.tickformat == ".3g"

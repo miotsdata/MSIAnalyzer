@@ -22,6 +22,7 @@
         <file>Views/MS1SpectraSection.qml</file>
         <file>Views/VisualInspectionSection.qml</file>
         <file>Views/SpatialCorrelationSection.qml</file>
+        <file>Views/CalibrationSection.qml</file>
         <file>Views/ZoomableImage.qml</file>
         <file>Views/HeatmapControlsPanel.qml</file>
         <file>Views/RoiOverlay.qml</file>

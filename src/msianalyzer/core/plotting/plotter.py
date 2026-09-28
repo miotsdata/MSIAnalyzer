@@ -205,6 +205,89 @@ class Plotter:
         return fig
 
     @staticmethod
+    @log_call
+    def plot_calibration_curve(
+        points: list[tuple[float, float]],
+        fit,
+        concentration_unit: str,
+        height: int = 450,
+    ) -> go.Figure:
+        """Plot a fitted calibration curve: standards as markers, the fit
+        as a line, extended slightly past the data on both ends.
+
+        Args:
+            points: `(concentration, signal)` pairs — same shape
+                `core.calibration.curve_fit.fit_calibration_curve` takes.
+                `signal` is the analyte/reference-channel intensity ratio
+                (see `core.calibration.roi_intensity.roi_internal_standard_signal`),
+                not a raw intensity.
+            fit: A `core.calibration.curve_fit.CalibrationFitResult`.
+            concentration_unit: e.g. `"pmol/mm2"` — the x-axis label.
+            height: Figure height in pixels. Defaults to 450.
+
+        Returns:
+            A Plotly `Figure` with the standards, the fit line, and its
+            R²/slope/intercept in the title.
+        """
+        x = np.array([p[0] for p in points], dtype=float)
+        y = np.array([p[1] for p in points], dtype=float)
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=y, mode="markers", name="Standards",
+                marker=dict(color=_BLUE_MATCHED, size=9),
+                hovertemplate="concentration=%{x:.4g}<br>signal=%{y:.4g}<extra></extra>",
+            )
+        )
+
+        # Extend the line 5% past the data on both ends, not just between
+        # the outermost standards — a flat "line segment only between
+        # points" reads oddly next to a fit that's meant to extrapolate to
+        # unknowns outside the standards' own range.
+        x_min, x_max = float(np.min(x)), float(np.max(x))
+        pad = (x_max - x_min) * 0.05 if x_max > x_min else max(abs(x_max), 1.0) * 0.05
+        line_x = np.linspace(x_min - pad, x_max + pad, 50)
+        line_y = fit.slope * line_x + fit.intercept
+        fig.add_trace(
+            go.Scatter(
+                x=line_x, y=line_y, mode="lines", name="Fit",
+                line=dict(color=_CONNECTOR, dash="dash"),
+                hoverinfo="skip",
+            )
+        )
+
+        fig.update_layout(
+            title=(
+                f"y = {fit.slope:.4g}x + {fit.intercept:.4g}   "
+                f"R² = {fit.r_squared:.4f}"
+            ),
+            xaxis=dict(
+                title=f"Concentration ({concentration_unit})",
+                showgrid=True, gridcolor="#eeeeee", zeroline=False,
+                # Plotly's default tick auto-formatting falls back to SI
+                # unit-prefix notation (e.g. "0.5µ" meaning 0.5e-6) for
+                # very small/large ranges — easy to misread as a literal
+                # unit rather than a magnitude prefix, since this axis
+                # already has its own real unit in the title. An explicit
+                # general-format tickformat (not the "s"/SI type) always
+                # renders plain numbers or plain scientific notation
+                # instead.
+                tickformat=".3g",
+            ),
+            yaxis=dict(
+                title="Signal (analyte / reference)",
+                showgrid=True, gridcolor="#eeeeee", zeroline=False,
+                tickformat=".3g",
+            ),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            height=height,
+            margin=dict(t=60, b=50, l=60, r=20),
+        )
+        return fig
+
+    @staticmethod
     def _add_spectrum_trace(
         fig: go.Figure,
         mz_array: np.ndarray,

@@ -112,7 +112,7 @@ def test_run_started_then_completed_shows_running_page_then_analysis_page(
     current_item = stack_view.property("currentItem")
     assert current_item.objectName() == "projectHomePage"
 
-    application.core_bridge.runStarted.emit("run-1")
+    application.core_bridge.runStarted.emit("run-1", "untargeted")
     qtbot.wait(100)
 
     current_item = stack_view.property("currentItem")
@@ -501,6 +501,67 @@ def test_export_integration_choose_folder_opens_folder_dialog_with_chosen_layer_
     qtbot.wait(50)
 
     assert dialog.property("visible") is False
+    assert folder_dialog.property("visible") is True
+
+
+def test_export_menu_is_targeted_analysis_flag_false_for_untargeted_analysis(
+    application, engine, qtbot
+):
+    # `visible` itself isn't reliably readable via QObject.property() for a
+    # MenuItem that's never been popped open in this offscreen test
+    # environment (the same Popup-family quirk test_router.py's own
+    # open-analysis-submenu tests already document) — assert through
+    # exportMenu's own `isTargetedAnalysis` flag instead, which is exactly
+    # what every item's `visible` binding above is gated on.
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    export_menu = window.findChild(QObject, "exportMenu")
+    assert export_menu.property("isTargetedAnalysis") is False
+
+
+def test_export_menu_is_targeted_analysis_flag_true_for_targeted_analysis(
+    application, engine, qtbot
+):
+    # Reported directly: "we can only export calibration etc results, no
+    # annotation, ms1, figures etc [for a targeted analysis]. Those should
+    # be hidden from menu" — Annotation/Integration/Image's `visible` is
+    # `!isTargetedAnalysis`, Calibration's is `isTargetedAnalysis`; both
+    # sides share this one flag, so a single check covers all four items'
+    # own bindings.
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    analysis = AnalysisModel(
+        project_model, "run-1",
+        {
+            "id": "run-1",
+            "config": {"io": {"out_dir": "/tmp/proj/out"}, "analysis_type": "targeted"},
+        },
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    export_menu = window.findChild(QObject, "exportMenu")
+    assert export_menu.property("isTargetedAnalysis") is True
+
+    calibration_item = window.findChild(QObject, "exportCalibrationMenuItem")
+    assert calibration_item.property("enabled") is True
+
+    folder_dialog = window.findChild(QObject, "exportCalibrationFolderDialog")
+    assert folder_dialog.property("visible") is False
+
+    calibration_item.click()
+    qtbot.wait(50)
+
     assert folder_dialog.property("visible") is True
 
 

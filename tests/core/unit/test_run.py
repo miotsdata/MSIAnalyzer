@@ -10,7 +10,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from msianalyzer.core.run.run import Run, RunStatus, SampleResult
+from msianalyzer.core.run.run import (
+    RUN_STEPS,
+    TARGETED_RUN_STEPS,
+    Run,
+    RunStatus,
+    SampleResult,
+)
 
 # ==============================================================================
 # MOCK CONFIG & DUMMY OBJECTS
@@ -142,6 +148,10 @@ class MockAnalysisConfig:
 @dataclass
 class MockNormalizationConfig:
     enabled: bool = True
+    mode: str = "tic"
+    reference_mz: float | None = None
+    reference_ppm: float = 5.0
+    analyte_mzs: list = field(default_factory=list)
 
 
 @dataclass
@@ -149,10 +159,14 @@ class MockSpatialCorrelationConfig:
     enabled: bool = False
     layer: str = "TIC"
     n_jobs: int | None = None
+    local_enabled: bool = False
+    local_threshold: float = 1.0
+    local_n_workers: int | None = None
 
 
 class DummyConfig:
     def __init__(self, tmp_path):
+        self.analysis_type = "untargeted"
         self.io = MockIOConfig(
             project_folder=str(tmp_path),
             out_dir=str(tmp_path / "out"),
@@ -339,9 +353,19 @@ def _patch_common(mocker):
     m["log_command"] = mocker.patch("msianalyzer.core.run.run.log_command")
     m["parse_raster_xml"] = mocker.patch(
         "msianalyzer.core.run.run.parse_raster_xml",
-        return_value=(pd.DataFrame({"x": [1, 2]}), None),
+        return_value=(
+            pd.DataFrame({"x": [1, 2]}),
+            {
+                "grid_width": 2, "grid_height": 1, "raster_start_sec": 0.0,
+                "pixel_size_x": None, "pixel_size_y": None, "pixel_size_unit": None,
+            },
+        ),
     )
     m["map_pixels_to_db"] = mocker.patch("msianalyzer.core.run.run.map_pixels_to_db")
+    m["write_raw_metadata"] = mocker.patch("msianalyzer.core.run.run.write_raw_metadata")
+    m["load_raw_metadata_value"] = mocker.patch(
+        "msianalyzer.core.run.run.load_raw_metadata_value", return_value=None
+    )
     m["get_average_ms1_spectra"] = mocker.patch(
         "msianalyzer.core.run.run.get_average_ms1_spectra",
         return_value=(np.array([100.0, 200.0]), np.array([10.0, 20.0])),
@@ -411,6 +435,124 @@ def test_process_one_sample_fresh_run_with_mad_filter(mocker, tmp_path):
 
     mock_fig.write_html.assert_called_once_with(out_dir / "sample_filtered_ms1.html")
     assert (out_dir / "sample_peaks_data.csv").exists()
+
+    # No <rasterConfig> in this raster XML (the default mock's metadata) —
+    # nothing to offer as a pixel-size default, same as before this
+    # metadata existed at all.
+    m["write_raw_metadata"].assert_not_called()
+
+
+def test_process_one_sample_writes_raster_pixel_size_when_xml_has_it(mocker, tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    mzml_path = tmp_path / "sample.mzML"
+    xml_path = tmp_path / "sample.xml"
+    mzml_path.touch()
+    xml_path.write_text(DUMMY_XML_CONTENT, encoding="utf-8")
+
+    config = DummyConfig(tmp_path)
+    m = _patch_common(mocker)
+    m["analysis_db"].is_command_already_run.return_value = False
+    mocker.patch.object(Run, "is_command_already_run", return_value=False)
+    m["parse_raster_xml"].return_value = (
+        pd.DataFrame({"x": [1, 2]}),
+        {
+            "grid_width": 2, "grid_height": 1, "raster_start_sec": 0.0,
+            "pixel_size_x": 0.05, "pixel_size_y": 0.05, "pixel_size_unit": "mm",
+        },
+    )
+    m["Plotter"].return_value.plot_spectra.return_value = mocker.MagicMock()
+
+    parsed_db_path = tmp_path / "parsed" / "sample.db"
+    Run._process_one_sample(
+        mzml_path, xml_path, 1, parsed_db_path,
+        config=config, run_id="proj_test", analysis_id="ana_test",
+        analysis_db_path=out_dir / "analysis.db",
+    )
+
+    m["write_raw_metadata"].assert_called_once_with(
+        parsed_db_path,
+        {"pixel_size_x": 0.05, "pixel_size_y": 0.05, "pixel_size_unit": "mm"},
+    )
+
+
+def test_process_one_sample_backfills_pixel_size_for_already_mapped_raw_db(mocker, tmp_path):
+    # Real reported gap: a raw db parsed before pixel-size extraction
+    # existed already has `map_pixels_to_db` logged as done, so the whole
+    # pixel-mapping block — including the one-time pixel-size write — was
+    # being skipped entirely on every later re-run against it. Reusing an
+    # already-parsed raw database across analyses is the normal workflow
+    # here, not an edge case.
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    mzml_path = tmp_path / "sample.mzML"
+    xml_path = tmp_path / "sample.xml"
+    db_path = tmp_path / "parsed" / "sample.db"
+    mzml_path.touch()
+    xml_path.write_text(DUMMY_XML_CONTENT, encoding="utf-8")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.touch()
+    (out_dir / "sample_filtered_ms1.html").touch()
+    (out_dir / "sample_peaks_data.csv").touch()
+
+    config = DummyConfig(tmp_path)
+    m = _patch_common(mocker)
+    m["analysis_db"].is_command_already_run.return_value = True
+    m["load_aggregated_spectra"].side_effect = [(np.array([100.0]), np.array([50.0]))]
+    mocker.patch.object(Run, "is_command_already_run", return_value=True)
+    # Not on record yet (a raw db from before this metadata existed).
+    m["load_raw_metadata_value"].return_value = None
+    m["parse_raster_xml"].return_value = (
+        pd.DataFrame({"x": [1, 2]}),
+        {
+            "grid_width": 2, "grid_height": 1, "raster_start_sec": 0.0,
+            "pixel_size_x": 0.1, "pixel_size_y": 0.1, "pixel_size_unit": "mm",
+        },
+    )
+
+    Run._process_one_sample(
+        mzml_path, xml_path, 2, db_path,
+        config=config, run_id="proj_test", analysis_id="ana_test",
+        analysis_db_path=out_dir / "analysis.db",
+    )
+
+    # map_pixels_to_db itself must NOT re-run (the expensive part stays
+    # skipped) — only the cheap pixel-size backfill happens.
+    m["map_pixels_to_db"].assert_not_called()
+    m["write_raw_metadata"].assert_called_once_with(
+        db_path, {"pixel_size_x": 0.1, "pixel_size_y": 0.1, "pixel_size_unit": "mm"}
+    )
+
+
+def test_process_one_sample_skips_backfill_when_pixel_size_already_on_record(mocker, tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    mzml_path = tmp_path / "sample.mzML"
+    xml_path = tmp_path / "sample.xml"
+    db_path = tmp_path / "parsed" / "sample.db"
+    mzml_path.touch()
+    xml_path.write_text(DUMMY_XML_CONTENT, encoding="utf-8")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.touch()
+    (out_dir / "sample_filtered_ms1.html").touch()
+    (out_dir / "sample_peaks_data.csv").touch()
+
+    config = DummyConfig(tmp_path)
+    m = _patch_common(mocker)
+    m["analysis_db"].is_command_already_run.return_value = True
+    m["load_aggregated_spectra"].side_effect = [(np.array([100.0]), np.array([50.0]))]
+    mocker.patch.object(Run, "is_command_already_run", return_value=True)
+    m["load_raw_metadata_value"].return_value = "0.1"  # already backfilled
+
+    Run._process_one_sample(
+        mzml_path, xml_path, 2, db_path,
+        config=config, run_id="proj_test", analysis_id="ana_test",
+        analysis_db_path=out_dir / "analysis.db",
+    )
+
+    # Not even worth re-reading the XML once it's already on record.
+    m["parse_raster_xml"].assert_not_called()
+    m["write_raw_metadata"].assert_not_called()
 
 
 def test_process_one_sample_cached_run(mocker, tmp_path):
@@ -689,11 +831,11 @@ def test_run_core_executes_successfully(mocker, tmp_path):
     )
 
     mock_norm_result = mocker.MagicMock(
-        n_samples=2, n_pixels=10, median_tic=123.0
+        n_samples=2, n_pixels=10, reference_median=123.0, layer_name="TIC"
     )
     mock_norm_result.merged_path.name = "merged.h5ad"
-    mock_run_tic_normalization = mocker.patch(
-        "msianalyzer.core.run.run.run_tic_normalization",
+    mock_run_normalization = mocker.patch(
+        "msianalyzer.core.run.run.run_normalization",
         return_value=mock_norm_result,
     )
 
@@ -728,8 +870,8 @@ def test_run_core_executes_successfully(mocker, tmp_path):
     assert mock_create_adata.call_count == 2
     assert mock_adata.write_h5ad.call_count == 2
 
-    mock_run_tic_normalization.assert_called_once()
-    norm_kwargs = mock_run_tic_normalization.call_args
+    mock_run_normalization.assert_called_once()
+    norm_kwargs = mock_run_normalization.call_args
     assert norm_kwargs.kwargs["out_dir"] == out_dir
     sample_paths = norm_kwargs.args[0]
     assert sample_paths == {
@@ -790,10 +932,10 @@ def test_run_core_registers_already_parsed_sample_by_its_own_db_stem(mocker, tmp
     mocker.patch(
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mock_adata
     )
-    mock_norm_result = mocker.MagicMock(n_samples=2, n_pixels=10, median_tic=123.0)
+    mock_norm_result = mocker.MagicMock(n_samples=2, n_pixels=10, reference_median=123.0, layer_name="TIC")
     mock_norm_result.merged_path.name = "merged.h5ad"
     mocker.patch(
-        "msianalyzer.core.run.run.run_tic_normalization",
+        "msianalyzer.core.run.run.run_normalization",
         return_value=mock_norm_result,
     )
 
@@ -850,8 +992,8 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
         "msianalyzer.core.run.run.build_summary_report"
     )
     mock_create_adata = mocker.patch("msianalyzer.core.run.run.create_spatial_adata")
-    mock_run_tic_normalization = mocker.patch(
-        "msianalyzer.core.run.run.run_tic_normalization"
+    mock_run_normalization = mocker.patch(
+        "msianalyzer.core.run.run.run_normalization"
     )
 
     mock_executor = _mock_pool_executor(mocker, [res1, res2])
@@ -865,7 +1007,7 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     mock_run_consensus.assert_not_called()
     mock_build_report.assert_not_called()
     mock_create_adata.assert_not_called()
-    mock_run_tic_normalization.assert_not_called()
+    mock_run_normalization.assert_not_called()
 
 
 # ==============================================================================
@@ -1021,7 +1163,7 @@ def _patch_run_core_collaborators(mocker, mzs_index=(100.0, 200.0, 300.0)):
     mocker.patch(
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
     )
-    mocker.patch("msianalyzer.core.run.run.run_tic_normalization")
+    mocker.patch("msianalyzer.core.run.run.run_normalization")
 
 
 def test_run_core_emits_on_step_progress_for_every_stage(mocker, tmp_path):
@@ -1058,6 +1200,78 @@ def test_run_core_emits_on_step_progress_for_every_stage(mocker, tmp_path):
     run.run_core()
 
     assert events == _FULL_RUN_STAGES_SUCCESS
+
+
+def _run_core_with_spatial_correlation(mocker, tmp_path, *, enabled, local_enabled):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    config.annotate.library_path = str(tmp_path / "lib.db")
+    config.spatial_correlation.enabled = enabled
+    config.spatial_correlation.local_enabled = local_enabled
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(
+        out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0, 200.0])
+    )
+    res2 = SampleResult(
+        out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0, 300.0])
+    )
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    _patch_run_core_collaborators(mocker)
+    mock_global = mocker.patch("msianalyzer.core.run.run.compute_spatial_autocorr")
+    mock_local = mocker.patch("msianalyzer.core.run.run.compute_local_moran_layer")
+    _mock_pool_executor(mocker, [res1, res2])
+
+    run.run_core()
+    return mock_global, mock_local
+
+
+def test_run_core_skips_both_moran_passes_when_neither_enabled(mocker, tmp_path):
+    mock_global, mock_local = _run_core_with_spatial_correlation(
+        mocker, tmp_path, enabled=False, local_enabled=False
+    )
+    mock_global.assert_not_called()
+    mock_local.assert_not_called()
+
+
+def test_run_core_runs_only_global_moran_when_only_enabled(mocker, tmp_path):
+    mock_global, mock_local = _run_core_with_spatial_correlation(
+        mocker, tmp_path, enabled=True, local_enabled=False
+    )
+    assert mock_global.call_count == 2  # once per sample
+    mock_local.assert_not_called()
+
+
+def test_run_core_runs_only_local_moran_when_only_local_enabled(mocker, tmp_path):
+    # The independence this config is designed for: local_enabled doesn't
+    # need (and shouldn't trigger) the global pass.
+    mock_global, mock_local = _run_core_with_spatial_correlation(
+        mocker, tmp_path, enabled=False, local_enabled=True
+    )
+    mock_global.assert_not_called()
+    assert mock_local.call_count == 2  # once per sample
+    for call in mock_local.call_args_list:
+        assert call.kwargs["layer"] == "TIC"
+        assert call.kwargs["n_workers"] is None
+
+
+def test_run_core_runs_both_moran_passes_when_both_enabled(mocker, tmp_path):
+    mock_global, mock_local = _run_core_with_spatial_correlation(
+        mocker, tmp_path, enabled=True, local_enabled=True
+    )
+    assert mock_global.call_count == 2
+    assert mock_local.call_count == 2
 
 
 def test_run_core_emits_sample_progress_as_each_sample_completes(mocker, tmp_path):
@@ -1368,3 +1582,233 @@ def test_run_core_match_target_list_idempotent_on_rerun_does_not_duplicate_injec
     # target_mz_set, read fresh from the DB rather than needing a rerun.
     mock_matching.assert_not_called()
     mock_adb.load_injected_feature_mzs.assert_called()
+
+
+# ==============================================================================
+# TESTS FOR TARGETED ANALYSIS TYPE
+# ==============================================================================
+
+
+def test_targeted_run_steps_is_a_subset_of_run_steps_in_order():
+    assert TARGETED_RUN_STEPS == (
+        "process_samples",
+        "assemble_adata",
+        "normalize_tic",
+    )
+    # every targeted step also appears in RUN_STEPS, in the same relative
+    # order — targeted mode isn't inventing new stage names.
+    indices = [RUN_STEPS.index(step) for step in TARGETED_RUN_STEPS]
+    assert indices == sorted(indices)
+
+
+def test_process_one_sample_targeted_skips_average_centroid_filter(mocker, tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    mzml_path = tmp_path / "sample.mzML"
+    xml_path = tmp_path / "sample.xml"
+    mzml_path.touch()
+    xml_path.write_text(DUMMY_XML_CONTENT, encoding="utf-8")
+
+    config = DummyConfig(tmp_path)
+    config.analysis_type = "targeted"
+    m = _patch_common(mocker)
+    m["analysis_db"].is_command_already_run.return_value = False
+    mocker.patch.object(Run, "is_command_already_run", return_value=False)
+
+    res = Run._process_one_sample(
+        mzml_path,
+        xml_path,
+        1,
+        tmp_path / "parsed" / "sample.db",
+        config=config,
+        run_id="proj_test",
+        analysis_id="ana_test",
+        analysis_db_path=out_dir / "analysis.db",
+        targeted=True,
+    )
+
+    assert isinstance(res, SampleResult)
+    assert res.out_db_path == tmp_path / "parsed" / "sample.db"
+    assert res.peaks_mzs.size == 0
+
+    m["MzmlParser"].return_value.parse.assert_called_once()
+    m["map_pixels_to_db"].assert_called_once()
+    m["get_average_ms1_spectra"].assert_not_called()
+    m["detect_ms1_centroids"].assert_not_called()
+    m["filter_intensities_mad"].assert_not_called()
+    m["save_aggregated_spectra"].assert_not_called()
+
+    assert not (out_dir / "sample_filtered_ms1.html").exists()
+    assert not (out_dir / "sample_peaks_data.csv").exists()
+
+
+def _targeted_config(tmp_path):
+    config = DummyConfig(tmp_path)
+    config.analysis_type = "targeted"
+    config.normalization.mode = "reference_mz"
+    config.normalization.reference_mz = 154.0863
+    config.normalization.analyte_mzs = [200.0]
+    return config
+
+
+def test_run_core_targeted_dispatches_to_targeted_pipeline(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config = _targeted_config(tmp_path)
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([]))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    mock_align = mocker.patch("msianalyzer.core.run.run.align_mz_across_samples")
+    mock_run_grouper = mocker.patch("msianalyzer.core.run.run.run_grouper")
+    mock_run_purity = mocker.patch("msianalyzer.core.run.run.run_precursor_purity")
+    mock_run_annotation = mocker.patch("msianalyzer.core.run.run.run_annotation")
+    mock_run_consensus = mocker.patch("msianalyzer.core.run.run.run_consensus")
+    mock_build_report = mocker.patch("msianalyzer.core.run.run.build_summary_report")
+    mock_matching = mocker.patch("msianalyzer.core.run.run.run_target_list_matching")
+
+    mock_adata = mocker.MagicMock()
+    mock_create_adata = mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mock_adata
+    )
+
+    mock_norm_result = mocker.MagicMock(
+        n_samples=2, n_pixels=10, reference_median=1.0, layer_name="mz_154.0863"
+    )
+    mock_norm_result.merged_path.name = "merged.h5ad"
+    mock_run_normalization = mocker.patch(
+        "msianalyzer.core.run.run.run_normalization",
+        return_value=mock_norm_result,
+    )
+
+    _mock_pool_executor(mocker, [res1, res2])
+
+    run.run_core()
+
+    # untargeted-only stages never run at all
+    mock_align.assert_not_called()
+    mock_run_grouper.assert_not_called()
+    mock_run_purity.assert_not_called()
+    mock_run_annotation.assert_not_called()
+    mock_run_consensus.assert_not_called()
+    mock_build_report.assert_not_called()
+    mock_matching.assert_not_called()
+    assert not (out_dir / "aligned_mzs.csv").exists()
+
+    # assemble_adata: one call per sample, seeded with the reference m/z
+    # *and* every configured analyte — all quantified in this one already-
+    # parallel pass, not extracted on demand later by the GUI.
+    assert mock_create_adata.call_count == 2
+    for call in mock_create_adata.call_args_list:
+        assert call.kwargs["target_mz_set"] == {154.0863, 200.0}
+    assert mock_adata.write_h5ad.call_count == 2
+
+    mock_run_normalization.assert_called_once()
+    norm_kwargs = mock_run_normalization.call_args
+    assert norm_kwargs.kwargs["mode"] == "reference_mz"
+    assert norm_kwargs.kwargs["reference_mz"] == 154.0863
+
+    # analytes (not the reference channel) get registered as browsable
+    # "injected" features — same mechanism an untargeted run's target-list
+    # matches use — so the Calibration workspace's analyte picker has
+    # something to show with no further extraction.
+    mock_adb.append_injected_features.assert_called_once()
+    registered = mock_adb.append_injected_features.call_args.args[1]
+    assert [f.mz for f in registered] == [200.0]
+
+
+def test_run_core_targeted_emits_targeted_run_steps(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config = _targeted_config(tmp_path)
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    events = []
+    run.on_step = lambda step, status: events.append((step, status))
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([]))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
+    )
+    mock_norm_result = mocker.MagicMock(
+        n_samples=2, n_pixels=10, reference_median=1.0, layer_name="mz_154.0863"
+    )
+    mock_norm_result.merged_path.name = "merged.h5ad"
+    mocker.patch(
+        "msianalyzer.core.run.run.run_normalization", return_value=mock_norm_result
+    )
+
+    _mock_pool_executor(mocker, [res1, res2])
+
+    run.run_core()
+
+    assert events == [
+        ("process_samples", "started"),
+        ("process_samples", "completed"),
+        ("assemble_adata", "started"),
+        ("assemble_adata", "completed"),
+        ("normalize_tic", "started"),
+        ("normalize_tic", "completed"),
+    ]
+
+
+def test_run_core_targeted_passes_targeted_flag_to_sample_worker(mocker, tmp_path):
+    run = Run("test_config.yml")
+    config = _targeted_config(tmp_path)
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([]))
+
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+
+    mocker.patch(
+        "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
+    )
+    mock_norm_result = mocker.MagicMock(
+        n_samples=2, n_pixels=10, reference_median=1.0, layer_name="mz_154.0863"
+    )
+    mock_norm_result.merged_path.name = "merged.h5ad"
+    mocker.patch(
+        "msianalyzer.core.run.run.run_normalization", return_value=mock_norm_result
+    )
+
+    mock_executor = _mock_pool_executor(mocker, [res1, res2])
+
+    run.run_core()
+
+    submit_calls = mock_executor.__enter__.return_value.submit.call_args_list
+    worker = submit_calls[0].args[0]
+    assert worker.keywords["targeted"] is True

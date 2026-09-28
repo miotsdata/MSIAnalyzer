@@ -30,6 +30,8 @@ from msianalyzer.core.parser.mzml_parser import (
     _parse_scan_id,
     _parse_scan_polarity,
     _parse_tic,
+    load_raw_metadata_value,
+    write_raw_metadata,
 )
 
 # ===========================================================================
@@ -441,6 +443,46 @@ def test_log_command_helper(tmp_path: Path, sample_run_id: str):
 
     assert row[0] == "denoise_ms2"
     assert '"threshold": 100' in row[1]
+
+
+def test_write_raw_metadata_upserts_key_value_pairs(tmp_path: Path):
+    db_path = tmp_path / "test_meta.db"
+    parser = MzmlParser()
+    conn = parser._init_ms1_db(db_path)
+    conn.close()
+
+    write_raw_metadata(db_path, {"pixel_size_x": "0.05", "pixel_size_unit": "mm"})
+
+    assert load_raw_metadata_value(db_path, "pixel_size_x") == "0.05"
+    assert load_raw_metadata_value(db_path, "pixel_size_unit") == "mm"
+
+
+def test_write_raw_metadata_replaces_existing_key(tmp_path: Path):
+    db_path = tmp_path / "test_meta.db"
+    parser = MzmlParser()
+    conn = parser._init_ms1_db(db_path)
+    conn.close()
+
+    write_raw_metadata(db_path, {"pixel_size_x": "0.05"})
+    write_raw_metadata(db_path, {"pixel_size_x": "0.1"})
+
+    assert load_raw_metadata_value(db_path, "pixel_size_x") == "0.1"
+
+
+def test_load_raw_metadata_value_missing_key_returns_none(tmp_path: Path):
+    db_path = tmp_path / "test_meta.db"
+    parser = MzmlParser()
+    conn = parser._init_ms1_db(db_path)
+    conn.close()
+
+    assert load_raw_metadata_value(db_path, "does_not_exist") is None
+
+
+def test_load_raw_metadata_value_missing_table_returns_none(tmp_path: Path):
+    db_path = tmp_path / "no_schema.db"
+    sqlite3.connect(db_path).close()
+
+    assert load_raw_metadata_value(db_path, "pixel_size_x") is None
 
 
 def test_init_raw_db_creates_expected_tables(tmp_path: Path):

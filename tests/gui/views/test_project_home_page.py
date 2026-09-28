@@ -114,6 +114,39 @@ def test_run_row_shows_date_out_dir_and_config_path(
     assert config_text.property("text") == "Config: " + expected_config_rel
 
 
+def test_run_row_hides_targeted_badge_for_untargeted_run(
+    project_home_view, project_with_runs, find_visual_child
+):
+    model = ProjectModel(project_with_runs, "/tmp/proj")
+    view = project_home_view(model)
+    root = view.rootObject()
+
+    run_id = next(iter(project_with_runs.runs.keys()))
+    row = find_visual_child(root, "runRow_" + run_id)
+    badge = row.findChild(QQuickItem, "runRowTargetedBadge")
+
+    assert badge.property("visible") is False
+
+
+def test_run_row_shows_targeted_badge_for_targeted_run(
+    project_home_view, project, find_visual_child
+):
+    project.runs["run-t"] = {
+        "id": "run-t",
+        "start_date": "2026-01-01 12:00:00",
+        "config": {"io": {"out_dir": "/tmp/proj/output_t"}, "analysis_type": "targeted"},
+        "config_path": "",
+    }
+    model = ProjectModel(project, "/tmp/proj")
+    view = project_home_view(model)
+    root = view.rootObject()
+
+    row = find_visual_child(root, "runRow_run-t")
+    badge = row.findChild(QQuickItem, "runRowTargetedBadge")
+
+    assert badge.property("visible") is True
+
+
 def test_run_row_context_menu_copies_absolute_paths(
     project_home_view, project_with_runs, find_visual_child
 ):
@@ -218,6 +251,24 @@ def test_new_analysis_button_emits_router_signal(
 
     qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
     assert spy.at(0)[0].name == model.name
+    assert spy.at(0)[1] == "untargeted"
+
+
+def test_new_targeted_analysis_button_emits_router_signal(
+    project_home_view, project, application, qtbot
+):
+    model = ProjectModel(project, "/tmp/proj")
+    view = project_home_view(model)
+    root = view.rootObject()
+    button = root.findChild(QQuickItem, "newTargetedAnalysisButton")
+
+    spy = QSignalSpy(application.router.newAnalysisPageRequested)
+    button_center = button.mapToScene(button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=button_center)
+
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=2000)
+    assert spy.at(0)[0].name == model.name
+    assert spy.at(0)[1] == "targeted"
 
 
 def test_clicking_run_row_emits_analysis_selected(

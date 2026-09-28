@@ -903,3 +903,64 @@ def log_command(
         return command_id
     finally:
         con.close()
+
+
+@log_call(source="db_path")
+def write_raw_metadata(db_path: Path | str, rows: dict[str, str]) -> None:
+    """Upsert key/value pairs into an existing raw database's own
+    ``metadata`` table (see `create_raw_schema`) — the raw-DB-side
+    counterpart of `analysis_db.write_metadata`. Kept as its own function
+    here (not a reuse of that one against a raw path) since the raw and
+    analysis databases are two deliberately separate schemas/modules;
+    calling `analysis_db.*` against a raw path would blur that boundary
+    even though the underlying SQL happens to be identical.
+
+    Used by `Run._process_one_sample` right after `parse_raster_xml` to
+    record the acquisition's own pixel size (`pixel_size_x`/
+    `pixel_size_y`/`pixel_size_unit`, when the raster XML has a
+    `<rasterConfig>`), so the GUI can default a calibration ROI's pixel
+    size to it later (`load_raw_metadata_value`) while still letting the
+    user override it (or fill it in themselves, when the XML has no such
+    section at all).
+
+    Args:
+        db_path: Path to an existing raw database (already has its
+            `metadata` table — `init_raw_db` already ran during parsing).
+        rows: `{key: value}` — every value is stringified before storing,
+            same as `analysis_db.write_metadata`.
+    """
+    con = sqlite3.connect(Path(db_path))
+    try:
+        safe_executemany(
+            con,
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            [(k, str(v)) for k, v in rows.items()],
+            table="metadata",
+            logger=logger,
+            source=db_path,
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def load_raw_metadata_value(db_path: Path | str, key: str) -> str | None:
+    """One value from a raw database's own `metadata` table — the
+    raw-DB-side counterpart of `analysis_db.load_metadata_value`, kept
+    separate for the same module-boundary reason `write_raw_metadata` is.
+
+    Returns:
+        The stored value, or `None` if `key` isn't set or the table
+        doesn't exist (a raw db from before this function existed, or an
+        ad-hoc/test database).
+    """
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        try:
+            cur = con.execute("SELECT value FROM metadata WHERE key = ?", (key,))
+        except sqlite3.OperationalError:
+            return None
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        con.close()

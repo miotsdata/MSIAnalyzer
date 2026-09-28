@@ -178,11 +178,50 @@ def test_run_analysis_forwards_run_started_and_step_changed(tmp_path, mocker, qt
         }
     }
 
-    with qtbot.waitSignal(bridge.runStarted, timeout=2000):
+    with qtbot.waitSignal(bridge.runStarted, timeout=2000) as started_spy:
         with qtbot.waitSignal(bridge.runStepChanged, timeout=2000) as step_spy:
             bridge.run_analysis(config_dict, str(tmp_path))
 
     assert step_spy.args == ["process_samples", "started"]
+    assert started_spy.args[1] == "untargeted"
+
+
+def test_targeted_run_steps_property_matches_core():
+    from msianalyzer.core.run.run import TARGETED_RUN_STEPS
+
+    bridge = CoreBridge()
+    assert bridge.TARGETED_RUN_STEPS == list(TARGETED_RUN_STEPS)
+
+
+def test_run_analysis_forwards_analysis_type_targeted(tmp_path, mocker):
+    # Doesn't spawn a real RunWorker/QThread at all (unlike the sibling
+    # tests above) — only run_analysis's own analysis_type -> runStarted
+    # plumbing is under test here, so RunWorker.start is stubbed out
+    # entirely rather than letting a background thread actually run.
+    (tmp_path / "configs").mkdir()
+    bridge = CoreBridge()
+    mocker.patch("msianalyzer.gui.utils.core_bridge.RunWorker.start")
+
+    config_dict = {
+        "analysis_type": "targeted",
+        "normalization": {
+            "mode": "reference_mz",
+            "reference_mz": 154.0863,
+            "analyte_mzs": [200.0],
+        },
+        "io": {
+            "mzml_paths": [str(tmp_path / "a.mzML")],
+            "xml_paths": [str(tmp_path / "a.xml")],
+            "out_dir": str(tmp_path / "out"),
+            "db_paths": [],
+        },
+    }
+
+    received = []
+    bridge.runStarted.connect(lambda run_id, analysis_type: received.append(analysis_type))
+    bridge.run_analysis(config_dict, str(tmp_path))
+
+    assert received == ["targeted"]
 
 
 def test_run_analysis_forwards_sample_progress(tmp_path, mocker, qtbot):

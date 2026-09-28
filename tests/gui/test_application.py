@@ -128,7 +128,7 @@ def test_invalidConfig_triggers_router_showErrorRequested(application):
 def test_run_started_sets_current_run_id(application):
     assert application.current_run_id is None
 
-    application.core_bridge.runStarted.emit("run-123")
+    application.core_bridge.runStarted.emit("run-123", "untargeted")
 
     assert application.current_run_id == "run-123"
 
@@ -139,15 +139,16 @@ def test_run_started_emits_show_running_page_requested_with_project_model(
     application.project_model = ProjectModel(project, "/tmp/proj")
     received = []
     application.router.showRunningPageRequested.connect(
-        lambda model, run_id: received.append((model, run_id))
+        lambda model, run_id, analysis_type: received.append((model, run_id, analysis_type))
     )
 
-    application.core_bridge.runStarted.emit("run-123")
+    application.core_bridge.runStarted.emit("run-123", "targeted")
 
     assert len(received) == 1
-    model, run_id = received[0]
+    model, run_id, analysis_type = received[0]
     assert model.name == project.name
     assert run_id == "run-123"
+    assert analysis_type == "targeted"
 
 
 def test_run_completed_reloads_project_from_folder(application):

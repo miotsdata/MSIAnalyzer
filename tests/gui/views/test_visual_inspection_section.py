@@ -37,6 +37,14 @@ def _open_visual_tab(view, root, find_visual_child, qtbot):
     # stray late signal can land during a *later*, unrelated test.
     controls = find_visual_child(root, "controlsFlickable")
     qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)
+    # obsColumns is fetched on a background thread now too (ADR 48 round
+    # 3) — wait for it here as well, so isSelectedObsNumeric/
+    # selectedObsColumn are already correct before a caller switches into
+    # obs mode. Without this, isSelectedObsNumeric can still be sitting at
+    # its "no column loaded yet" default (`true`) at the moment of the
+    # switch, which sends a categorical column to getObsValueRange instead
+    # of getObsCategories — caught as a real bug, not just a test nicety.
+    qtbot.waitUntil(lambda: not controls.property("obsColumnsLoading"), timeout=2000)
 
 
 def _scroll_controls_panel_to(root, find_visual_child, item):
@@ -105,6 +113,69 @@ def test_visual_layer_button_click_updates_data_layer(
     qtbot.wait(50)
 
     assert section.property("dataLayer") == "raw"
+
+
+def test_tic_button_reflects_reference_mz_normalized_analysis(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    with sqlite3.connect(visual_analysis_model.analysisDbPath) as con:
+        con.execute(
+            "INSERT INTO commands (command_name, datetime, arguments, run_id) "
+            "VALUES ('normalize_tic', '2026-01-01T00:00:00', ?, 'run1')",
+            ('{"mode": "reference_mz", "reference_mz": 154.0863}',),
+        )
+        con.commit()
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    # dataLayer's default ("TIC") follows the resolved real layer name,
+    # since it was still at that untouched default when the analysis loaded.
+    assert section.property("normalizedLayerName") == "mz_154.0863"
+    assert section.property("dataLayer") == "mz_154.0863"
+
+    tic_button = find_visual_child(root, "ticLayerButton")
+    assert tic_button.property("text") == "m/z 154.0863"
+
+    raw_button = find_visual_child(root, "rawLayerButton")
+    center = raw_button.mapToScene(raw_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+    assert section.property("dataLayer") == "raw"
+
+    center = tic_button.mapToScene(tic_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+    assert section.property("dataLayer") == "mz_154.0863"
+
+
+def test_local_moran_layer_button_updates_data_layer_and_colormap(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    assert section.property("colormap") == "viridis"
+
+    local_moran_button = find_visual_child(root, "localMoranLayerButton")
+    center = local_moran_button.mapToScene(local_moran_button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert section.property("dataLayer") == "localMoran"
+    # Local Moran's I values are signed — switching into this layer should
+    # auto-select the one diverging colormap rather than leave a sequential
+    # one selected (see HeatmapControlsPanel.qml's onDataLayerChanged).
+    assert section.property("colormap") == "coolwarm"
+
+    vmin_label = find_visual_child(root, "vminValueLabel")
+    # No cheap real range for this layer — the label reads "auto" literally
+    # rather than a real-looking (but wrong) number.
+    assert vmin_label.property("text") == "vmin: auto"
 
 
 def test_visual_sample_visibility_toggle_removes_tile(
@@ -759,24 +830,40 @@ def test_switching_layer_resets_to_autoscale(
     assert section.property("autoScale") is True
 
 
+def _auto_range(section):
+    value = section.property("autoRange")
+    return value.toVariant() if hasattr(value, "toVariant") else value
+
+
 def test_disabling_autoscale_seeds_manual_range_from_auto_range(
-    analysis_view, visual_analysis_model, find_visual_child, qtbot
+    analysis_view, visual_analysis_model, find_visual_child, qtbot, application
 ):
     # The proposed/agreed fix for the raw/TIC scale mismatch: rather than
     # a fixed guess or slowly-doubling ceiling, disabling autoscale
     # starts the manual vmin/vmax from whatever autoscale was actually
     # using for the current feature+layer (autoRange, backed by the real
-    # per-pixel data — see AnalysisBridge.getFeatureValueRange).
+    # per-pixel data — see AnalysisBridge.requestFeatureValueRange).
+    #
+    # requestFeatureValueRange now runs on a background thread and can
+    # fire more than once around analysis-open (an early no-op call while
+    # selectedFeature is still null, then a real one once the async
+    # feature list lands). Rather than guess how many times/exactly when
+    # it lands and race a manual property override against it, stub the
+    # provider call itself so every dispatch converges on the same known
+    # value — no h5ad files exist for this fixture, so the real call would
+    # otherwise default to {0, 1} regardless.
+    application.analysis_bridge.heatmap_provider.getFeatureValueRange = (
+        lambda *args, **kwargs: {"vmin": 12.5, "vmax": 987654.0}
+    )
+
     view = analysis_view(visual_analysis_model)
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    # Simulate a real backend response (no h5ad files exist for this
-    # fixture, so the real autoRange call would default to {0, 1} — the
-    # bridge/provider's own real-data computation is covered by their
-    # unit tests; this test is about the QML reacting to it correctly).
-    section.setProperty("autoRange", {"vmin": 12.5, "vmax": 987654.0})
+    qtbot.waitUntil(
+        lambda: _auto_range(section)["vmin"] == pytest.approx(12.5), timeout=2000
+    )
 
     _disable_autoscale(view, root, find_visual_child, qtbot)
 
@@ -790,15 +877,24 @@ def test_disabling_autoscale_seeds_manual_range_from_auto_range(
 
 
 def test_vmin_vmax_labels_show_auto_range_while_autoscale_is_on(
-    analysis_view, visual_analysis_model, find_visual_child, qtbot
+    analysis_view, visual_analysis_model, find_visual_child, qtbot, application
 ):
+    # See test_disabling_autoscale_seeds_manual_range_from_auto_range's
+    # comment: stub the provider call rather than race a manual
+    # `autoRange` override against however many times/whenever
+    # requestFeatureValueRange's background worker actually resolves.
+    application.analysis_bridge.heatmap_provider.getFeatureValueRange = (
+        lambda *args, **kwargs: {"vmin": 0.5, "vmax": 42.75}
+    )
+
     view = analysis_view(visual_analysis_model)
     root = view.rootObject()
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    section.setProperty("autoRange", {"vmin": 0.5, "vmax": 42.75})
-    qtbot.wait(50)
+    qtbot.waitUntil(
+        lambda: _auto_range(section)["vmin"] == pytest.approx(0.5), timeout=2000
+    )
 
     vmin_label = find_visual_child(root, "vminValueLabel")
     vmax_label = find_visual_child(root, "vmaxValueLabel")
@@ -990,6 +1086,13 @@ def test_selecting_categorical_obs_column_hides_color_scale_and_shows_legend(
     legend_image = find_visual_child(root, "colorbarLegendImage")
     assert legend_image.property("visible") is False
 
+    # requestObsCategories (dispatched by the mode switch above) runs on a
+    # background thread now — wait for the real categories to land rather
+    # than assuming a fixed `qtbot.wait()` in _switch_to_obs_mode is
+    # always enough.
+    qtbot.waitUntil(
+        lambda: len(_as_list(section.property("obsCategoryLegend"))) > 0, timeout=2000
+    )
     legend = _as_list(section.property("obsCategoryLegend"))
     assert sorted(c["category"] for c in legend) == ["negative", "positive"]
 
@@ -1014,6 +1117,13 @@ def test_obs_category_colors_stable_when_sample_hidden(
     _switch_to_obs_mode(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
+    # requestObsCategories (dispatched by the mode switch above) runs on a
+    # background thread now — wait for the real categories to land rather
+    # than assuming a fixed `qtbot.wait()` in _switch_to_obs_mode is
+    # always enough.
+    qtbot.waitUntil(
+        lambda: len(_as_list(section.property("obsCategoryLegend"))) > 0, timeout=2000
+    )
     legend_before = sorted(
         c["category"] for c in _as_list(section.property("obsCategoryLegend"))
     )

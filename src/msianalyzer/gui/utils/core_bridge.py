@@ -5,7 +5,7 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core.config import Config
 from msianalyzer.core.project.project import Project, create_project_folder
-from msianalyzer.core.run.run import RUN_STEPS, Run
+from msianalyzer.core.run.run import RUN_STEPS, TARGETED_RUN_STEPS, Run
 from msianalyzer.gui.utils.config_schema import coerce_config_values
 from msianalyzer.gui.utils.run_worker import RunWorker
 
@@ -16,7 +16,7 @@ class CoreBridge(QObject):
     invalidCreateProjectName = Signal(str)
     invalidCreateProjectPath = Signal(str)
     invalidConfig = Signal(str)
-    runStarted = Signal(str)
+    runStarted = Signal(str, str)  # run_id, analysis_type
     runStepChanged = Signal(str, str)
     runSampleProgress = Signal(int, int)
     runCompleted = Signal(str)
@@ -42,6 +42,13 @@ class CoreBridge(QObject):
     def RUN_STEPS(self) -> list[str]:
         """Canonical, ordered `Run` stage names — see `core.run.run.RUN_STEPS`."""
         return list(RUN_STEPS)
+
+    @Property(list, constant=True)
+    def TARGETED_RUN_STEPS(self) -> list[str]:
+        """Canonical, ordered `_run_core_targeted` stage names — see
+        `core.run.run.TARGETED_RUN_STEPS`. `RunningAnalysisPage.qml` picks
+        between this and `RUN_STEPS` based on the pushed `analysisType`."""
+        return list(TARGETED_RUN_STEPS)
 
     def load_project(self, path):
         """Load the project rooted at `path`.
@@ -125,4 +132,4 @@ class CoreBridge(QObject):
         self._run_worker = worker
         worker.start()
 
-        self.runStarted.emit(run.id)
+        self.runStarted.emit(run.id, config.analysis_type)

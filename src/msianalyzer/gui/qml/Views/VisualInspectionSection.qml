@@ -46,6 +46,20 @@ Item {
     // this section without reaching two levels deep.
     property bool featuresLoading: controls.featuresLoading
 
+    // Per-sample Moran's I for the currently-selected feature, keyed by
+    // sample name — {} when in obs-column mode, no feature selected yet,
+    // or no spatial-correlation data cached for this analysis.
+    // Deliberately a plain JS binding, not the async property+Connections
+    // pattern `controls` itself uses for its own `.h5ad`-backed fetches:
+    // `getMoranIForFeature` is a synchronous in-memory dict lookup over
+    // the already-cached SpatialCorrelationModel, not disk I/O, so there's
+    // nothing here to block the GUI thread or need a worker for.
+    property var moranIScores: (controls.inspectionMode === "feature" && controls.selectedFeature
+                                 && analysis && analysis.analysisDbPath)
+                                ? AnalysisBridge.getMoranIForFeature(
+                                      analysis.analysisDbPath, controls.selectedFeature.mz)
+                                : ({})
+
     // The live HeatmapControlsPanel instance itself, forwarded the same
     // way — Export > Image… (Main.qml) reads its current
     // inspectionMode/dataLayer/colormap/vminToken()/vmaxToken() straight
@@ -61,6 +75,10 @@ Item {
     // pendingInspectHandled tells the owner to clear it once applied, so
     // a later plain tab switch to Visual Inspection doesn't re-apply it.
     property real pendingInspectMz: NaN
+    // Same one-shot handoff, for Spatial Correlation's local summary
+    // table — "" (the default) means "leave dataLayer alone", set by
+    // AnalysisPage's own pendingInspectLayer binding otherwise.
+    property string pendingInspectLayer: ""
     signal pendingInspectHandled()
 
     // Triggered by both pendingInspectMz itself changing AND
@@ -78,6 +96,9 @@ Item {
             return f.mz === visualSection.pendingInspectMz
         })
         if (idx >= 0) controls.selectedFeatureIndex = idx
+        if (visualSection.pendingInspectLayer !== "") {
+            controls.dataLayer = visualSection.pendingInspectLayer
+        }
         visualSection.pendingInspectHandled()
     }
 
@@ -280,7 +301,8 @@ Item {
 
                                 Label {
                                     objectName: "heatmapTileLabel_" + modelData.name
-                                    text: modelData.name
+                                    text: modelData.name + (visualSection.moranIScores[modelData.name] !== undefined
+                                          ? " (I=" + visualSection.moranIScores[modelData.name].toFixed(2) + ")" : "")
                                     Layout.fillWidth: true
                                     horizontalAlignment: Text.AlignHCenter
                                 }

@@ -10,10 +10,10 @@ class Router(QObject):
     projectFolderChosen = Signal(str)
     showProjectHomeRequested = Signal(QObject)
     showErrorRequested = Signal(str)
-    newAnalysisPageRequested = Signal(QObject)
+    newAnalysisPageRequested = Signal(QObject, str)  # project, analysis_type
     analysisSelected = Signal(str)
     runAnalysisRequested = Signal(QObject, dict)
-    showRunningPageRequested = Signal(QObject, str)
+    showRunningPageRequested = Signal(QObject, str, str)  # project, run_id, analysis_type
     showAnalysisRequested = Signal(QObject)
     # Menu bar > Project > Close Project. `Application` resets its own
     # project/project_model/project_folder state on this; Main.qml's own

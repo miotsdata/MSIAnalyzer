@@ -8,6 +8,7 @@ import pytest
 from PIL import Image as PILImage
 from PySide6.QtCore import QObject, QPointF, Qt
 from PySide6.QtQuick import QQuickItem
+from PySide6.QtTest import QSignalSpy
 from scipy.sparse import csr_matrix
 
 from msianalyzer.core.registration import attach_he_image, fit_and_save_registration
@@ -236,6 +237,33 @@ def test_draw_saves_immediately_on_close_writes_h5ad(
     assert _as_list(window.property("draftVertices")) == []
     saved_names = [r["name"] for r in _as_list(window.property("savedRois"))]
     assert "liver" in saved_names
+
+
+def test_roi_saved_signal_fires_with_sample_and_roi_name(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad")
+    _write_grid_h5ad(out_dir / "s2.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+
+    spy = QSignalSpy(window.roiSaved)
+
+    _start_drawing(window, "liver", qtbot)
+    _tap_grid_point(window, canvas, 1, 1, qtbot)
+    _tap_grid_point(window, canvas, 3, 1, qtbot)
+    _tap_grid_point(window, canvas, 3, 3, qtbot)
+    _tap_grid_point(window, canvas, 1, 3, qtbot)
+    _tap_grid_point(window, canvas, 1, 1, qtbot)  # closes + saves
+    qtbot.wait(100)
+
+    assert spy.count() == 1
+    assert spy.at(0)[0] == "s1"
+    assert spy.at(0)[1] == "liver"
 
 
 def test_undo_removes_last_vertex(

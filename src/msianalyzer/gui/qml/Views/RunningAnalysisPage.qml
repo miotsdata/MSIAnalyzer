@@ -9,6 +9,10 @@ Page {
 
     property var project
     property string runId
+    // "untargeted" (default) or "targeted" — picks which step list to
+    // render below (RUN_STEPS vs. TARGETED_RUN_STEPS), set at push time
+    // by Router.showRunningPageRequested's third argument.
+    property string analysisType: "untargeted"
     property var stepStatuses: ({})
     property string errorMessage: ""
     // Only meaningful for the "process_samples" step — the other steps
@@ -71,7 +75,8 @@ Page {
             Repeater {
                 id: stepsRepeater
                 objectName: "stepsRepeater"
-                model: CoreBridge.RUN_STEPS
+                model: runningAnalysisPage.analysisType === "targeted"
+                       ? CoreBridge.TARGETED_RUN_STEPS : CoreBridge.RUN_STEPS
 
                 delegate: ColumnLayout {
                     Layout.fillWidth: true

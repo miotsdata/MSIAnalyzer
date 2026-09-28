@@ -17,8 +17,12 @@ from pathlib import Path
 import anndata as ad
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from .analysis_db import (
+    load_calibration_curve,
+    load_calibration_points,
+    load_calibration_unknowns,
     load_feature_ids_and_mzs,
     load_feature_representative_annotations,
     load_samples,
@@ -306,4 +310,46 @@ def export_visual_inspection_images(
         written += 1
 
     logger.info("exported %d visual inspection image(s) to %s", written, dest_folder)
+    return written
+
+
+def export_calibration_results(db_path: str | Path, dest_folder: str | Path) -> int:
+    """Write a targeted analysis' calibration results to `dest_folder`:
+    `calibration_standards.csv` (every standard point), `calibration_curve.csv`
+    (the current fit's parameters/statistics), and `calibration_unknowns.csv`
+    (every quantified ROI result).
+
+    No free-text/comma-risk fields here (unlike `export_annotation_table`'s
+    library-supplied compound names) — a plain `DataFrame.to_csv` is enough,
+    no hand-rolled `csv.writer` quoting needed.
+
+    Args:
+        db_path: The analysis' SQLite database.
+        dest_folder: Destination folder, created if it doesn't exist.
+
+    Returns:
+        The number of files actually written (0-3) — a table that doesn't
+        exist yet (no standards added, or no curve fit yet) is simply
+        skipped, not an error.
+    """
+    dest_folder = Path(dest_folder)
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    written = 0
+
+    points_df = load_calibration_points(db_path)
+    if not points_df.empty:
+        points_df.to_csv(dest_folder / "calibration_standards.csv", index=False)
+        written += 1
+
+    curve = load_calibration_curve(db_path)
+    if curve is not None:
+        pd.DataFrame([curve]).to_csv(dest_folder / "calibration_curve.csv", index=False)
+        written += 1
+
+    unknowns_df = load_calibration_unknowns(db_path)
+    if not unknowns_df.empty:
+        unknowns_df.to_csv(dest_folder / "calibration_unknowns.csv", index=False)
+        written += 1
+
+    logger.info("exported calibration results (%d file(s)) to %s", written, dest_folder)
     return written

@@ -26,6 +26,18 @@ from msianalyzer.core.config.config import GROUPS, GROUP_TITLES, TargetListConfi
 
 _BESPOKE_GROUPS = ("io", "target_list")
 
+#: Groups a `targeted` analysis actually asks the user about — everything
+#: else is either meaningless for it (ms1/centroid/peak/align/target_list/
+#: group_ms2/purity/annotate/consensus/report assume untargeted feature
+#: discovery/alignment/MS2; spatial_correlation doesn't fit this
+#: workflow's ROI/calibration focus, per user feedback) or shouldn't be
+#: user-configurable at all (h5ad's assembly parameters — a targeted
+#: `.h5ad` is just built with `H5adConfig()`'s own defaults, never asked
+#: about, same as `io` is always the bespoke tab regardless of type). `io`
+#: is shown too, but bespoke — not part of this filtered list, see
+#: `NewAnalysisPage.qml`.
+_TARGETED_GROUPS = ("normalization", "analysis")
+
 _UNION_ORIGINS = (typing.Union, types.UnionType)
 
 #: Kept uppercase (or as otherwise spelled here) when turning a
@@ -150,7 +162,9 @@ def _classify(annotation: object) -> str:
             `typing.get_type_hints`.
 
     Returns:
-        One of `"bool"`, `"int"`, `"float"`, `"str"`, `"optional_bool"`,
+        One of `"bool"`, `"int"`, `"float"`, `"str"`, `"float_list"` (a
+        required `list[float]`, comma-separated in the UI — currently only
+        `NormalizationConfig.analyte_mzs`), `"optional_bool"`,
         `"optional_int"`, `"optional_float"`, `"optional_str"`,
         `"optional_str_list"` (an optional `list[str]`, comma-separated in
         the UI) or `"path_list"` (the `str | list[str] | None` shape used
@@ -169,6 +183,8 @@ def _classify(annotation: object) -> str:
         return "float"
     if annotation is str:
         return "str"
+    if typing.get_origin(annotation) is list and typing.get_args(annotation) == (float,):
+        return "float_list"
 
     origin = typing.get_origin(annotation)
     args = typing.get_args(annotation)
@@ -345,6 +361,9 @@ class ConfigSchemaProvider(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._groups = build_config_schema()
+        self._targeted_groups = [
+            g for g in self._groups if g["key"] in _TARGETED_GROUPS
+        ]
         self._target_list_schema = build_target_list_schema()
         self._positive_adducts = [a.label for a in adducts_for_polarity("positive")]
         self._negative_adducts = [a.label for a in adducts_for_polarity("negative")]
@@ -352,6 +371,12 @@ class ConfigSchemaProvider(QObject):
     @Property(list, constant=True)
     def groups(self) -> list[dict]:
         return self._groups
+
+    @Property(list, constant=True)
+    def targetedGroups(self) -> list[dict]:
+        """The subset of `groups` a `targeted` analysis' `NewAnalysisPage.qml`
+        actually shows tabs for — see `_TARGETED_GROUPS`."""
+        return self._targeted_groups
 
     @Property(dict, constant=True)
     def targetListSchema(self) -> dict:

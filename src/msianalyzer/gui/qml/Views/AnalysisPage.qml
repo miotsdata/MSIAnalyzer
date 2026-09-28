@@ -8,6 +8,14 @@ Page {
     objectName: "analysisPage"
 
     property var analysis
+    // A targeted analysis has no MS2/alignment/feature-discovery output —
+    // Summary/MS1 Spectra/Annotations/Visual Inspection/Spatial
+    // Correlation all assume that machinery, so this workspace shows only
+    // the Calibration page for one (per user feedback: "IT IS A TOTAL
+    // DIFFERENT ANALYSES ... the only thing that should be present is the
+    // page of the calibration curve"), not a 5th tab alongside the rest.
+    readonly property bool isTargeted: analysisPage.analysis
+                                        && analysisPage.analysis.analysisType === "targeted"
     // `analysis` can still be unset at Component.onCompleted time for a
     // page reached via StackView.push({"analysis": ...}) — same timing
     // quirk noted on summaryLoader's own Qt.binding below — so this reacts
@@ -19,21 +27,26 @@ Page {
     onAnalysisChanged: {
         if (analysisPage.analysis && analysisPage.analysis.analysisDbPath) {
             AnalysisBridge.ensureSchemaCurrent(analysisPage.analysis.analysisDbPath)
-            // Warm up two background-thread fetches other tabs will
-            // almost certainly need, right now while the user is
-            // already looking at a "loading" state (opening the
-            // analysis), instead of paying that cost again the moment
-            // they switch to Visual Inspection or Spatial Correlation
-            // (each is a lazy Loader, destroyed/rebuilt every tab
-            // switch — see AnalysisBridge.requestFeatureList's and
-            // getSpatialCorrelationModel's own docstrings). Both cache
-            // by analysis_db_path on the bridge itself, so calling them
-            // again later from those sections' own onAnalysisChanged is
-            // a cache hit, not a duplicate fetch. Fire-and-forget: no
-            // listener needed here, the cache population is a side
-            // effect of the bridge methods themselves.
+            // Warm up background-thread fetches other tabs will almost
+            // certainly need, right now while the user is already looking
+            // at a "loading" state (opening the analysis), instead of
+            // paying that cost again the moment they switch tabs (each
+            // section is a lazy Loader, destroyed/rebuilt every tab switch
+            // — see AnalysisBridge.requestFeatureList's and
+            // getSpatialCorrelationModel's own docstrings). Both cache by
+            // analysis_db_path on the bridge itself, so calling them again
+            // later from those sections' own onAnalysisChanged is a cache
+            // hit, not a duplicate fetch. Fire-and-forget: no listener
+            // needed here, the cache population is a side effect of the
+            // bridge methods themselves.
+            //
+            // requestFeatureList matters for a targeted analysis too now
+            // (it's the Calibration workspace's analyte picker); Spatial
+            // Correlation never runs for one, so its own model is skipped.
             AnalysisBridge.requestFeatureList(analysisPage.analysis.analysisDbPath)
-            AnalysisBridge.getSpatialCorrelationModel(analysisPage.analysis.analysisDbPath)
+            if (!analysisPage.isTargeted) {
+                AnalysisBridge.getSpatialCorrelationModel(analysisPage.analysis.analysisDbPath)
+            }
         }
     }
     // Set by Annotations' "Inspect visually" right-click just before
@@ -43,6 +56,12 @@ Page {
     // a later plain click on the Visual Inspection nav button doesn't
     // re-apply a stale feature selection from a previous "Inspect visually".
     property real pendingInspectMz: NaN
+
+    // Same one-shot handoff, for Spatial Correlation's *local* summary
+    // table's "Show spatial distribution" — "" means "leave dataLayer
+    // alone" (every other entry point above). Cleared back to "" the same
+    // way pendingInspectMz is, via pendingInspectHandled.
+    property string pendingInspectLayer: ""
 
     // Set while waiting on AnalysisBridge.prefetchHeatmapSamples (see
     // goToVisualInspection below) — true from the moment a switch to
@@ -59,8 +78,12 @@ Page {
     // setting sectionStack.currentIndex directly — see
     // HeatmapPrefetchWorker's own docstring for the freeze this avoids.
     // `pendingMz` is optional (the plain nav button passes none).
-    function goToVisualInspection(pendingMz) {
+    // `pendingLayer` is optional too — only the local summary table's
+    // handoff passes one ("localMoran"), to also switch the heatmap layer
+    // once the feature is selected, not just pick the feature itself.
+    function goToVisualInspection(pendingMz, pendingLayer) {
         if (pendingMz !== undefined) analysisPage.pendingInspectMz = pendingMz
+        if (pendingLayer !== undefined) analysisPage.pendingInspectLayer = pendingLayer
         if (!analysisPage.analysis || !analysisPage.analysis.analysisDbPath) {
             sectionStack.currentIndex = 3
             return
@@ -136,6 +159,10 @@ Page {
                 id: navRail
                 objectName: "navRail"
                 spacing: 4
+                // A targeted analysis has exactly one page (Calibration —
+                // see `isTargeted`'s own comment) — no tabs to switch
+                // between, so the whole nav rail is pointless for it.
+                visible: !analysisPage.isTargeted
                 // "I don't want user to run back and forth while things
                 // are loading" — also closes off a plausible trigger for
                 // the rare crash found while testing the loading overlay
@@ -206,6 +233,7 @@ Page {
                 objectName: "sectionStack"
                 currentIndex: 0
                 anchors.fill: parent
+                visible: !analysisPage.isTargeted
 
                 // Annotations/Visual Inspection are now lazy too (`active:
                 // currentIndex === N`, matching MS1's existing pattern) —
@@ -237,6 +265,13 @@ Page {
                 Loader {
                     id: summaryLoader
                     objectName: "summarySectionLoader"
+                    // Never constructed for a targeted analysis — see
+                    // `isTargeted`'s own comment; this is the one Loader in
+                    // this StackLayout with no `active:` gate otherwise (it
+                    // used to be eager regardless of analysis type, which
+                    // would build SummarySection.qml — untargeted-shaped
+                    // data throughout — for no reason on every targeted run).
+                    active: !analysisPage.isTargeted
                     source: "qrc:/Views/SummarySection.qml"
                     // Qt.binding, not a one-time assignment: a plain
                     // `item.analysis = analysisPage.analysis` only runs once,
@@ -297,7 +332,18 @@ Page {
                         // handler already exists to catch it.
                         item.pendingInspectHandled.connect(function () {
                             analysisPage.pendingInspectMz = NaN
+                            analysisPage.pendingInspectLayer = ""
                         })
+                        // Layer *before* mz: assigning pendingInspectMz's
+                        // binding below fires applyPendingInspect()
+                        // synchronously (see the comment above) — if
+                        // pendingInspectLayer's own binding weren't already
+                        // in place by then, applyPendingInspect() would
+                        // read its old/default value ("") and silently
+                        // skip switching the layer, one assignment too late
+                        // to ever apply once the one-shot mz request is
+                        // already consumed.
+                        item.pendingInspectLayer = Qt.binding(function () { return analysisPage.pendingInspectLayer })
                         item.pendingInspectMz = Qt.binding(function () { return analysisPage.pendingInspectMz })
                     }
                 }
@@ -313,8 +359,27 @@ Page {
                         item.showSpatialDistributionRequested.connect(function (mz) {
                             analysisPage.goToVisualInspection(mz)
                         })
+                        // Same handoff, from the *local* summary table's
+                        // own context menu — also switches the heatmap
+                        // layer to Local Moran's I, not just the feature.
+                        item.showLocalSpatialDistributionRequested.connect(function (mz) {
+                            analysisPage.goToVisualInspection(mz, "localMoran")
+                        })
                     }
                 }
+            }
+
+            // A targeted analysis' sole page — see `isTargeted`'s own
+            // comment. Not one of `sectionStack`'s Loaders (that whole
+            // StackLayout is hidden for a targeted analysis) since there's
+            // no tab to switch to it from; it just fills this Item outright.
+            Loader {
+                id: calibrationLoader
+                objectName: "calibrationSectionLoader"
+                active: analysisPage.isTargeted
+                anchors.fill: parent
+                source: "qrc:/Views/CalibrationSection.qml"
+                onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
             }
 
             // "whenever I change a page there is a small delay/page
@@ -334,6 +399,10 @@ Page {
     }
 
     readonly property bool currentSectionReady: {
+        if (analysisPage.isTargeted) {
+            return calibrationLoader.status === Loader.Ready
+                   && calibrationLoader.item && !calibrationLoader.item.rowsLoading
+        }
         if (analysisPage.switchingToVisual) return false
         switch (sectionStack.currentIndex) {
         case 0: return summaryLoader.status === Loader.Ready
