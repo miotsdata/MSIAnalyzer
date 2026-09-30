@@ -165,6 +165,59 @@ per-library tables. Controlled by `report.*`; regenerate it any time with
     aligned_mzs.csv           the feature list
     analysis_<run-id>.db      everything parameter-dependent
     merged.h5ad               every sample concatenated (raw + TIC layers, sample obs column)
+    imported/<name>/<sample>.h5ad  an imported analyzed .h5ad, split per sample (see below)
     summary_report.html       per-sample counts, feature overlap, MS2 + purity plots
     summary.json              the same numbers, machine-readable
 ```
+
+## Bringing notebook results back (imported datasets)
+
+After a run, you may analyze `merged.h5ad` (or one sample's `.h5ad`) in
+your own notebook: QC, dimensionality reduction, clustering and so on.
+To look at the result inside the app, open the analysis and choose
+**Analyses → Import analyzed .h5ad…**:
+
+1. Pick the file. It's read in the background without loading its
+   intensity matrix, so even multi-GB files open quickly.
+2. Give the import a name. Check the **sample mapping**: rows named like
+   an analysis sample are pre-filled, and anything left on *(skip)* isn't
+   imported. For a merged file, the sample comes from its `sample` obs
+   column. You can pick another column if you rebuilt it.
+3. Click **Import**. The file is split into one copy per sample, with a
+   progress bar.
+
+A **Dataset** switcher then appears in the workspace header, listing
+*Pipeline output* and your imports. It changes what **Visual Inspection**
+and **Spatial Correlation** show. Summary, MS1 Spectra and Annotations
+always come from the analysis itself.
+
+What to keep in your notebook so the import works:
+
+- **Each pixel's identity.** Keep the obs names as MSIAnalyzer wrote them
+  (`<pixel>-<sample>` in `merged.h5ad`), *or* keep the `x`/`y` columns or
+  `obsm["spatial"]`. Filtering pixels out is fine. Pixels that don't
+  belong to their sample make the import stop with an error.
+- **Each feature's m/z.** Keep `var["mz"]`, or var names of the form
+  `mz_<value>`. Dropping features is fine; they just disappear from the
+  feature list.
+
+With an imported dataset active:
+
+- New obs columns (e.g. `leiden`) appear in Visual Inspection's
+  **Obs column** mode.
+- The **Layer** picker lists `X` (the file's own main matrix) plus its
+  layers.
+- An H&E image registered for a sample applies automatically, and stays
+  aligned even if QC removed whole edge rows or columns.
+- **ROIs** you draw are saved in the imported copy **and written back
+  into your own file** as a boolean obs column `roi_<name>`. Nothing else
+  in your file is modified. If the file was moved, or is open in a
+  notebook, the ROI is still saved in the app and a warning tells you it
+  wasn't written back.
+- **Spatial Correlation** has a **Compute Moran's I** button (global
+  and/or local, on the layer you choose). An import has no pipeline run,
+  so this replaces the `spatial_correlation` config step.
+
+Removing an imported dataset (the ✕ next to the switcher) deletes its
+per-sample copies, never your original file.
+

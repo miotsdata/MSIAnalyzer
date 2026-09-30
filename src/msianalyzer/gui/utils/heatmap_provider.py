@@ -9,6 +9,7 @@ from PySide6.QtCore import QSize
 from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickImageProvider
 
+from msianalyzer.core.imported_dataset import sample_h5ad_path
 from msianalyzer.core.plotting.heatmap import (
     category_color,
     feature_value_range,
@@ -67,24 +68,43 @@ class HeatmapImageProvider(QQuickImageProvider):
     def __init__(self) -> None:
         super().__init__(QQuickImageProvider.ImageType.Image)
         self._analysis_db_path: str | None = None
+        # Imported dataset folder (ADR 49), relative to the analysis
+        # folder; None = the pipeline's own per-sample files.
+        self._rel_dir: str | None = None
         self._cache: OrderedDict[str, ad.AnnData] = OrderedDict()
         self._render_cache: OrderedDict[str, np.ndarray] = OrderedDict()
 
-    def setAnalysisDbPath(self, analysis_db_path: str) -> None:
-        if analysis_db_path != self._analysis_db_path:
+    def setAnalysisDbPath(self, analysis_db_path: str, rel_dir: str | None = None) -> None:
+        """Point this provider at one analysis' pipeline output
+        (`rel_dir=None`) or one of its imported datasets (`rel_dir` =
+        `imported_datasets.rel_dir`, see `AnalysisBridge.setActiveDataset`).
+        """
+        rel_dir = rel_dir or None
+        if analysis_db_path != self._analysis_db_path or rel_dir != self._rel_dir:
             self._cache.clear()
             # A request id (e.g. "s1|100.0|raw|viridis|0|15") says nothing
-            # about which analysis it came from — without also clearing
-            # this, switching to a different analysis that happens to
-            # share a sample name and request the same tile would
-            # silently serve the OLD analysis's rendered pixels.
+            # about which analysis (or dataset) it came from — without
+            # also clearing this, switching to a different analysis that
+            # happens to share a sample name and request the same tile
+            # would silently serve the OLD analysis's rendered pixels.
             self._render_cache.clear()
         self._analysis_db_path = analysis_db_path
+        self._rel_dir = rel_dir
+
+    def clearCaches(self) -> None:
+        """Drop every cached AnnData and render — after the files of the
+        current source were rewritten on disk (e.g. Moran's I computed
+        over an imported dataset)."""
+        self._cache.clear()
+        self._render_cache.clear()
+
+    def _h5ad_path(self, sample_name: str) -> Path:
+        return sample_h5ad_path(self._analysis_db_path, sample_name, self._rel_dir)
 
     def _load_adata(self, sample_name: str) -> ad.AnnData | None:
         if not self._analysis_db_path:
             return None
-        h5ad_path = Path(self._analysis_db_path).parent / f"{sample_name}.h5ad"
+        h5ad_path = self._h5ad_path(sample_name)
         key = str(h5ad_path)
         if key in self._cache:
             self._cache.move_to_end(key)
@@ -113,8 +133,7 @@ class HeatmapImageProvider(QQuickImageProvider):
         """
         if not self._analysis_db_path:
             return
-        h5ad_path = Path(self._analysis_db_path).parent / f"{sample_name}.h5ad"
-        self._cache.pop(str(h5ad_path), None)
+        self._cache.pop(str(self._h5ad_path(sample_name)), None)
         prefix = f"{sample_name}|"
         for key in [k for k in self._render_cache if k.startswith(prefix)]:
             del self._render_cache[key]

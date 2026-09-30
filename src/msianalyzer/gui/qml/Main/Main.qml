@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import "qrc:/Style"
+import "qrc:/Views"
 
 ApplicationWindow {
     id: window
@@ -193,6 +194,17 @@ ApplicationWindow {
                 text: "New Targeted…"
                 enabled: window.currentProject !== null
                 onTriggered: Router.newAnalysisPageRequested(window.currentProject, "targeted")
+            }
+            // Bring a notebook-analyzed .h5ad back into the open analysis
+            // as a linked dataset (ADR 49). Only meaningful inside an
+            // untargeted analysis workspace. A targeted one has no Visual
+            // Inspection / Spatial Correlation to show it in.
+            AppMenuItem {
+                objectName: "importH5adMenuItem"
+                text: "Import analyzed .h5ad…"
+                enabled: window.currentAnalysis !== null
+                         && window.currentAnalysis.analysisType !== "targeted"
+                onTriggered: importH5adDialog.openFor(window.currentAnalysis)
             }
             Menu {
                 objectName: "openAnalysisMenu"
@@ -402,6 +414,13 @@ ApplicationWindow {
             window.currentAnalysis = null
             stackView.push("qrc:/Views/StartPage.qml")
         }
+    }
+
+    ImportH5adDialog {
+        id: importH5adDialog
+        // Show the freshly imported dataset right away.
+        onImported: (datasetId) => AnalysisBridge.setActiveDataset(
+                        window.currentAnalysis.analysisDbPath, datasetId)
     }
 
     MessageDialog {

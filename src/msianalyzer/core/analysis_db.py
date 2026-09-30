@@ -27,6 +27,8 @@ rois                 analysis-wide ROI name/color catalog (geometry lives per-sa
 calibration_curves   fitted calibration curves (targeted analyses), append-only history
 calibration_points   one row per calibration standard ROI feeding a curve
 calibration_unknowns one row per quantified ROI (interpolated against a curve)
+imported_datasets    notebook-analyzed .h5ad re-imported as a linked dataset (ADR 49)
+imported_dataset_samples which analysis samples each imported dataset covers
 """
 
 from __future__ import annotations
@@ -659,6 +661,34 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             interpolated_conc REAL,
             amount            REAL,
             created_at        TEXT    NOT NULL
+        )
+    """)
+
+    # --- Imported analyzed .h5ad datasets (ADR 49) --------------------------
+    # A notebook-analyzed .h5ad (merged or single-sample) re-imported and
+    # split into one .h5ad per sample under `rel_dir` (relative to this
+    # database's own folder, so an analysis folder stays relocatable).
+    # `source_path` is the user's own file, kept only so ROIs drawn on the
+    # imported data can be written back into its obs (never deleted).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS imported_datasets (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT    NOT NULL UNIQUE,
+            rel_dir       TEXT    NOT NULL UNIQUE,
+            source_path   TEXT    NOT NULL,
+            source_kind   TEXT    NOT NULL CHECK (source_kind IN ('merged', 'single')),
+            sample_column TEXT,
+            layers        TEXT    NOT NULL DEFAULT '[]',
+            imported_at   TEXT    NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS imported_dataset_samples (
+            dataset_id   INTEGER NOT NULL REFERENCES imported_datasets(id) ON DELETE CASCADE,
+            sample_id    INTEGER NOT NULL REFERENCES samples(sample_id),
+            source_label TEXT,
+            n_pixels     INTEGER NOT NULL,
+            PRIMARY KEY (dataset_id, sample_id)
         )
     """)
 
@@ -2144,6 +2174,157 @@ def delete_calibration_unknown(db_path: Path | str, unknown_id: int) -> bool:
         cur = safe_execute(
             con, "DELETE FROM calibration_unknowns WHERE id = ?", (unknown_id,),
             table="calibration_unknowns", logger=logger, source=db_path,
+        )
+        con.commit()
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Imported analyzed .h5ad datasets (ADR 49)
+# ---------------------------------------------------------------------------
+
+
+@log_call(source="db_path")
+def insert_imported_dataset(
+    db_path: Path | str,
+    *,
+    name: str,
+    rel_dir: str,
+    source_path: str,
+    source_kind: str,
+    sample_column: str | None,
+    layers: list[str],
+    samples: list[tuple[str, str | None, int]],
+) -> int:
+    """Register one imported dataset and the samples it covers.
+
+    Args:
+        db_path: The analysis database.
+        name: Display name — `UNIQUE`.
+        rel_dir: Per-sample `.h5ad` folder, relative to `db_path`'s folder.
+        source_path: The user's own source `.h5ad` (absolute).
+        source_kind: `"merged"` or `"single"`.
+        sample_column: The source's obs column naming each row's sample
+            (`None` for a single-sample file).
+        layers: The imported files' `.layers` names (for a layer picker).
+        samples: `(sample_name, source_label, n_pixels)` per imported
+            sample; `sample_name` must already be in `samples`.
+
+    Returns:
+        The new `imported_datasets.id`.
+
+    Raises:
+        sqlite3.IntegrityError: `name`/`rel_dir` already exists.
+        ValueError: a `sample_name` isn't one of this analysis' samples.
+    """
+    with connect(db_path) as con:
+        ids = {}
+        for sample_name, _label, _n in samples:
+            row = con.execute(
+                "SELECT sample_id FROM samples WHERE name = ?", (sample_name,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"no sample named {sample_name!r} in this analysis")
+            ids[sample_name] = int(row[0])
+        cur = safe_execute(
+            con,
+            "INSERT INTO imported_datasets (name, rel_dir, source_path, source_kind, "
+            "sample_column, layers, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                name, rel_dir, source_path, source_kind, sample_column,
+                json.dumps(list(layers)), datetime.now().astimezone().isoformat(),
+            ),
+            table="imported_datasets", logger=logger, source=db_path,
+        )
+        dataset_id = int(cur.lastrowid)
+        safe_executemany(
+            con,
+            "INSERT INTO imported_dataset_samples (dataset_id, sample_id, source_label, "
+            "n_pixels) VALUES (?, ?, ?, ?)",
+            [(dataset_id, ids[s], label, int(n)) for s, label, n in samples],
+            table="imported_dataset_samples", logger=logger, source=db_path,
+        )
+        con.commit()
+        return dataset_id
+
+
+@log_call(source="db_path")
+def load_imported_datasets(db_path: Path | str) -> pd.DataFrame:
+    """Every imported dataset of this analysis, for the workspace's
+    dataset switcher.
+
+    Returns:
+        A DataFrame with `id`, `name`, `rel_dir`, `source_path`,
+        `source_kind`, `sample_column`, `imported_at`, ordered by
+        `imported_at`. Empty when there are none (or the table doesn't
+        exist yet on an analysis the schema refresh hasn't reached).
+    """
+    sql = (
+        "SELECT id, name, rel_dir, source_path, source_kind, sample_column, "
+        "imported_at FROM imported_datasets ORDER BY imported_at, id"
+    )
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def load_imported_dataset(db_path: Path | str, dataset_id: int) -> dict | None:
+    """One imported dataset, with its samples.
+
+    Returns:
+        `{"id", "name", "rel_dir", "source_path", "source_kind",
+        "sample_column", "layers": [...], "imported_at", "samples": [{"name",
+        "sample_id", "source_label", "n_pixels"}, ...]}` (samples ordered by
+        `sample_id`), or `None` if no such dataset.
+    """
+    with connect(db_path) as con:
+        try:
+            row = con.execute(
+                "SELECT id, name, rel_dir, source_path, source_kind, sample_column, "
+                "layers, imported_at FROM imported_datasets WHERE id = ?",
+                (int(dataset_id),),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if row is None:
+            return None
+        sample_rows = con.execute(
+            "SELECT s.name, s.sample_id, i.source_label, i.n_pixels "
+            "FROM imported_dataset_samples i JOIN samples s ON s.sample_id = i.sample_id "
+            "WHERE i.dataset_id = ? ORDER BY s.sample_id",
+            (int(dataset_id),),
+        ).fetchall()
+    keys = ("id", "name", "rel_dir", "source_path", "source_kind", "sample_column",
+            "layers", "imported_at")
+    info = dict(zip(keys, row))
+    info["layers"] = json.loads(info["layers"] or "[]")
+    info["samples"] = [
+        {"name": n, "sample_id": int(i), "source_label": label, "n_pixels": int(px)}
+        for n, i, label, px in sample_rows
+    ]
+    return info
+
+
+@log_call(source="db_path")
+def delete_imported_dataset_rows(db_path: Path | str, dataset_id: int) -> bool:
+    """Remove one imported dataset's rows (its sample rows cascade).
+    Files on disk are `core.imported_dataset.delete_imported_dataset`'s job.
+
+    Returns:
+        True if a dataset row was actually deleted.
+    """
+    with connect(db_path) as con:
+        safe_execute(
+            con, "DELETE FROM imported_dataset_samples WHERE dataset_id = ?",
+            (int(dataset_id),), table="imported_dataset_samples",
+            logger=logger, source=db_path,
+        )
+        cur = safe_execute(
+            con, "DELETE FROM imported_datasets WHERE id = ?", (int(dataset_id),),
+            table="imported_datasets", logger=logger, source=db_path,
         )
         con.commit()
         return cur.rowcount > 0

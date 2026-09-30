@@ -9,6 +9,7 @@ import pytest
 from scipy.sparse import csr_matrix
 
 from msianalyzer.core.plotting.heatmap import (
+    GRID_UNS_KEY,
     category_color,
     feature_value_range,
     list_obs_columns,
@@ -501,3 +502,59 @@ def test_render_heatmap_figure_rejects_unknown_mode():
     adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
     with pytest.raises(ValueError):
         render_heatmap_figure(adata, mode="bogus")
+
+
+# ---------------------------------------------------------------------------
+# Imported datasets (ADR 49): stored grid axes + render m/z guard
+# ---------------------------------------------------------------------------
+
+
+def test_pixel_grid_indices_uses_stored_full_grid_axes():
+    # Only x=1 pixels left (the x=0 column was filtered out). Without the
+    # stored axes the grid would collapse to 1 column and x=1 would land
+    # on column 0.
+    adata = _make_grid_adata([1.0, 2.0, 3.0, 4.0])[[1, 3]].copy()
+    adata.uns[GRID_UNS_KEY] = {"x": np.array([0.0, 1.0]), "y": np.array([0.0, 1.0])}
+
+    x_index, y_index, unique_x, unique_y = pixel_grid_indices(adata)
+
+    np.testing.assert_array_equal(x_index, [1, 1])
+    np.testing.assert_array_equal(y_index, [0, 1])
+    assert unique_x.size == 2 and unique_y.size == 2
+    rgba = render_feature_heatmap(adata, 100.0, layer="raw")
+    assert rgba.shape[:2] == (2, 2)
+    # the missing column renders black
+    assert (rgba[:, 0, :3] == 0).all()
+
+
+def test_render_feature_heatmap_imported_missing_feature_renders_black_not_neighbor():
+    adata = _make_grid_adata([1.0, 2.0, 3.0, 4.0])
+    adata.uns[GRID_UNS_KEY] = {"x": np.array([0.0, 1.0]), "y": np.array([0.0, 1.0])}
+    # 150.0 is 50 Da away from the only var (100.0): nearest-match alone
+    # would silently render mz 100's intensities.
+    rgba = render_feature_heatmap(adata, 150.0, layer="raw")
+    assert (rgba[..., :3] == 0).all()
+    assert feature_value_range(adata, 150.0, layer="raw") == (0.0, 1.0)
+
+
+def test_render_feature_heatmap_imported_tolerates_tiny_mz_roundoff():
+    adata = _make_grid_adata([1.0, 2.0, 3.0, 4.0])
+    adata.uns[GRID_UNS_KEY] = {"x": np.array([0.0, 1.0]), "y": np.array([0.0, 1.0])}
+    exact = render_feature_heatmap(adata, 100.0, layer="raw")
+    np.testing.assert_array_equal(
+        render_feature_heatmap(adata, 100.0 + 1e-7, layer="raw"), exact
+    )
+
+
+def test_list_obs_columns_hides_imported_bookkeeping_columns():
+    adata = _make_grid_adata(
+        [1.0, 2.0, 3.0, 4.0],
+        obs_columns={
+            "sample": ["s1"] * 4,
+            "source_obs_name": ["a", "b", "c", "d"],
+            "leiden": ["0", "1", "0", "1"],
+        },
+    )
+    names = {c["name"] for c in list_obs_columns(adata)}
+    assert "leiden" in names
+    assert not names & {"sample", "source_obs_name"}

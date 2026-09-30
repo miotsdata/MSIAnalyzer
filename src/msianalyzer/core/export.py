@@ -143,12 +143,16 @@ def _text_or_blank(value) -> str:
     return str(value)
 
 
-def _sample_h5ad_path(db_path: str | Path, sample_name: str) -> Path:
-    """Same convention as `AnalysisBridge._sample_h5ad_path`/
-    `HeatmapImageProvider._load_adata` and `run.py`'s own writer — every
-    sample's `.h5ad` lives next to the analysis database itself, named
-    after the sample."""
-    return Path(db_path).parent / f"{sample_name}.h5ad"
+def _sample_h5ad_path(
+    db_path: str | Path, sample_name: str, rel_dir: str | None = None
+) -> Path:
+    """`core.imported_dataset.sample_h5ad_path` — the one resolver
+    `AnalysisBridge`/`HeatmapImageProvider` share: next to the analysis
+    database (`run.py`'s own writer), or inside an imported dataset's
+    folder when `rel_dir` is given (ADR 49)."""
+    from msianalyzer.core.imported_dataset import sample_h5ad_path
+
+    return sample_h5ad_path(db_path, sample_name, rel_dir)
 
 
 def export_integration_tables(
@@ -236,6 +240,7 @@ def export_visual_inspection_images(
     vmin: float | None = None,
     vmax: float | None = None,
     show_rois: bool = False,
+    rel_dir: str | None = None,
 ) -> int:
     """Write `<dest_folder>/<sample_name>.<image_format>` for every
     sample — the same raster + colorbar/legend `render_heatmap_figure`
@@ -266,6 +271,9 @@ def export_visual_inspection_images(
         vmax: Upper color-scale bound. `None` autoscales per sample.
         show_rois: Draw each sample's own saved ROI polygons on top,
             matching Visual Inspection's "Show ROIs" checkbox.
+        rel_dir: Export an imported dataset's files (ADR 49) instead of
+            the pipeline output — whichever Visual Inspection is showing.
+            Samples the dataset doesn't cover are skipped.
 
     Returns:
         The number of sample images written. A sample with no `.h5ad`
@@ -278,7 +286,7 @@ def export_visual_inspection_images(
     samples = load_samples(db_path)
     loaded: dict[str, ad.AnnData] = {}
     for sample_name in samples["name"]:
-        h5ad_path = _sample_h5ad_path(db_path, sample_name)
+        h5ad_path = _sample_h5ad_path(db_path, sample_name, rel_dir)
         if not h5ad_path.exists():
             logger.warning(
                 "skipping %s in image export: no h5ad at %s", sample_name, h5ad_path
@@ -306,7 +314,7 @@ def export_visual_inspection_images(
             render_mode = "obs_categorical"
 
         rois = (
-            load_sample_rois(_sample_h5ad_path(db_path, sample_name))
+            load_sample_rois(_sample_h5ad_path(db_path, sample_name, rel_dir))
             if show_rois
             else None
         )

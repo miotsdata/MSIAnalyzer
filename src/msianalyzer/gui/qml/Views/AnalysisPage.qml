@@ -27,6 +27,10 @@ Page {
     onAnalysisChanged: {
         if (analysisPage.analysis && analysisPage.analysis.analysisDbPath) {
             AnalysisBridge.ensureSchemaCurrent(analysisPage.analysis.analysisDbPath)
+            // Every workspace opens on the pipeline output, never on an
+            // imported dataset (ADR 49) left active from a previous visit.
+            AnalysisBridge.setActiveDataset(analysisPage.analysis.analysisDbPath, -1)
+            analysisPage.refreshImportedDatasets()
             // Warm up background-thread fetches other tabs will almost
             // certainly need, right now while the user is already looking
             // at a "loading" state (opening the analysis), instead of
@@ -49,6 +53,39 @@ Page {
             }
         }
     }
+    // Imported analyzed .h5ad datasets of this analysis (ADR 49) — the
+    // header's "Dataset" switcher lists them after "Pipeline output".
+    property var importedDatasets: []
+
+    function refreshImportedDatasets() {
+        analysisPage.importedDatasets = (analysisPage.analysis && analysisPage.analysis.analysisDbPath)
+            ? AnalysisBridge.getImportedDatasets(analysisPage.analysis.analysisDbPath) : []
+    }
+
+    Connections {
+        target: AnalysisBridge
+        function onImportedDatasetsChanged(dbPath) {
+            if (analysisPage.analysis && dbPath === analysisPage.analysis.analysisDbPath)
+                analysisPage.refreshImportedDatasets()
+        }
+        // Same eager warm-up as onAnalysisChanged above, for the newly
+        // selected dataset. Both bridge caches are keyed per dataset.
+        function onActiveDatasetChanged() {
+            if (!analysisPage.analysis || !analysisPage.analysis.analysisDbPath
+                    || analysisPage.isTargeted)
+                return
+            AnalysisBridge.requestFeatureList(analysisPage.analysis.analysisDbPath)
+            AnalysisBridge.getSpatialCorrelationModel(analysisPage.analysis.analysisDbPath)
+            // Switching while Visual Inspection is on screen: go through
+            // the same background prefetch (and loading overlay) as
+            // opening the tab. Otherwise every tile of the new dataset
+            // would load its .h5ad on the GUI thread (see
+            // HeatmapPrefetchWorker).
+            if (sectionStack.currentIndex === 3)
+                analysisPage.goToVisualInspection()
+        }
+    }
+
     // Set by Annotations' "Inspect visually" right-click just before
     // switching to the Visual Inspection tab (see annotationsLoader.onLoaded
     // below) — a one-shot handoff, not persistent workspace state: cleared
@@ -88,7 +125,7 @@ Page {
             sectionStack.currentIndex = 3
             return
         }
-        var sampleNames = AnalysisBridge.getSamples(analysisPage.analysis.analysisDbPath)
+        var sampleNames = AnalysisBridge.getInspectionSamples(analysisPage.analysis.analysisDbPath)
                                         .slice(0, 4)  // matches VisualInspectionSection's own grid cap
                                         .map(function (s) { return s.name })
         analysisPage.switchingToVisual = true
@@ -198,6 +235,55 @@ Page {
                             cursorShape: Qt.PointingHandCursor
                         }
                     }
+                }
+            }
+
+            // Which data Visual Inspection / Spatial Correlation show (ADR
+            // 49): the pipeline output, or a notebook-analyzed .h5ad
+            // imported via Analyses > Import analyzed .h5ad…. Hidden until
+            // there's something to switch to.
+            RowLayout {
+                objectName: "datasetSwitcher"
+                visible: !analysisPage.isTargeted && analysisPage.importedDatasets.length > 0
+                enabled: analysisPage.currentSectionReady
+                opacity: enabled ? 1.0 : 0.5
+                spacing: 4
+
+                Label {
+                    text: "Dataset:"
+                    color: Theme.mutedTextColor
+                }
+                ComboBox {
+                    id: datasetCombo
+                    objectName: "datasetCombo"
+                    Layout.preferredWidth: 200
+                    model: ["Pipeline output"].concat(
+                        analysisPage.importedDatasets.map(function (d) { return d.name }))
+                    currentIndex: {
+                        var id = (AnalysisBridge ? AnalysisBridge.activeDatasetId : -1)
+                        for (var i = 0; i < analysisPage.importedDatasets.length; i++)
+                            if (analysisPage.importedDatasets[i].id === id) return i + 1
+                        return 0
+                    }
+                    onActivated: (index) => {
+                        var id = index === 0 ? -1 : analysisPage.importedDatasets[index - 1].id
+                        AnalysisBridge.setActiveDataset(analysisPage.analysis.analysisDbPath, id)
+                    }
+                    ToolTip.visible: hovered && currentIndex > 0
+                    ToolTip.text: currentIndex > 0
+                        ? "Imported from " + analysisPage.importedDatasets[currentIndex - 1].source_path
+                          + "\nApplies to Visual Inspection and Spatial Correlation."
+                        : ""
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                }
+                ToolButton {
+                    objectName: "removeDatasetButton"
+                    text: "✕"
+                    visible: datasetCombo.currentIndex > 0
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Remove this imported dataset"
+                    onClicked: removeDatasetDialog.open()
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
                 }
             }
 
@@ -415,6 +501,32 @@ Page {
         case 4: return spatialCorrLoader.status === Loader.Ready
                        && spatialCorrLoader.item && !spatialCorrLoader.item.rowsLoading
         default: return true
+        }
+    }
+
+    Dialog {
+        id: removeDatasetDialog
+        objectName: "removeDatasetDialog"
+        title: "Remove imported dataset"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Yes | Dialog.No
+        readonly property var dataset: datasetCombo.currentIndex > 0
+                                       ? analysisPage.importedDatasets[datasetCombo.currentIndex - 1] : null
+
+        Label {
+            width: 420
+            wrapMode: Text.Wrap
+            text: removeDatasetDialog.dataset
+                  ? "Remove \"" + removeDatasetDialog.dataset.name + "\" from this analysis? "
+                    + "Its per-sample copies (and any ROIs or Moran's I computed on them) are deleted. "
+                    + "Your own file is kept:\n" + removeDatasetDialog.dataset.source_path
+                  : ""
+        }
+        onAccepted: {
+            if (removeDatasetDialog.dataset)
+                AnalysisBridge.deleteImportedDataset(analysisPage.analysis.analysisDbPath,
+                                                     removeDatasetDialog.dataset.id)
         }
     }
 }

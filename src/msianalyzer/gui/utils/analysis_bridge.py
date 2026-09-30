@@ -1,4 +1,5 @@
 import base64
+import functools
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core import analysis_db
 from msianalyzer.core import export as core_export
+from msianalyzer.core import imported_dataset
 from msianalyzer.core.parser import load_raw_metadata_value
 from msianalyzer.core.annotation.formula_prediction import FormulaPredictionSettings
 from msianalyzer.core.calibration.curve_fit import (
@@ -34,7 +36,7 @@ from msianalyzer.core.calibration.units import (
     pixel_area,
 )
 from msianalyzer.core.plotting import roi
-from msianalyzer.core.plotting.heatmap import category_color
+from msianalyzer.core.plotting.heatmap import _RENDER_MZ_TOLERANCE_PPM, category_color
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
 from msianalyzer.core.plotting.plotter import Plotter
 from msianalyzer.core.registration import (
@@ -43,6 +45,7 @@ from msianalyzer.core.registration import (
     load_registration,
 )
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
+from msianalyzer.gui.utils.dataset_task_worker import DatasetTaskWorker
 from msianalyzer.gui.utils.export_worker import ExportWorker
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
 from msianalyzer.gui.utils.he_image_provider import HEImageProvider
@@ -159,7 +162,70 @@ def _pivot_spatial_correlation_rows(
     return list(by_mz.values()), samples
 
 
-def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
+def _inspection_samples_frame(analysis_db_path: str, rel_dir: str | None) -> pd.DataFrame:
+    """The samples Visual Inspection / Spatial Correlation show: every
+    analysis sample for the pipeline output, or only the samples an
+    imported dataset (ADR 49, found by its `rel_dir`) actually covers —
+    same `sample_id`/`name`/`polarity` shape as `analysis_db.load_samples`.
+    """
+    samples = analysis_db.load_samples(analysis_db_path)
+    if not rel_dir or samples.empty:
+        return samples
+    datasets = analysis_db.load_imported_datasets(analysis_db_path)
+    match = datasets[datasets["rel_dir"] == rel_dir] if not datasets.empty else datasets
+    if match.empty:
+        return samples.iloc[0:0]
+    info = analysis_db.load_imported_dataset(analysis_db_path, int(match.iloc[0]["id"]))
+    names = {s["name"] for s in (info or {}).get("samples", [])}
+    return samples[samples["name"].isin(names)].reset_index(drop=True)
+
+
+def _load_dataset_feature_list(analysis_db_path: str, rel_dir: str) -> pd.DataFrame:
+    """Visual Inspection's feature list for an imported dataset (ADR 49):
+    the features actually present in its files (a notebook may have
+    filtered some out), read from one sample's `var` in backed mode, each
+    joined to the analysis feature within
+    `heatmap._RENDER_MZ_TOLERANCE_PPM` to keep its `feature_id` and
+    representative `compound_name`. A var with no matching analysis
+    feature keeps its m/z with `feature_id`/`compound_name` `None`.
+
+    Returns:
+        `feature_id`, `mz`, `compound_name`, ordered by `mz` (the
+        `analysis_db.load_feature_list` shape).
+    """
+    columns = ["feature_id", "mz", "compound_name"]
+    samples = _inspection_samples_frame(analysis_db_path, rel_dir)
+    var_mz = None
+    for name in samples.get("name", []):
+        path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name, rel_dir)
+        if not path.exists():
+            continue
+        adata = ad.read_h5ad(path, backed="r")
+        try:
+            var_mz = adata.var["mz"].to_numpy(dtype=float)
+        finally:
+            adata.file.close()
+        break
+    if var_mz is None or var_mz.size == 0:
+        return pd.DataFrame(columns=columns)
+
+    features = analysis_db.load_feature_list(analysis_db_path)
+    rows = []
+    for mz in np.sort(var_mz):
+        feature_id, name = None, None
+        if not features.empty:
+            diffs = np.abs(features["mz"].to_numpy(dtype=float) - mz)
+            i = int(np.argmin(diffs))
+            if diffs[i] <= abs(mz) * _RENDER_MZ_TOLERANCE_PPM * 1e-6:
+                feature_id = int(features.iloc[i]["feature_id"])
+                name = features.iloc[i]["compound_name"]
+        rows.append({"feature_id": feature_id, "mz": float(mz), "compound_name": name})
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _load_spatial_correlation_table(
+    analysis_db_path: str, rel_dir: str | None = None
+) -> pd.DataFrame:
     """One row per (feature, sample) with that sample's Moran's I for that
     feature, plus its representative compound name (if annotated) — the
     flat shape `SpatialCorrelationSection.qml` pivots client-side into the
@@ -178,13 +244,15 @@ def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
         analysis_db_path: The analysis' SQLite database — used both to
             find the output folder/sample list and to look up compound
             names.
+        rel_dir: An imported dataset's folder (ADR 49) to read instead
+            of the pipeline's own per-sample files; `None` = pipeline.
 
     Returns:
         Columns `mz`, `sample`, `moran_i`, `compound_name` (`None` when
         unannotated). Empty when no sample's `.h5ad` has ever had
         `spatial_correlation` run on it.
     """
-    samples = analysis_db.load_samples(analysis_db_path)
+    samples = _inspection_samples_frame(analysis_db_path, rel_dir)
     columns = ["mz", "sample", "moran_i", "compound_name"]
     if samples.empty:
         return pd.DataFrame(columns=columns)
@@ -195,7 +263,7 @@ def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
 
     rows = []
     for name in samples["name"]:
-        h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name)
+        h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name, rel_dir)
         if not h5ad_path.exists():
             continue
         # `backed="r"` — this only needs `uns`/`var` (small metadata),
@@ -235,7 +303,9 @@ def _load_spatial_correlation_table(analysis_db_path: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def _load_local_moran_layer_data(analysis_db_path: str) -> tuple[list[dict], list[str]]:
+def _load_local_moran_layer_data(
+    analysis_db_path: str, rel_dir: str | None = None
+) -> tuple[list[dict], list[str]]:
     """Reads every sample's `adata.layers["localMoranI"]` (written by
     `core.spatial.local_moran.compute_local_moran_layer`) and assembles
     the `LocalMoranSummaryModel.setRows` shape directly — one dict per
@@ -253,12 +323,13 @@ def _load_local_moran_layer_data(analysis_db_path: str) -> tuple[list[dict], lis
 
     Args:
         analysis_db_path: The analysis' SQLite database.
+        rel_dir: As `_load_spatial_correlation_table`'s.
 
     Returns:
         `(feature_rows, samples)` — empty/empty when no sample's `.h5ad`
         has ever had `spatial_correlation.local_enabled` run on it.
     """
-    samples = analysis_db.load_samples(analysis_db_path)
+    samples = _inspection_samples_frame(analysis_db_path, rel_dir)
     if samples.empty:
         return [], []
 
@@ -269,7 +340,7 @@ def _load_local_moran_layer_data(analysis_db_path: str) -> tuple[list[dict], lis
     by_mz: dict[float, dict] = {}
     sample_names_with_data: set[str] = set()
     for name in samples["name"]:
-        h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name)
+        h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name, rel_dir)
         if not h5ad_path.exists():
             continue
         # backed="r" still avoids loading X/other layers — only
@@ -517,6 +588,17 @@ class AnalysisBridge(QObject):
     featureValueRangeReady = Signal(dict)
     obsValueRangeReady = Signal(dict)
     obsCategoriesReady = Signal(list)
+    # Imported analyzed .h5ad datasets (ADR 49)
+    activeDatasetChanged = Signal()
+    importedDatasetsChanged = Signal(str)  # analysis_db_path
+    h5adInspected = Signal(dict)
+    h5adInspectFailed = Signal(str)
+    datasetTaskProgress = Signal(int, int, str)  # done, total, sample name
+    datasetImportFinished = Signal(int, str)  # dataset id, message
+    datasetImportFailed = Signal(str)
+    datasetMoranFinished = Signal(str)
+    datasetMoranFailed = Signal(str)
+    roiSourceWriteFailed = Signal(str)  # ROI saved locally, write-back failed
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -527,10 +609,12 @@ class AnalysisBridge(QObject):
         # Single-slot cache for getSpatialCorrelationModel — see that
         # method's own docstring for why.
         self._spatial_correlation_model_path: str | None = None
+        self._spatial_correlation_model_rel_dir: str | None = None
         self._spatial_correlation_model: "SpatialCorrelationModel | None" = None
         # Same single-slot cache pattern, for the local Moran's I summary
         # table — see getLocalMoranSummaryModel.
         self._local_moran_summary_model_path: str | None = None
+        self._local_moran_summary_model_rel_dir: str | None = None
         self._local_moran_summary_model: "LocalMoranSummaryModel | None" = None
         # Single-slot cache for requestFeatureList — see that method's
         # own docstring for why.
@@ -587,6 +671,16 @@ class AnalysisBridge(QObject):
         # action, since only one export can sensibly run at a time from
         # one workspace.
         self._export_worker: ExportWorker | None = None
+        # Which dataset Visual Inspection / Spatial Correlation read
+        # (ADR 49): `None` = the pipeline output, else an
+        # `imported_datasets` row of `_active_db_path`. Only one analysis
+        # workspace is ever open, so one slot is enough; any other
+        # analysis path always resolves to its pipeline output.
+        self._active_db_path: str | None = None
+        self._active_dataset: dict | None = None
+        self._h5ad_inspect_worker: TableQueryWorker | None = None
+        self._dataset_task_worker: DatasetTaskWorker | None = None
+        self._import_db_path: str | None = None
 
     @Slot(float)
     def onSpectrumPointClicked(self, mz: float) -> None:
@@ -599,9 +693,12 @@ class AnalysisBridge(QObject):
         """Point the `image://heatmap/...` provider at this analysis.
 
         Called once when the Visual Inspection section loads (there's only
-        ever one active analysis workspace at a time).
+        ever one active analysis workspace at a time). Follows the active
+        imported dataset, if any (see `setActiveDataset`).
         """
-        self.heatmap_provider.setAnalysisDbPath(analysis_db_path)
+        self.heatmap_provider.setAnalysisDbPath(
+            analysis_db_path, self._active_rel_dir(analysis_db_path)
+        )
 
     @Slot(str, list)
     def prefetchHeatmapSamples(self, analysis_db_path: str, sample_names: list) -> None:
@@ -635,13 +732,20 @@ class AnalysisBridge(QObject):
                 sample in the analysis (Visual Inspection's grid can show
                 any of them), not just the ones about to be visible.
         """
-        self.heatmap_provider.setAnalysisDbPath(analysis_db_path)
+        rel_dir = self._active_rel_dir(analysis_db_path)
+        self.heatmap_provider.setAnalysisDbPath(analysis_db_path, rel_dir)
         if not sample_names:
             self.heatmapPrefetchReady.emit()
             return
-        features = analysis_db.load_feature_list(analysis_db_path)
+        features = (
+            _load_dataset_feature_list(analysis_db_path, rel_dir)
+            if rel_dir else analysis_db.load_feature_list(analysis_db_path)
+        )
         default_mz = float(features.iloc[0]["mz"]) if not features.empty else None
-        worker = HeatmapPrefetchWorker(self.heatmap_provider, sample_names, default_mz, self)
+        worker = HeatmapPrefetchWorker(
+            self.heatmap_provider, sample_names, default_mz, self,
+            dataset_token=f"ds{self._get_active_dataset_id() if rel_dir else -1}",
+        )
         worker.succeeded.connect(self._onHeatmapPrefetchSucceeded)
         worker.failed.connect(self._onHeatmapPrefetchFailed)
         self._heatmap_prefetch_worker = worker
@@ -670,7 +774,9 @@ class AnalysisBridge(QObject):
         `setHeatmapAnalysis`, called from the same place (Visual
         Inspection's `onAnalysisChanged`)."""
         self.he_image_provider.setAnalysisDbPath(analysis_db_path)
-        self.he_overlay_provider.setAnalysisDbPath(analysis_db_path)
+        self.he_overlay_provider.setAnalysisDbPath(
+            analysis_db_path, self._active_rel_dir(analysis_db_path)
+        )
 
     @Slot(list, float, str)
     def requestFeatureValueRange(self, sample_names: list, mz: float, layer: str) -> None:
@@ -954,7 +1060,11 @@ class AnalysisBridge(QObject):
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return SpatialCorrelationModel(self)
-        if analysis_db_path == self._spatial_correlation_model_path:
+        rel_dir = self._active_rel_dir(analysis_db_path)
+        if (
+            analysis_db_path == self._spatial_correlation_model_path
+            and rel_dir == self._spatial_correlation_model_rel_dir
+        ):
             return self._spatial_correlation_model
 
         if self._spatial_correlation_model is not None:
@@ -962,9 +1072,13 @@ class AnalysisBridge(QObject):
         model = SpatialCorrelationModel(self)
         model.setRowsLoading(True)
         self._spatial_correlation_model_path = analysis_db_path
+        self._spatial_correlation_model_rel_dir = rel_dir
         self._spatial_correlation_model = model
 
-        worker = TableQueryWorker(_load_spatial_correlation_table, analysis_db_path, self)
+        worker = TableQueryWorker(
+            functools.partial(_load_spatial_correlation_table, rel_dir=rel_dir),
+            analysis_db_path, self,
+        )
         # Plain bound-method connections, not a lambda — PySide only
         # marshals a cross-thread signal onto the main thread's event
         # loop for a bound QObject-method slot (it inspects the
@@ -1024,7 +1138,11 @@ class AnalysisBridge(QObject):
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return LocalMoranSummaryModel(self)
-        if analysis_db_path == self._local_moran_summary_model_path:
+        rel_dir = self._active_rel_dir(analysis_db_path)
+        if (
+            analysis_db_path == self._local_moran_summary_model_path
+            and rel_dir == self._local_moran_summary_model_rel_dir
+        ):
             return self._local_moran_summary_model
 
         if self._local_moran_summary_model is not None:
@@ -1033,9 +1151,13 @@ class AnalysisBridge(QObject):
         model.setThreshold(_load_local_moran_threshold_default(analysis_db_path))
         model.setRowsLoading(True)
         self._local_moran_summary_model_path = analysis_db_path
+        self._local_moran_summary_model_rel_dir = rel_dir
         self._local_moran_summary_model = model
 
-        worker = TableQueryWorker(_load_local_moran_layer_data, analysis_db_path, self)
+        worker = TableQueryWorker(
+            functools.partial(_load_local_moran_layer_data, rel_dir=rel_dir),
+            analysis_db_path, self,
+        )
         worker.succeeded.connect(self._onLocalMoranSummarySucceeded)
         worker.failed.connect(self._onLocalMoranSummaryFailed)
         self._local_moran_summary_worker = worker
@@ -1081,6 +1203,7 @@ class AnalysisBridge(QObject):
         """
         if (
             analysis_db_path != self._spatial_correlation_model_path
+            or self._spatial_correlation_model_rel_dir != self._active_rel_dir(analysis_db_path)
             or self._spatial_correlation_model is None
         ):
             return {}
@@ -1542,14 +1665,22 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         if not analysis_db_path or not Path(analysis_db_path).exists():
             self.featureListReady.emit([])
             return
-        if analysis_db_path == self._feature_list_cache_path:
+        rel_dir = self._active_rel_dir(analysis_db_path)
+        cache_key = (analysis_db_path, rel_dir)
+        if cache_key == self._feature_list_cache_path:
             self.featureListReady.emit(self._feature_list_cache_rows)
             return
-        worker = TableQueryWorker(analysis_db.load_feature_list, analysis_db_path, self)
+        # An imported dataset (ADR 49) lists only the features its own
+        # files still contain — see _load_dataset_feature_list.
+        query = (
+            functools.partial(_load_dataset_feature_list, rel_dir=rel_dir)
+            if rel_dir else analysis_db.load_feature_list
+        )
+        worker = TableQueryWorker(query, analysis_db_path, self)
         worker.succeeded.connect(self._onFeatureListSucceeded)
         worker.failed.connect(self._onFeatureListFailed)
         self._feature_list_worker = worker
-        self._feature_list_worker_path = analysis_db_path
+        self._feature_list_worker_path = cache_key
         worker.start()
 
     @Slot(object)
@@ -1569,16 +1700,253 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         self.featureListReady.emit([])
 
     # -----------------------------------------------------------------
+    # Imported analyzed .h5ad datasets (ADR 49)
+    # -----------------------------------------------------------------
+
+    def _get_active_dataset_id(self) -> int:
+        return int(self._active_dataset["id"]) if self._active_dataset else -1
+
+    #: The imported dataset Visual Inspection / Spatial Correlation
+    #: currently read, `-1` for the pipeline output.
+    activeDatasetId = Property(int, _get_active_dataset_id, notify=activeDatasetChanged)
+
+    @Slot(str, result=list)
+    def getImportedDatasets(self, analysis_db_path: str) -> list:
+        """Every imported dataset of this analysis, for the workspace's
+        dataset switcher.
+
+        Returns:
+            Records (`id`, `name`, `source_path`, `source_kind`,
+            `imported_at`), oldest first; `[]` when there are none.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        df = analysis_db.load_imported_datasets(analysis_db_path)
+        if df.empty:
+            return []
+        return _dataframe_to_records(
+            df[["id", "name", "source_path", "source_kind", "imported_at"]]
+        )
+
+    @Slot(str, int)
+    def setActiveDataset(self, analysis_db_path: str, dataset_id: int) -> None:
+        """Switch which data Visual Inspection / Spatial Correlation read:
+        `dataset_id = -1` for the pipeline output, else one of this
+        analysis' imported datasets. It points both heatmap-reading image
+        providers at it, and it drops the feature-list and
+        spatial-correlation caches, because those are keyed per dataset
+        and are rebuilt on the next request. Emits `activeDatasetChanged`
+        only when something actually changed.
+        """
+        info = None
+        if dataset_id >= 0 and analysis_db_path and Path(analysis_db_path).exists():
+            info = analysis_db.load_imported_dataset(analysis_db_path, dataset_id)
+        if info is not None and not info.get("samples"):
+            info = None
+        previous = (self._active_db_path, self._get_active_dataset_id())
+        self._active_db_path = analysis_db_path if info is not None else None
+        self._active_dataset = info
+        rel_dir = self._active_rel_dir(analysis_db_path)
+        self.heatmap_provider.setAnalysisDbPath(analysis_db_path, rel_dir)
+        self.he_overlay_provider.setAnalysisDbPath(analysis_db_path, rel_dir)
+        if previous != (self._active_db_path, self._get_active_dataset_id()):
+            self.activeDatasetChanged.emit()
+
+    @Slot(result=dict)
+    def getActiveDatasetInfo(self) -> dict:
+        """The active imported dataset (`id`, `name`, `source_path`,
+        `layers`, `samples` names), or `{}` for the pipeline output — for
+        the layer picker and the Moran's I controls."""
+        if self._active_dataset is None:
+            return {}
+        info = self._active_dataset
+        return {
+            "id": int(info["id"]),
+            "name": info["name"],
+            "source_path": info["source_path"],
+            "layers": list(info["layers"]),
+            "samples": [s["name"] for s in info["samples"]],
+        }
+
+    @Slot(str, result=list)
+    def getInspectionSamples(self, analysis_db_path: str) -> list:
+        """The samples Visual Inspection shows: every analysis sample for
+        the pipeline output, only the covered ones for an imported
+        dataset. It uses the same record shape as `getSamples` (which stays
+        all-samples, because the MS1 section's selector is dataset-agnostic).
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        return _dataframe_to_records(
+            _inspection_samples_frame(analysis_db_path, self._active_rel_dir(analysis_db_path))
+        )
+
+    @Slot(str)
+    def inspectH5ad(self, path: str) -> None:
+        """Start reading a candidate source file's metadata (backed mode,
+        never `X`) on a background thread. The result arrives via
+        `h5adInspected(dict)` (`H5adInspection.to_dict`) or
+        `h5adInspectFailed(message)`."""
+        worker = TableQueryWorker(
+            lambda p: imported_dataset.inspect_h5ad(p).to_dict(), path, self
+        )
+        worker.succeeded.connect(self._onH5adInspected)
+        worker.failed.connect(self._onH5adInspectFailed)
+        self._h5ad_inspect_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _onH5adInspected(self, info: dict) -> None:
+        if self.sender() is not self._h5ad_inspect_worker:
+            return  # superseded by a newer request — discard
+        self.h5adInspected.emit(info)
+
+    @Slot(str)
+    def _onH5adInspectFailed(self, message: str) -> None:
+        if self.sender() is not self._h5ad_inspect_worker:
+            return
+        self.h5adInspectFailed.emit(message)
+
+    def _start_dataset_task(self, task_fn, on_succeeded, on_failed) -> bool:
+        if self._dataset_task_worker is not None and self._dataset_task_worker.isRunning():
+            on_failed("Another import or Moran's I computation is still running.")
+            return False
+        worker = DatasetTaskWorker(task_fn, self)
+        worker.progress.connect(self.datasetTaskProgress)
+        worker.succeeded.connect(on_succeeded)
+        worker.failed.connect(on_failed)
+        self._dataset_task_worker = worker
+        worker.start()
+        return True
+
+    @Slot(str, str, str, str, "QVariantMap")
+    def importH5ad(
+        self, analysis_db_path: str, source_path: str, name: str,
+        sample_column: str, sample_map: dict,
+    ) -> None:
+        """Import `source_path` as a dataset of this analysis on a
+        background thread (`imported_dataset.import_analyzed_h5ad`).
+        Progress arrives via `datasetTaskProgress`, and the result via
+        `datasetImportFinished(dataset_id, message)` /
+        `datasetImportFailed(message)`.
+
+        Args:
+            sample_column: `""` for a single-sample file.
+            sample_map: Source label -> analysis sample name, only the
+                samples to import (QML drops unmapped ones).
+        """
+        self._import_db_path = analysis_db_path
+        task = functools.partial(
+            self._run_import, analysis_db_path, source_path, name,
+            sample_column or None, {str(k): str(v) for k, v in dict(sample_map).items()},
+        )
+        self._start_dataset_task(
+            task, self._onDatasetImportSucceeded, self.datasetImportFailed.emit
+        )
+
+    @staticmethod
+    def _run_import(db, source, name, sample_column, sample_map, progress):
+        return imported_dataset.import_analyzed_h5ad(
+            db, source, name=name, sample_column=sample_column,
+            sample_map=sample_map, progress=progress,
+        )
+
+    @Slot(object)
+    def _onDatasetImportSucceeded(self, result) -> None:
+        if self.sender() is not self._dataset_task_worker:
+            return
+        self.importedDatasetsChanged.emit(self._import_db_path)
+        self.datasetImportFinished.emit(
+            int(result.dataset_id),
+            f"Imported {result.n_samples} sample(s), {result.n_pixels} pixels.",
+        )
+
+    @Slot(str, int, result=bool)
+    def deleteImportedDataset(self, analysis_db_path: str, dataset_id: int) -> bool:
+        """Delete an imported dataset's files and rows. The user's source
+        file is kept. If it was the active dataset, the view falls back to
+        the pipeline output first, so no open file handle points into the
+        folder being removed."""
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return False
+        if self._get_active_dataset_id() == dataset_id and self._active_db_path == analysis_db_path:
+            self.setActiveDataset(analysis_db_path, -1)
+        removed = imported_dataset.delete_imported_dataset(analysis_db_path, dataset_id)
+        if removed:
+            self.importedDatasetsChanged.emit(analysis_db_path)
+        return removed
+
+    @Slot(str, str, bool, bool)
+    def computeDatasetMoran(
+        self, analysis_db_path: str, layer: str, run_global: bool, run_local: bool
+    ) -> None:
+        """Moran's I (global and/or local) over the active imported
+        dataset, on a background thread (see
+        `imported_dataset.compute_dataset_spatial_correlation`). Progress
+        arrives via `datasetTaskProgress`. On success, the
+        spatial-correlation caches are dropped, and
+        `datasetMoranFinished(message)` fires so the section re-requests
+        its models. On failure, `datasetMoranFailed(message)` fires."""
+        if self._active_rel_dir(analysis_db_path) is None:
+            self.datasetMoranFailed.emit("Select an imported dataset first.")
+            return
+        task = functools.partial(
+            self._run_dataset_moran, analysis_db_path, self._get_active_dataset_id(),
+            layer, run_global, run_local,
+        )
+        self._start_dataset_task(
+            task, self._onDatasetMoranSucceeded, self.datasetMoranFailed.emit
+        )
+
+    @staticmethod
+    def _run_dataset_moran(db, dataset_id, layer, run_global, run_local, progress):
+        return imported_dataset.compute_dataset_spatial_correlation(
+            db, dataset_id, layer=layer, run_global=run_global,
+            run_local=run_local, progress=progress,
+        )
+
+    @Slot(object)
+    def _onDatasetMoranSucceeded(self, n_samples) -> None:
+        if self.sender() is not self._dataset_task_worker:
+            return
+        self._drop_spatial_correlation_caches()
+        self.heatmap_provider.clearCaches()  # the files changed on disk
+        self.datasetMoranFinished.emit(f"Moran's I computed for {n_samples} sample(s).")
+
+    def _drop_spatial_correlation_caches(self) -> None:
+        self._spatial_correlation_model_path = None
+        self._spatial_correlation_model_rel_dir = None
+        self._local_moran_summary_model_path = None
+        self._local_moran_summary_model_rel_dir = None
+
+    # -----------------------------------------------------------------
     # ROI Design
     # -----------------------------------------------------------------
 
     @staticmethod
-    def _sample_h5ad_path(analysis_db_path: str, sample_name: str) -> Path:
-        """Where one sample's `.h5ad` lives — same convention as
-        `HeatmapImageProvider._load_adata`, factored out here since every
-        ROI slot below needs it (and a drifted duplicate would silently
-        defeat `HeatmapImageProvider.invalidate`'s cache eviction)."""
-        return Path(analysis_db_path).parent / f"{sample_name}.h5ad"
+    def _sample_h5ad_path(
+        analysis_db_path: str, sample_name: str, rel_dir: str | None = None
+    ) -> Path:
+        """Where one sample's `.h5ad` lives — `core.imported_dataset.
+        sample_h5ad_path`, the one resolver `HeatmapImageProvider` also
+        uses (a drifted duplicate would silently defeat
+        `HeatmapImageProvider.invalidate`'s cache eviction). `rel_dir`
+        selects an imported dataset (ADR 49); `None` = pipeline output."""
+        return imported_dataset.sample_h5ad_path(analysis_db_path, sample_name, rel_dir)
+
+    def _active_rel_dir(self, analysis_db_path: str) -> str | None:
+        """The active imported dataset's folder if `analysis_db_path` is
+        the analysis it belongs to, else `None` (pipeline output)."""
+        if self._active_dataset is not None and analysis_db_path == self._active_db_path:
+            return self._active_dataset["rel_dir"]
+        return None
+
+    def _inspection_h5ad_path(self, analysis_db_path: str, sample_name: str) -> Path:
+        """A sample's `.h5ad` for whichever dataset is currently active —
+        what every Visual Inspection / ROI slot reads and writes."""
+        return self._sample_h5ad_path(
+            analysis_db_path, sample_name, self._active_rel_dir(analysis_db_path)
+        )
 
     @staticmethod
     def _merged_h5ad_path(analysis_db_path: str) -> Path:
@@ -1639,7 +2007,7 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return []
-        h5ad_path = self._sample_h5ad_path(analysis_db_path, sample_name)
+        h5ad_path = self._inspection_h5ad_path(analysis_db_path, sample_name)
         if not h5ad_path.exists():
             return []
         rois = roi.load_sample_rois(h5ad_path)
@@ -1671,15 +2039,22 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             color: `"#rrggbb"` — only takes effect if `name` is new.
             vertices: `[[col, row], ...]`, grid-index space, >= 3 points.
 
+        With an imported dataset active (ADR 49), the ROI goes into that
+        dataset's own per-sample file instead, and its obs column is
+        written back into the user's source `.h5ad` (`merged.h5ad` is
+        not touched). A failed write-back (source moved, or locked by a
+        notebook) doesn't fail the save — it's reported in `warning`.
+
         Returns:
-            `{"ok": True, "pixel_count": int}` on success, or
+            `{"ok": True, "pixel_count": int}` on success (plus
+            `"warning": str` only if the source write-back failed), or
             `{"ok": False, "error": "<message>"}` (e.g. fewer than 3
             vertices, sample h5ad missing) — surfaced by ROI Design as an
             inline error rather than a silent no-op.
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return {"ok": False, "error": "No analysis database."}
-        h5ad_path = self._sample_h5ad_path(analysis_db_path, sample_name)
+        h5ad_path = self._inspection_h5ad_path(analysis_db_path, sample_name)
         if not h5ad_path.exists():
             return {"ok": False, "error": f"Sample {sample_name!r} has no .h5ad file."}
 
@@ -1710,13 +2085,41 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         # return value (which is just the pixel count) — a second, cheap
         # read+mask against the just-written file, kept separate so
         # save_roi_to_sample's own signature/tests stay merged.h5ad-agnostic.
-        sample_adata_mask = roi.polygon_pixel_mask(ad.read_h5ad(h5ad_path), vertices)
-        roi.sync_roi_to_merged(
-            self._merged_h5ad_path(analysis_db_path), sample_name, name,
-            effective_color, vertices, sample_adata_mask,
-        )
+        sample_adata = ad.read_h5ad(h5ad_path)
+        sample_adata_mask = roi.polygon_pixel_mask(sample_adata, vertices)
+        warning = ""
+        if self._active_rel_dir(analysis_db_path):
+            warning = self._write_roi_to_source(sample_adata, name, sample_adata_mask)
+        else:
+            roi.sync_roi_to_merged(
+                self._merged_h5ad_path(analysis_db_path), sample_name, name,
+                effective_color, vertices, sample_adata_mask,
+            )
         self.heatmap_provider.invalidate(sample_name)
-        return {"ok": True, "pixel_count": pixel_count}
+        result = {"ok": True, "pixel_count": pixel_count}
+        if warning:
+            result["warning"] = warning
+        return result
+
+    def _write_roi_to_source(self, sample_adata, name: str, mask) -> str:
+        """Best-effort ROI obs-column write-back into the active imported
+        dataset's source `.h5ad` (ADR 49). Returns `""` on success, else a
+        user-facing warning (also emitted as `roiSourceWriteFailed`)."""
+        source = self._active_dataset["source_path"]
+        try:
+            imported_dataset.write_roi_to_source(
+                source, roi.roi_obs_column(name),
+                sample_adata.obs[imported_dataset.SOURCE_OBS_NAME_COLUMN], mask,
+            )
+        except (OSError, KeyError, ValueError) as e:
+            logger.warning("ROI write-back to %s failed: %s", source, e)
+            message = (
+                f"ROI saved in MSIAnalyzer, but it could not be written back to "
+                f"{Path(source).name} ({e}). Is the file moved, or open in a notebook?"
+            )
+            self.roiSourceWriteFailed.emit(message)
+            return message
+        return ""
 
     @Slot(str, str, str, result=bool)
     def deleteRoiFromSample(self, analysis_db_path: str, sample_name: str, name: str) -> bool:
@@ -1730,16 +2133,36 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return False
-        h5ad_path = self._sample_h5ad_path(analysis_db_path, sample_name)
+        h5ad_path = self._inspection_h5ad_path(analysis_db_path, sample_name)
         if not h5ad_path.exists():
             return False
         removed = roi.delete_roi_from_sample(h5ad_path, name)
         if removed:
-            roi.sync_roi_deletion_to_merged(
-                self._merged_h5ad_path(analysis_db_path), sample_name, name
-            )
+            if self._active_rel_dir(analysis_db_path):
+                self._remove_roi_from_source(h5ad_path, name)
+            else:
+                roi.sync_roi_deletion_to_merged(
+                    self._merged_h5ad_path(analysis_db_path), sample_name, name
+                )
             self.heatmap_provider.invalidate(sample_name)
         return removed
+
+    def _remove_roi_from_source(self, h5ad_path: Path, name: str) -> None:
+        """Deletion counterpart of `_write_roi_to_source` — best effort,
+        a failure is only emitted as `roiSourceWriteFailed`."""
+        source = self._active_dataset["source_path"]
+        try:
+            adata = ad.read_h5ad(h5ad_path, backed="r")
+            try:
+                names = adata.obs[imported_dataset.SOURCE_OBS_NAME_COLUMN].to_numpy()
+            finally:
+                adata.file.close()
+            imported_dataset.remove_roi_from_source(source, roi.roi_obs_column(name), names)
+        except (OSError, KeyError, ValueError) as e:
+            logger.warning("ROI removal from %s failed: %s", source, e)
+            self.roiSourceWriteFailed.emit(
+                f"ROI removed in MSIAnalyzer, but not from {Path(source).name} ({e})."
+            )
 
     @Slot(str, list, str, result=dict)
     def deleteRoiEverywhere(self, analysis_db_path: str, sample_names: list, name: str) -> dict:
@@ -2561,6 +2984,10 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             vmax_token: `HeatmapControlsPanel.vmaxToken()`'s own value.
             show_rois: Mirrors Visual Inspection's "Show ROIs" checkbox.
         """
+        # Resolved now, on the GUI thread — the export follows whatever
+        # dataset Visual Inspection is showing when the user clicked.
+        rel_dir = self._active_rel_dir(analysis_db_path)
+
         def _do_export() -> str:
             mz = float(mz_str) if mz_str else None
             vmin = None if vmin_token == "auto" else float(vmin_token)
@@ -2577,6 +3004,7 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
                 vmin=vmin,
                 vmax=vmax,
                 show_rois=show_rois,
+                rel_dir=rel_dir,
             )
             return f"Images exported for {n} sample(s) to {dest_folder}"
 

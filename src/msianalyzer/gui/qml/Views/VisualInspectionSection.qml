@@ -8,8 +8,13 @@ Item {
     objectName: "visualSection"
 
     property var analysis
-    property var samples: (analysis && analysis.analysisDbPath)
-                           ? AnalysisBridge.getSamples(analysis.analysisDbPath) : []
+    // The active dataset's samples (ADR 49): every analysis sample for
+    // the pipeline output, only the covered ones for an imported dataset.
+    // Reading activeDatasetId here is what re-evaluates this binding on a
+    // dataset switch.
+    property var samples: (analysis && analysis.analysisDbPath && AnalysisBridge && AnalysisBridge.activeDatasetId >= -1)
+                           ? AnalysisBridge.getInspectionSamples(analysis.analysisDbPath) : []
+    onSamplesChanged: visualSection.refreshSampleRois()
 
     property int gridRows: 1
     property int gridCols: Math.max(1, Math.min(4, visualSection.samples.length))
@@ -55,7 +60,8 @@ Item {
     // the already-cached SpatialCorrelationModel, not disk I/O, so there's
     // nothing here to block the GUI thread or need a worker for.
     property var moranIScores: (controls.inspectionMode === "feature" && controls.selectedFeature
-                                 && analysis && analysis.analysisDbPath)
+                                 && analysis && analysis.analysisDbPath
+                                 && AnalysisBridge && AnalysisBridge.activeDatasetId >= -1)
                                 ? AnalysisBridge.getMoranIForFeature(
                                       analysis.analysisDbPath, controls.selectedFeature.mz)
                                 : ({})

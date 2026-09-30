@@ -14,7 +14,24 @@ import pandas as pd
 # by category position (O(categories) work per pixel), so this alone was
 # slow enough to freeze the UI ("quite slow (and freezes)"). polarity: a
 # single constant value per sample, nothing to see spatially.
-_EXCLUDED_OBS_COLUMNS = {"x", "y", "scan_id", "polarity"}
+# sample / source_obs_name: bookkeeping columns of an imported analyzed
+# dataset (ADR 49) — one constant value per sample file, and the user's
+# own ~unique-per-pixel obs name respectively (same problem as scan_id).
+_EXCLUDED_OBS_COLUMNS = {"x", "y", "scan_id", "polarity", "sample", "source_obs_name"}
+#: `adata.uns` key holding a sample's *full* pixel-grid axes
+#: (`{"x": unique_x, "y": unique_y}`), written by
+#: `core.imported_dataset` into every imported per-sample file (ADR 49).
+#: A notebook QC step can drop a whole edge row/column of pixels; the
+#: grid rebuilt from the *remaining* coordinates would then shrink, and
+#: every ROI polygon / H&E registration (both stored in grid-index space)
+#: would silently shift. Pipeline files never have it and are unaffected.
+GRID_UNS_KEY = "msianalyzer_grid"
+#: How far (ppm) a requested m/z may be from the nearest `.var["mz"]` for
+#: a *rendered* feature of an imported dataset to count as that feature.
+#: Pipeline files always contain every feature (and keep plain
+#: nearest-match), but an imported notebook-filtered dataset may not —
+#: nearest-match alone would then silently show a neighbor.
+_RENDER_MZ_TOLERANCE_PPM = 10.0
 # Fixed qualitative palette for discrete `obs` columns — categories aren't
 # ordered, so a continuous colormap/vmin/vmax makes no sense for them;
 # every tile and the legend index into this one palette by the same
@@ -36,6 +53,23 @@ def _feature_column_index(adata: ad.AnnData, mz: float) -> int:
     """
     mz_values = adata.var["mz"].to_numpy(dtype=float)
     return int(np.argmin(np.abs(mz_values - mz)))
+
+
+def _rendered_feature_values(adata: ad.AnnData, mz: float, layer: str) -> np.ndarray:
+    """One feature's per-pixel values for *display* — like
+    `_layer_column(adata, layer, _feature_column_index(adata, mz))`, but,
+    for an imported dataset only (it carries `uns[GRID_UNS_KEY]`),
+    all-`NaN` (renders black) when no `.var["mz"]` is within
+    `_RENDER_MZ_TOLERANCE_PPM` of `mz` — a feature filtered out in the
+    notebook — instead of showing whichever neighbor is nearest.
+    """
+    col_idx = _feature_column_index(adata, mz)
+    if GRID_UNS_KEY not in adata.uns:
+        return _layer_column(adata, layer, col_idx)
+    nearest = float(adata.var["mz"].to_numpy(dtype=float)[col_idx])
+    if abs(nearest - mz) > abs(mz) * _RENDER_MZ_TOLERANCE_PPM * 1e-6:
+        return np.full(adata.n_obs, np.nan)
+    return _layer_column(adata, layer, col_idx)
 
 
 def _layer_column(adata: ad.AnnData, layer: str, col_idx: int) -> np.ndarray:
@@ -66,8 +100,7 @@ def feature_value_range(
         `(min, max)` of the finite values in that column, or `(0.0, 1.0)`
         if there are none.
     """
-    col_idx = _feature_column_index(adata, mz)
-    values = _layer_column(adata, layer, col_idx)
+    values = _rendered_feature_values(adata, mz, layer)
     finite = values[np.isfinite(values)]
     if finite.size == 0:
         return 0.0, 1.0
@@ -87,6 +120,11 @@ def pixel_grid_indices(
     Args:
         adata: One sample's AnnData, already loaded.
 
+    When `adata.uns[GRID_UNS_KEY]` is present (an imported, possibly
+    pixel-filtered dataset — ADR 49), its stored full-grid axes are used
+    instead of the unique values actually present, so the grid keeps the
+    original sample's exact shape and indices.
+
     Returns:
         `(x_index, y_index, unique_x, unique_y)` — `x_index`/`y_index` are
         parallel to `adata.obs` row order (same length, same order):
@@ -96,8 +134,13 @@ def pixel_grid_indices(
     xy = np.asarray(adata.obsm["spatial"], dtype=float)
     x, y = xy[:, 0], xy[:, 1]
 
-    unique_x = np.unique(x)
-    unique_y = np.unique(y)
+    grid_axes = adata.uns.get(GRID_UNS_KEY)
+    if grid_axes is not None:
+        unique_x = np.asarray(grid_axes["x"], dtype=float)
+        unique_y = np.asarray(grid_axes["y"], dtype=float)
+    else:
+        unique_x = np.unique(x)
+        unique_y = np.unique(y)
     x_index = np.searchsorted(unique_x, x)
     y_index = np.searchsorted(unique_y, y)
     return x_index, y_index, unique_x, unique_y
@@ -193,8 +236,7 @@ def render_feature_heatmap(
     Returns:
         An `(n_unique_y, n_unique_x, 4)` `uint8` array (RGBA).
     """
-    col_idx = _feature_column_index(adata, mz)
-    values = _layer_column(adata, layer, col_idx)
+    values = _rendered_feature_values(adata, mz, layer)
     grid = _reconstruct_grid(adata, values)
     return _colorize_grid(grid, colormap, vmin, vmax)
 

@@ -89,6 +89,11 @@ QtObject {
     // washed-out against a light background, hence a distinct, more
     // saturated shade rather than reusing the same hex both ways.
     readonly property color errorColor: isDark ? "#e06c75" : "#c0392b"
+    // Non-blocking caution text: something worked, but with a caveat
+    // (e.g. an imported .h5ad from a different analysis, or an ROI saved
+    // but not written back to its source file). Amber, deeper in light
+    // mode for the same contrast reason as errorColor.
+    readonly property color warningColor: isDark ? "#e5c07b" : "#9a6700"
 
     // --- Accent ----------------------------------------------------------
 

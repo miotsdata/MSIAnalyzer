@@ -30,6 +30,7 @@
         <file>Views/RoiDesignWindow.qml</file>
         <file>Views/LandmarkOverlay.qml</file>
         <file>Views/CoregistrationWindow.qml</file>
+        <file>Views/ImportH5adDialog.qml</file>
         <file>Utils/SearchQuery.js</file>
         <file>Utils/AffineTransform.js</file>
     </qresource>

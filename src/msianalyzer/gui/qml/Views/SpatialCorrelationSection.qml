@@ -34,7 +34,14 @@ Item {
     // touches visible cells, not every row's delegate — see
     // getSpatialCorrelationModel's/SpatialCorrelationModel's own
     // docstrings for the full reasoning.
-    property var model: (analysis && analysis.analysisDbPath)
+    //
+    // Both models follow the active dataset (ADR 49): the bridge caches
+    // one per (analysis, dataset). Reading activeDatasetId/modelRevision
+    // here re-evaluates the binding on a dataset switch and after "Compute
+    // Moran's I" rewrote the dataset's files.
+    property int modelRevision: 0
+    property var model: (analysis && analysis.analysisDbPath
+                         && AnalysisBridge && AnalysisBridge.activeDatasetId >= -1 && modelRevision >= 0)
                          ? AnalysisBridge.getSpatialCorrelationModel(analysis.analysisDbPath)
                          : null
 
@@ -44,9 +51,62 @@ Item {
     // table below the global one; gated on `local_enabled` having
     // actually run for a sample the same way the global table is gated
     // on `enabled`, not on each other.
-    property var localModel: (analysis && analysis.analysisDbPath)
+    property var localModel: (analysis && analysis.analysisDbPath
+                              && AnalysisBridge && AnalysisBridge.activeDatasetId >= -1 && modelRevision >= 0)
                               ? AnalysisBridge.getLocalMoranSummaryModel(analysis.analysisDbPath)
                               : null
+
+    // --- Moran's I on an imported dataset (ADR 49) --------------------
+    // The pipeline computes Moran's I during Run (config
+    // `spatial_correlation`). An imported notebook dataset has no Run, so
+    // it gets an explicit compute action instead (the user's choice: "a
+    // button after import").
+    readonly property bool datasetActive: (AnalysisBridge ? AnalysisBridge.activeDatasetId : -1) >= 0
+    property var datasetInfo: ({})
+    property bool computing: false
+    property int computeDone: 0
+    property int computeTotal: 0
+    property string computeMessage: ""
+    property bool computeFailed: false
+
+    function refreshDatasetInfo() {
+        spatialCorrelationSection.datasetInfo = spatialCorrelationSection.datasetActive
+            ? AnalysisBridge.getActiveDatasetInfo() : ({})
+        spatialCorrelationSection.computeMessage = ""
+    }
+    Component.onCompleted: spatialCorrelationSection.refreshDatasetInfo()
+
+    function computeMoran() {
+        spatialCorrelationSection.computing = true
+        spatialCorrelationSection.computeFailed = false
+        spatialCorrelationSection.computeMessage = ""
+        spatialCorrelationSection.computeDone = 0
+        spatialCorrelationSection.computeTotal = (spatialCorrelationSection.datasetInfo.samples || []).length
+        AnalysisBridge.computeDatasetMoran(analysis.analysisDbPath, moranLayerCombo.currentText,
+                                           globalMoranCheck.checked, localMoranCheck.checked)
+    }
+
+    Connections {
+        target: AnalysisBridge
+        function onActiveDatasetChanged() { spatialCorrelationSection.refreshDatasetInfo() }
+        function onDatasetTaskProgress(done, total, sampleName) {
+            if (!spatialCorrelationSection.computing) return
+            spatialCorrelationSection.computeDone = done
+            spatialCorrelationSection.computeTotal = total
+        }
+        function onDatasetMoranFinished(message) {
+            if (!spatialCorrelationSection.computing) return
+            spatialCorrelationSection.computing = false
+            spatialCorrelationSection.computeMessage = message
+            spatialCorrelationSection.modelRevision += 1
+        }
+        function onDatasetMoranFailed(message) {
+            if (!spatialCorrelationSection.computing) return
+            spatialCorrelationSection.computing = false
+            spatialCorrelationSection.computeFailed = true
+            spatialCorrelationSection.computeMessage = message
+        }
+    }
 
     // True while *either* table's fetch is still in flight — AnalysisPage's
     // currentSectionReady reads this one property, so both tables gate the
@@ -98,6 +158,69 @@ Item {
         anchors.margins: 16
         spacing: 16
 
+        // Imported dataset only: compute Moran's I over its own files.
+        RowLayout {
+            objectName: "datasetMoranBar"
+            visible: spatialCorrelationSection.datasetActive
+            Layout.fillWidth: true
+            spacing: 8
+
+            Label {
+                text: "Dataset \"" + (spatialCorrelationSection.datasetInfo.name || "") + "\" — layer:"
+                font.bold: true
+            }
+            ComboBox {
+                id: moranLayerCombo
+                objectName: "datasetMoranLayerCombo"
+                enabled: !spatialCorrelationSection.computing
+                model: ["X"].concat((spatialCorrelationSection.datasetInfo.layers || [])
+                                    .filter(function (l) { return l !== "localMoranI" }))
+                // Same default the pipeline stage uses, when present.
+                currentIndex: Math.max(0, model.indexOf("TIC"))
+                ToolTip.visible: hovered
+                ToolTip.text: "Which intensities to score: \"X\" is the imported file's own main matrix."
+            }
+            CheckBox {
+                id: globalMoranCheck
+                objectName: "datasetGlobalMoranCheck"
+                text: "Global"
+                checked: true
+                enabled: !spatialCorrelationSection.computing
+            }
+            CheckBox {
+                id: localMoranCheck
+                objectName: "datasetLocalMoranCheck"
+                text: "Local"
+                enabled: !spatialCorrelationSection.computing
+            }
+            Button {
+                objectName: "datasetComputeMoranButton"
+                text: "Compute Moran's I"
+                enabled: !spatialCorrelationSection.computing
+                         && (globalMoranCheck.checked || localMoranCheck.checked)
+                onClicked: spatialCorrelationSection.computeMoran()
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
+            ProgressBar {
+                objectName: "datasetMoranProgressBar"
+                visible: spatialCorrelationSection.computing
+                Layout.preferredWidth: 160
+                from: 0
+                to: Math.max(1, spatialCorrelationSection.computeTotal)
+                value: spatialCorrelationSection.computeDone
+                indeterminate: spatialCorrelationSection.computeDone === 0
+            }
+            Label {
+                objectName: "datasetMoranMessageLabel"
+                visible: spatialCorrelationSection.computeMessage !== ""
+                text: spatialCorrelationSection.computeMessage
+                color: spatialCorrelationSection.computeFailed ? Theme.errorColor : Theme.mutedTextColor
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
+            Item { Layout.fillWidth: true; visible: spatialCorrelationSection.computeMessage === "" }
+        }
+
         // ============================================================
         // Global Moran's I — one score per feature per sample.
         // ============================================================
@@ -118,7 +241,9 @@ Item {
                              || spatialCorrelationSection.sampleNames.length === 0)
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                text: "No spatial correlation scores yet — enable `spatial_correlation` in the run config."
+                text: spatialCorrelationSection.datasetActive
+                      ? "No Moran's I scores for this imported dataset yet — use \"Compute Moran's I\" above."
+                      : "No spatial correlation scores yet — enable `spatial_correlation` in the run config."
                 color: Theme.mutedTextColor
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter

@@ -122,6 +122,12 @@ Window {
     property color draftColor: "white"
     readonly property bool canClose: roiWindow.draftVertices.length >= 3
     property string saveError: ""
+    // Set when an ROI saved fine but couldn't be written back into an
+    // imported dataset's source .h5ad (ADR 49), e.g. because the file was
+    // moved or is locked by a notebook. Unlike saveError, the save
+    // itself succeeded, so this survives resetDraft() until the next
+    // save attempt.
+    property string saveWarning: ""
 
     property var savedRois: []
     function refreshSavedRois() {
@@ -286,6 +292,7 @@ Window {
         var result = AnalysisBridge.saveRoi(
             roiWindow.analysis.analysisDbPath, roiWindow.selectedSample.name,
             roiWindow.draftName, roiWindow.draftColor.toString(), roiWindow.draftVertices)
+        roiWindow.saveWarning = result.warning ? result.warning : ""
         if (result.ok) {
             var savedSampleName = roiWindow.selectedSample.name
             var savedRoiName = roiWindow.draftName
@@ -597,6 +604,16 @@ Window {
                             HoverHandler { cursorShape: Qt.PointingHandCursor }
                         }
                     }
+                }
+
+                Label {
+                    objectName: "roiSaveWarningLabel"
+                    visible: roiWindow.saveWarning.length > 0
+                    text: roiWindow.saveWarning
+                    color: Theme.warningColor
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 1
                 }
 
                 Label {

@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 from urllib.parse import unquote
 
 import anndata as ad
@@ -8,6 +7,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickImageProvider
 
 from msianalyzer.core import analysis_db
+from msianalyzer.core.imported_dataset import sample_h5ad_path
 from msianalyzer.core.plotting.heatmap import render_heatmap_by_target
 from msianalyzer.core.registration import load_registration, warp_heatmap_to_he_space
 
@@ -40,9 +40,14 @@ class HEOverlayImageProvider(QQuickImageProvider):
     def __init__(self) -> None:
         super().__init__(QQuickImageProvider.ImageType.Image)
         self._analysis_db_path: str | None = None
+        self._rel_dir: str | None = None
 
-    def setAnalysisDbPath(self, analysis_db_path: str) -> None:
+    def setAnalysisDbPath(self, analysis_db_path: str, rel_dir: str | None = None) -> None:
+        """Same contract as `HeatmapImageProvider.setAnalysisDbPath` — the
+        registration is per sample (raw DB), so only the `.h5ad` the
+        warped heatmap is rendered from follows `rel_dir`."""
         self._analysis_db_path = analysis_db_path
+        self._rel_dir = rel_dir or None
 
     def requestImage(self, id: str, size: QSize, requestedSize: QSize) -> QImage:
         try:
@@ -60,7 +65,7 @@ class HEOverlayImageProvider(QQuickImageProvider):
             if info is None or info.fit is None:
                 return QImage()
 
-            h5ad_path = Path(self._analysis_db_path).parent / f"{sample_name}.h5ad"
+            h5ad_path = sample_h5ad_path(self._analysis_db_path, sample_name, self._rel_dir)
             if not h5ad_path.exists():
                 return QImage()
             adata = ad.read_h5ad(h5ad_path)

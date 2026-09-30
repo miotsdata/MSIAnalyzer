@@ -90,6 +90,49 @@ Flickable {
         controlsFlickable.refreshObsColumns()
     }
 
+    // --- Imported dataset (ADR 49) -----------------------------------
+    // An imported notebook .h5ad has its own layers, which may not
+    // include the pipeline's raw/TIC pair, and "X" may itself be what the
+    // notebook normalized. So while one is active, the Raw/TIC buttons
+    // give way to a picker over "X" plus the dataset's own layers.
+    property bool datasetActive: (AnalysisBridge ? AnalysisBridge.activeDatasetId : -1) >= 0
+    property var datasetLayerOptions: ["X"]
+
+    function refreshDatasetLayers() {
+        if (!controlsFlickable.datasetActive) {
+            controlsFlickable.datasetLayerOptions = ["X"]
+            // Back on the pipeline output: a dataset-only layer choice
+            // means nothing here any more.
+            if (["raw", controlsFlickable.normalizedLayerName, "localMoran"]
+                    .indexOf(controlsFlickable.dataLayer) < 0)
+                controlsFlickable.dataLayer = controlsFlickable.normalizedLayerName
+            return
+        }
+        var info = AnalysisBridge.getActiveDatasetInfo()
+        var layers = (info.layers || []).filter(function (l) { return l !== "localMoranI" })
+        controlsFlickable.datasetLayerOptions = ["X"].concat(layers)
+        if (controlsFlickable.dataLayer !== "localMoran"
+                && controlsFlickable.datasetLayerOptions.indexOf(controlsFlickable.dataLayer) < 0)
+            controlsFlickable.dataLayer = layers.indexOf(controlsFlickable.normalizedLayerName) >= 0
+                                          ? controlsFlickable.normalizedLayerName : "X"
+    }
+
+    Connections {
+        target: AnalysisBridge
+        // A different dataset: new feature list (a notebook may have
+        // dropped features), new obs columns (clusters, ...), new layers.
+        // The sample list itself is rebound by the owner (samples ->
+        // onSamplesChanged -> refreshObsColumns).
+        function onActiveDatasetChanged() {
+            controlsFlickable.refreshDatasetLayers()
+            controlsFlickable.selectedFeatureIndex = 0
+            controlsFlickable.refreshFeatures()
+            controlsFlickable.refreshObsColumns()
+            controlsFlickable.refresh()
+        }
+    }
+    Component.onCompleted: controlsFlickable.refreshDatasetLayers()
+
     Connections {
         target: AnalysisBridge
         function onFeatureListReady(receivedFeatures) {
@@ -453,23 +496,31 @@ Flickable {
     // warped-onto-H&E overlay, see core/registration/overlay.py) — kept
     // separate from tileSource so a second provider can reuse the exact
     // same target-encoding logic instead of duplicating it.
+    //
+    // Every target ends with a "|ds<id>" field naming the active dataset
+    // (ADR 49; "ds-1" = pipeline output). The Python parsers read their
+    // fields by position and ignore it. It exists so that switching
+    // datasets changes every tile's URL, which makes QML's Image actually
+    // re-request it, and so both providers' render caches keep datasets
+    // apart. HeatmapPrefetchWorker appends the same token.
     function tileTarget(sampleName) {
         if (!controlsFlickable.analysis) return ""
+        var ds = "|ds" + (AnalysisBridge ? AnalysisBridge.activeDatasetId : -1)
         if (controlsFlickable.inspectionMode === "obs") {
             if (!controlsFlickable.selectedObsColumn) return ""
             if (controlsFlickable.isSelectedObsNumeric) {
                 return sampleName + "|obs:" + controlsFlickable.selectedObsColumn
                        + "|" + controlsFlickable.colormap
                        + "|" + controlsFlickable.vminToken()
-                       + "|" + controlsFlickable.vmaxToken()
+                       + "|" + controlsFlickable.vmaxToken() + ds
             }
             var cats = controlsFlickable.obsCategoryLegend.map(function (c) { return c.category }).join(",")
-            return sampleName + "|obs:" + controlsFlickable.selectedObsColumn + "|" + cats
+            return sampleName + "|obs:" + controlsFlickable.selectedObsColumn + "|" + cats + ds
         }
         if (!controlsFlickable.selectedFeature) return ""
         return sampleName + "|" + controlsFlickable.selectedFeature.mz + "|"
                + controlsFlickable.dataLayer + "|" + controlsFlickable.colormap + "|"
-               + controlsFlickable.vminToken() + "|" + controlsFlickable.vmaxToken()
+               + controlsFlickable.vminToken() + "|" + controlsFlickable.vmaxToken() + ds
     }
 
     // One sample's image://heatmap/... source, for either mode — shared by
@@ -656,6 +707,18 @@ Flickable {
             font.bold: true
             visible: controlsFlickable.inspectionMode === "feature"
         }
+        ComboBox {
+            id: datasetLayerCombo
+            objectName: "datasetLayerCombo"
+            Layout.fillWidth: true
+            visible: controlsFlickable.inspectionMode === "feature" && controlsFlickable.datasetActive
+            model: controlsFlickable.datasetLayerOptions
+            currentIndex: model.indexOf(controlsFlickable.dataLayer)
+            onActivated: (index) => controlsFlickable.dataLayer = model[index]
+            ToolTip.visible: hovered
+            ToolTip.text: "\"X\" is the imported file's own main matrix; the others are its layers."
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+        }
         RowLayout {
             visible: controlsFlickable.inspectionMode === "feature"
             // Plain (non-checkable) Buttons rather than RadioButton +
@@ -673,6 +736,7 @@ Flickable {
             Button {
                 id: rawLayerButton
                 objectName: "rawLayerButton"
+                visible: !controlsFlickable.datasetActive
                 text: "Raw"
                 highlighted: controlsFlickable.dataLayer === "raw"
                 onClicked: controlsFlickable.dataLayer = "raw"
@@ -696,6 +760,7 @@ Flickable {
             Button {
                 id: ticLayerButton
                 objectName: "ticLayerButton"
+                visible: !controlsFlickable.datasetActive
                 // Friendlier label than the raw layer key: "TIC" for a
                 // TIC-normalized analysis, "m/z 154.0863" for a
                 // reference-m/z-normalized one — dataLayer's actual value
