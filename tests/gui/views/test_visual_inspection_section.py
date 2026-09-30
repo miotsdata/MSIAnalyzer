@@ -139,6 +139,21 @@ def test_tic_button_reflects_reference_mz_normalized_analysis(
     tic_button = find_visual_child(root, "ticLayerButton")
     assert tic_button.property("text") == "m/z 154.0863"
 
+    # The label just grew from "TIC" to "m/z 154.0863"; the RowLayout
+    # re-positions the next button on its next layout pass, not
+    # synchronously. Until then Local Moran's I still sits where the
+    # short label ended, over the right half of this button, and a click
+    # at its center can land there. Wait for the row to settle, the way
+    # it has long since settled by the time a real user clicks.
+    moran_button = find_visual_child(root, "localMoranLayerButton")
+
+    def _row_settled():
+        tic_right = tic_button.mapToScene(tic_button.boundingRect().topRight()).x()
+        moran_left = moran_button.mapToScene(moran_button.boundingRect().topLeft()).x()
+        return tic_right <= moran_left
+
+    qtbot.waitUntil(_row_settled, timeout=2000)
+
     raw_button = find_visual_child(root, "rawLayerButton")
     center = raw_button.mapToScene(raw_button.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
