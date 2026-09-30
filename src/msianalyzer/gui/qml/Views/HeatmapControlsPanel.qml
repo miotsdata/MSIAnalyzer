@@ -262,10 +262,30 @@ Flickable {
     // same syntax as Annotate's fields, see SearchQuery.matchesName/
     // matchesMz. Both must match when both are non-empty. Applied before
     // sorting; feature-mode only, an obs column has no name/mz to search.
+    //
+    // Applied explicitly (Search button / Enter), not per keystroke — the
+    // same draft-then-apply shape as vmin/vmax below. Applying resets the
+    // selection to the first match, which re-renders every visible tile
+    // and refetches the autoscale range; doing that on every character
+    // rendered heatmaps for features nobody meant to look at, and churned
+    // the provider's small render cache.
     property string nameQuery: ""
     property string mzQuery: ""
+    property string draftNameQuery: ""
+    property string draftMzQuery: ""
+    readonly property bool searchPending: draftNameQuery !== nameQuery || draftMzQuery !== mzQuery
     onNameQueryChanged: controlsFlickable.selectedFeatureIndex = 0
     onMzQueryChanged: controlsFlickable.selectedFeatureIndex = 0
+
+    function applySearch() {
+        controlsFlickable.nameQuery = controlsFlickable.draftNameQuery
+        controlsFlickable.mzQuery = controlsFlickable.draftMzQuery
+    }
+    function clearSearch() {
+        controlsFlickable.draftNameQuery = ""
+        controlsFlickable.draftMzQuery = ""
+        controlsFlickable.applySearch()
+    }
 
     readonly property var filteredFeatures: controlsFlickable.features.filter(function (f) {
         return SearchQuery.matchesName(controlsFlickable.nameQuery, f.compound_name)
@@ -603,8 +623,9 @@ Flickable {
             Layout.fillWidth: true
             visible: controlsFlickable.inspectionMode === "feature"
             placeholderText: "Search name…"
-            text: controlsFlickable.nameQuery
-            onTextChanged: controlsFlickable.nameQuery = text
+            text: controlsFlickable.draftNameQuery
+            onTextChanged: controlsFlickable.draftNameQuery = text
+            onAccepted: controlsFlickable.applySearch()
         }
         TextField {
             id: featureMzSearchField
@@ -612,8 +633,31 @@ Flickable {
             Layout.fillWidth: true
             visible: controlsFlickable.inspectionMode === "feature"
             placeholderText: "Search m/z…"
-            text: controlsFlickable.mzQuery
-            onTextChanged: controlsFlickable.mzQuery = text
+            text: controlsFlickable.draftMzQuery
+            onTextChanged: controlsFlickable.draftMzQuery = text
+            onAccepted: controlsFlickable.applySearch()
+        }
+        RowLayout {
+            visible: controlsFlickable.inspectionMode === "feature"
+            Button {
+                id: featureSearchButton
+                objectName: "featureSearchButton"
+                text: "Search"
+                Layout.fillWidth: true
+                // Enabled only while the fields hold an edit not yet
+                // applied — same convention as "Apply color range".
+                enabled: controlsFlickable.searchPending
+                onClicked: controlsFlickable.applySearch()
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
+            Button {
+                objectName: "featureSearchClearButton"
+                text: "Clear"
+                enabled: controlsFlickable.nameQuery !== "" || controlsFlickable.mzQuery !== ""
+                         || controlsFlickable.draftNameQuery !== "" || controlsFlickable.draftMzQuery !== ""
+                onClicked: controlsFlickable.clearSearch()
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
         }
         RowLayout {
             visible: controlsFlickable.inspectionMode === "feature"

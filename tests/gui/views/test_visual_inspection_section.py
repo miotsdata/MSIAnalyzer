@@ -442,28 +442,43 @@ def test_sort_mode_combo_reflects_default_mz_sort(
     assert sort_combo.property("currentIndex") == 0
 
 
-def test_search_field_updates_search_query(
-    analysis_view, sortable_features_model, find_visual_child, qtbot
-):
-    view = analysis_view(sortable_features_model)
-    root = view.rootObject()
-    _open_visual_tab(view, root, find_visual_child, qtbot)
-
-    section = find_visual_child(root, "controlsFlickable")
-    search_field = find_visual_child(root, "featureNameSearchField")
+def _type_into(view, qtbot, field, text):
     # Real key events, not setProperty("text", ...) — see
     # test_name_search_field_updates_name_query in test_annotations_section.py
     # for why (the field's `text` carries a declarative binding back to
-    # `nameQuery`, which a plain setProperty write races).
-    center = search_field.mapToScene(search_field.boundingRect().center()).toPoint()
+    # its draft property, which a plain setProperty write races).
+    center = field.mapToScene(field.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
-    for ch in "zebra":
-        qtbot.keyClick(view, ord(ch.upper()))
-
-    assert section.property("nameQuery").lower() == "zebra"
+    for ch in text:
+        qtbot.keyClick(view, ord(ch.upper()) if ch.isalpha() else ord(ch))
 
 
-def test_mz_search_field_updates_mz_query(
+def _click(view, qtbot, item):
+    center = item.mapToScene(item.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(20)
+
+
+def test_typing_in_search_field_only_updates_the_draft(
+    analysis_view, sortable_features_model, find_visual_child, qtbot
+):
+    # Typing must not filter (nor reset the selected feature, which would
+    # re-render every tile) per keystroke — only Search/Enter applies it.
+    view = analysis_view(sortable_features_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    labels_before = section.property("featureLabels").toVariant()
+    _type_into(view, qtbot, find_visual_child(root, "featureNameSearchField"), "zebra")
+
+    assert section.property("draftNameQuery").lower() == "zebra"
+    assert section.property("nameQuery") == ""
+    assert section.property("featureLabels").toVariant() == labels_before
+    assert section.property("searchPending") is True
+
+
+def test_enter_in_search_field_applies_the_search(
     analysis_view, sortable_features_model, find_visual_child, qtbot
 ):
     view = analysis_view(sortable_features_model)
@@ -471,13 +486,52 @@ def test_mz_search_field_updates_mz_query(
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
-    search_field = find_visual_child(root, "featureMzSearchField")
-    center = search_field.mapToScene(search_field.boundingRect().center()).toPoint()
-    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
-    for ch in "150":
-        qtbot.keyClick(view, ord(ch))
+    _type_into(view, qtbot, find_visual_child(root, "featureMzSearchField"), "150")
+    assert section.property("mzQuery") == ""
+    qtbot.keyClick(view, Qt.Key_Return)
 
     assert section.property("mzQuery") == "150"
+    assert section.property("featureLabels").toVariant() == ["m/z 150.0000"]
+    assert section.property("searchPending") is False
+
+
+def test_search_button_applies_both_fields(
+    analysis_view, sortable_features_model, find_visual_child, qtbot
+):
+    view = analysis_view(sortable_features_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    _type_into(view, qtbot, find_visual_child(root, "featureNameSearchField"), "zebra")
+    _type_into(view, qtbot, find_visual_child(root, "featureMzSearchField"), "90-110")
+    _click(view, qtbot, find_visual_child(root, "featureSearchButton"))
+
+    assert section.property("nameQuery").lower() == "zebra"
+    assert section.property("mzQuery") == "90-110"
+    assert section.property("featureLabels").toVariant() == ["100.0000: Zebra compound"]
+
+
+def test_clear_button_resets_fields_and_search(
+    analysis_view, sortable_features_model, find_visual_child, qtbot
+):
+    view = analysis_view(sortable_features_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    all_labels = section.property("featureLabels").toVariant()
+    name_field = find_visual_child(root, "featureNameSearchField")
+    _type_into(view, qtbot, name_field, "zebra")
+    _click(view, qtbot, find_visual_child(root, "featureSearchButton"))
+    assert len(section.property("featureLabels").toVariant()) == 1
+
+    _click(view, qtbot, find_visual_child(root, "featureSearchClearButton"))
+
+    assert section.property("nameQuery") == ""
+    assert section.property("draftNameQuery") == ""
+    assert name_field.property("text") == ""
+    assert section.property("featureLabels").toVariant() == all_labels
 
 
 def test_search_by_name_substring_filters_to_matching_feature(
@@ -606,6 +660,8 @@ def test_moving_vmin_slider_does_not_re_render_until_apply_clicked(
 
     apply_button = find_visual_child(root, "applyColorRangeButton")
     assert apply_button.property("enabled") is True
+    _scroll_controls_panel_to(root, find_visual_child, apply_button)
+    qtbot.wait(20)
     center = apply_button.mapToScene(apply_button.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(50)
