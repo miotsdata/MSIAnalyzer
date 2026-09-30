@@ -6,7 +6,7 @@ import pandas as pd
 from PySide6.QtGui import QImage
 from scipy.sparse import csr_matrix
 
-from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider
+from msianalyzer.gui.utils.heatmap_provider import HeatmapImageProvider, load_light_sample
 
 
 def _write_sample_h5ad(path, values=(0.0, 10.0, 5.0, 15.0), obs_columns=None):
@@ -162,11 +162,10 @@ def test_invalidate_clears_cached_renders_for_that_sample(tmp_path):
         assert spy.call_count == 2  # re-rendered, not served from the stale cache
 
 
-def test_prefetch_render_target_populates_cache_for_a_later_request_image_call(tmp_path):
-    # The exact mechanism AnalysisBridge.prefetchHeatmapSamples relies on:
-    # pre-populating the render cache from a background thread so the
-    # real (synchronous, GUI-thread) requestImage call that follows is a
-    # cache hit, not a fresh matplotlib render.
+def test_render_target_populates_cache_for_a_later_request_image_call(tmp_path):
+    # What HEOverlayImageProvider relies on: a render through
+    # _render_target is cached under the full request id, so a later
+    # requestImage for the same id is a cache hit, not a fresh render.
     from msianalyzer.core.plotting import heatmap as heatmap_module
 
     _write_sample_h5ad(tmp_path / "s1.h5ad")
@@ -217,7 +216,7 @@ def test_request_image_reuses_cached_adata(tmp_path):
     provider = HeatmapImageProvider()
     provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
 
-    with patch("msianalyzer.gui.utils.heatmap_provider.ad.read_h5ad", wraps=ad.read_h5ad) as spy:
+    with patch("msianalyzer.gui.utils.heatmap_provider.load_light_sample", wraps=load_light_sample) as spy:
         provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
         provider.requestImage("s1|100.0|raw|magma|0|15", None, None)
         assert spy.call_count == 1
@@ -234,7 +233,7 @@ def test_set_analysis_db_path_clears_cache_on_change(tmp_path):
     provider = HeatmapImageProvider()
     provider.setAnalysisDbPath(str(dir_a / "analysis.db"))
 
-    with patch("msianalyzer.gui.utils.heatmap_provider.ad.read_h5ad", wraps=ad.read_h5ad) as spy:
+    with patch("msianalyzer.gui.utils.heatmap_provider.load_light_sample", wraps=load_light_sample) as spy:
         provider.requestImage("s1|100.0|raw|viridis|0|15", None, None)
         assert spy.call_count == 1
 
@@ -435,3 +434,139 @@ def test_request_image_handles_percent_encoded_obs_id(tmp_path):
     image = provider.requestImage(encoded_id, None, None)
 
     assert not image.isNull()
+
+
+# ---------------------------------------------------------------------------
+# ADR 50: asynchronous, serial rendering + budgeted light-sample cache
+# ---------------------------------------------------------------------------
+
+
+def test_request_image_response_renders_off_the_calling_thread(tmp_path, qtbot):
+    import threading
+
+    _write_sample_h5ad(tmp_path / "s1.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    render_threads = []
+    real = provider.requestImage
+
+    def spy(*args):
+        render_threads.append(threading.current_thread())
+        return real(*args)
+
+    provider.requestImage = spy
+    response = provider.requestImageResponse("s1|100.0|raw|viridis|0|15", None)
+    qtbot.waitUntil(lambda: response.done, timeout=5000)
+    assert render_threads and render_threads[0] is not threading.main_thread()
+
+
+def test_request_image_response_texture_is_the_rendered_image(tmp_path, qtbot):
+    _write_sample_h5ad(tmp_path / "s1.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    response = provider.requestImageResponse("s1|100.0|raw|viridis|0|15", None)
+    qtbot.waitUntil(lambda: not response._image.isNull(), timeout=5000)
+    assert response._image.width() == 2 and response._image.height() == 2
+
+
+def test_renders_never_run_concurrently(tmp_path, qtbot):
+    import threading
+    import time as _time
+
+    for name in ("s1", "s2", "s3"):
+        _write_sample_h5ad(tmp_path / f"{name}.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    active = [0]
+    peak = [0]
+    guard = threading.Lock()
+    real = provider.requestImage
+
+    def slow(*args):
+        with guard:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        _time.sleep(0.02)
+        try:
+            return real(*args)
+        finally:
+            with guard:
+                active[0] -= 1
+
+    provider.requestImage = slow
+    responses = [
+        provider.requestImageResponse(f"{n}|100.0|raw|viridis|0|{v}", None)
+        for n in ("s1", "s2", "s3") for v in (10, 15, 20)
+    ]
+    qtbot.waitUntil(lambda: all(not r._image.isNull() for r in responses), timeout=10000)
+    assert peak[0] == 1
+
+
+def test_cancelled_response_skips_the_render_but_still_finishes(tmp_path, qtbot):
+    _write_sample_h5ad(tmp_path / "s1.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    # Hold the single render thread busy so the second request is still
+    # queued when it gets cancelled.
+    import threading
+    release = threading.Event()
+    calls = []
+    real = provider.requestImage
+
+    def gated(id_, *rest):
+        calls.append(id_)
+        if id_.endswith("|0|15"):
+            release.wait(5)
+        return real(id_, *rest)
+
+    provider.requestImage = gated
+    first = provider.requestImageResponse("s1|100.0|raw|viridis|0|15", None)
+    second = provider.requestImageResponse("s1|100.0|raw|viridis|0|99", None)
+    second.cancel()
+    release.set()
+    qtbot.waitUntil(lambda: second.done, timeout=5000)
+    assert calls == ["s1|100.0|raw|viridis|0|15"]
+    assert second._image.isNull()
+
+
+def test_warm_loads_samples_so_tiles_do_not_read_files(tmp_path):
+    for name in ("s1", "s2"):
+        _write_sample_h5ad(tmp_path / f"{name}.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    provider.warm(["s1", "s2"], "raw")
+    with patch("msianalyzer.gui.utils.heatmap_provider.load_light_sample",
+               wraps=load_light_sample) as spy:
+        assert not provider.requestImage("s1|100.0|raw|viridis|0|15", None, None).isNull()
+        assert not provider.requestImage("s2|100.0|raw|viridis|0|15", None, None).isNull()
+        assert spy.call_count == 0
+
+
+def test_cache_budget_evicts_least_recently_used_samples(tmp_path):
+    for name in ("s1", "s2", "s3"):
+        _write_sample_h5ad(tmp_path / f"{name}.h5ad")
+    provider = HeatmapImageProvider(cache_budget_bytes=1)  # smaller than any sample
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    provider.warm(["s1", "s2", "s3"], "raw")
+    assert list(provider._cache) == [str(tmp_path / "s3.h5ad")]  # most recent kept
+
+
+def test_cache_holds_many_samples_under_a_normal_budget(tmp_path):
+    names = [f"s{i}" for i in range(16)]
+    for name in names:
+        _write_sample_h5ad(tmp_path / f"{name}.h5ad")
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    provider.warm(names, "raw")
+    assert len(provider._cache) == 16  # the old fixed 4-entry cache thrashed here
+
+
+def test_missing_sample_response_reports_an_error_not_an_empty_image(tmp_path, qtbot):
+    # A Ready-but-0x0 image blocks all input in ZoomableImage; a missing
+    # sample must reach QML as Image.Error, exactly like the old
+    # synchronous provider's null QImage did.
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    response = provider.requestImageResponse("nope|100.0|raw|viridis|0|15", None)
+    qtbot.waitUntil(lambda: response.done, timeout=5000)
+    assert response.errorString() == "no image"

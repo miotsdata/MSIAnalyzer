@@ -18,6 +18,8 @@ from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
 from msianalyzer.gui.utils import single_instance
 
 from msianalyzer.core.utils import configure_logging
+from msianalyzer.core.utils.logging_utils import default_debug_log_dir
+from msianalyzer.gui.utils.freeze_watchdog import FreezeWatchdog
 
 
 def apply_font_scale(scale: float = 0.9) -> None:
@@ -126,7 +128,13 @@ def main() -> int:
 
     single_instance.connect_activation(server, _activate_existing_window)
 
+    # Any GUI-thread stall of 3 s or more (a "not responding" freeze) dumps
+    # every thread's stack next to the debug log (ADR 50).
+    watchdog = FreezeWatchdog(default_debug_log_dir())
+    watchdog.start()
+
     exit_code = app.exec()
+    watchdog.stop()
 
     # `app.exec()` returning means every window closed (or the user
     # confirmed quitting mid-run, see Main.qml's quitDuringRunDialog) —

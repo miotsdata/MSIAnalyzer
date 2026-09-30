@@ -104,6 +104,8 @@ Item {
             opacity: canvas.overlayOpacity
             smooth: false
             cache: false
+            // image://he_overlay is an async provider (ADR 50): it renders off
+            // the GUI thread regardless of this setting.
             asynchronous: false
             source: canvas.heMode ? canvas.heOverlaySource : ""
         }

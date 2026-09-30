@@ -8,8 +8,34 @@ Item {
     objectName: "summarySection"
 
     property var analysis
-    property var stats: (analysis && analysis.analysisDbPath)
-                         ? AnalysisBridge.getSummary(analysis.analysisDbPath) : null
+    // Fetched on a background thread (requestSummary / summaryReady): the
+    // counts aggregate over every MS2 annotation and froze the GUI for
+    // seconds on a large analysis (ADR 50). `statsLoading` gates
+    // AnalysisPage's loading overlay via currentSectionReady.
+    property var stats: null
+    property bool statsLoading: false
+
+    function refreshStats() {
+        if (analysis && analysis.analysisDbPath && AnalysisBridge) {
+            summarySection.statsLoading = true
+            AnalysisBridge.requestSummary(analysis.analysisDbPath)
+        } else {
+            summarySection.stats = null
+            summarySection.statsLoading = false
+        }
+    }
+    onAnalysisChanged: summarySection.refreshStats()
+    Component.onCompleted: summarySection.refreshStats()
+
+    Connections {
+        target: AnalysisBridge
+        function onSummaryReady(dbPath, counts) {
+            if (!summarySection.analysis || dbPath !== summarySection.analysis.analysisDbPath)
+                return
+            summarySection.stats = counts
+            summarySection.statsLoading = false
+        }
+    }
     // Distinct from "stats is null" (no db path resolved at all) — an
     // existing-but-empty analysis (0 samples, 0 features) also counts as
     // "nothing to show" for the empty-state message.
@@ -37,7 +63,7 @@ Item {
     Label {
         id: emptyStateLabel
         objectName: "summaryEmptyStateLabel"
-        visible: !hasData
+        visible: !hasData && !statsLoading
         anchors.centerIn: parent
         text: "No analysis data available."
         color: Theme.mutedTextColor

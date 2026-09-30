@@ -65,6 +65,14 @@ def resolve_log_level(level: int | str) -> int:
         ) from exc
 
 
+def default_debug_log_dir() -> Path:
+    """Where the always-on DEBUG log goes when no directory is given:
+    ``<src/msianalyzer>/log``. The GUI's freeze dumps (ADR 50) go here too."""
+    # this file: src/msianalyzer/core/utils/logging_utils.py
+    # parents[2] -> src/msianalyzer
+    return Path(__file__).resolve().parents[2] / "log"
+
+
 def configure_logging(
     *,
     level: int | str = logging.INFO,
@@ -118,9 +126,7 @@ def configure_logging(
 
     # Debug file handler: always DEBUG+, verbose format
     if debug_log_dir is None:
-        # this file: src/msianalyzer/core/utils/logging_utils.py
-        # parents[2] -> src/msianalyzer
-        debug_log_dir = Path(__file__).resolve().parents[2] / "log"
+        debug_log_dir = default_debug_log_dir()
     debug_log_dir = Path(debug_log_dir)
     debug_log_dir.mkdir(parents=True, exist_ok=True)
 

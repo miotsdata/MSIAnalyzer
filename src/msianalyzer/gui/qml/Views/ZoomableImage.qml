@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 
 Flickable {
     id: root
@@ -72,20 +73,15 @@ Flickable {
         // want for reading discrete per-pixel values off a heatmap.
         smooth: false
         cache: false
-        // Deliberately synchronous: `asynchronous: true` runs
-        // HeatmapImageProvider.requestImage() on Qt's background image
-        // thread pool, and with 2+ visible tiles that means 2+ concurrent
-        // calls into the same Python-implemented provider — reproduced as
-        // an intermittent hang inside AnalysisPage's QML construction
-        // (bisected to exactly this) whenever a test seeded more than one
-        // sample. Root cause not fully pinned down (most likely matplotlib
-        // colormap/Normalize global state under concurrent access, or a
-        // PySide6 cross-thread callback edge case) but synchronous loading
-        // reproduced zero hangs across 25+ full-suite stress runs, vs.
-        // ~30-50% with async on. These tiles are small rasters (one
-        // pixel per spatial coordinate) so synchronous rendering doesn't
-        // meaningfully block the UI.
-        asynchronous: false
+        // Heatmap tiles come from HeatmapImageProvider, a
+        // QQuickAsyncImageProvider (ADR 50), so they always load off the
+        // GUI thread whatever `asynchronous` says. They render one at a
+        // time on the provider's own single render thread. This replaced
+        // `asynchronous: false`, which ran every render (including a
+        // cold, multi-second .h5ad read) on the GUI thread and froze the
+        // app across a 16-sample grid. The old reason for keeping it
+        // synchronous (concurrent Python renders hanging) doesn't apply:
+        // the provider never renders concurrently.
     }
 
     // Exactly tracks the Image's own position/size — overlay children
@@ -101,6 +97,19 @@ Flickable {
         width: image.width
         height: image.height
         property alias effectiveScale: root.effectiveScale
+    }
+
+    // Shown while this tile's image is being rendered. Parented to the
+    // Flickable itself, not its content, so it stays centred in view
+    // rather than scrolling with the image.
+    BusyIndicator {
+        objectName: "zoomableImageBusy"
+        parent: root
+        anchors.centerIn: parent
+        width: Math.min(40, root.width / 3)
+        height: width
+        running: image.status === Image.Loading
+        visible: running
     }
 
     WheelHandler {

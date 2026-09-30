@@ -232,3 +232,38 @@ def test_sync_roi_deletion_to_merged_keeps_other_samples(tmp_path):
     assert set(reread.uns["rois"]["liver"]["samples"].keys()) == {"s2"}
     assert reread.obs.loc[reread.obs["sample"] == "s1", "roi_liver"].sum() == 0
     assert reread.obs.loc[reread.obs["sample"] == "s2", "roi_liver"].sum() == 4
+
+
+# ---------------------------------------------------------------------------
+# ADR 50: element-level writes — never a full AnnData load/rewrite
+# ---------------------------------------------------------------------------
+
+
+def test_roi_save_and_delete_never_load_the_anndata_and_keep_x(tmp_path):
+    from unittest.mock import patch
+
+    path = tmp_path / "s1.h5ad"
+    _write_sample_h5ad(path)
+    x_before = ad.read_h5ad(path).X.toarray()
+
+    with patch("anndata.read_h5ad", side_effect=AssertionError("full read")), \
+            patch("anndata.AnnData.write_h5ad", side_effect=AssertionError("full write")):
+        assert save_roi_to_sample(path, "liver", "#ff0000", [[1, 1], [3, 1], [3, 3], [1, 3]]) == 4
+        assert set(load_sample_rois(path)) == {"liver"}
+        assert delete_roi_from_sample(path, "liver") is True
+
+    reread = ad.read_h5ad(path)
+    np.testing.assert_array_equal(reread.X.toarray(), x_before)
+    assert "roi_liver" not in reread.obs.columns
+    assert load_sample_rois(path) == {}
+
+
+def test_two_rois_keep_obs_column_order(tmp_path):
+    path = tmp_path / "s1.h5ad"
+    _write_sample_h5ad(path)
+    save_roi_to_sample(path, "a", "#ff0000", [[0, 0], [2, 0], [2, 2]])
+    save_roi_to_sample(path, "b", "#00ff00", [[1, 1], [3, 1], [3, 3]])
+    save_roi_to_sample(path, "a", "#ff0000", [[0, 0], [4, 0], [4, 4]])  # overwrite
+    reread = ad.read_h5ad(path)
+    assert [c for c in reread.obs.columns if c.startswith("roi_")] == ["roi_a", "roi_b"]
+    assert reread.obs["roi_a"].dtype == bool

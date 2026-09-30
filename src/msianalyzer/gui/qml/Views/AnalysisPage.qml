@@ -125,8 +125,9 @@ Page {
             sectionStack.currentIndex = 3
             return
         }
+        // Every sample: the grid is a scrollable column of all of them, and
+        // the provider's cache is sized to hold them all (ADR 50).
         var sampleNames = AnalysisBridge.getInspectionSamples(analysisPage.analysis.analysisDbPath)
-                                        .slice(0, 4)  // matches VisualInspectionSection's own grid cap
                                         .map(function (s) { return s.name })
         analysisPage.switchingToVisual = true
         AnalysisBridge.prefetchHeatmapSamples(analysisPage.analysis.analysisDbPath, sampleNames)
@@ -492,6 +493,7 @@ Page {
         if (analysisPage.switchingToVisual) return false
         switch (sectionStack.currentIndex) {
         case 0: return summaryLoader.status === Loader.Ready
+                       && summaryLoader.item && !summaryLoader.item.statsLoading
         case 1: return ms1Loader.status === Loader.Ready
                        && ms1Loader.item && !ms1Loader.item.plotLoading
         case 2: return annotationsLoader.status === Loader.Ready

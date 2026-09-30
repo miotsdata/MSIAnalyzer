@@ -1,32 +1,60 @@
 import logging
+import os
+import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import unquote
 
-import anndata as ad
 import numpy as np
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QImage
-from PySide6.QtQuick import QQuickImageProvider
+from PySide6.QtQuick import QQuickAsyncImageProvider, QQuickImageResponse
 
 from msianalyzer.core.imported_dataset import sample_h5ad_path
 from msianalyzer.core.plotting.heatmap import (
     category_color,
     feature_value_range,
-    list_obs_columns,
     obs_categories,
     obs_value_range,
     render_colorbar,
     render_heatmap_by_target,
 )
+from msianalyzer.core.plotting.light_sample import LightSample
+from msianalyzer.gui.utils.async_image import new_render_pool, start_render
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SIZE = 4
-_RENDER_CACHE_SIZE = 16
+#: Rendered tiles are small (one pixel per spatial coordinate); this many
+#: covers several screens' worth of recently viewed tiles for a 16-sample
+#: grid.
+_RENDER_CACHE_SIZE = 128
+_FALLBACK_BUDGET_BYTES = 4 * 1024**3
 
 
-class HeatmapImageProvider(QQuickImageProvider):
+def default_cache_budget_bytes() -> int:
+    """How much memory the per-sample data cache may hold: a quarter of
+    physical RAM (about 16 GB on a 64 GB machine), so every sample of a
+    typical project stays warm on the layer being viewed."""
+    try:
+        return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") * 0.25)
+    except (ValueError, OSError, AttributeError):
+        return _FALLBACK_BUDGET_BYTES
+
+
+def rgba_to_qimage(rgba: np.ndarray) -> QImage:
+    height, width, _ = rgba.shape
+    image = QImage(rgba.data, width, height, width * 4, QImage.Format.Format_RGBA8888)
+    return image.copy()
+
+
+def load_light_sample(path: Path) -> LightSample:
+    """The one place a sample file is opened for rendering. It's a module
+    function so tests can count reads by patching it."""
+    return LightSample(path)
+
+
+class HeatmapImageProvider(QQuickAsyncImageProvider):
     """Serves Visual Inspection's spatial heatmaps as `image://heatmap/...`.
 
     Three request-id shapes:
@@ -43,65 +71,79 @@ class HeatmapImageProvider(QQuickImageProvider):
       - Colorbar legend (first field is the literal `"colorbar"`, no
         sample involved): `colorbar|colormap` — a flat gradient strip for
         the color-scale legend under vmin/vmax, see `render_colorbar`.
+    Fields after these (e.g. `HeatmapControlsPanel.tileTarget`'s `|ds<id>`
+    dataset token) are ignored by the parsers.
+
+    **Asynchronous (ADR 50).** Qt calls `requestImageResponse`, which
+    only queues the render on `render_pool`: a single-thread pool, so
+    renders are serial but never run on the GUI thread. Before this, every
+    tile rendered synchronously on the GUI thread, and a cold tile meant a
+    full `.h5ad` read (0.35–0.8 s) there. Across a 16-sample grid that
+    froze the app for 5–14 s per feature or dataset switch. `requestImage`
+    is still the synchronous render itself, used by the queued job and by
+    tests.
+
+    **Cache.** Each sample is a `LightSample`: `var`, coordinates, and
+    only the layer and obs columns actually viewed, with the matrix in
+    CSC, so a feature column is sub-millisecond. The cache is bounded by
+    a memory budget (`default_cache_budget_bytes`) rather than an entry
+    count; the old 4-entry cache thrashed on every feature switch as soon
+    as a project had more than 4 samples. A second LRU holds rendered RGBA
+    tiles, keyed by the full request id.
+
+    **Thread safety.** The render thread, `HeatmapQueryWorker`s and
+    `HeatmapPrefetchWorker` all touch the cache, so every cache access
+    and every render holds `lock` (re-entrant).
 
     Resolving `sampleName` to a `.h5ad` path needs the current analysis'
-    database path, set once via `setAnalysisDbPath` when the Visual
-    Inspection section loads (see `AnalysisBridge.setHeatmapAnalysis`) —
-    there is only ever one active analysis workspace at a time.
-
-    Keeps a small LRU cache of opened `AnnData` objects (keyed by `.h5ad`
-    path) so switching feature/colormap/range within the same sample set
-    doesn't re-read from disk on every request. A second, separate LRU
-    cache holds already-*rendered* RGBA arrays, keyed by the exact
-    request id — `ZoomableImage.qml`'s `Image` sets `cache: false`
-    (Qt's own image cache is disabled there), so without this, re-showing
-    a tile you've already viewed (e.g. flipping back to a feature) redid
-    the full matplotlib render every time. It also lets
-    `AnalysisBridge.prefetchHeatmapSamples` pre-render the default tile
-    on a background thread (`_render_target`, shared with `requestImage`)
-    before Visual Inspection's `ZoomableImage`s ever request it — the
-    render cost (not just the `.h5ad` read `_load_adata` alone covers) is
-    what was still causing several seconds of a blank grid after the
-    loading overlay disappeared.
+    database path (and, for an imported dataset, its folder), set via
+    `setAnalysisDbPath`. There is only ever one active analysis workspace.
     """
 
-    def __init__(self) -> None:
-        super().__init__(QQuickImageProvider.ImageType.Image)
+    def __init__(self, cache_budget_bytes: int | None = None) -> None:
+        super().__init__()
         self._analysis_db_path: str | None = None
         # Imported dataset folder (ADR 49), relative to the analysis
         # folder; None = the pipeline's own per-sample files.
         self._rel_dir: str | None = None
-        self._cache: OrderedDict[str, ad.AnnData] = OrderedDict()
+        self._budget = cache_budget_bytes or default_cache_budget_bytes()
+        self._cache: OrderedDict[str, LightSample] = OrderedDict()
         self._render_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self.lock = threading.RLock()
+        self.render_pool = new_render_pool()
 
-    def setAnalysisDbPath(self, analysis_db_path: str, rel_dir: str | None = None) -> None:
+    def setAnalysisDbPath(self, analysis_db_path: str | None, rel_dir: str | None = None) -> None:
         """Point this provider at one analysis' pipeline output
         (`rel_dir=None`) or one of its imported datasets (`rel_dir` =
         `imported_datasets.rel_dir`, see `AnalysisBridge.setActiveDataset`).
         """
         rel_dir = rel_dir or None
-        if analysis_db_path != self._analysis_db_path or rel_dir != self._rel_dir:
-            self._cache.clear()
-            # A request id (e.g. "s1|100.0|raw|viridis|0|15") says nothing
-            # about which analysis (or dataset) it came from — without
-            # also clearing this, switching to a different analysis that
-            # happens to share a sample name and request the same tile
-            # would silently serve the OLD analysis's rendered pixels.
-            self._render_cache.clear()
-        self._analysis_db_path = analysis_db_path
-        self._rel_dir = rel_dir
+        with self.lock:
+            if analysis_db_path != self._analysis_db_path or rel_dir != self._rel_dir:
+                self._cache.clear()
+                # A request id (e.g. "s1|100.0|raw|viridis|0|15") says
+                # nothing about which analysis it came from — without also
+                # clearing this, switching to a different analysis that
+                # happens to share a sample name and request the same tile
+                # would silently serve the OLD analysis's rendered pixels.
+                self._render_cache.clear()
+            self._analysis_db_path = analysis_db_path
+            self._rel_dir = rel_dir
 
     def clearCaches(self) -> None:
-        """Drop every cached AnnData and render — after the files of the
+        """Drop every cached sample and render — after the files of the
         current source were rewritten on disk (e.g. Moran's I computed
         over an imported dataset)."""
-        self._cache.clear()
-        self._render_cache.clear()
+        with self.lock:
+            self._cache.clear()
+            self._render_cache.clear()
 
     def _h5ad_path(self, sample_name: str) -> Path:
         return sample_h5ad_path(self._analysis_db_path, sample_name, self._rel_dir)
 
-    def _load_adata(self, sample_name: str) -> ad.AnnData | None:
+    # -- sample cache (callers hold self.lock) -----------------------------
+
+    def _sample(self, sample_name: str) -> LightSample | None:
         if not self._analysis_db_path:
             return None
         h5ad_path = self._h5ad_path(sample_name)
@@ -111,56 +153,90 @@ class HeatmapImageProvider(QQuickImageProvider):
             return self._cache[key]
         if not h5ad_path.exists():
             return None
-        adata = ad.read_h5ad(h5ad_path)
-        self._cache[key] = adata
-        if len(self._cache) > _CACHE_SIZE:
-            self._cache.popitem(last=False)
-        return adata
+        sample = load_light_sample(h5ad_path)
+        self._cache[key] = sample
+        return sample
+
+    def _enforce_budget(self) -> None:
+        """Evict least-recently-used samples until the cache fits the
+        budget. The most recent one is always kept."""
+        total = sum(s.nbytes() for s in self._cache.values())
+        while total > self._budget and len(self._cache) > 1:
+            _key, evicted = self._cache.popitem(last=False)
+            total -= evicted.nbytes()
+
+    def _prepared_sample(self, sample_name: str, parts: list[str]) -> LightSample | None:
+        sample = self._sample(sample_name)
+        if sample is not None:
+            sample.prepare(parts)
+            self._enforce_budget()
+        return sample
+
+    def warm(self, sample_names: list[str], layer: str) -> None:
+        """Load `sample_names` with `layer` into the cache — what
+        `HeatmapPrefetchWorker` runs before Visual Inspection opens."""
+        for name in sample_names:
+            with self.lock:
+                sample = self._sample(name)
+                if sample is not None:
+                    sample.ensure_layer(layer)
+                    self._enforce_budget()
 
     def invalidate(self, sample_name: str) -> None:
-        """Evict `sample_name`'s cached AnnData, if present — call this
-        after any write to that sample's `.h5ad` (e.g.
-        `AnalysisBridge.saveRoi`/`deleteRoiFromSample`) so the next heatmap
-        tile request re-reads the file instead of serving the stale
-        in-memory obs/uns this LRU cache is still holding.
+        """Evict `sample_name`'s cached data, if present. Call this after
+        any write to that sample's `.h5ad` (e.g.
+        `AnalysisBridge.saveRoi`/`deleteRoiFromSample`), so the next tile
+        request re-reads the file instead of serving stale obs/uns from
+        this cache.
 
-        Also drops every cached *render* for that sample (`_render_cache`
-        keys start with `"<sample_name>|"`) — a stale rendered tile would
-        otherwise keep being served from cache even after the underlying
-        data changed (e.g. a new ROI drawn).
+        It also drops every cached *render* for that sample
+        (`_render_cache` keys start with `"<sample_name>|"`). Otherwise a
+        stale tile would keep being served after the underlying data
+        changed (e.g. a new ROI drawn).
 
         A no-op if the sample was never cached, or no analysis is set.
         """
-        if not self._analysis_db_path:
-            return
-        self._cache.pop(str(self._h5ad_path(sample_name)), None)
-        prefix = f"{sample_name}|"
-        for key in [k for k in self._render_cache if k.startswith(prefix)]:
-            del self._render_cache[key]
+        with self.lock:
+            if not self._analysis_db_path:
+                return
+            self._cache.pop(str(self._h5ad_path(sample_name)), None)
+            prefix = f"{sample_name}|"
+            for key in [k for k in self._render_cache if k.startswith(prefix)]:
+                del self._render_cache[key]
 
     def _render_target(self, sample_name: str, target: str, parts: list[str]) -> np.ndarray | None:
-        """Render (or return the cached render of) one tile — shared by
-        `requestImage` and `AnalysisBridge.prefetchHeatmapSamples`'s
-        background pre-render, so both populate/consume the exact same
-        cache under the exact same key (the full request id).
+        """Render (or return the cached render of) one tile. Shared by
+        `requestImage` and `HEOverlayImageProvider`, so both populate and
+        consume the same caches under the same key (the full request id).
         """
         cache_key = "|".join(parts)
-        if cache_key in self._render_cache:
-            self._render_cache.move_to_end(cache_key)
-            return self._render_cache[cache_key]
+        with self.lock:
+            if cache_key in self._render_cache:
+                self._render_cache.move_to_end(cache_key)
+                return self._render_cache[cache_key]
 
-        if sample_name == "colorbar":
-            rgba = render_colorbar(target)
-        else:
-            adata = self._load_adata(sample_name)
-            if adata is None:
-                return None
-            rgba = render_heatmap_by_target(adata, target, parts)
+            if sample_name == "colorbar":
+                rgba = render_colorbar(target)
+            else:
+                t0 = time.perf_counter()
+                sample = self._prepared_sample(sample_name, parts)
+                if sample is None:
+                    return None
+                t1 = time.perf_counter()
+                rgba = render_heatmap_by_target(sample.adata, target, parts)
+                t2 = time.perf_counter()
+                log = logger.warning if t2 - t0 > 0.5 else logger.debug
+                log(
+                    "heatmap tile %s: load %.3f s, render %.3f s (%s)",
+                    cache_key, t1 - t0, t2 - t1, threading.current_thread().name,
+                )
 
-        self._render_cache[cache_key] = rgba
-        if len(self._render_cache) > _RENDER_CACHE_SIZE:
-            self._render_cache.popitem(last=False)
-        return rgba
+            self._render_cache[cache_key] = rgba
+            if len(self._render_cache) > _RENDER_CACHE_SIZE:
+                self._render_cache.popitem(last=False)
+            return rgba
+
+    # -- queries (HeatmapQueryWorker threads) ------------------------------
 
     def getFeatureValueRange(
         self, sample_names: list[str], mz: float, layer: str
@@ -175,7 +251,7 @@ class HeatmapImageProvider(QQuickImageProvider):
             sample_names: Samples to combine — normally the currently
                 visible ones, so the range covers what's actually shown.
             mz: The feature's consensus m/z.
-            layer: `"raw"` or `"TIC"`.
+            layer: `"raw"`, `"TIC"`, `"X"`, or an imported dataset's layer.
 
         Returns:
             `{"vmin": ..., "vmax": ...}`, the min of every sample's min
@@ -186,16 +262,19 @@ class HeatmapImageProvider(QQuickImageProvider):
         mins = []
         maxes = []
         for name in sample_names:
-            adata = self._load_adata(name)
-            if adata is None:
-                continue
-            try:
-                vmin, vmax = feature_value_range(adata, mz, layer)
-            except Exception:
-                logger.exception(
-                    "feature value range failed for sample %r, mz %r", name, mz
-                )
-                continue
+            with self.lock:
+                try:
+                    sample = self._sample(name)
+                    if sample is None:
+                        continue
+                    sample.ensure_layer(layer)
+                    self._enforce_budget()
+                    vmin, vmax = feature_value_range(sample.adata, mz, layer)
+                except Exception:
+                    logger.exception(
+                        "feature value range failed for sample %r, mz %r", name, mz
+                    )
+                    continue
             mins.append(vmin)
             maxes.append(vmax)
         if not mins:
@@ -203,18 +282,19 @@ class HeatmapImageProvider(QQuickImageProvider):
         return {"vmin": min(mins), "vmax": max(maxes)}
 
     def getObsColumns(self, sample_names: list[str]) -> list:
-        """`adata.obs` columns available to overlay, from the first
-        sample in `sample_names` that actually resolves to a `.h5ad` —
-        every sample in one analysis shares the same pipeline-produced
-        schema, so one sample's columns stand in for the whole set.
+        """Overlayable `obs` columns, from the first sample in
+        `sample_names` that resolves to a `.h5ad`. Every sample in one
+        analysis (or one imported dataset) shares the same schema, so one
+        sample stands in for the whole set. Read from file metadata only.
 
         Returns:
             See `list_obs_columns`; `[]` if no sample resolves.
         """
         for name in sample_names:
-            adata = self._load_adata(name)
-            if adata is not None:
-                return list_obs_columns(adata)
+            with self.lock:
+                sample = self._sample(name)
+                if sample is not None:
+                    return sample.obs_columns()
         return []
 
     def getObsValueRange(self, sample_names: list[str], obs_column: str) -> dict:
@@ -228,17 +308,19 @@ class HeatmapImageProvider(QQuickImageProvider):
         mins = []
         maxes = []
         for name in sample_names:
-            adata = self._load_adata(name)
-            if adata is None:
-                continue
-            try:
-                vmin, vmax = obs_value_range(adata, obs_column)
-            except Exception:
-                logger.exception(
-                    "obs value range failed for sample %r, column %r",
-                    name, obs_column,
-                )
-                continue
+            with self.lock:
+                try:
+                    sample = self._sample(name)
+                    if sample is None:
+                        continue
+                    sample.ensure_obs(obs_column)
+                    vmin, vmax = obs_value_range(sample.adata, obs_column)
+                except Exception:
+                    logger.exception(
+                        "obs value range failed for sample %r, column %r",
+                        name, obs_column,
+                    )
+                    continue
             mins.append(vmin)
             maxes.append(vmax)
         if not mins:
@@ -260,24 +342,34 @@ class HeatmapImageProvider(QQuickImageProvider):
         """
         categories = set()
         for name in sample_names:
-            adata = self._load_adata(name)
-            if adata is None:
-                continue
-            try:
-                categories.update(obs_categories(adata, obs_column))
-            except Exception:
-                logger.exception(
-                    "obs categories failed for sample %r, column %r",
-                    name, obs_column,
-                )
-                continue
+            with self.lock:
+                try:
+                    sample = self._sample(name)
+                    if sample is None:
+                        continue
+                    sample.ensure_obs(obs_column)
+                    categories.update(obs_categories(sample.adata, obs_column))
+                except Exception:
+                    logger.exception(
+                        "obs categories failed for sample %r, column %r",
+                        name, obs_column,
+                    )
+                    continue
         ordered = sorted(categories)
         return [
             {"category": cat, "color": category_color(i)}
             for i, cat in enumerate(ordered)
         ]
 
+    # -- Qt entry points -----------------------------------------------------
+
+    def requestImageResponse(self, id: str, requestedSize: QSize) -> QQuickImageResponse:
+        return start_render(self.render_pool, lambda: self.requestImage(id, None, requestedSize))
+
     def requestImage(self, id: str, size: QSize, requestedSize: QSize) -> QImage:
+        """The synchronous render behind every tile: runs on
+        `render_pool`'s thread when Qt asks (`requestImageResponse`), or
+        directly from tests."""
         try:
             # QML's Image element treats `source` as a URL: assigning
             # "image://heatmap/name|mz|..." percent-encodes the "|" (not a
@@ -293,9 +385,4 @@ class HeatmapImageProvider(QQuickImageProvider):
         except Exception:
             logger.exception("heatmap render failed for request id %r", id)
             return QImage()
-
-        height, width, _ = rgba.shape
-        image = QImage(
-            rgba.data, width, height, width * 4, QImage.Format.Format_RGBA8888
-        )
-        return image.copy()
+        return rgba_to_qimage(rgba)

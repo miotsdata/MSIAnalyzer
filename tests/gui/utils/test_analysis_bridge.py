@@ -541,11 +541,12 @@ def test_load_spatial_correlation_table_reads_every_feature_not_just_the_last(tm
 
 
 def test_load_spatial_correlation_table_does_not_load_full_x_into_memory(tmp_path):
-    # The real bug this backed-mode fix addresses: ad.read_h5ad() (no
-    # `backed`) loads the whole X matrix just to read uns/var, which
-    # failed outright on a real project with multi-GB .h5ad files
-    # (reported as "no correlation run" for an analysis that had one).
-    # Confirms the fetch goes through backed mode rather than a full read.
+    # ad.read_h5ad() (no `backed`) loads the whole X matrix just to read
+    # uns/var, which failed outright on a real project with multi-GB
+    # .h5ad files (reported as "no correlation run" for an analysis that
+    # had one). Even `backed="r"` decodes all of obs per sample (ADR 50),
+    # so the loader now reads only `var` and `uns/moranI` via h5py —
+    # no AnnData is opened at all.
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     with sqlite3.connect(db_path) as con:
@@ -557,11 +558,10 @@ def test_load_spatial_correlation_table_does_not_load_full_x_into_memory(tmp_pat
     _seed_moran_h5ad(tmp_path, "s1", mz=100.0, moran_i=0.5)
 
     with patch("msianalyzer.gui.utils.analysis_bridge.ad.read_h5ad", wraps=ad.read_h5ad) as spy:
-        _load_spatial_correlation_table(str(db_path))
+        df = _load_spatial_correlation_table(str(db_path))
 
-    assert spy.call_count == 1
-    _, kwargs = spy.call_args
-    assert kwargs.get("backed") == "r"
+    assert spy.call_count == 0
+    assert list(df["moran_i"]) == [0.5]
 
 
 def test_get_spatial_correlation_model_reads_moran_scores_with_name(tmp_path, qtbot):
@@ -2557,3 +2557,28 @@ def test_get_sample_pixel_size_empty_dict_for_unknown_sample(tmp_path):
 def test_get_sample_pixel_size_empty_dict_missing_analysis_db(tmp_path):
     bridge = AnalysisBridge()
     assert bridge.getSamplePixelSize(str(tmp_path / "nope.db"), "s1") == {}
+
+
+def test_request_summary_emits_counts_from_a_worker_and_caches(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
+    bridge = AnalysisBridge()
+
+    with qtbot.waitSignal(bridge.summaryReady, timeout=3000) as spy:
+        bridge.requestSummary(str(db_path))
+    assert spy.args[0] == str(db_path)
+    assert spy.args[1]["n_samples"] == 1
+
+    with patch("msianalyzer.core.analysis_db.load_summary_counts") as never:
+        with qtbot.waitSignal(bridge.summaryReady, timeout=1000) as spy:
+            bridge.requestSummary(str(db_path))
+        never.assert_not_called()
+    assert spy.args[1]["n_samples"] == 1
+
+
+def test_request_summary_missing_db_emits_zero_summary(tmp_path, qtbot):
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.summaryReady, timeout=1000) as spy:
+        bridge.requestSummary(str(tmp_path / "nope.db"))
+    assert spy.args[1] == _ZERO_SUMMARY

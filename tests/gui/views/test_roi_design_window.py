@@ -170,6 +170,17 @@ def _start_drawing(window, name, qtbot):
     assert window.property("draftState") == "drawing"
 
 
+def _wait_image_ready(zoom_image, qtbot):
+    """Heatmap tiles load asynchronously (ADR 50): wait until the
+    ZoomableImage has finished loading (its busy indicator stopped;
+    success or not) before tapping into it, since its geometry changes
+    once the image arrives."""
+    busy = zoom_image.findChild(QQuickItem, "zoomableImageBusy")
+    qtbot.wait(20)
+    if busy is not None:
+        qtbot.waitUntil(lambda: not busy.property("running"), timeout=3000)
+
+
 def _tap_grid_point(window, canvas, col, row, qtbot):
     """Click the point in `canvas` (the RoiDrawingCanvas) corresponding to
     grid-index (col, row)'s pixel *center* — the same convention
@@ -181,6 +192,7 @@ def _tap_grid_point(window, canvas, col, row, qtbot):
     from the previous click instead."""
     overlay_holder = canvas.findChild(QQuickItem, "zoomableImageOverlayHolder")
     zoom_image = canvas.findChild(QQuickItem, "roiZoomableImage")
+    _wait_image_ready(zoom_image, qtbot)
     scale = zoom_image.property("effectiveScale")
     point = overlay_holder.mapToScene(
         QPointF((col + 0.5) * scale, (row + 0.5) * scale)

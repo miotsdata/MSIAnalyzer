@@ -95,12 +95,24 @@ def _click(window, item, qtbot):
     qtbot.wait(30)
 
 
+def _wait_image_ready(zoom_image, qtbot):
+    """Heatmap tiles load asynchronously (ADR 50): wait until the
+    ZoomableImage has finished loading (its busy indicator stopped;
+    success or not) before tapping into it, since its geometry changes
+    once the image arrives."""
+    busy = zoom_image.findChild(QQuickItem, "zoomableImageBusy")
+    qtbot.wait(20)
+    if busy is not None:
+        qtbot.waitUntil(lambda: not busy.property("running"), timeout=3000)
+
+
 def _tap_pane_point(window, zoom_image, x, y, qtbot):
     """Click the point in `zoom_image` (a ZoomableImage) at native
     pixel-coordinate (x, y) — the landmark analogue of
     test_roi_design_window.py's `_tap_grid_point`, but with no `+0.5`
     cell-center offset (a landmark is one clicked point, not a polygon
     cell-membership test — see LandmarkOverlay.qml)."""
+    _wait_image_ready(zoom_image, qtbot)
     overlay_holder = zoom_image.findChild(QQuickItem, "zoomableImageOverlayHolder")
     scale = zoom_image.property("effectiveScale")
     point = overlay_holder.mapToScene(QPointF(x * scale, y * scale)).toPoint()

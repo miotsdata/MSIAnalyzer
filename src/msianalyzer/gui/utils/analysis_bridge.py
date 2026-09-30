@@ -9,8 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import anndata as ad
+import h5py
 import numpy as np
 import pandas as pd
+from anndata.io import read_elem
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core import analysis_db
@@ -45,6 +47,7 @@ from msianalyzer.core.registration import (
     load_registration,
 )
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
+from msianalyzer.core.utils import h5ad_io
 from msianalyzer.gui.utils.dataset_task_worker import DatasetTaskWorker
 from msianalyzer.gui.utils.export_worker import ExportWorker
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
@@ -183,7 +186,7 @@ def _inspection_samples_frame(analysis_db_path: str, rel_dir: str | None) -> pd.
 def _load_dataset_feature_list(analysis_db_path: str, rel_dir: str) -> pd.DataFrame:
     """Visual Inspection's feature list for an imported dataset (ADR 49):
     the features actually present in its files (a notebook may have
-    filtered some out), read from one sample's `var` in backed mode, each
+    filtered some out), read from one sample's `var` alone (h5py), each
     joined to the analysis feature within
     `heatmap._RENDER_MZ_TOLERANCE_PPM` to keep its `feature_id` and
     representative `compound_name`. A var with no matching analysis
@@ -200,11 +203,8 @@ def _load_dataset_feature_list(analysis_db_path: str, rel_dir: str) -> pd.DataFr
         path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name, rel_dir)
         if not path.exists():
             continue
-        adata = ad.read_h5ad(path, backed="r")
-        try:
-            var_mz = adata.var["mz"].to_numpy(dtype=float)
-        finally:
-            adata.file.close()
+        with h5py.File(path, "r") as f:
+            var_mz = read_elem(f["var"])["mz"].to_numpy(dtype=float)
         break
     if var_mz is None or var_mz.size == 0:
         return pd.DataFrame(columns=columns)
@@ -266,39 +266,26 @@ def _load_spatial_correlation_table(
         h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name, rel_dir)
         if not h5ad_path.exists():
             continue
-        # `backed="r"` — this only needs `uns`/`var` (small metadata),
-        # never `X` (the actual per-pixel intensities). A plain
-        # `ad.read_h5ad` loads the whole sparse matrix into memory just
-        # to throw it away, which is merely wasteful on a small project
-        # but genuinely broke on a real one: several-GB `.h5ad` files
-        # (backed mode reads a project's own multi-GB samples in well
-        # under a second here, vs. loading gigabytes of `X` for nothing)
-        # caused this to fail — silently, from the user's side, since
-        # the fetch runs on a background thread and only logs a warning
-        # on failure — reported as "no correlation run" for an analysis
-        # that very much had one.
-        adata = ad.read_h5ad(h5ad_path, backed="r")
-        try:
-            moran = adata.uns.get("moranI")
+        # Only `var` and `uns/moranI` are read (h5py, element by element).
+        # A plain `ad.read_h5ad` loads the whole matrix, which broke on
+        # several-GB files. Even `backed="r"` still decodes all of obs
+        # (scan ids, obs names) per sample, and that was part of the
+        # pile-up of full reads behind the GUI freezes (ADR 50).
+        with h5py.File(h5ad_path, "r") as f:
+            moran = h5ad_io.read_uns(f, "moranI")
             if moran is None:
                 continue
-            mz_by_var = adata.var["mz"]
-            for var_name, i_score in moran["I"].items():
-                mz = float(mz_by_var.loc[var_name])
-                rows.append(
-                    {
-                        "mz": mz,
-                        "sample": name,
-                        "moran_i": float(i_score),
-                        "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
-                    }
-                )
-        finally:
-            # Backed mode keeps the underlying HDF5 file open
-            # (`adata.file`) until explicitly closed — without this,
-            # looping over several samples leaks one open file handle
-            # per sample for the rest of the process's lifetime.
-            adata.file.close()
+            mz_by_var = read_elem(f["var"])["mz"]
+        for var_name, i_score in moran["I"].items():
+            mz = float(mz_by_var.loc[var_name])
+            rows.append(
+                {
+                    "mz": mz,
+                    "sample": name,
+                    "moran_i": float(i_score),
+                    "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
+                }
+            )
 
     return pd.DataFrame(rows, columns=columns)
 
@@ -343,29 +330,27 @@ def _load_local_moran_layer_data(
         h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name, rel_dir)
         if not h5ad_path.exists():
             continue
-        # backed="r" still avoids loading X/other layers — only
-        # localMoranI (materialized explicitly below) is read into memory.
-        adata = ad.read_h5ad(h5ad_path, backed="r")
-        try:
-            if "localMoranI" not in adata.layers:
+        # Only `var` and `layers/localMoranI` are read (see
+        # _load_spatial_correlation_table for why not `backed="r"`).
+        with h5py.File(h5ad_path, "r") as f:
+            if "layers" not in f or "localMoranI" not in f["layers"]:
                 continue
-            layer = adata.layers["localMoranI"][:]
-            if hasattr(layer, "toarray"):
-                layer = layer.toarray()
-            mz_by_var = adata.var["mz"]
-            sample_names_with_data.add(name)
-            for col_idx, var_name in enumerate(adata.var_names):
-                mz = float(mz_by_var.loc[var_name])
-                row = by_mz.setdefault(
-                    mz,
-                    {
-                        "mz": mz,
-                        "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
-                    },
-                )
-                row[name] = np.asarray(layer[:, col_idx], dtype=float)
-        finally:
-            adata.file.close()
+            layer = read_elem(f["layers"]["localMoranI"])
+            var = read_elem(f["var"])
+        if hasattr(layer, "toarray"):
+            layer = layer.toarray()
+        mz_by_var = var["mz"]
+        sample_names_with_data.add(name)
+        for col_idx, var_name in enumerate(var.index):
+            mz = float(mz_by_var.loc[var_name])
+            row = by_mz.setdefault(
+                mz,
+                {
+                    "mz": mz,
+                    "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
+                },
+            )
+            row[name] = np.asarray(layer[:, col_idx], dtype=float)
 
     return list(by_mz.values()), sorted(sample_names_with_data)
 
@@ -588,6 +573,7 @@ class AnalysisBridge(QObject):
     featureValueRangeReady = Signal(dict)
     obsValueRangeReady = Signal(dict)
     obsCategoriesReady = Signal(list)
+    summaryReady = Signal(str, dict)  # analysis_db_path, counts
     # Imported analyzed .h5ad datasets (ADR 49)
     activeDatasetChanged = Signal()
     importedDatasetsChanged = Signal(str)  # analysis_db_path
@@ -624,7 +610,9 @@ class AnalysisBridge(QObject):
         # Same "own it here, main.py just registers it" reasoning as
         # heatmap_provider above.
         self.he_image_provider = HEImageProvider()
-        self.he_overlay_provider = HEOverlayImageProvider()
+        # Shares heatmap_provider's sample cache, lock and render thread
+        # (ADR 50).
+        self.he_overlay_provider = HEOverlayImageProvider(self.heatmap_provider)
         # Plot HTML -> temp file -> `WebEngineView.url`, not `.loadHtml()`.
         # `loadHtml`/`setHtml` silently fail past Qt's documented ~2MB
         # limit (it's an IPC message, capped); a plot with the full
@@ -681,6 +669,10 @@ class AnalysisBridge(QObject):
         self._h5ad_inspect_worker: TableQueryWorker | None = None
         self._dataset_task_worker: DatasetTaskWorker | None = None
         self._import_db_path: str | None = None
+        self._summary_worker: TableQueryWorker | None = None
+        self._summary_worker_path: str | None = None
+        self._summary_cache_path: str | None = None
+        self._summary_cache: dict = {}
 
     @Slot(float)
     def onSpectrumPointClicked(self, mz: float) -> None:
@@ -702,50 +694,39 @@ class AnalysisBridge(QObject):
 
     @Slot(str, list)
     def prefetchHeatmapSamples(self, analysis_db_path: str, sample_names: list) -> None:
-        """Warm `heatmap_provider`'s `.h5ad` cache for `sample_names` on a
-        background thread; `heatmapPrefetchReady` fires once done (or
-        immediately, synchronously, if there's nothing to prefetch).
+        """Warm `heatmap_provider`'s sample cache for `sample_names` on a
+        background thread. `heatmapPrefetchReady` fires once done, or
+        immediately if there's nothing to prefetch.
 
-        Call this — and wait for `heatmapPrefetchReady` — *before*
-        switching to the Visual Inspection tab, not after. See the class
-        docstring and `HeatmapPrefetchWorker`'s own docstring for the
-        freeze this avoids.
+        `AnalysisPage.goToVisualInspection` calls this and waits for
+        `heatmapPrefetchReady` before switching to Visual Inspection, so
+        the tab opens with every tile ready at once. Tiles render off the
+        GUI thread either way (ADR 50), so this is about presentation,
+        not about avoiding a freeze.
 
-        Also points the provider at `analysis_db_path` synchronously
-        first (same as `setHeatmapAnalysis`, safe to call again from
-        Visual Inspection's own `onAnalysisChanged` afterward) — the
-        background worker needs that set before it can resolve any
-        sample name to a `.h5ad` path at all.
-
-        Beyond the `.h5ad` read, this also pre-*renders* each sample's
-        default tile (lowest-m/z feature, matching
-        `HeatmapControlsPanel.qml`'s own default state) — the matplotlib
-        render itself, not just the disk read, was the rest of the
-        "several seconds of a blank grid after the loading spinner"
-        complaint. See `HeatmapPrefetchWorker`'s own docstring for why
-        this is still safe against the concurrency hazard
-        `asynchronous: false` originally guarded against.
+        It also points the provider at `analysis_db_path` (and the active
+        dataset) synchronously first, because the worker needs that to
+        resolve sample names at all. It loads the layer the controls panel
+        will default to: the analysis' normalized layer for the pipeline
+        output, or, for an imported dataset, `TIC` if it has one, else `X`
+        (`HeatmapControlsPanel.refreshDatasetLayers`'s rule).
 
         Args:
             analysis_db_path: The analysis' SQLite database.
-            sample_names: Which samples to prefetch — normally every
-                sample in the analysis (Visual Inspection's grid can show
-                any of them), not just the ones about to be visible.
+            sample_names: Which samples to prefetch — every sample Visual
+                Inspection's grid shows.
         """
         rel_dir = self._active_rel_dir(analysis_db_path)
         self.heatmap_provider.setAnalysisDbPath(analysis_db_path, rel_dir)
         if not sample_names:
             self.heatmapPrefetchReady.emit()
             return
-        features = (
-            _load_dataset_feature_list(analysis_db_path, rel_dir)
-            if rel_dir else analysis_db.load_feature_list(analysis_db_path)
-        )
-        default_mz = float(features.iloc[0]["mz"]) if not features.empty else None
-        worker = HeatmapPrefetchWorker(
-            self.heatmap_provider, sample_names, default_mz, self,
-            dataset_token=f"ds{self._get_active_dataset_id() if rel_dir else -1}",
-        )
+        if rel_dir:
+            layers = self._active_dataset["layers"]
+            layer = "TIC" if "TIC" in layers else "X"
+        else:
+            layer = _load_normalized_layer_name(analysis_db_path)
+        worker = HeatmapPrefetchWorker(self.heatmap_provider, sample_names, layer, self)
         worker.succeeded.connect(self._onHeatmapPrefetchSucceeded)
         worker.failed.connect(self._onHeatmapPrefetchFailed)
         self._heatmap_prefetch_worker = worker
@@ -970,6 +951,45 @@ class AnalysisBridge(QObject):
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return dict(_EMPTY_SUMMARY)
         return analysis_db.load_summary_counts(analysis_db_path)
+
+    @Slot(str)
+    def requestSummary(self, analysis_db_path: str) -> None:
+        """`getSummary`, on a background thread: the result arrives via
+        `summaryReady(analysis_db_path, counts)`. `SummarySection.qml` uses
+        this. `feature_compound_scores` is a view aggregating over every
+        MS2 annotation, and on a real 2.6 GB analysis the counts took
+        6.8 s on the GUI thread when opening the workspace (ADR 50).
+
+        Cached per analysis (single slot), since the counts don't change
+        while the analysis is open. A cache hit emits synchronously.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            self.summaryReady.emit(analysis_db_path, dict(_EMPTY_SUMMARY))
+            return
+        if analysis_db_path == self._summary_cache_path:
+            self.summaryReady.emit(analysis_db_path, self._summary_cache)
+            return
+        worker = TableQueryWorker(analysis_db.load_summary_counts, analysis_db_path, self)
+        worker.succeeded.connect(self._onSummarySucceeded)
+        worker.failed.connect(self._onSummaryFailed)
+        self._summary_worker = worker
+        self._summary_worker_path = analysis_db_path
+        worker.start()
+
+    @Slot(object)
+    def _onSummarySucceeded(self, counts: dict) -> None:
+        if self.sender() is not self._summary_worker:
+            return  # superseded by a newer request — discard
+        self._summary_cache_path = self._summary_worker_path
+        self._summary_cache = dict(counts)
+        self.summaryReady.emit(self._summary_worker_path, self._summary_cache)
+
+    @Slot(str)
+    def _onSummaryFailed(self, message: str) -> None:
+        if self.sender() is not self._summary_worker:
+            return
+        logger.warning("summary counts failed: %s", message)
+        self.summaryReady.emit(self._summary_worker_path, dict(_EMPTY_SUMMARY))
 
     @Slot(str)
     def requestAnnotationTable(self, analysis_db_path: str) -> None:
@@ -2082,14 +2102,13 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
                 pass  # raced with another save of the same new name — fine, row exists now
 
         # Recomputed rather than threaded through save_roi_to_sample's
-        # return value (which is just the pixel count) — a second, cheap
-        # read+mask against the just-written file, kept separate so
-        # save_roi_to_sample's own signature/tests stay merged.h5ad-agnostic.
-        sample_adata = ad.read_h5ad(h5ad_path)
-        sample_adata_mask = roi.polygon_pixel_mask(sample_adata, vertices)
+        # return value (which is just the pixel count), so that function's
+        # own signature/tests stay merged.h5ad-agnostic. It only reads the
+        # coordinates (ADR 50), so the recompute is cheap.
+        sample_adata_mask = roi.sample_polygon_mask(h5ad_path, vertices)
         warning = ""
         if self._active_rel_dir(analysis_db_path):
-            warning = self._write_roi_to_source(sample_adata, name, sample_adata_mask)
+            warning = self._write_roi_to_source(h5ad_path, name, sample_adata_mask)
         else:
             roi.sync_roi_to_merged(
                 self._merged_h5ad_path(analysis_db_path), sample_name, name,
@@ -2101,7 +2120,13 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             result["warning"] = warning
         return result
 
-    def _write_roi_to_source(self, sample_adata, name: str, mask) -> str:
+    @staticmethod
+    def _source_obs_names(h5ad_path: Path):
+        """An imported sample file's `obs["source_obs_name"]`, read alone."""
+        with h5py.File(h5ad_path, "r") as f:
+            return h5ad_io.read_obs_column(f, imported_dataset.SOURCE_OBS_NAME_COLUMN)
+
+    def _write_roi_to_source(self, h5ad_path: Path, name: str, mask) -> str:
         """Best-effort ROI obs-column write-back into the active imported
         dataset's source `.h5ad` (ADR 49). Returns `""` on success, else a
         user-facing warning (also emitted as `roiSourceWriteFailed`)."""
@@ -2109,7 +2134,7 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         try:
             imported_dataset.write_roi_to_source(
                 source, roi.roi_obs_column(name),
-                sample_adata.obs[imported_dataset.SOURCE_OBS_NAME_COLUMN], mask,
+                self._source_obs_names(h5ad_path), mask,
             )
         except (OSError, KeyError, ValueError) as e:
             logger.warning("ROI write-back to %s failed: %s", source, e)
@@ -2152,12 +2177,9 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         a failure is only emitted as `roiSourceWriteFailed`."""
         source = self._active_dataset["source_path"]
         try:
-            adata = ad.read_h5ad(h5ad_path, backed="r")
-            try:
-                names = adata.obs[imported_dataset.SOURCE_OBS_NAME_COLUMN].to_numpy()
-            finally:
-                adata.file.close()
-            imported_dataset.remove_roi_from_source(source, roi.roi_obs_column(name), names)
+            imported_dataset.remove_roi_from_source(
+                source, roi.roi_obs_column(name), self._source_obs_names(h5ad_path)
+            )
         except (OSError, KeyError, ValueError) as e:
             logger.warning("ROI removal from %s failed: %s", source, e)
             self.roiSourceWriteFailed.emit(

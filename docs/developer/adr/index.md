@@ -59,3 +59,4 @@ useful).
 | [47](0047-he-coregistration-phase3-overlay-and-roi-on-he.md) | H&E coregistration Phase 3: warped-heatmap overlay, and drawing ROI on the H&E image | Accepted |
 | [48](0048-spatial-correlation-morans-i.md) | Spatial correlation (Moran's I), computed via squidpy on the `.h5ad` | Accepted |
 | [49](0049-imported-analyzed-h5ad-datasets.md) | Imported analyzed `.h5ad` datasets, linked to an analysis | Accepted |
+| [50](0050-gui-responsiveness-no-h5ad-io-on-gui-thread.md) | GUI responsiveness: no `.h5ad` I/O on the GUI thread | Accepted |

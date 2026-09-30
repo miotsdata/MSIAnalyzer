@@ -374,6 +374,16 @@ def analysis_view(application):
         view.show()
         QTest.qWaitForWindowExposed(view)
         QTest.qWait(50)
+        # The Summary counts load on a background thread (ADR 50), and the
+        # page's nav rail and "Back to project" stay disabled under the
+        # loading overlay until they land. Wait for that, like a user
+        # would, before handing the view to the test.
+        root = view.rootObject()
+        if root is not None and not root.property("isTargeted"):
+            deadline = 3000
+            while not root.property("currentSectionReady") and deadline > 0:
+                QTest.qWait(10)
+                deadline -= 10
         views.append(view)
         return view
 

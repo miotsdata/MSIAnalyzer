@@ -25,9 +25,11 @@ import logging
 from pathlib import Path
 
 import anndata as ad
+import h5py
 import numpy as np
 from matplotlib.path import Path as MplPath
 
+from msianalyzer.core.utils import h5ad_io
 from msianalyzer.core.utils.logging_utils import log_call
 
 logger = logging.getLogger(__name__)
@@ -79,19 +81,32 @@ def polygon_pixel_mask(adata: ad.AnnData, vertices: list) -> np.ndarray:
     return path.contains_points(points)
 
 
+def sample_polygon_mask(h5ad_path: Path | str, vertices: list) -> np.ndarray:
+    """`polygon_pixel_mask` for a sample file, reading only its
+    coordinates and grid axes (`LightSample`), not the whole AnnData."""
+    from msianalyzer.core.plotting.light_sample import LightSample
+
+    return polygon_pixel_mask(LightSample(h5ad_path).adata, vertices)
+
+
+def _rois_dict(raw) -> dict:
+    return {str(k): dict(v) for k, v in (raw or {}).items()}
+
+
 @log_call(source="h5ad_path")
 def save_roi_to_sample(
     h5ad_path: Path | str, name: str, color: str, vertices: list,
 ) -> int:
-    """Add/overwrite one ROI on a sample's `.h5ad`: the per-pixel boolean
-    membership column (`adata.obs[roi_obs_column(name)]`) and the border
-    polygon (`adata.uns["rois"][name]`), then write the file back to the
-    SAME path — same read/mutate/write-back shape as
-    `tic_normalization.run_normalization`, but a single interactive
-    save rather than a pipeline command.
+    """Add or overwrite one ROI on a sample's `.h5ad`, in place. It writes
+    the per-pixel boolean membership column (`obs[roi_obs_column(name)]`)
+    and the border polygon (`uns["rois"][name]`).
+
+    Only those two elements are written (`core.utils.h5ad_io`). X, the
+    layers and the other obs columns are never loaded, so a save takes
+    milliseconds even on a multi-GB file (ADR 50).
 
     Args:
-        h5ad_path: The sample's own `.h5ad` file, overwritten in place.
+        h5ad_path: The sample's own `.h5ad` file, edited in place.
         name: ROI name — color consistency across samples is the caller's
             responsibility (see `AnalysisBridge.saveRoi`'s catalog lookup);
             this function does not touch the analysis-wide catalog.
@@ -109,49 +124,36 @@ def save_roi_to_sample(
     if len(vertices) < 3:
         raise ValueError(f"ROI {name!r} needs at least 3 vertices, got {len(vertices)}")
 
-    adata = ad.read_h5ad(h5ad_path)
-    mask = polygon_pixel_mask(adata, vertices)
-    adata.obs[roi_obs_column(name)] = mask
-
-    rois = dict(adata.uns.get("rois") or {})
-    rois[name] = {
-        "color": color,
-        "vertices": [[float(c), float(r)] for c, r in vertices],
-    }
-    adata.uns["rois"] = rois
-
-    adata.write_h5ad(h5ad_path)
+    mask = sample_polygon_mask(h5ad_path, vertices)
+    with h5py.File(h5ad_path, "r+") as f:
+        h5ad_io.set_obs_column(f, roi_obs_column(name), mask)
+        rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
+        rois[name] = {
+            "color": color,
+            "vertices": np.asarray([[float(c), float(r)] for c, r in vertices]),
+        }
+        h5ad_io.write_uns(f, "rois", rois)
     return int(mask.sum())
 
 
 @log_call(source="h5ad_path")
 def delete_roi_from_sample(h5ad_path: Path | str, name: str) -> bool:
-    """Remove one ROI's obs column + uns entry from a sample's `.h5ad`,
-    writing back to the same path. A no-op (returns False) if the sample
-    never had this ROI — deleting from the catalog can validly race ahead
-    of, or entirely skip, any given sample's own h5ad.
+    """Remove one ROI's obs column and uns entry from a sample's `.h5ad`,
+    in place (element-level, like `save_roi_to_sample`). A no-op
+    (returns False) if the sample never had this ROI: deleting from the
+    catalog can validly race ahead of, or entirely skip, any given
+    sample's own h5ad.
 
     Returns:
-        True if anything was actually removed and the file rewritten.
+        True if anything was actually removed.
     """
-    adata = ad.read_h5ad(h5ad_path)
-    column = roi_obs_column(name)
-    rois = dict(adata.uns.get("rois") or {})
-
-    had_column = column in adata.obs.columns
-    had_uns = name in rois
-
-    if not had_column and not had_uns:
-        return False
-
-    if had_column:
-        adata.obs = adata.obs.drop(columns=[column])
-    if had_uns:
-        del rois[name]
-        adata.uns["rois"] = rois
-
-    adata.write_h5ad(h5ad_path)
-    return True
+    with h5py.File(h5ad_path, "r+") as f:
+        had_column = h5ad_io.drop_obs_column(f, roi_obs_column(name))
+        rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
+        had_uns = rois.pop(name, None) is not None
+        if had_uns:
+            h5ad_io.write_uns(f, "rois", rois)
+    return had_column or had_uns
 
 
 def load_sample_rois(h5ad_path: Path | str) -> dict:
@@ -170,8 +172,8 @@ def load_sample_rois(h5ad_path: Path | str) -> dict:
         can't use directly. `{}` if the sample has no ROIs (or predates
         this feature).
     """
-    adata = ad.read_h5ad(h5ad_path)
-    rois = dict(adata.uns.get("rois") or {})
+    with h5py.File(h5ad_path, "r") as f:
+        rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
     return {
         name: {
             "color": info["color"],
@@ -230,25 +232,33 @@ def sync_roi_to_merged(
     if not merged_path.exists():
         return False
 
-    merged = ad.read_h5ad(merged_path)
-    row_mask = (merged.obs["sample"] == sample_name).to_numpy()
-
     column = roi_obs_column(name)
-    if column not in merged.obs.columns:
-        merged.obs[column] = False
-    merged.obs.loc[row_mask, column] = mask
+    with h5py.File(merged_path, "r+") as f:
+        row_mask = _sample_rows(f, sample_name)
+        values = (
+            np.asarray(h5ad_io.read_obs_column(f, column), dtype=bool)
+            if h5ad_io.has_obs_column(f, column) else np.zeros(row_mask.size, dtype=bool)
+        )
+        values[row_mask] = mask
+        h5ad_io.set_obs_column(f, column, values)
 
-    rois = dict(merged.uns.get("rois") or {})
-    entry = dict(rois.get(name) or {"color": color, "samples": {}})
-    entry["color"] = color
-    samples = dict(entry.get("samples") or {})
-    samples[sample_name] = {"vertices": [[float(c), float(r)] for c, r in vertices]}
-    entry["samples"] = samples
-    rois[name] = entry
-    merged.uns["rois"] = rois
-
-    merged.write_h5ad(merged_path)
+        rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
+        entry = dict(rois.get(name) or {"color": color, "samples": {}})
+        entry["color"] = color
+        samples = {str(k): dict(v) for k, v in (entry.get("samples") or {}).items()}
+        samples[sample_name] = {
+            "vertices": np.asarray([[float(c), float(r)] for c, r in vertices])
+        }
+        entry["samples"] = samples
+        rois[name] = entry
+        h5ad_io.write_uns(f, "rois", rois)
     return True
+
+
+def _sample_rows(f: h5py.File, sample_name: str) -> np.ndarray:
+    """Boolean mask of `merged.h5ad`'s rows belonging to `sample_name`,
+    from its `sample` obs column alone."""
+    return (np.asarray(h5ad_io.read_obs_column(f, "sample")).astype(str) == sample_name)
 
 
 @log_call(source="merged_path")
@@ -269,30 +279,28 @@ def sync_roi_deletion_to_merged(
     if not merged_path.exists():
         return False
 
-    merged = ad.read_h5ad(merged_path)
-    rois = dict(merged.uns.get("rois") or {})
-    entry = rois.get(name)
     column = roi_obs_column(name)
+    with h5py.File(merged_path, "r+") as f:
+        rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
+        entry = rois.get(name)
+        has_column = h5ad_io.has_obs_column(f, column)
+        had_sample = bool(entry and sample_name in (entry.get("samples") or {}))
+        if not had_sample and not has_column:
+            return False
 
-    had_sample = bool(entry and sample_name in (entry.get("samples") or {}))
-    if not had_sample and column not in merged.obs.columns:
-        return False
+        if has_column:
+            values = np.asarray(h5ad_io.read_obs_column(f, column), dtype=bool)
+            values[_sample_rows(f, sample_name)] = False
+            h5ad_io.set_obs_column(f, column, values)
 
-    if column in merged.obs.columns:
-        row_mask = (merged.obs["sample"] == sample_name).to_numpy()
-        merged.obs.loc[row_mask, column] = False
-
-    if entry is not None:
-        samples = dict(entry.get("samples") or {})
-        samples.pop(sample_name, None)
-        if samples:
-            entry["samples"] = samples
-            rois[name] = entry
-        else:
-            rois.pop(name, None)
-            if column in merged.obs.columns:
-                merged.obs = merged.obs.drop(columns=[column])
-        merged.uns["rois"] = rois
-
-    merged.write_h5ad(merged_path)
+        if entry is not None:
+            samples = {str(k): dict(v) for k, v in (entry.get("samples") or {}).items()}
+            samples.pop(sample_name, None)
+            if samples:
+                entry["samples"] = samples
+                rois[name] = entry
+            else:
+                rois.pop(name, None)
+                h5ad_io.drop_obs_column(f, column)
+            h5ad_io.write_uns(f, "rois", rois)
     return True

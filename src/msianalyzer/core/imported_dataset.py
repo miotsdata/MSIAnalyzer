@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import sqlite3
+import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -47,10 +48,10 @@ import anndata as ad
 import h5py
 import numpy as np
 import pandas as pd
-from anndata.io import read_elem, write_elem
 
 from msianalyzer.core import analysis_db
 from msianalyzer.core.plotting.heatmap import GRID_UNS_KEY
+from msianalyzer.core.utils import h5ad_io
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
 
 logger = logging.getLogger(__name__)
@@ -289,6 +290,7 @@ def _import_one_sample(
     Returns:
         `(sample_name, n_pixels, layer_names)`.
     """
+    t0 = time.perf_counter()
     src = ad.read_h5ad(source_path, backed="r")
     try:
         if sample_column is not None:
@@ -303,6 +305,7 @@ def _import_one_sample(
     finally:
         src.file.close()
 
+    t1 = time.perf_counter()
     ref = ad.read_h5ad(pipeline_h5ad, backed="r")
     try:
         ref_names = pd.Index(ref.obs_names.astype(str))
@@ -320,7 +323,12 @@ def _import_one_sample(
         del sub.obsp[key]
     _ensure_var_mz(sub, Path(source_path).name)
 
+    t2 = time.perf_counter()
     sub.write_h5ad(out_path)
+    logger.debug(
+        "import %s: read rows %.2f s, match pixels %.2f s, write %.2f s",
+        sample_name, t1 - t0, t2 - t1, time.perf_counter() - t2,
+    )
     return sample_name, int(sub.n_obs), _layer_names(sub)
 
 
@@ -400,6 +408,7 @@ def import_analyzed_h5ad(
     labels_by_sample = {s: label for label, s in sample_map.items()}
     pixels: dict[str, int] = {}
     layers: list[str] = []
+    t_start = time.perf_counter()
     try:
         with worker_logging() as (log_queue, initializer):
             with ProcessPoolExecutor(
@@ -417,8 +426,16 @@ def import_analyzed_h5ad(
                     )
                     for label, sample_name in sample_map.items()
                 ]
+                logger.debug(
+                    "import: %d worker(s) started, %d task(s) submitted in %.2f s",
+                    workers, total, time.perf_counter() - t_start,
+                )
                 for done, future in enumerate(as_completed(futures), start=1):
                     sample_name, n_pixels, sample_layers = future.result()
+                    logger.debug(
+                        "import: %s done (%d/%d) at %.2f s",
+                        sample_name, done, total, time.perf_counter() - t_start,
+                    )
                     pixels[sample_name] = n_pixels
                     layers = layers or sample_layers
                     if progress is not None:
@@ -483,20 +500,6 @@ def delete_imported_dataset(analysis_db_path: Path | str, dataset_id: int) -> bo
 # ---------------------------------------------------------------------------
 
 
-def _rewrite_source_obs(source_path: Path, edit: Callable[[pd.DataFrame], bool]) -> bool:
-    """Read only the source's `obs` group, let `edit` change it in place,
-    and write just that group back — `X`/layers/obsm are never loaded or
-    rewritten, so this stays cheap on a multi-GB file. `edit` returns
-    whether anything changed (nothing is written otherwise)."""
-    with h5py.File(source_path, "r+") as f:
-        obs = read_elem(f["obs"])
-        if not edit(obs):
-            return False
-        del f["obs"]
-        write_elem(f, "obs", obs)
-    return True
-
-
 @log_call(source="source_path")
 def write_roi_to_source(
     source_path: Path | str,
@@ -508,6 +511,10 @@ def write_roi_to_source(
     one sample's rows — `True` where `mask`, `False` for that sample's
     other rows; other samples' rows keep whatever they had (`False` when
     the column is new).
+
+    Only that one column is written. The obs index is read to find the
+    rows, and nothing else is loaded or rewritten (`core.utils.h5ad_io`,
+    ADR 50).
 
     Args:
         source_path: The user's source file (merged or single).
@@ -529,20 +536,22 @@ def write_roi_to_source(
     names = pd.Index(np.asarray(source_obs_names, dtype=str))
     values = np.asarray(mask, dtype=bool)
 
-    def _edit(obs: pd.DataFrame) -> bool:
-        rows = obs.index.get_indexer(names)
+    with h5py.File(source_path, "r+") as f:
+        index = h5ad_io.read_obs_index(f).astype(str)
+        rows = index.get_indexer(names)
         found = rows >= 0
         if not found.all():
             logger.warning(
                 "%s: %d ROI rows no longer exist in the source file; skipped",
                 source_path, int((~found).sum()),
             )
-        col = obs[column].to_numpy(dtype=bool).copy() if column in obs else np.zeros(len(obs), bool)
+        col = (
+            np.asarray(h5ad_io.read_obs_column(f, column), dtype=bool).copy()
+            if h5ad_io.has_obs_column(f, column) else np.zeros(len(index), dtype=bool)
+        )
         col[rows[found]] = values[found]
-        obs[column] = col
-        return True
-
-    return _rewrite_source_obs(source_path, _edit)
+        h5ad_io.set_obs_column(f, column, col)
+    return True
 
 
 @log_call(source="source_path")
@@ -565,19 +574,18 @@ def remove_roi_from_source(
         raise FileNotFoundError(source_path)
     names = pd.Index(np.asarray(source_obs_names, dtype=str))
 
-    def _edit(obs: pd.DataFrame) -> bool:
-        if column not in obs:
+    with h5py.File(source_path, "r+") as f:
+        if not h5ad_io.has_obs_column(f, column):
             return False
-        rows = obs.index.get_indexer(names)
-        col = obs[column].to_numpy(dtype=bool).copy()
+        index = h5ad_io.read_obs_index(f).astype(str)
+        rows = index.get_indexer(names)
+        col = np.asarray(h5ad_io.read_obs_column(f, column), dtype=bool).copy()
         col[rows[rows >= 0]] = False
         if col.any():
-            obs[column] = col
+            h5ad_io.set_obs_column(f, column, col)
         else:
-            del obs[column]
-        return True
-
-    return _rewrite_source_obs(source_path, _edit)
+            h5ad_io.drop_obs_column(f, column)
+    return True
 
 
 # ---------------------------------------------------------------------------
