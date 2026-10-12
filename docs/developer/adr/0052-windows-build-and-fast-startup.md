@@ -56,6 +56,10 @@ imported).
   `.exe` again; without this call, every Run would open more GUIs.
   Verified by running the whole test suite with the start method set to
   `spawn` (how Windows works).
+- The GUI (and the test suite, `tests/conftest.py`) set the start method
+  to `spawn` on every OS. Linux's default `fork` copies a process whose Qt
+  and logging threads may hold locks, and the forked pool workers then
+  deadlock: the test suite hung in `import_analyzed_h5ad` on 2 of 3 runs.
 - `sys.stdout`/`sys.stderr` are redirected to `os.devnull` when `None`
   (a no-console Windows exe). Otherwise any library that prints crashes.
 - The debug log and freeze dumps moved from `src/msianalyzer/log` (inside

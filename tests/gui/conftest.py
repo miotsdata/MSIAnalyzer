@@ -61,6 +61,42 @@ def _apply_test_font_scale(qapp):
     apply_font_scale()
 
 
+@pytest.fixture(autouse=True)
+def _join_worker_threads():
+    """Waits, after every test, for each QThread the test started.
+
+    The bridges' workers (HeatmapQueryWorker, TableQueryWorker, ...) are
+    children of the bridge. A test that ends while one is still reading
+    an .h5ad drops the bridge, and whenever the garbage collector then
+    destroys it, Qt aborts the whole process ("QThread: Destroyed while
+    thread is still running"), in whichever later test happens to be
+    running. That killed CI twice at ~92%. The app itself never hits
+    this: its bridges live until os._exit. Wrapping QThread.start is the
+    one place every worker passes through, however the test built its
+    bridge; the list also keeps each thread alive until it's joined.
+    """
+    import shiboken6
+    from PySide6.QtCore import QThread
+
+    started = []
+    original_start = QThread.start
+
+    def tracking_start(self, *args, **kwargs):
+        started.append(self)
+        return original_start(self, *args, **kwargs)
+
+    QThread.start = tracking_start
+    try:
+        yield
+    finally:
+        QThread.start = original_start
+        for thread in started:
+            # Workers that deleteLater() themselves are already gone, which
+            # means they already finished.
+            if shiboken6.isValid(thread):
+                thread.wait(30_000)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def compile_qml_resources():
     rc_path = "src/msianalyzer/gui/resources_rc.py"

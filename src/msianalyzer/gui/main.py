@@ -96,8 +96,12 @@ def main() -> int:
         sys.stdout = open(os.devnull, "w")
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
-    # Frozen Windows build: every ProcessPoolExecutor worker is a fresh
-    # launch of this same .exe. This turns that launch into a worker and
+    # Linux defaults to fork, and forking this process (Qt + logging
+    # threads already running) can deadlock the workers. Spawn is what
+    # Windows always uses.
+    multiprocessing.set_start_method("spawn", force=True)
+    # Frozen build: every ProcessPoolExecutor worker is a fresh launch of
+    # this same executable. This turns that launch into a worker and
     # never returns, instead of opening another GUI. No-op otherwise.
     multiprocessing.freeze_support()
     configure_logging(level=logging.DEBUG)
