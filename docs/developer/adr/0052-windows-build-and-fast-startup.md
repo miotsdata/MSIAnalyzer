@@ -84,10 +84,11 @@ installer (`%LOCALAPPDATA%\Programs\MSIAnalyzer`, no admin rights, no UAC
 prompt).
 
 **Builds run in GitHub Actions and ship as Release assets**
-(`.github/workflows/windows-build.yml`), not as Actions artifacts. On
+(`.github/workflows/release-builds.yml`, together with the Linux
+AppImage built on `ubuntu-22.04`), not as Actions artifacts. On
 the Free plan, artifacts share 500 MB of storage, and the installer
 alone is about that big; release assets have no total quota, only
-< 2 GiB per file. A manual run replaces one `windows-dev` pre-release;
+< 2 GiB per file. A manual run replaces one `dev-build` pre-release;
 a `v*` tag makes a real release. The workflow smoke-tests the frozen
 app first, checking that `Main.qml` loads (the watchdog's
 `freeze_*.txt` appears only after that). A Windows VM is then only

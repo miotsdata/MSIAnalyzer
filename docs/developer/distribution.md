@@ -83,20 +83,28 @@ startup-time work and the Windows-specific runtime fixes.
 
 ### Normal route: GitHub Actions → GitHub Release
 
-`.github/workflows/windows-build.yml` runs that script on a
-`windows-latest` runner, smoke-tests the frozen app (it must get as far
-as loading `Main.qml`), and publishes the installer as a **Release
-asset**:
+`.github/workflows/release-builds.yml` builds **both** platforms in
+parallel: this script on `windows-latest`, and
+`packaging/appimage/build.sh` on `ubuntu-22.04`. The oldest supported
+Ubuntu, not `latest`: an AppImage only runs where glibc is at least as
+new as the one it was built against. Each job smoke-tests its frozen app
+(it must get as far as loading `Main.qml`) and uploads its file to the
+same **Release**:
 
-- **Actions → Windows build → Run workflow** (any branch): replaces the
-  single `windows-dev` pre-release.
+- **Manual only**: Actions → Release builds → Run workflow (any branch),
+  or `gh workflow run release-builds.yml --ref <branch>`. This replaces
+  the single `dev-build` pre-release.
 - **Push a `v*` tag**: creates a normal release for that tag.
+
+There is deliberately no push/PR trigger, since every build costs
+runner minutes.
 
 Why a Release, not an Actions artifact: on the Free plan, artifacts
 count against 500 MB of storage, and the installer alone is about that
 big. Release assets have no total-size quota, only < 2 GiB per file.
-Cost is runner minutes only: Windows uses them at 2×, and the 2,000
-free minutes a month cover a few dozen builds.
+Cost is runner minutes only, and only while the repo is private (public
+repos are free): Windows uses them at 2×, Linux at 1×, and the 2,000 free
+minutes a month cover a few dozen builds.
 
 To test a build, a Windows machine (or VM) only needs to download the
 installer from the Releases page, with no Python or tooling. Or run
