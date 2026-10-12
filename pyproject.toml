@@ -11,7 +11,10 @@ readme = "README.md"
 license = {text = "MIT"}
 
 [project.optional-dependencies]
-gui = ["pyside6>=6.12.0"]
+# Not the `pyside6` meta-package: since 6.12 it also pulls PySide6-WebEngine
+# (~280 MB) and PySide6-Pdf, which the GUI doesn't use (ADR 51). Qt Graphs
+# is in Addons.
+gui = ["pyside6-essentials>=6.12.0", "pyside6-addons>=6.12.0"]
 
 [build-system]
 requires = ["pdm-backend"]

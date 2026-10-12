@@ -5,7 +5,7 @@
 groups = ["default", "dev", "gui"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:753e4ed47ee3da0508b021b0e4d51a55bd8a1b84ac00af5986fed89b05775e3e"
+content_hash = "sha256:38c1c698ffcc539089b467c8bac98cbdf247fc8c277d57621eea4b3de8a79a5a"
 
 [[metadata.targets]]
 requires_python = ">=3.13,<3.14"
@@ -3449,27 +3449,6 @@ files = [
 ]
 
 [[package]]
-name = "pyside6"
-version = "6.12.0"
-requires_python = "<3.16,>=3.10"
-summary = "Python bindings for the Qt cross-platform application and UI framework"
-groups = ["gui"]
-dependencies = [
-    "PySide6-Addons==6.12.0",
-    "PySide6-Essentials==6.12.0",
-    "PySide6-Pdf==6.12.0.140",
-    "PySide6-WebEngine==6.12.0.140",
-    "tomli>=2.0.1; python_version < \"3.11\"",
-]
-files = [
-    {file = "pyside6-6.12.0-cp310-abi3-macosx_14_0_universal2.whl", hash = "sha256:efea4c2f2aa54403c45de825865a902a1960a1cc9d5aaa92d4ebb8f4c4cd0708"},
-    {file = "pyside6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:d13ed4d0053cc20f3e4e0fdbf12790a9b7f958d7e22c0843411ecfa8c799e2a9"},
-    {file = "pyside6-6.12.0-cp310-abi3-manylinux_2_39_aarch64.whl", hash = "sha256:8920e163f60493e18822d20f1e01c7c4bcf9c1c5cfbc68284788896f692594f8"},
-    {file = "pyside6-6.12.0-cp310-abi3-win_amd64.whl", hash = "sha256:31a8d2893f2f28ab483b1534dde0438f27af6e234593de30425cb4729052d8f8"},
-    {file = "pyside6-6.12.0-cp310-abi3-win_arm64.whl", hash = "sha256:22e2ec6407f32b61955a28f91ab55676e60017210285c28f0c381bfeed389414"},
-]
-
-[[package]]
 name = "pyside6-addons"
 version = "6.12.0"
 requires_python = "<3.16,>=3.10"
@@ -3501,40 +3480,6 @@ files = [
     {file = "pyside6_essentials-6.12.0-cp310-abi3-manylinux_2_39_aarch64.whl", hash = "sha256:08c5841063fc1df69b7fa1ee405f539e66576a83fc48004be3e2c5e35ccbfa69"},
     {file = "pyside6_essentials-6.12.0-cp310-abi3-win_amd64.whl", hash = "sha256:c9a95102aa23c1f86516a30d5a9be37552d324eee7e567eb7508973f1218cb42"},
     {file = "pyside6_essentials-6.12.0-cp310-abi3-win_arm64.whl", hash = "sha256:c76aa689989bf9bb9b45535e0a81c6733294df720b0eed1308fa30d2606b98cc"},
-]
-
-[[package]]
-name = "pyside6-pdf"
-version = "6.12.0.140"
-requires_python = "<3.16,>=3.10"
-summary = "Python bindings for the Qt cross-platform application and UI framework (Pdf)"
-groups = ["gui"]
-dependencies = [
-    "PySide6-Essentials==6.12.0",
-]
-files = [
-    {file = "pyside6_pdf-6.12.0.140-cp310-abi3-macosx_14_0_universal2.whl", hash = "sha256:74287989dd24a82ac1604e27a2d4530a0ab71ff03cdf878c16fdbcf5144373fb"},
-    {file = "pyside6_pdf-6.12.0.140-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:0c94370b6b9d65fbfe54f9d6d25df0677db0cdcfd0a842a63958a3603a42007c"},
-    {file = "pyside6_pdf-6.12.0.140-cp310-abi3-manylinux_2_39_aarch64.whl", hash = "sha256:2b63ee1f8ce3d3b2b648be2ebda483dd0fbca8d44c92a6c6f924033ac7fbde8c"},
-    {file = "pyside6_pdf-6.12.0.140-cp310-abi3-win_amd64.whl", hash = "sha256:4971ba1a0ca15e7c29cfd808e9600aeb46b2305dad01456eb09fa3197166268e"},
-    {file = "pyside6_pdf-6.12.0.140-cp310-abi3-win_arm64.whl", hash = "sha256:ce6e4d858df1eb4e2adcbd8ba212f3611ce60f9978881fe10d417f36013a6ff9"},
-]
-
-[[package]]
-name = "pyside6-webengine"
-version = "6.12.0.140"
-requires_python = "<3.16,>=3.10"
-summary = "Python bindings for the Qt cross-platform application and UI framework (WebEngine)"
-groups = ["gui"]
-dependencies = [
-    "PySide6-Addons==6.12.0",
-]
-files = [
-    {file = "pyside6_webengine-6.12.0.140-cp310-abi3-macosx_14_0_universal2.whl", hash = "sha256:9a1de2da360d1817c08e9400a2a2fc5234beb3022a22123e15355169e183074e"},
-    {file = "pyside6_webengine-6.12.0.140-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:c041c9921d7c91c9e51a2c027f434d05c3c59baa2c8f17b71dc8194e77791f06"},
-    {file = "pyside6_webengine-6.12.0.140-cp310-abi3-manylinux_2_39_aarch64.whl", hash = "sha256:66a842ccb7f06fa7e357f6d4d63bc2739e3cbc1f93583f314e38c43024fe5f74"},
-    {file = "pyside6_webengine-6.12.0.140-cp310-abi3-win_amd64.whl", hash = "sha256:f9b61b1d457a591ee590a6b80515f25a3e61e2576a2a0a70566380f9d9de4ab0"},
-    {file = "pyside6_webengine-6.12.0.140-cp310-abi3-win_arm64.whl", hash = "sha256:44d1fac2a057a71b8f947fc5177a95fab8a0ea4e2fda068f223a00fd0193a8c7"},
 ]
 
 [[package]]

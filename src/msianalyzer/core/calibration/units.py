@@ -89,7 +89,7 @@ def area_conversion_factor(from_unit: str, to_unit: str) -> float:
 
     Used to redisplay an already-computed area/concentration/curve in a
     different square-length unit than it was originally computed in
-    (`AnalysisBridge.getCalibrationPlotUrl`'s `display_area_unit`, and
+    (`AnalysisBridge.getCalibrationPlotData`'s `display_area_unit`, and
     `CalibrationSection.qml`'s own mirror of this same formula for its
     tables/stats label) — a live, non-destructive display choice, not a
     change to what's stored.

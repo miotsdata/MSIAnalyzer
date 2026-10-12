@@ -11,7 +11,12 @@ pip install msianalyzer          # core + CLI only
 pip install msianalyzer[gui]     # + PySide6, for the desktop app
 ```
 
-Only `pyside6` is GUI-exclusive — `plotly`/`matplotlib`/`anndata`/`libviz`/
+Only PySide6 is GUI-exclusive — `pyside6-essentials` + `pyside6-addons`,
+not the `pyside6` meta-package, which since 6.12 also pulls the ~280 MB
+`pyside6-webengine` the GUI no longer uses (ADR 51). An environment that
+had the meta-package installed loses `PySide6/__init__.py` when a sync
+removes it (the wheels share that file): run `pdm sync -G:all -d
+--reinstall` once after switching. `plotly`/`matplotlib`/`anndata`/`libviz`/
 `tomli-w`/`kaleido` are used by core plotting/report code too, so they stay
 in the base `dependencies` list, not the `gui` extra.
 
@@ -133,13 +138,10 @@ Install from the Release (or run a local `dist\` build directly). Check:
   (single-instance lock);
 - **a Run with `n_workers` > 1** completes, and no extra windows appear
   (`freeze_support`, ADR 52);
-- MS1 and mirror plots render (QtWebEngine);
+- MS1, mirror and calibration plots render (Qt Graphs): zoom with the
+  wheel, drag to pan, double-click to reset, hover shows a tooltip;
 - Visual Inspection heatmaps, an export, Help > User Guide;
 - `%LOCALAPPDATA%\MSIAnalyzer\Logs\` has the debug log.
-
-In a VM without GPU acceleration, if the WebEngine plots stay blank, set
-`QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` for that session. It's a VM
-issue; real hardware doesn't need it.
 
 ### Expected on a fresh machine
 
@@ -156,25 +158,16 @@ issue; real hardware doesn't need it.
 [requires-python](#requires-python)), advisory lint, then the full test
 suite headless.
 
-### The headless Qt/WebEngine recipe
+### The headless Qt recipe
 
 Validated against a fresh `ubuntu:24.04` container running as a non-root
 user (matching GitHub's actual `ubuntu-latest` runner conditions, not just
-a local dev machine that already has a display). Two environment
-variables are required together:
+a local dev machine that already has a display):
+`QT_QPA_PLATFORM=offscreen`. (Until ADR 51 the GUI also embedded
+QtWebEngine, which additionally needed
+`QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu"`; no longer.)
 
-```
-QT_QPA_PLATFORM=offscreen
-QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu"
-```
-
-Without `--no-sandbox`: Chromium's own sandbox needs privileges a
-container/CI runner doesn't grant by default, and the whole process exits
-with code 1 **silently — no traceback, no error message** the moment a
-`WebEngineView`-backed test runs. This is easy to misdiagnose as a crash;
-it's a permissions issue.
-
-A broad list of Qt/Chromium runtime shared libraries also has to be
+A broad list of Qt runtime shared libraries also has to be
 `apt-get install`ed explicitly (see the workflow file for the full list) —
 worked out empirically, one missing-library error at a time, against a
 minimal base image. `build-essential`/`pkg-config` are in that list too,

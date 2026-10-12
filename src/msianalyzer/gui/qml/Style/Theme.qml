@@ -128,6 +128,14 @@ QtObject {
     // black regardless of theme, same as most design systems' "shadow".
     readonly property color shadowColor: "#000000"
 
+    // --- Plot series (Qt Graphs plots, ADR 51) ----------------------
+
+    // The reports' Plotly colors (black / gray / blue on white), with the
+    // black and gray lifted in dark mode so they stay visible.
+    readonly property color plotStrongColor: isDark ? "#e0e0e0" : "#000000"
+    readonly property color plotWeakColor: isDark ? "#7a7a7a" : "#999999"
+    readonly property color plotAccentColor: isDark ? "#4fa3e0" : "#1f77b4"
+
     // --- Type scale --------------------------------------------------
 
     // A page's own title (e.g. "Create project", a project's name on

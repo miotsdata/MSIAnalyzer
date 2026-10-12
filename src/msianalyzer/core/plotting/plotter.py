@@ -2,8 +2,9 @@
 plotter.py
 Visualization module for msianalyzer.
 
-Produces interactive Plotly figures that work both as standalone HTML
-and embedded in QML via WebEngineView.
+Plotly figures for the HTML report, plus the plain-data builders
+(`spectrum_groups`, `mirror_plot_data`, the calibration helpers) the GUI's
+Qt Graphs plots draw from (ADR 51) — one place for the shared logic.
 """
 
 from __future__ import annotations
@@ -58,6 +59,101 @@ _MS1_CATEGORY_LABELS = {
     "non_annotated": "Non-annotated",
     "annotated": "Annotated",
 }
+
+
+def spectrum_groups(mz_array, intensity_array, categories) -> list[dict]:
+    """A spectrum's peaks split by feature category, as plain data for the
+    GUI's stick plot (ADR 51): `[{"key", "name", "peaks": [[mz, intensity],
+    ...]}]`, in `_MS1_CATEGORY_LABELS` order, empty categories left out.
+    Same split and labels as `Plotter.plot_spectra`'s traces."""
+    mz_array = np.asarray(mz_array, dtype=float)
+    intensity_array = np.asarray(intensity_array, dtype=float)
+    categories = np.asarray(categories)
+    groups = []
+    for category, label in _MS1_CATEGORY_LABELS.items():
+        mask = categories == category
+        if mask.any():
+            peaks = np.column_stack([mz_array[mask], intensity_array[mask]]).tolist()
+            groups.append({"key": category, "name": label, "peaks": peaks})
+    return groups
+
+
+def _connector_pairs(
+    empirical_mz, empirical_int, library_mz, library_int, ppm_tolerance: float
+) -> list[tuple[float, float, float]]:
+    """Mirror plot's matched pairs: `(library_mz, empirical_intensity,
+    library_intensity)` for every library peak with an empirical peak
+    within `ppm_tolerance` (the tallest one, if several)."""
+    if len(empirical_mz) == 0:
+        return []
+    order = np.argsort(empirical_mz)
+    q_mz_sorted = np.asarray(empirical_mz)[order]
+    q_int_sorted = np.asarray(empirical_int)[order]
+    pairs = []
+    for lib_m, lib_i in zip(library_mz, library_int):
+        tol_da = lib_m * ppm_tolerance * 1e-6
+        lo = np.searchsorted(q_mz_sorted, lib_m - tol_da, side="left")
+        hi = np.searchsorted(q_mz_sorted, lib_m + tol_da, side="right")
+        if lo == hi:
+            continue
+        best = int(np.argmax(q_int_sorted[lo:hi])) + lo
+        pairs.append((float(lib_m), float(q_int_sorted[best]), float(lib_i)))
+    return pairs
+
+
+def mirror_plot_data(data: dict) -> dict:
+    """One `Plotter.get_annotation_spectra` result as plain data for the
+    GUI's mirror plot (ADR 51), the same matching as `build_mirror_figure`:
+
+    `{"title", "groups": [{"key", "name", "peaks": [[mz, y], ...]}],
+    "connectors": [[mz, empirical_y, -library_y], ...]}`. Empirical peaks
+    point up, library peaks down (negative y); keys are `"matched"` /
+    `"unmatched"`, and each name appears once in the legend.
+    """
+    emp_mz = np.asarray(data["empirical_mz"], dtype=float)
+    emp_int = np.asarray(data["empirical_intensity"], dtype=float)
+    lib_mz = np.asarray(data["library_mz"], dtype=float)
+    lib_int = np.asarray(data["library_intensity"], dtype=float)
+    tol = data["fragment_ppm_tolerance"]
+    _, emp_matched = _align_peaks(lib_mz, lib_int, emp_mz, emp_int, tol)
+    _, lib_matched = _align_peaks(emp_mz, emp_int, lib_mz, lib_int, tol)
+
+    def peaks(mz, intensity, mask, direction):
+        return np.column_stack([mz[mask], intensity[mask] * direction]).tolist()
+
+    groups = [
+        {"key": "matched", "name": "Matched", "peaks": peaks(emp_mz, emp_int, emp_matched, 1)},
+        {"key": "unmatched", "name": "Unmatched", "peaks": peaks(emp_mz, emp_int, ~emp_matched, 1)},
+        {"key": "matched", "name": "", "peaks": peaks(lib_mz, lib_int, lib_matched, -1)},
+        {"key": "unmatched", "name": "", "peaks": peaks(lib_mz, lib_int, ~lib_matched, -1)},
+    ]
+    sources = (data["emp_source"], data["lib_source"])
+    source_note = (
+        f"  ·  empirical: {sources[0]}, library: {sources[1]}"
+        if sources != ("filtered", "filtered") else ""
+    )
+    return {
+        "title": f"{data['compound_name']}  ({data['compound_formula']}){source_note}",
+        "groups": [g for g in groups if g["peaks"]],
+        "connectors": [
+            [m, e, -l] for m, e, l in _connector_pairs(emp_mz, emp_int, lib_mz, lib_int, tol)
+        ],
+    }
+
+
+def calibration_line_range(x) -> tuple[float, float]:
+    """Where a calibration curve's fit line starts and ends: 5% past the
+    standards on both ends. A line only between the outermost standards
+    reads oddly next to a fit meant to extrapolate to unknowns outside
+    their range. Shared by the report's Plotly figure and the GUI's plot."""
+    x_min, x_max = float(np.min(x)), float(np.max(x))
+    pad = (x_max - x_min) * 0.05 if x_max > x_min else max(abs(x_max), 1.0) * 0.05
+    return x_min - pad, x_max + pad
+
+
+def calibration_title(fit) -> str:
+    """A calibration curve's equation and R², its plot title."""
+    return f"y = {fit.slope:.4g}x + {fit.intercept:.4g}   R² = {fit.r_squared:.4f}"
 
 
 def _normalize_to_max(intensity: np.ndarray) -> np.ndarray:
@@ -122,8 +218,8 @@ class Plotter:
     """Builds interactive Plotly figures from msianalyzer outputs.
 
     The class is stateless: every method takes the data (or the database
-    path) it needs as an argument. Figures render both as standalone HTML
-    and embedded in QML via ``WebEngineView``.
+    path) it needs as an argument. The figures are for the HTML report;
+    the GUI plots the module-level plain-data builders instead (ADR 51).
     """
 
     # ------------------------------------------------------------------
@@ -241,13 +337,7 @@ class Plotter:
             )
         )
 
-        # Extend the line 5% past the data on both ends, not just between
-        # the outermost standards — a flat "line segment only between
-        # points" reads oddly next to a fit that's meant to extrapolate to
-        # unknowns outside the standards' own range.
-        x_min, x_max = float(np.min(x)), float(np.max(x))
-        pad = (x_max - x_min) * 0.05 if x_max > x_min else max(abs(x_max), 1.0) * 0.05
-        line_x = np.linspace(x_min - pad, x_max + pad, 50)
+        line_x = np.linspace(*calibration_line_range(x), 50)
         line_y = fit.slope * line_x + fit.intercept
         fig.add_trace(
             go.Scatter(
@@ -258,10 +348,7 @@ class Plotter:
         )
 
         fig.update_layout(
-            title=(
-                f"y = {fit.slope:.4g}x + {fit.intercept:.4g}   "
-                f"R² = {fit.r_squared:.4f}"
-            ),
+            title=calibration_title(fit),
             xaxis=dict(
                 title=f"Concentration ({concentration_unit})",
                 showgrid=True, gridcolor="#eeeeee", zeroline=False,
@@ -729,22 +816,10 @@ class Plotter:
         library_int: np.ndarray,
         ppm_tolerance: float,
     ) -> None:
-        if len(empirical_mz) == 0:
-            return
-
-        order = np.argsort(empirical_mz)
-        q_mz_sorted = empirical_mz[order]
-        q_int_sorted = empirical_int[order]
-
         xs, ys = [], []
-        for lib_m, lib_i in zip(library_mz, library_int):
-            tol_da = lib_m * ppm_tolerance * 1e-6
-            lo = np.searchsorted(q_mz_sorted, lib_m - tol_da, side="left")
-            hi = np.searchsorted(q_mz_sorted, lib_m + tol_da, side="right")
-            if lo == hi:
-                continue
-            best = int(np.argmax(q_int_sorted[lo:hi])) + lo
-            emp_i = float(q_int_sorted[best])
+        for lib_m, emp_i, lib_i in _connector_pairs(
+            empirical_mz, empirical_int, library_mz, library_int, ppm_tolerance
+        ):
             xs += [lib_m, lib_m, None]
             ys += [emp_i, -lib_i, None]
 

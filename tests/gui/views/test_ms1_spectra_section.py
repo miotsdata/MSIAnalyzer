@@ -2,7 +2,7 @@ import sqlite3
 
 import numpy as np
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 
 
 def _open_ms1_tab(view, root, find_visual_child, qtbot):
@@ -12,13 +12,23 @@ def _open_ms1_tab(view, root, find_visual_child, qtbot):
     qtbot.wait(50)
 
 
+def _click_peak(view, root, find_visual_child, qtbot, mz=150.0, intensity=50.0):
+    """Clicks the spectrum plot halfway up the stick at `mz` — the real
+    hit-testing path (StickPlot.peakAtPixel -> peakClicked)."""
+    plot = find_visual_child(root, "spectrumView")
+    qtbot.waitUntil(lambda: plot.property("hasPeaks") and plot.xToPixel(mz) > 0, timeout=2000)
+    local = QPointF(plot.xToPixel(mz), plot.yToPixel(intensity / 2))
+    qtbot.mouseClick(view, Qt.LeftButton, pos=plot.mapToScene(local).toPoint())
+    qtbot.wait(50)
+
+
 @pytest.fixture
 def ms1_analysis_model(annotated_analysis_model):
     """`annotated_analysis_model` (feature 7, mz 123.4567 / sample s1 /
     Caffeine — the `features` row itself now comes from that fixture),
     plus a saved filtered spectrum for sample 1 (so the sample selector +
     spectrum view have something to show) and a `feature_ms2_summary` row
-    for feature 7 (so a simulated `spectrumPointClicked` resolves to it)."""
+    for feature 7 (so a click on the 150.0 peak resolves to it)."""
     from msianalyzer.core.analysis_db import log_command
     from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
 
@@ -84,12 +94,7 @@ def test_ms1_spectrum_point_click_updates_detail_panel(
     root = view.rootObject()
     _open_ms1_tab(view, root, find_visual_child, qtbot)
 
-    # The WebEngineView's own click handling isn't safe/useful to simulate
-    # here (see AnnotationsSection tests) — instead fire the signal the
-    # embedded JS would emit via QWebChannel, exactly as the real click
-    # handler in AnalysisBridge.getSpectrumUrl does downstream.
-    application.analysis_bridge.spectrumPointClicked.emit(150.1)
-    qtbot.wait(50)
+    _click_peak(view, root, find_visual_child, qtbot)
 
     # Scoped to detailPanel, not the whole page `root` — searching from
     # `root` right after this click reproducibly segfaulted inside
@@ -136,8 +141,7 @@ def test_feature_detail_is_a_single_row(
     root = view.rootObject()
     _open_ms1_tab(view, root, find_visual_child, qtbot)
 
-    application.analysis_bridge.spectrumPointClicked.emit(150.1)
-    qtbot.wait(50)
+    _click_peak(view, root, find_visual_child, qtbot)
 
     detail_panel = find_visual_child(root, "detailPanel")
     feature_id_label = find_visual_child(detail_panel, "detailFeatureId")
@@ -155,8 +159,7 @@ def test_present_absent_and_top_hits_are_three_equal_columns(
     root = view.rootObject()
     _open_ms1_tab(view, root, find_visual_child, qtbot)
 
-    application.analysis_bridge.spectrumPointClicked.emit(150.1)
-    qtbot.wait(50)
+    _click_peak(view, root, find_visual_child, qtbot)
 
     detail_panel = find_visual_child(root, "detailPanel")
     present_col = find_visual_child(detail_panel, "samplesPresentColumnContainer")
@@ -178,8 +181,7 @@ def test_bottom_columns_have_separator_lines(
     root = view.rootObject()
     _open_ms1_tab(view, root, find_visual_child, qtbot)
 
-    application.analysis_bridge.spectrumPointClicked.emit(150.1)
-    qtbot.wait(50)
+    _click_peak(view, root, find_visual_child, qtbot)
 
     detail_panel = find_visual_child(root, "detailPanel")
     divider1 = find_visual_child(detail_panel, "presentAbsentDivider")
@@ -199,8 +201,7 @@ def test_top_hit_score_is_bold(
     root = view.rootObject()
     _open_ms1_tab(view, root, find_visual_child, qtbot)
 
-    application.analysis_bridge.spectrumPointClicked.emit(150.1)
-    qtbot.wait(50)
+    _click_peak(view, root, find_visual_child, qtbot)
 
     detail_panel = find_visual_child(root, "detailPanel")
     top_hit = find_visual_child(detail_panel, "topHit_0")
@@ -217,8 +218,7 @@ def test_present_and_absent_lists_get_less_space_than_top_hits(
     root = view.rootObject()
     _open_ms1_tab(view, root, find_visual_child, qtbot)
 
-    application.analysis_bridge.spectrumPointClicked.emit(150.1)
-    qtbot.wait(50)
+    _click_peak(view, root, find_visual_child, qtbot)
 
     ms1_section = find_visual_child(root, "ms1Section")
     assert ms1_section.property("detailSecondaryListMaxHeight") == 90  # 18px * 5 rows
@@ -262,8 +262,7 @@ def test_top_hits_list_caps_height_before_scrolling(
     root = view.rootObject()
     _open_ms1_tab(view, root, find_visual_child, qtbot)
 
-    application.analysis_bridge.spectrumPointClicked.emit(150.1)
-    qtbot.wait(50)
+    _click_peak(view, root, find_visual_child, qtbot)
 
     ms1_section = find_visual_child(root, "ms1Section")
     detail_panel = find_visual_child(root, "detailPanel")

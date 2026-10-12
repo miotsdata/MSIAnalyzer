@@ -1,6 +1,8 @@
 # 51 — Qt Graphs instead of Plotly/WebEngine for the GUI's interactive plots
 
-**Status:** Proposed (branch `pyside6.12`, on PySide6 6.12.0)
+**Status:** Accepted, implemented on branch `pyside6.12` (PySide6 6.12.0);
+merges to `dev` after the user's real-app check. See **Implementation**
+at the end for what the spike settled.
 
 ## Context
 
@@ -151,3 +153,45 @@ the same one:
   step 3.
 - ADR 17's rule about where the figure is built stops applying to the GUI.
   ADR 25's plotly pin still applies to reports.
+
+## Implementation (2026-10-12)
+
+- **Sticks: none of the four candidates above.** Each group is one
+  `LineSeries` that zigzags `(m, 0) → (m, y) → (m, 0)` from peak to peak;
+  the return trips run along y = 0, under a zero line drawn on top (the
+  mirror plot's center line anyway). One series per category, offscreen-
+  renderable, so tests click real peaks. `StickPlot.qml` serves MS1 and
+  the mirror plot; `CalibrationPlot.qml` the calibration curve.
+- **Hover/click** pick the peak nearest the pointer in x within 8 px (the
+  closer tip wins between the mirror plot's halves), from the axes'
+  `visualMin`/`visualMax` and the graph's `plotArea` — not series hit-
+  testing, which needs pixel-exact hits on 1 px sticks.
+- **Plotly extras, decided:** kept hover tooltip (m/z + intensity) and
+  double-click reset; wheel zoom and drag pan are `GraphsView`'s own. y is
+  never zoomed: it refits to the tallest peak in the visible m/z window
+  (or stays at ±1.15 for the mirror plot). Dropped: the modebar (PNG
+  export exists in the Export menu) and the "x unified" crosshair line.
+- **Data:** `getSpectrumData`, `getCalibrationPlotData`, and
+  `mirrorPlotReady(dict)`, built by `plotter.py`'s `spectrum_groups`,
+  `mirror_plot_data`, `calibration_line_range`/`calibration_title`, which
+  the report's Plotly figures share. `MirrorPlotWorker` now builds the
+  plot data on its thread too (ADR 17's main-thread rule is gone with
+  Plotly).
+- **Colors** come from `Theme.qml` (`plotStrongColor`, `plotWeakColor`,
+  `plotAccentColor`), so the plots follow the light/dark switch.
+- **Dependencies:** the `gui` extra is `pyside6-essentials` +
+  `pyside6-addons` (Qt Graphs is in Addons), not the `pyside6`
+  meta-package, which since 6.12 also pulls `pyside6-webengine` (~280 MB)
+  and `pyside6-pdf`. Removing the meta-package from an existing
+  environment deletes the shared `PySide6/__init__.py`: one
+  `pdm sync -G:all -d --reinstall` restores it.
+- **Gone:** the HTML writers, the WebChannel click path
+  (`onSpectrumPointClicked`/`spectrumPointClicked`),
+  `QtWebEngineQuick.initialize()`, the Chromium CI flags and the
+  WebEngine parts of the PyInstaller spec (which now keeps the `QtGraphs`
+  QML module). `LoadingOverlay` and the lazy section loaders stay: they
+  also cover the sections' async data loads.
+- Step 1 also surfaced a test-suite race (a test's bridge deleting its
+  still-running worker thread on return), fixed in `tests/gui/conftest.py`
+  on `dev` too.
+

@@ -745,9 +745,12 @@ def test_fit_curve_shows_stats_and_plot_after_two_standards(
     assert stats_label.property("visible") is True
     assert "slope" in stats_label.property("text")
 
-    plot_view = find_visual_child(section, "calibrationPlotView")
-    assert plot_view.property("visible") is True
-    assert plot_view.property("url").toString().startswith("file://")
+    plot = find_visual_child(section, "calibrationPlot")
+    assert plot.property("visible") is True
+    assert plot.property("hasData") is True
+    title = find_visual_child(plot, "calibrationPlotTitle")
+    assert title.property("text").startswith("y = ")
+    assert "R²" in title.property("text")
 
 
 def test_add_unknown_flow_draws_roi_and_records_result(

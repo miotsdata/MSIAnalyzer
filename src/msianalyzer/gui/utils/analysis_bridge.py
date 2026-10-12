@@ -4,9 +4,7 @@ import base64
 import functools
 import json
 import logging
-import os
 import sqlite3
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,7 +38,12 @@ from msianalyzer.core.calibration.units import (
 from msianalyzer.core.plotting import roi
 from msianalyzer.core.plotting.heatmap import _RENDER_MZ_TOLERANCE_PPM, category_color
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
-from msianalyzer.core.plotting.plotter import Plotter
+from msianalyzer.core.plotting.plotter import (
+    Plotter,
+    calibration_line_range,
+    calibration_title,
+    spectrum_groups,
+)
 from msianalyzer.core.registration import (
     attach_he_image,
     fit_and_save_registration,
@@ -66,7 +69,6 @@ ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 
-_SPECTRUM_DIV_ID = "msi-spectrum-plot"
 
 _EMPTY_SUMMARY = {
     "n_samples": 0,
@@ -505,11 +507,6 @@ class AnalysisBridge(QObject):
 
     Two exceptions to "QML calls in, a value flows straight back out":
 
-    - `spectrumPointClicked`: the MS1 spectra section's `WebEngineView`
-      registers this object on a `WebChannel`, and the JS embedded in
-      `getSpectrumUrl`'s output calls `onSpectrumPointClicked` when the
-      user clicks a point on the plot — QML listens for the resulting
-      signal to update the feature-detail side panel.
     - `mirrorPlotReady`: `requestMirrorPlot` (unlike every other method
       here) does *not* return its result directly — it can involve
       `emp_source`/`lib_source="raw"`, real file I/O against a raw
@@ -563,8 +560,7 @@ class AnalysisBridge(QObject):
       the same cost on any cold first visit.
     """
 
-    spectrumPointClicked = Signal(float)
-    mirrorPlotReady = Signal(str)
+    mirrorPlotReady = Signal("QVariantMap")
     formulaPredictionFinished = Signal(str)  # analysis_db_path
     formulaPredictionFailed = Signal(str, str)  # analysis_db_path, message
     annotationTableReady = Signal(list)
@@ -617,21 +613,6 @@ class AnalysisBridge(QObject):
         # Shares heatmap_provider's sample cache, lock and render thread
         # (ADR 50).
         self.he_overlay_provider = HEOverlayImageProvider(self.heatmap_provider)
-        # Plot HTML -> temp file -> `WebEngineView.url`, not `.loadHtml()`.
-        # `loadHtml`/`setHtml` silently fail past Qt's documented ~2MB
-        # limit (it's an IPC message, capped); a plot with the full
-        # Plotly.js library inlined (`include_plotlyjs=True`) is ~4.6MB on
-        # its own before any data — every spectrum/mirror plot exceeded
-        # the limit and simply never rendered. A `file://` navigation has
-        # no such cap. Counters keep each URL unique (an unchanged QML
-        # `url` binding doesn't reload, even if the file's content
-        # changed) while bounding disk use to the current + one stale file.
-        self._spectrum_counter = 0
-        self._spectrum_prev_path: Path | None = None
-        self._mirror_plot_counter = 0
-        self._mirror_plot_prev_path: Path | None = None
-        self._calibration_plot_counter = 0
-        self._calibration_plot_prev_path: Path | None = None
         # Kept alive while running — nothing else holds a reference to it
         # (same pattern as CoreBridge._run_worker). Replacing it (a new
         # request before the previous one finished) is also how a stale
@@ -677,12 +658,6 @@ class AnalysisBridge(QObject):
         self._summary_worker_path: str | None = None
         self._summary_cache_path: str | None = None
         self._summary_cache: dict = {}
-
-    @Slot(float)
-    def onSpectrumPointClicked(self, mz: float) -> None:
-        """Called from JS (via the `WebChannel`) when a spectrum point is
-        clicked; re-emitted as `spectrumPointClicked` for QML to connect to."""
-        self.spectrumPointClicked.emit(mz)
 
     @Slot(str)
     def setHeatmapAnalysis(self, analysis_db_path: str) -> None:
@@ -1355,39 +1330,6 @@ class AnalysisBridge(QObject):
 
         return hits
 
-    def _write_spectrum_html(self, html: str) -> str:
-        self._spectrum_counter += 1
-        path = Path(tempfile.gettempdir()) / (
-            f"msianalyzer_spectrum_{os.getpid()}_{self._spectrum_counter}.html"
-        )
-        path.write_text(html, encoding="utf-8")
-        if self._spectrum_prev_path is not None:
-            self._spectrum_prev_path.unlink(missing_ok=True)
-        self._spectrum_prev_path = path
-        return path.as_uri()
-
-    def _write_mirror_plot_html(self, html: str) -> str:
-        self._mirror_plot_counter += 1
-        path = Path(tempfile.gettempdir()) / (
-            f"msianalyzer_mirror_plot_{os.getpid()}_{self._mirror_plot_counter}.html"
-        )
-        path.write_text(html, encoding="utf-8")
-        if self._mirror_plot_prev_path is not None:
-            self._mirror_plot_prev_path.unlink(missing_ok=True)
-        self._mirror_plot_prev_path = path
-        return path.as_uri()
-
-    def _write_calibration_plot_html(self, html: str) -> str:
-        self._calibration_plot_counter += 1
-        path = Path(tempfile.gettempdir()) / (
-            f"msianalyzer_calibration_plot_{os.getpid()}_{self._calibration_plot_counter}.html"
-        )
-        path.write_text(html, encoding="utf-8")
-        if self._calibration_plot_prev_path is not None:
-            self._calibration_plot_prev_path.unlink(missing_ok=True)
-        self._calibration_plot_prev_path = path
-        return path.as_uri()
-
     @Slot(str, int, result=str)
     def getBasicMirrorPlotImage(self, analysis_db_path: str, annotation_id: int) -> str:
         """A fast, static empirical-vs-library mirror plot for one
@@ -1398,8 +1340,7 @@ class AnalysisBridge(QObject):
         a raw per-sample database or a library file (only the already
         max-normalised, pre-computed arrays `ms2_annotations` itself
         stores), so there's no slow/remote I/O risk to move off the GUI
-        thread, and no `WebEngineView`/Chromium renderer needed just to
-        show it.
+        thread.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
@@ -1461,9 +1402,10 @@ class AnalysisBridge(QObject):
     def requestMirrorPlot(
         self, analysis_db_path: str, annotation_id: int, emp_source: str, lib_source: str
     ) -> None:
-        """Start building the full interactive (Plotly) mirror plot for
-        one `ms2_annotations` row on a background thread; the result
-        (or an error page) arrives via `mirrorPlotReady(url)`.
+        """Start building the interactive mirror plot's data for one
+        `ms2_annotations` row on a background thread; the result
+        (`mirror_plot_data`, or `{"error": message}`) arrives via
+        `mirrorPlotReady(dict)`.
 
         Fire-and-forget rather than a return value — see the class
         docstring for why (`emp_source`/`lib_source="raw"` can mean slow
@@ -1489,28 +1431,13 @@ class AnalysisBridge(QObject):
     def _onMirrorPlotSucceeded(self, data: dict) -> None:
         if self.sender() is not self._mirror_plot_worker:
             return  # superseded by a newer request — discard
-        # Building the Plotly figure here (main thread), not inside
-        # MirrorPlotWorker — see MirrorPlotWorker's own docstring for why
-        # (a real crash) doing it on the worker thread reproduced.
-        fig = Plotter().build_mirror_figure(data)
-        # Fill the WebEngineView's viewport instead of the figure's own
-        # fixed pixel height — same fix as MS1's spectrum plot
-        # (getSpectrumUrl below).
-        fig.update_layout(autosize=True)
-        fig.layout.height = None
-        html = fig.to_html(full_html=False, include_plotlyjs=True, config={"responsive": True})
-        html += (
-            "<style>html, body { margin: 0; padding: 0; "
-            "height: 100%; overflow: hidden; }</style>"
-        )
-        self.mirrorPlotReady.emit(self._write_mirror_plot_html(html))
+        self.mirrorPlotReady.emit(data)
 
     @Slot(str)
     def _onMirrorPlotFailed(self, message: str) -> None:
         if self.sender() is not self._mirror_plot_worker:
             return  # superseded by a newer request — discard
-        html = f"<p style='font-family: sans-serif; color: #900;'>{message}</p>"
-        self.mirrorPlotReady.emit(self._write_mirror_plot_html(html))
+        self.mirrorPlotReady.emit({"error": message})
 
     @Slot(str, result=list)
     def getSamples(self, analysis_db_path: str) -> list:
@@ -1527,14 +1454,10 @@ class AnalysisBridge(QObject):
             return []
         return _dataframe_to_records(analysis_db.load_samples(analysis_db_path))
 
-    @Slot(str, str, int, result=str)
-    def getSpectrumUrl(self, analysis_db_path: str, run_id: str, sample_id: int) -> str:
-        """One sample's filtered MS1 spectrum, as a `file://` URL for a
-        `WebEngineView`'s `url` to load.
-
-        The returned page registers itself on the page's `QWebChannel`
-        (already wired to this object as `"analysisBridge"` by the QML side)
-        and calls `onSpectrumPointClicked` whenever the plot is clicked.
+    @Slot(str, str, int, result=dict)
+    def getSpectrumData(self, analysis_db_path: str, run_id: str, sample_id: int) -> dict:
+        """One sample's filtered MS1 spectrum as plain data for
+        MS1SpectraSection.qml's stick plot (Qt Graphs, ADR 51).
 
         Args:
             analysis_db_path: The analysis' SQLite database.
@@ -1543,14 +1466,10 @@ class AnalysisBridge(QObject):
             sample_id: Row id in the analysis `samples` table.
 
         Returns:
-            A `file://` URL to a self-contained, click-aware HTML page
-            (full inline Plotly.js). Written to disk rather than returned
-            as HTML for `loadHtml()`/`setHtml()` to load directly: that
-            API silently fails past Qt's ~2MB limit, and embedding
-            Plotly.js alone is already ~4.6MB — every spectrum plot was
-            silently failing to render before this. A short `<p>` error
-            page instead if no filtered spectrum was ever saved for that
-            sample.
+            `{"groups": [{"key", "name", "peaks": [[mz, intensity], ...]},
+            ...]}`, one group per feature category (`spectrum_groups`), or
+            `{"groups": [], "error": "<message>"}` if no filtered spectrum
+            was ever saved for that sample.
         """
         try:
             mz, intensity = load_aggregated_spectra(
@@ -1563,46 +1482,12 @@ class AnalysisBridge(QObject):
             logger.warning(
                 "spectrum for sample %s (run %s) not found: %s", sample_id, run_id, e
             )
-            html = "<p style='font-family: sans-serif; color: #900;'>No spectrum found for this sample.</p>"
-            return self._write_spectrum_html(html)
+            return {"groups": [], "error": "No spectrum found for this sample."}
 
         categories = _categorize_peaks(
             mz, analysis_db.load_feature_categories(analysis_db_path)
         )
-        fig = Plotter.plot_spectra(mz, intensity, categories=categories)
-        # Fill the WebEngineView's viewport instead of `plot_spectra`'s
-        # fixed pixel height — left as-is, the plot rendered at a height
-        # that rarely matched the actual container, showing a scrollbar
-        # ("the top row... shouldn't be scrollable. Adapt the content to
-        # the row"). `autosize` + clearing the explicit height lets
-        # Plotly.js size to its container instead; `responsive` makes it
-        # re-measure when the container itself resizes.
-        fig.update_layout(autosize=True)
-        fig.layout.height = None
-        body = fig.to_html(
-            full_html=False,
-            include_plotlyjs=True,
-            div_id=_SPECTRUM_DIV_ID,
-            config={"responsive": True},
-        )
-        click_script = f"""
-<style>html, body {{ margin: 0; padding: 0; height: 100%; overflow: hidden; }}</style>
-<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
-<script>
-new QWebChannel(qt.webChannelTransport, function(channel) {{
-    var bridge = channel.objects.analysisBridge;
-    var plotDiv = document.getElementById('{_SPECTRUM_DIV_ID}');
-    if (bridge && plotDiv) {{
-        plotDiv.on('plotly_click', function(data) {{
-            if (data.points.length > 0) {{
-                bridge.onSpectrumPointClicked(data.points[0].x);
-            }}
-        }});
-    }}
-}});
-</script>
-"""
-        return self._write_spectrum_html(body + click_script)
+        return {"groups": spectrum_groups(mz, intensity, categories)}
 
     @Slot(str, float, int, result=dict)
     def getFeatureDetail(self, analysis_db_path: str, mz: float, top_n: int) -> dict:
@@ -2817,10 +2702,10 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             return False
         return analysis_db.delete_calibration_unknown(analysis_db_path, unknown_id)
 
-    @Slot(str, result=str)
-    def getCalibrationPlotUrl(self, analysis_db_path: str, display_area_unit: str = "") -> str:
-        """The fitted calibration curve, as a `file://` URL for a
-        `WebEngineView` — CalibrationSection.qml's Step 2 chart.
+    @Slot(str, str, result=dict)
+    def getCalibrationPlotData(self, analysis_db_path: str, display_area_unit: str = "") -> dict:
+        """The fitted calibration curve as plain data for
+        CalibrationSection.qml's Step 2 plot (Qt Graphs, ADR 51).
 
         Cheap enough (a handful of points, no raw spectrum I/O) to build
         synchronously — unlike `requestMirrorPlot`, no background worker.
@@ -2838,17 +2723,19 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
                 unit already is a no-op.
 
         Returns:
-            The plot's URL, or `""` if there's no analysis database, no
-            curve has been fit yet, or it has no standards on record.
+            `{"points": [[concentration, signal], ...], "fitLine": [[x0, y0],
+            [x1, y1]], "title": "y = ...  R² = ...", "xTitle", "yTitle"}`,
+            or `{}` if there's no analysis database, no curve has been fit
+            yet, or it has no standards on record.
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
-            return ""
+            return {}
         curve = analysis_db.load_calibration_curve(analysis_db_path)
         if curve is None:
-            return ""
+            return {}
         points_df = analysis_db.load_calibration_points(analysis_db_path)
         if points_df.empty:
-            return ""
+            return {}
         points = list(zip(points_df["concentration"], points_df["mean_intensity"]))
         slope, intercept, lod, loq = curve["slope"], curve["intercept"], curve["lod"], curve["loq"]
         concentration_unit_label = curve["concentration_unit"]
@@ -2879,15 +2766,14 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             )
 
         fit = SimpleNamespace(slope=slope, intercept=intercept, r_squared=curve["r_squared"])
-        fig = Plotter.plot_calibration_curve(points, fit, concentration_unit_label)
-        fig.update_layout(autosize=True)
-        fig.layout.height = None
-        html = fig.to_html(full_html=False, include_plotlyjs=True, config={"responsive": True})
-        html += (
-            "<style>html, body { margin: 0; padding: 0; "
-            "height: 100%; overflow: hidden; }</style>"
-        )
-        return self._write_calibration_plot_html(html)
+        x0, x1 = calibration_line_range([x for x, _ in points])
+        return {
+            "points": [[float(x), float(y)] for x, y in points],
+            "fitLine": [[x0, slope * x0 + intercept], [x1, slope * x1 + intercept]],
+            "title": calibration_title(fit),
+            "xTitle": f"Concentration ({concentration_unit_label})",
+            "yTitle": "Signal (analyte / reference)",
+        }
 
     # -----------------------------------------------------------------
     # Export menu

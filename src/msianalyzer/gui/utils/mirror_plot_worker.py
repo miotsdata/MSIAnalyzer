@@ -4,36 +4,32 @@ import logging
 
 from PySide6.QtCore import QThread, Signal
 
-from msianalyzer.core.plotting.plotter import Plotter
+from msianalyzer.core.plotting.plotter import Plotter, mirror_plot_data
 
 logger = logging.getLogger(__name__)
 
 
 class MirrorPlotWorker(QThread):
-    """Resolves one annotation's mirror-plot data (`Plotter.get_annotation_spectra`)
-    on a background thread.
+    """Resolves one annotation's mirror-plot data (`Plotter.get_annotation_spectra`,
+    then `mirror_plot_data`) on a background thread.
 
     `emp_source`/`lib_source` == "raw" means reading straight from a file
     that isn't guaranteed local or fast: the owning sample's raw database,
     or — this worker's original motivation — a spectral library file
     living on a slow network mount. Doing that synchronously on the GUI
-    thread (the original `AnalysisBridge.getMirrorPlotUrl` did) blocks
+    thread (the original synchronous mirror-plot slot did) blocks
     Qt's whole event loop for as long as the I/O takes, which reads to
     the user as an outright app freeze ("python is not responding",
     eventually force-quit) rather than a normal wait — nothing else can
     repaint or respond meanwhile. One-shot per request, not reused —
     matches `RunWorker`'s own lifecycle.
 
-    Deliberately stops at the *data*, not the Plotly figure: building the
-    figure here too (tried first) reproducibly crashed — a segfault inside
-    Plotly's own `_perform_plotly_relayout` while the main thread was mid
-    garbage-collection, i.e. Plotly's object graph isn't safe to build
-    concurrently with whatever else is happening on the main thread.
-    `AnalysisBridge` calls `Plotter.build_mirror_figure` on the *main*
-    thread once `succeeded` delivers this worker's data.
+    The result is plain lists (ADR 51: the GUI plots with Qt Graphs), so
+    it's built here too. ADR 17's "build the Plotly figure on the main
+    thread" rule no longer applies: no Plotly object exists in the GUI.
     """
 
-    succeeded = Signal(object)  # a get_annotation_spectra() dict
+    succeeded = Signal(object)  # a mirror_plot_data() dict
     failed = Signal(str)  # human-readable error message
 
     def __init__(
@@ -64,4 +60,4 @@ class MirrorPlotWorker(QThread):
             )
             self.failed.emit(str(e))
             return
-        self.succeeded.emit(data)
+        self.succeeded.emit(mirror_plot_data(data))

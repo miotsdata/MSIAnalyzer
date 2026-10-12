@@ -462,7 +462,7 @@ def test_details_button_disabled_without_a_selected_hit(
     assert details_button.property("enabled") is False
 
 
-def test_detail_window_loads_full_plotly_mirror_plot(
+def test_detail_window_loads_the_mirror_plot(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):
     view = analysis_view(annotated_analysis_model)
@@ -475,9 +475,10 @@ def test_detail_window_loads_full_plotly_mirror_plot(
 
     # requestMirrorPlot is async (MirrorPlotWorker, background thread) —
     # see AnalysisBridge's docstring on why this must not be synchronous.
-    qtbot.waitUntil(
-        lambda: mirror_view.property("url").toString().startswith("file://"), timeout=5000
-    )
+    qtbot.waitUntil(lambda: mirror_view.property("hasPeaks") is True, timeout=5000)
+    assert detail_window.property("plotLoading") is False
+    title = detail_window.findChild(QQuickItem, "detailMirrorPlotTitle")
+    assert "Caffeine" in title.property("text")
 
 
 def test_detail_window_shows_metadata_table_next_to_the_plot(
@@ -520,18 +521,15 @@ def test_detail_window_reloads_on_source_toggle(
 
     detail_window = root.findChild(QObject, "mirrorPlotDetailWindow")
     mirror_view = detail_window.findChild(QQuickItem, "detailMirrorPlotView")
-    qtbot.waitUntil(
-        lambda: mirror_view.property("url").toString().startswith("file://"), timeout=5000
-    )
-    initial_url = mirror_view.property("url").toString()
+    qtbot.waitUntil(lambda: mirror_view.property("hasPeaks") is True, timeout=5000)
+    initial = detail_window.property("plotData")
 
     detail_window.setProperty("empSource", "raw")
     detail_window.refresh()
 
-    qtbot.waitUntil(
-        lambda: mirror_view.property("url").toString() != initial_url, timeout=5000
-    )
-    assert mirror_view.property("url").toString().startswith("file://")
+    # A new result (the raw-source plot, or its error) replaces the old one.
+    qtbot.waitUntil(lambda: detail_window.property("plotData") != initial, timeout=5000)
+    assert detail_window.property("plotLoading") is False
 
 
 def test_detail_window_resets_to_filtered_on_reopen(

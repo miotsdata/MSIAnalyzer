@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtWebEngine
 import "qrc:/Style"
 
 // The targeted-analysis Calibration workspace — AnalysisPage.qml's sole
@@ -53,7 +52,7 @@ Item {
     property var unknownsRows: []
     property var currentCurve: ({})
     readonly property bool hasCurve: Object.keys(calibrationSection.currentCurve).length > 0
-    property string plotUrl: ""
+    property var plotData: ({})
 
     // Pixel size/unit + the standards' amount unit — entered once (top of
     // Step 1) and reused for every "Add Standard"/"Add Sample to
@@ -163,13 +162,13 @@ Item {
             ? AnalysisBridge.getCalibrationCurve(analysis.analysisDbPath) : ({})
         // `concentrationAreaUnit` redisplays an already-fitted curve in
         // whichever unit the combo currently has selected — a live,
-        // non-destructive choice (see AnalysisBridge.getCalibrationPlotUrl's
+        // non-destructive choice (see AnalysisBridge.getCalibrationPlotData's
         // own docstring), so this needs re-running whenever that changes,
         // not just when the underlying data does (see onConcentrationAreaUnitChanged).
-        calibrationSection.plotUrl = (analysis && analysis.analysisDbPath && calibrationSection.hasCurve)
-            ? AnalysisBridge.getCalibrationPlotUrl(
+        calibrationSection.plotData = (analysis && analysis.analysisDbPath && calibrationSection.hasCurve)
+            ? AnalysisBridge.getCalibrationPlotData(
                   analysis.analysisDbPath, calibrationSection.concentrationAreaUnit)
-            : ""
+            : ({})
     }
     onConcentrationAreaUnitChanged: calibrationSection.refreshCurve()
     function refreshAll() {
@@ -738,23 +737,12 @@ Item {
                               : ""
                     }
 
-                    // Lazy — a WebEngineView starts its Chromium renderer
-                    // as soon as it's constructed, regardless of its own
-                    // `visible` (same reasoning as
-                    // MirrorPlotDetailWindow.qml/AnnotationsSection.qml's
-                    // identical comment) — `active` only once a curve
-                    // actually exists means Steps 1/3-only usage (no fit
-                    // yet) never spins up Chromium at all.
-                    Loader {
-                        id: plotViewLoader
-                        objectName: "calibrationPlotViewLoader"
-                        active: calibrationSection.hasCurve
+                    CalibrationPlot {
+                        objectName: "calibrationPlot"
+                        visible: calibrationSection.hasCurve
+                        plotData: calibrationSection.plotData
                         Layout.fillWidth: true
                         Layout.preferredHeight: 450
-                        sourceComponent: WebEngineView {
-                            objectName: "calibrationPlotView"
-                            url: calibrationSection.plotUrl
-                        }
                     }
                 }
             }

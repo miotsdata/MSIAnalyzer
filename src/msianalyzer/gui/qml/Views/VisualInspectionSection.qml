@@ -204,13 +204,8 @@ Item {
             Item { Layout.fillWidth: true }
         }
 
-        // Lazy — see mirrorPlotDetailWindowLoader in AnnotationsSection.qml
-        // for why: a WebEngineView inside MirrorPlotDetailWindow spins up
-        // its Chromium renderer as soon as it's constructed, regardless of
-        // the owning Window's own `visible`. RoiDesignWindow has no
-        // WebEngineView, but the same lazy pattern is kept for consistency
-        // and so opening the Visual Inspection tab never eagerly builds a
-        // second top-level window nobody asked for. Not a Layout item
+        // Lazy, so opening the Visual Inspection tab never eagerly builds
+        // a second top-level window nobody asked for. Not a Layout item
         // itself (Loader renders nothing here) — kept out of the RowLayout
         // below so it can't affect that row's sizing.
         Loader {

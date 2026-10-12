@@ -26,12 +26,15 @@ jobs:
           version: "2.28.0"
           cache: true
 
-      # The GUI's runtime deps (PySide6 + QtWebEngine) need real shared
-      # libraries even headless — this list was worked out empirically
+      # The GUI's runtime deps (PySide6) need real shared libraries even
+      # headless — this list was worked out empirically
       # against a fresh ubuntu:24.04 container (same base as ubuntu-latest)
       # by installing, running the suite, and closing each missing-library
       # gap it reported.
-      - name: Install Qt/WebEngine runtime libraries
+      # It dates from when the GUI also ran QtWebEngine (Chromium), whose
+      # extra libraries (nss, atk, cups, ...) are probably no longer needed
+      # since ADR 51; not trimmed yet.
+      - name: Install Qt runtime libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -74,14 +77,7 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-          # Chromium's sandbox needs privileges a CI container/runner
-          # doesn't grant by default — without this, QtWebEngine-backed
-          # tests (mirror plot, MS1 spectrum views) abort the whole
-          # process with no traceback. --disable-gpu avoids a similar
-          # failure to acquire a GL context headless.
-          QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu"
         run: |
-          # A rare native abort under offscreen+WebEngine is a known,
-          # already-documented flake (ADR 0014, docs/developer/architecture/
-          # gui.md) — not a real bug. One retry absorbs it.
+          # One retry absorbs a known accumulation-triggered PySide6/Shiboken
+          # wrapper flake (docs/developer/distribution.md, "The retry line").
           pdm run pytest -q || pdm run pytest -q
