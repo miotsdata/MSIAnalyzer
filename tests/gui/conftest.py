@@ -73,7 +73,9 @@ def _join_worker_threads():
     running. That killed CI twice at ~92%. The app itself never hits
     this: its bridges live until os._exit. Wrapping QThread.start is the
     one place every worker passes through, however the test built its
-    bridge; the list also keeps each thread alive until it's joined.
+    bridge. The list keeps each thread's parent alive too, until the join:
+    a test's bridge is freed the moment the test function returns, and
+    deleting the parent deletes the still-running child thread with it.
     """
     import shiboken6
     from PySide6.QtCore import QThread
@@ -82,7 +84,7 @@ def _join_worker_threads():
     original_start = QThread.start
 
     def tracking_start(self, *args, **kwargs):
-        started.append(self)
+        started.append((self, self.parent()))
         return original_start(self, *args, **kwargs)
 
     QThread.start = tracking_start
@@ -90,7 +92,7 @@ def _join_worker_threads():
         yield
     finally:
         QThread.start = original_start
-        for thread in started:
+        for thread, _parent in started:
             # Workers that deleteLater() themselves are already gone, which
             # means they already finished.
             if shiboken6.isValid(thread):
