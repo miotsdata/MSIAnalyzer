@@ -60,4 +60,5 @@ useful).
 | [48](0048-spatial-correlation-morans-i.md) | Spatial correlation (Moran's I), computed via squidpy on the `.h5ad` | Accepted |
 | [49](0049-imported-analyzed-h5ad-datasets.md) | Imported analyzed `.h5ad` datasets, linked to an analysis | Accepted |
 | [50](0050-gui-responsiveness-no-h5ad-io-on-gui-thread.md) | GUI responsiveness: no `.h5ad` I/O on the GUI thread | Accepted |
+| [51](0051-qt-graphs-instead-of-plotly-in-gui.md) | Qt Graphs instead of Plotly/WebEngine for the GUI's interactive plots | Proposed |
 | [52](0052-windows-build-and-fast-startup.md) | Windows build (one cross-platform spec + Inno Setup), and a fast-starting GUI | Accepted |
