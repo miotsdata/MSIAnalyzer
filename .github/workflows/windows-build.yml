@@ -1,0 +1,83 @@
+name: Windows build
+
+# Builds the Windows installer and publishes it as a GitHub *Release*
+# asset, never an Actions artifact: artifacts count against the Free
+# plan's 500 MB storage (the installer alone is about that big), while
+# release assets have no total-size quota, only < 2 GiB per file.
+#
+# - Run manually (Actions tab > Windows build > Run workflow, any branch):
+#   replaces the single `windows-dev` pre-release with this build.
+# - Push a `v*` tag: creates a normal release for that tag.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pdm-project/setup-pdm@v4
+        with:
+          python-version: "3.13"
+          # Same pin as ci.yml: the PDM version pdm.lock was made with.
+          version: "2.28.0"
+          cache: true
+
+      # find-mfs / brain-isotopic-distribution ship no Windows wheel and
+      # compile here; the runner image already has the MSVC toolchain.
+      - name: Install dependencies
+        run: pdm install -G:all -d
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build app + installer
+        run: powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
+
+      # Catches the classic frozen-app failures (a pruned DLL, a missing
+      # hidden import, a QML module left out) without anyone opening it.
+      # gui.main only creates freeze_<ts>.txt (FreezeWatchdog) after
+      # Main.qml has loaded, so that file existing means startup worked.
+      - name: Smoke test (app starts and loads its QML)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+        run: |
+          $logs = "$env:LOCALAPPDATA\MSIAnalyzer\Logs"
+          $p = Start-Process dist\msianalyzer-gui\msianalyzer-gui.exe -PassThru
+          $deadline = (Get-Date).AddSeconds(120)
+          while (-not (Test-Path "$logs\freeze_*.txt") -and (Get-Date) -lt $deadline -and -not $p.HasExited) {
+            Start-Sleep -Seconds 2
+          }
+          $ok = Test-Path "$logs\freeze_*.txt"
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Get-Content "$logs\debug_*.log" -Tail 50 -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "App did not finish starting within 120 s (exited: $($p.HasExited))" }
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          installer=$(ls dist/MSIAnalyzer-setup-*.exe)
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            gh release create "$GITHUB_REF_NAME" "$installer" --generate-notes
+          else
+            gh release delete windows-dev --cleanup-tag --yes || true
+            gh release create windows-dev "$installer" --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "Windows dev build (${GITHUB_REF_NAME} @ ${GITHUB_SHA::7})" \
+              --notes "Latest manual Windows build from \`${GITHUB_REF_NAME}\`. Replaced on every run."
+          fi

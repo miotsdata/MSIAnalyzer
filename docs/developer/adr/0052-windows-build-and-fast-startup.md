@@ -83,6 +83,16 @@ PyInstaller and then ISCC on `msianalyzer.iss`. The result is a per-user
 installer (`%LOCALAPPDATA%\Programs\MSIAnalyzer`, no admin rights, no UAC
 prompt).
 
+**Builds run in GitHub Actions and ship as Release assets**
+(`.github/workflows/windows-build.yml`), not as Actions artifacts. On
+the Free plan, artifacts share 500 MB of storage, and the installer
+alone is about that big; release assets have no total quota, only
+< 2 GiB per file. A manual run replaces one `windows-dev` pre-release;
+a `v*` tag makes a real release. The workflow smoke-tests the frozen
+app first, checking that `Main.qml` loads (the watchdog's
+`freeze_*.txt` appears only after that). A Windows VM is then only
+needed to test the GUI, not to build.
+
 ## Consequences
 
 - Any heavy library added later should be imported lazily. The startup

@@ -81,34 +81,45 @@ spec, by `packaging/windows/build.ps1`. Output:
 See [ADR 52](adr/0052-windows-build-and-fast-startup.md) for the
 startup-time work and the Windows-specific runtime fixes.
 
-### One-time setup of the build machine (Windows 10/11 x64, e.g. a VM)
+### Normal route: GitHub Actions → GitHub Release
 
-1. **Git**: <https://git-scm.com/download/win>. Clone the repo.
-2. **PDM** (PowerShell):
-   `powershell -ExecutionPolicy ByPass -c "irm https://pdm-project.org/install-pdm.py | py -"`.
-   If `py` doesn't exist yet, install Python 3.13 x64 from python.org
-   first (tick "Add to PATH"). PDM can also fetch its own interpreter
-   with `pdm python install 3.13`.
-3. **Inno Setup 6**: <https://jrsoftware.org/isdl.php>, default options.
-4. In the repo: `pdm install -G:all -d`.
+`.github/workflows/windows-build.yml` runs that script on a
+`windows-latest` runner, smoke-tests the frozen app (it must get as far
+as loading `Main.qml`), and publishes the installer as a **Release
+asset**:
 
-No Visual Studio or MSVC build tools are needed. Every dependency ships a
-prebuilt Windows wheel, and the PySide6 wheel carries the MSVC runtime.
+- **Actions → Windows build → Run workflow** (any branch): replaces the
+  single `windows-dev` pre-release.
+- **Push a `v*` tag**: creates a normal release for that tag.
 
-### Build
+Why a Release, not an Actions artifact: on the Free plan, artifacts
+count against 500 MB of storage, and the installer alone is about that
+big. Release assets have no total-size quota, only < 2 GiB per file.
+Cost is runner minutes only: Windows uses them at 2×, and the 2,000
+free minutes a month cover a few dozen builds.
+
+To test a build, a Windows machine (or VM) only needs to download the
+installer from the Releases page, with no Python or tooling. Or run
+`dist\msianalyzer-gui\msianalyzer-gui.exe` from a local build.
+
+### Building locally on Windows (fallback)
+
+Needs Git, Python 3.13 x64, PDM, Inno Setup 6, **and the Visual Studio
+C++ Build Tools**: `find-mfs` and `brain-isotopic-distribution` ship no
+Windows wheel and compile on install. Then:
 
 ```
+pdm install -G:all -d
 powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ```
 
-The PyInstaller step prints `pruning N unreachable Qt libs: [...]`; on
-Linux N is ~100. If the built app fails to start with a missing-DLL
-error, that list is the first place to look.
+The PyInstaller step prints `pruning N unreachable Qt libs: [...]`. If a
+built app fails to start with a missing-DLL error, that list is the
+first place to look.
 
 ### Smoke test before handing it over
 
-Running `dist\msianalyzer-gui\msianalyzer-gui.exe` directly is enough; no
-need to install. Check:
+Install from the Release (or run a local `dist\` build directly). Check:
 
 - it opens, and a second launch only focuses the first window
   (single-instance lock);
