@@ -7,6 +7,7 @@ from scipy.sparse import csr_matrix
 from msianalyzer.core.plotting.roi import (
     delete_roi_from_sample,
     load_sample_rois,
+    per_sample_rois,
     polygon_pixel_mask,
     roi_obs_column,
     save_roi_to_sample,
@@ -129,6 +130,28 @@ def test_load_sample_rois_reads_back_saved_roi(tmp_path):
     rois = load_sample_rois(path)
 
     assert rois["liver"]["color"] == "#ff0000"
+
+
+def test_load_sample_rois_skips_merged_format_entries(tmp_path):
+    # A notebook that started from merged.h5ad hands back its
+    # {color, samples} entries, which have no polygon to draw.
+    path = tmp_path / "s1.h5ad"
+    adata = _make_grid_adata()
+    adata.uns["rois"] = {"tissue": {"color": "#00ff00", "samples": ["s1", "s2"]}}
+    adata.write_h5ad(path)
+    save_roi_to_sample(path, "liver", "#ff0000", [[1, 1], [3, 1], [3, 3], [1, 3]])
+
+    assert list(load_sample_rois(path)) == ["liver"]
+
+
+def test_per_sample_rois_takes_fallback_polygon_for_merged_entry():
+    rois = {"tissue": {"color": "#00ff00", "samples": ["s1"]}, "gone": {"color": "#000000"}}
+    fallback = {"tissue": {"color": "#00ff00", "vertices": np.array([[0, 0], [1, 0], [1, 1]])}}
+
+    out = per_sample_rois(rois, fallback)
+
+    assert list(out) == ["tissue"]
+    assert out["tissue"]["vertices"].shape == (3, 2)
 
 
 def test_load_sample_rois_empty_when_none_saved(tmp_path):

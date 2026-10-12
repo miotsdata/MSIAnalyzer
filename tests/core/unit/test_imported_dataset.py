@@ -28,6 +28,7 @@ from msianalyzer.core.imported_dataset import (
     write_roi_to_source,
 )
 from msianalyzer.core.plotting.heatmap import pixel_grid_indices
+from msianalyzer.core.plotting.roi import load_sample_rois, save_roi_to_sample
 
 SAMPLES = ("s1", "s2", "s3")
 N_X, N_Y = 5, 4
@@ -440,6 +441,29 @@ def _import_merged(analysis, tmp_path):
         sample_map={s: s for s in SAMPLES}, n_workers=1,
     )
     return db, src, result
+
+
+def test_import_replaces_merged_format_rois_with_pipeline_polygons(analysis, tmp_path):
+    db, samples = analysis
+    square = [[0, 0], [2, 0], [2, 2], [0, 2]]
+    save_roi_to_sample(db.parent / "s1.h5ad", "tumor", "#ff0000", square)
+    merged = _notebook_merged(samples)
+    # merged.h5ad's shape: no polygon, just which samples have the ROI.
+    merged.uns["rois"] = {
+        "tumor": {"color": "#ff0000", "samples": ["s1"]},
+        "gone": {"color": "#00ff00", "samples": ["s2"]},
+    }
+    src = tmp_path / "notebook_merged.h5ad"
+    merged.write_h5ad(src)
+
+    result = import_analyzed_h5ad(
+        db, src, name="v1", sample_column="sample",
+        sample_map={s: s for s in SAMPLES}, n_workers=1,
+    )
+
+    s1 = load_sample_rois(sample_h5ad_path(db, "s1", result.rel_dir))
+    assert list(s1) == ["tumor"] and s1["tumor"]["vertices"] == square
+    assert load_sample_rois(sample_h5ad_path(db, "s2", result.rel_dir)) == {}
 
 
 def test_write_roi_to_source_sets_only_that_samples_rows(analysis, tmp_path):

@@ -23,7 +23,10 @@ Per sample, the split:
     pipeline sample's *full* grid axes in `uns[GRID_UNS_KEY]` so a
     QC-filtered edge row/column can't shift the grid (see
     `heatmap.pixel_grid_indices`);
-  - drops `obsp` (whole-dataset pixel graphs mean nothing once split).
+  - drops `obsp` (whole-dataset pixel graphs mean nothing once split);
+  - keeps only per-sample ROI polygons in `uns["rois"]`: a source built
+    from `merged.h5ad` carries its polygon-less entries, which take the
+    pipeline sample's polygon of the same name (same grid) or are dropped.
 
 Splitting runs one process per sample (`ProcessPoolExecutor`); each worker
 opens the source in backed mode and only materializes its own sample's
@@ -49,6 +52,7 @@ import numpy as np
 import pandas as pd
 
 from msianalyzer.core import analysis_db
+from msianalyzer.core.plotting import roi
 from msianalyzer.core.plotting.heatmap import GRID_UNS_KEY
 from msianalyzer.core.utils import h5ad_io
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
@@ -312,6 +316,7 @@ def _import_one_sample(
     try:
         ref_names = pd.Index(ref.obs_names.astype(str))
         ref_xy = np.asarray(ref.obsm["spatial"], dtype=float)[:, :2]
+        ref_rois = ref.uns.get("rois")
     finally:
         ref.file.close()
 
@@ -323,6 +328,8 @@ def _import_one_sample(
     sub.uns[GRID_UNS_KEY] = {"x": np.unique(ref_xy[:, 0]), "y": np.unique(ref_xy[:, 1])}
     for key in list(sub.obsp.keys()):
         del sub.obsp[key]
+    if "rois" in sub.uns:
+        sub.uns["rois"] = roi.per_sample_rois(sub.uns["rois"], ref_rois)
     _ensure_var_mz(sub, Path(source_path).name)
 
     t2 = time.perf_counter()

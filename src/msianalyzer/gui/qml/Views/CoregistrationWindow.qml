@@ -20,6 +20,19 @@ import "qrc:/Style"
 Window {
     id: win
     objectName: "coregistrationWindow"
+    // Which samples are coregistered ("· H&E ✓" in the sample combo).
+    property var registrationMarks: ({})
+    function refreshRegistrationMarks() {
+        win.registrationMarks = (win.analysis && win.analysis.analysisDbPath)
+            ? AnalysisBridge.getRegistrationMarks(win.analysis.analysisDbPath,
+                  win.samples.map(function (s) { return s.name }))
+            : {}
+    }
+    onSamplesChanged: win.refreshRegistrationMarks()
+    Connections {
+        target: AnalysisBridge
+        function onRegistrationChanged() { win.refreshRegistrationMarks() }
+    }
     title: "H&E Coregistration" + (win.selectedSample ? " — " + win.selectedSample.name : "")
     // Same "starts hidden" reasoning as RoiDesignWindow.qml — a Loader-
     // constructed Window defaulting to visible would pop up unasked and
@@ -282,7 +295,8 @@ Window {
                 objectName: "coregSampleCombo"
                 Layout.fillWidth: true
                 Layout.maximumWidth: 220
-                model: win.samples.map(function (s) { return s.name })
+                // "· H&E ✓" marks the coregistered samples.
+                model: win.samples.map(function (s) { return s.name + (win.registrationMarks[s.name] || "") })
                 currentIndex: win.selectedSampleIndex
                 onActivated: (index) => win.selectedSampleIndex = index
                 HoverHandler { cursorShape: Qt.PointingHandCursor }

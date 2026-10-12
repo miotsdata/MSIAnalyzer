@@ -1867,6 +1867,25 @@ def test_get_registration_info_matrix_none_without_fit(tmp_path):
     assert info["matrix"] is None
 
 
+def test_get_registration_marks_per_sample_state(tmp_path):
+    db_path, _ = _seed_coreg_sample(tmp_path, "s1")
+    register_sample(db_path, name="s2", raw_db_path=tmp_path / "s2.db")
+    image_path = tmp_path / "slide.png"
+    _make_he_png(image_path)
+    bridge = AnalysisBridge()
+    changes = []
+    bridge.registrationChanged.connect(lambda: changes.append(1))
+
+    bridge.attachHeImage(str(db_path), "s1", str(image_path))
+    assert bridge.getRegistrationMarks(str(db_path), ["s1", "s2"]) == {
+        "s1": " · H&E not fitted", "s2": "",
+    }
+
+    bridge.saveRegistration(str(db_path), "s1", _COREG_LANDMARKS, "affine")
+    assert bridge.getRegistrationMarks(str(db_path), ["s1"]) == {"s1": " · H&E ✓"}
+    assert len(changes) == 2
+
+
 def test_save_registration_without_attached_image_returns_error(tmp_path):
     db_path, _raw_db_path = _seed_coreg_sample(tmp_path)
 

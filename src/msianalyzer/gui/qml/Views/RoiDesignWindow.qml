@@ -18,6 +18,19 @@ import "qrc:/Style"
 Window {
     id: roiWindow
     objectName: "roiDesignWindow"
+    // Which samples are coregistered ("· H&E ✓" in the sample combo).
+    property var registrationMarks: ({})
+    function refreshRegistrationMarks() {
+        roiWindow.registrationMarks = (roiWindow.analysis && roiWindow.analysis.analysisDbPath)
+            ? AnalysisBridge.getRegistrationMarks(roiWindow.analysis.analysisDbPath,
+                  roiWindow.samples.map(function (s) { return s.name }))
+            : {}
+    }
+    onSamplesChanged: roiWindow.refreshRegistrationMarks()
+    Connections {
+        target: AnalysisBridge
+        function onRegistrationChanged() { roiWindow.refreshRegistrationMarks() }
+    }
     title: "ROI Design" + (roiWindow.selectedSample ? " — " + roiWindow.selectedSample.name : "")
     // Window defaults to visible: true — without this, one popped up
     // immediately whenever the Loader that owns it gets constructed
@@ -202,10 +215,12 @@ Window {
     }
 
     onSelectedSampleIndexChanged: {
+        // Registration first: a bridge call below that throws must not
+        // also hide "Draw on H&E image".
+        roiWindow.refreshRoiRegistrationInfo()
         roiWindow.resetDraft()
         roiWindow.refreshSavedRois()
         roiWindow.refreshCatalogRois()
-        roiWindow.refreshRoiRegistrationInfo()
     }
     onVisibleChanged: {
         if (roiWindow.visible) {
@@ -215,10 +230,10 @@ Window {
             // with a one-click way to add one here), so there's no need
             // to guess which sample to open on.
             roiWindow.selectedSampleIndex = 0
+            roiWindow.refreshRoiRegistrationInfo()
             roiWindow.resetDraft()
             roiWindow.refreshSavedRois()
             roiWindow.refreshCatalogRois()
-            roiWindow.refreshRoiRegistrationInfo()
         }
     }
 
@@ -238,10 +253,10 @@ Window {
         roiWindow.requestActivate()
         if (wasVisible) {
             roiWindow.selectedSampleIndex = 0
+            roiWindow.refreshRoiRegistrationInfo()
             roiWindow.resetDraft()
             roiWindow.refreshSavedRois()
             roiWindow.refreshCatalogRois()
-            roiWindow.refreshRoiRegistrationInfo()
         }
     }
 
@@ -325,7 +340,8 @@ Window {
                 id: sampleCombo
                 objectName: "roiSampleCombo"
                 Layout.fillWidth: true
-                model: roiWindow.samples.map(function (s) { return s.name })
+                // "· H&E ✓" marks the coregistered samples.
+                model: roiWindow.samples.map(function (s) { return s.name + (roiWindow.registrationMarks[s.name] || "") })
                 currentIndex: roiWindow.selectedSampleIndex
                 onActivated: (index) => roiWindow.selectedSampleIndex = index
                 HoverHandler {

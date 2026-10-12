@@ -14,7 +14,24 @@ Item {
     // dataset switch.
     property var samples: (analysis && analysis.analysisDbPath && AnalysisBridge && AnalysisBridge.activeDatasetId >= -1)
                            ? AnalysisBridge.getInspectionSamples(analysis.analysisDbPath) : []
-    onSamplesChanged: visualSection.refreshSampleRois()
+    onSamplesChanged: {
+        visualSection.refreshSampleRois()
+        visualSection.refreshRegistrationMarks()
+    }
+
+    // { sampleName: " · H&E ✓" | " · H&E not fitted" | "" } — which
+    // samples are coregistered, appended to each tile's title.
+    property var registrationMarks: ({})
+    function refreshRegistrationMarks() {
+        visualSection.registrationMarks = (analysis && analysis.analysisDbPath)
+            ? AnalysisBridge.getRegistrationMarks(analysis.analysisDbPath,
+                  visualSection.samples.map(function (s) { return s.name }))
+            : {}
+    }
+    Connections {
+        target: AnalysisBridge
+        function onRegistrationChanged() { visualSection.refreshRegistrationMarks() }
+    }
 
     property int gridRows: 1
     property int gridCols: Math.max(1, Math.min(4, visualSection.samples.length))
@@ -42,6 +59,7 @@ Item {
             AnalysisBridge.setHeImageAnalysis(analysis.analysisDbPath)
             controls.refresh()
             visualSection.refreshSampleRois()
+            visualSection.refreshRegistrationMarks()
         }
     }
 
@@ -307,7 +325,8 @@ Item {
 
                                 Label {
                                     objectName: "heatmapTileLabel_" + modelData.name
-                                    text: modelData.name + (visualSection.moranIScores[modelData.name] !== undefined
+                                    text: modelData.name + (visualSection.registrationMarks[modelData.name] || "")
+                                          + (visualSection.moranIScores[modelData.name] !== undefined
                                           ? " (I=" + visualSection.moranIScores[modelData.name].toFixed(2) + ")" : "")
                                     Layout.fillWidth: true
                                     horizontalAlignment: Text.AlignHCenter

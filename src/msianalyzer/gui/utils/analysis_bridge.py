@@ -588,6 +588,7 @@ class AnalysisBridge(QObject):
     datasetMoranFinished = Signal(str)
     datasetMoranFailed = Signal(str)
     roiSourceWriteFailed = Signal(str)  # ROI saved locally, write-back failed
+    registrationChanged = Signal()  # an H&E image attached or a fit saved
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -2277,6 +2278,21 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
         }
         return result
 
+    @Slot(str, list, result=dict)
+    def getRegistrationMarks(self, analysis_db_path: str, sample_names: list) -> dict:
+        """`{sample: mark}` — the suffix Visual Inspection's tiles and the
+        ROI/Coregistration sample combos append to a sample's name:
+        `" · H&E ✓"` (fitted), `" · H&E not fitted"` (image only) or `""`.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {}
+        marks = {}
+        for name in sample_names:
+            info = self.getRegistrationInfo(analysis_db_path, name)
+            marks[name] = (" · H&E ✓" if info["hasFit"]
+                           else " · H&E not fitted" if info["hasImage"] else "")
+        return marks
+
     @Slot(str, str, str, result=dict)
     def attachHeImage(self, analysis_db_path: str, sample_name: str, image_path: str) -> dict:
         """Attach (or replace) `sample_name`'s H&E/brightfield image —
@@ -2304,6 +2320,7 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             attached = attach_he_image(raw_db_path, image_path)
         except (ValueError, OSError) as e:
             return {"ok": False, "error": str(e)}
+        self.registrationChanged.emit()
         return {
             "ok": True,
             "width": attached.width,
@@ -2349,6 +2366,7 @@ new QWebChannel(qt.webChannelTransport, function(channel) {{
             )
         except ValueError as e:
             return {"ok": False, "error": str(e)}
+        self.registrationChanged.emit()
         return {"ok": True, "rmse": fit.rmse, "landmarks": self._landmarks_to_rows(fit)}
 
     # -----------------------------------------------------------------

@@ -95,6 +95,21 @@ def _rois_dict(raw) -> dict:
     return {str(k): dict(v) for k, v in (raw or {}).items()}
 
 
+def per_sample_rois(rois, fallback=None) -> dict:
+    """`rois` as a per-sample `uns["rois"]`: entries without a polygon
+    (`merged.h5ad`'s `{color, samples}` shape, carried into a sample file
+    by a notebook that started from `merged.h5ad`) are replaced by the
+    same-named polygon in `fallback` if it has one, else dropped."""
+    fallback = _rois_dict(fallback)
+    out = {}
+    for name, info in _rois_dict(rois).items():
+        if "vertices" not in info:
+            info = fallback.get(name, {})
+        if "vertices" in info:
+            out[name] = info
+    return out
+
+
 @log_call(source="h5ad_path")
 def save_roi_to_sample(
     h5ad_path: Path | str, name: str, color: str, vertices: list,
@@ -172,10 +187,11 @@ def load_sample_rois(h5ad_path: Path | str) -> dict:
         pairs — h5ad round-trips a `uns` list-of-lists as a numpy array,
         which downstream QML consumers (RoiOverlay.qml's `.map()` calls)
         can't use directly. `{}` if the sample has no ROIs (or predates
-        this feature).
+        this feature). Entries without a polygon are skipped
+        (`per_sample_rois`).
     """
     with h5py.File(h5ad_path, "r") as f:
-        rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
+        rois = per_sample_rois(h5ad_io.read_uns(f, "rois"))
     return {
         name: {
             "color": info["color"],
