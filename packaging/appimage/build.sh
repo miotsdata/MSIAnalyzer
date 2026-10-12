@@ -28,6 +28,10 @@ fi
 echo "Recompiling QML resources..."
 pdm run pyside6-rcc src/msianalyzer/gui/qml/resources.qrc -o src/msianalyzer/gui/resources_rc.py
 
+# Help > User Guide opens the bundled site/ (see the spec's datas).
+echo "Building user guide..."
+pdm run mkdocs build --quiet
+
 echo "Running PyInstaller..."
 pdm run pyinstaller packaging/pyinstaller/msianalyzer-gui.spec --noconfirm
 

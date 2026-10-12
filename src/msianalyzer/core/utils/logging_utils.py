@@ -11,6 +11,8 @@ from multiprocessing import Manager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+import platformdirs
+
 __all__ = [
     "DefaultSourceFileFilter",
     "resolve_log_level",
@@ -66,11 +68,12 @@ def resolve_log_level(level: int | str) -> int:
 
 
 def default_debug_log_dir() -> Path:
-    """Where the always-on DEBUG log goes when no directory is given:
-    ``<src/msianalyzer>/log``. The GUI's freeze dumps (ADR 50) go here too."""
-    # this file: src/msianalyzer/core/utils/logging_utils.py
-    # parents[2] -> src/msianalyzer
-    return Path(__file__).resolve().parents[2] / "log"
+    """Where the always-on DEBUG log goes when no directory is given: the
+    OS's per-user log location (``~/.local/state/MSIAnalyzer/log`` on Linux,
+    ``%LOCALAPPDATA%\\MSIAnalyzer\\Logs`` on Windows). Never inside the
+    package — an installed app's own folder isn't writable. The GUI's freeze
+    dumps (ADR 50) go here too."""
+    return Path(platformdirs.user_log_dir("MSIAnalyzer", appauthor=False))
 
 
 def configure_logging(
@@ -100,7 +103,7 @@ def configure_logging(
         log_file: Optional path to an additional file handler at `level`.
             Defaults to None (no user log file).
         debug_log_dir: Directory for the always-on DEBUG log file. Defaults
-            to ``<src/msianalyzer>/log``.
+            to `default_debug_log_dir()`.
         run_id: When given, the DEBUG log file is named
             ``debug_<run_id>.log`` instead of ``debug_<timestamp>.log``.
 

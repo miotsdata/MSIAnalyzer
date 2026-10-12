@@ -21,7 +21,10 @@ from typing import Any
 import h5py
 import numpy as np
 import pandas as pd
-from anndata.io import read_elem, write_elem
+
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 
 def _column_order(obs: h5py.Group) -> list[str]:
@@ -34,7 +37,7 @@ def _set_column_order(obs: h5py.Group, order: list[str]) -> None:
 
 
 def read_obs_column(f: h5py.File, name: str) -> Any:
-    return read_elem(f["obs"][name])
+    return ad.io.read_elem(f["obs"][name])
 
 
 def read_obs_index(f: h5py.File) -> pd.Index:
@@ -42,7 +45,7 @@ def read_obs_index(f: h5py.File) -> pd.Index:
     index_key = obs.attrs.get("_index", "_index")
     if isinstance(index_key, bytes):
         index_key = index_key.decode()
-    return pd.Index(read_elem(obs[index_key]))
+    return pd.Index(ad.io.read_elem(obs[index_key]))
 
 
 def has_obs_column(f: h5py.File, name: str) -> bool:
@@ -54,7 +57,7 @@ def set_obs_column(f: h5py.File, name: str, values: np.ndarray) -> None:
     obs = f["obs"]
     if name in obs:
         del obs[name]
-    write_elem(obs, name, np.asarray(values))
+    ad.io.write_elem(obs, name, np.asarray(values))
     order = _column_order(obs)
     if name not in order:
         _set_column_order(obs, order + [name])
@@ -73,7 +76,7 @@ def drop_obs_column(f: h5py.File, name: str) -> bool:
 
 def read_uns(f: h5py.File, key: str, default: Any = None) -> Any:
     if "uns" in f and key in f["uns"]:
-        return read_elem(f["uns"][key])
+        return ad.io.read_elem(f["uns"][key])
     return default
 
 
@@ -84,4 +87,4 @@ def write_uns(f: h5py.File, key: str, value: Any) -> None:
         del uns[key]
     if value is None or (isinstance(value, dict) and not value):
         return
-    write_elem(uns, key, value)
+    ad.io.write_elem(uns, key, value)

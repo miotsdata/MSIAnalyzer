@@ -26,12 +26,11 @@ pdm build       # writes dist/msianalyzer-<version>-py3-none-any.whl and .tar.gz
 `[tool.pdm.build] excludes` in `pyproject.toml` keeps two things out of
 what `pdm build` ships:
 
-- **`src/msianalyzer/log/`** — `configure_logging`'s default
-  `debug_log_dir` (see [logging](logging.md)) is inside the package source
-  tree itself, for dev convenience. It's never gitignored or git-tracked,
-  so debug runs just accumulate files there silently. Without the
-  exclude, `pdm build` ships whatever happens to be on the building
-  machine at build time.
+- **`src/msianalyzer/log/`**: `configure_logging`'s default
+  `debug_log_dir` used to live inside the package source tree (it's now
+  the OS per-user log folder, see [logging](logging.md)). Older checkouts
+  still have that folder full of debug logs, and without the exclude
+  `pdm build` would ship them.
 - **`tests/core/examples/`** — real instrument data (`.raw`/`.mzML` +
   generated `.db`/`.h5ad` results, hundreds of MB). Never reached the
   wheel (pdm-backend excludes `tests/` from wheels by default), but
@@ -67,8 +66,69 @@ the exact traps that shaped it. The trimmed build is ~742MB unpacked,
 ~298MB as the AppImage; a real app icon is still needed (currently a
 generated placeholder).
 
-No Windows build exists yet — deferred to a locally-run Windows VM, per
-[ADR 22](adr/0022-distribution-and-ci-strategy.md).
+Both build scripts run `mkdocs build` first; the spec bundles `site/`
+for Help > User Guide.
+
+## Windows build
+
+Built on Windows itself (PyInstaller can't cross-compile), from the same
+spec, by `packaging/windows/build.ps1`. Output:
+
+- `dist\msianalyzer-gui\`: the runnable app (`msianalyzer-gui.exe` + `_internal\`)
+- `dist\MSIAnalyzer-setup-<version>.exe`: per-user installer (Inno Setup;
+  installs to `%LOCALAPPDATA%\Programs\MSIAnalyzer`, no admin rights)
+
+See [ADR 52](adr/0052-windows-build-and-fast-startup.md) for the
+startup-time work and the Windows-specific runtime fixes.
+
+### One-time setup of the build machine (Windows 10/11 x64, e.g. a VM)
+
+1. **Git**: <https://git-scm.com/download/win>. Clone the repo.
+2. **PDM** (PowerShell):
+   `powershell -ExecutionPolicy ByPass -c "irm https://pdm-project.org/install-pdm.py | py -"`.
+   If `py` doesn't exist yet, install Python 3.13 x64 from python.org
+   first (tick "Add to PATH"). PDM can also fetch its own interpreter
+   with `pdm python install 3.13`.
+3. **Inno Setup 6**: <https://jrsoftware.org/isdl.php>, default options.
+4. In the repo: `pdm install -G:all -d`.
+
+No Visual Studio or MSVC build tools are needed. Every dependency ships a
+prebuilt Windows wheel, and the PySide6 wheel carries the MSVC runtime.
+
+### Build
+
+```
+powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
+```
+
+The PyInstaller step prints `pruning N unreachable Qt libs: [...]`; on
+Linux N is ~100. If the built app fails to start with a missing-DLL
+error, that list is the first place to look.
+
+### Smoke test before handing it over
+
+Running `dist\msianalyzer-gui\msianalyzer-gui.exe` directly is enough; no
+need to install. Check:
+
+- it opens, and a second launch only focuses the first window
+  (single-instance lock);
+- **a Run with `n_workers` > 1** completes, and no extra windows appear
+  (`freeze_support`, ADR 52);
+- MS1 and mirror plots render (QtWebEngine);
+- Visual Inspection heatmaps, an export, Help > User Guide;
+- `%LOCALAPPDATA%\MSIAnalyzer\Logs\` has the debug log.
+
+In a VM without GPU acceleration, if the WebEngine plots stay blank, set
+`QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` for that session. It's a VM
+issue; real hardware doesn't need it.
+
+### Expected on a fresh machine
+
+- **SmartScreen** says "Windows protected your PC" (the exe is
+  unsigned): click *More info → Run anyway*. Only a code-signing
+  certificate removes this.
+- **First launch is slow** (Defender scans every bundled file, and Qt
+  compiles and caches the QML); later launches are fast.
 
 ## CI
 

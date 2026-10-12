@@ -24,13 +24,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import anndata as ad
 import h5py
 import numpy as np
 from matplotlib.path import Path as MplPath
 
 from msianalyzer.core.utils import h5ad_io
 from msianalyzer.core.utils.logging_utils import log_call
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 

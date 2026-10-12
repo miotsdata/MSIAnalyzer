@@ -1,12 +1,12 @@
 # src/msianalyzer/gui/main.py
 import importlib.metadata
+import multiprocessing
 import os
 import sys
 
-import PySide6
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QLibraryInfo, QUrl
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWebEngineQuick import QtWebEngineQuick
 from pathlib import Path
@@ -53,8 +53,9 @@ def build_engine(
     """Construct and populate the QML engine. Reusable by tests."""
     engine = QQmlApplicationEngine()
 
-    qml_import_path = Path(PySide6.__file__).parent / "Qt" / "qml"
-    engine.addImportPath(str(qml_import_path))
+    # Qt's own answer, not a hardcoded PySide6/Qt/qml: the Windows wheel
+    # keeps it at PySide6/qml, and a PyInstaller bundle somewhere else again.
+    engine.addImportPath(QLibraryInfo.path(QLibraryInfo.LibraryPath.QmlImportsPath))
 
     context = engine.rootContext()
     context.setContextProperty("Router", application.router)
@@ -87,6 +88,18 @@ def build_engine(
 
 
 def main() -> int:
+    # A windowed (no-console) Windows .exe starts with sys.stdout/stderr
+    # set to None, and any library that prints or draws a progress bar
+    # then crashes. Everything worth keeping goes to the debug log file
+    # anyway. Before freeze_support() so worker processes get it too.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+    # Frozen Windows build: every ProcessPoolExecutor worker is a fresh
+    # launch of this same .exe. This turns that launch into a worker and
+    # never returns, instead of opening another GUI. No-op otherwise.
+    multiprocessing.freeze_support()
     configure_logging(level=logging.DEBUG)
     # Must run before any QtQuick.Controls-importing QML loads — the
     # platform default style pulled in a dark theme on at least one real

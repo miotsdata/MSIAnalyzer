@@ -1,13 +1,10 @@
 import logging
 import sqlite3
 import numpy as np
-from scipy.signal import find_peaks
 from pathlib import Path
 from typing import Literal
 
 import pandas as pd
-from scipy.ndimage import gaussian_filter1d
-from scipy.spatial import cKDTree
 from msianalyzer.core.analysis_db import connect as _analysis_connect
 from msianalyzer.core.parser import array_to_blob, blob_to_array
 from msianalyzer.core.utils.db import safe_execute
@@ -201,6 +198,8 @@ def _estimate_baseline(
     baseline = np.nan_to_num(baseline, nan=global_baseline)
 
     # Smooth slowly varying background
+    from scipy.ndimage import gaussian_filter1d  # deferred: GUI startup cost
+
     baseline = gaussian_filter1d(baseline, sigma=smooth_sigma)
 
     return baseline
@@ -211,6 +210,8 @@ def _merge_peaks_ppm(mz, intensity, ppm: float = 5):
     order = np.argsort(intensity)[::-1]
 
     mz_ordered = mz[order]
+
+    from scipy.spatial import cKDTree  # deferred: GUI startup cost
 
     tree = cKDTree(mz_ordered[:, None])
 
@@ -281,6 +282,8 @@ def detect_ms1_centroids(
 
     height = baseline * (1.0 + baseline_factor)
     prominence = baseline * prominence_factor
+
+    from scipy.signal import find_peaks  # deferred: GUI startup cost
 
     peak_indices, _ = find_peaks(
         mean_intensities,

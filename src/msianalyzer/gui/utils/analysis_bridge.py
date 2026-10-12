@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import functools
 import json
@@ -8,11 +10,9 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-import anndata as ad
 import h5py
 import numpy as np
 import pandas as pd
-from anndata.io import read_elem
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core import analysis_db
@@ -60,6 +60,9 @@ from msianalyzer.gui.utils.local_moran_summary_model import LocalMoranSummaryMod
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
 from msianalyzer.gui.utils.spatial_correlation_model import SpatialCorrelationModel
 from msianalyzer.gui.utils.table_query_worker import TableQueryWorker
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +207,7 @@ def _load_dataset_feature_list(analysis_db_path: str, rel_dir: str) -> pd.DataFr
         if not path.exists():
             continue
         with h5py.File(path, "r") as f:
-            var_mz = read_elem(f["var"])["mz"].to_numpy(dtype=float)
+            var_mz = ad.io.read_elem(f["var"])["mz"].to_numpy(dtype=float)
         break
     if var_mz is None or var_mz.size == 0:
         return pd.DataFrame(columns=columns)
@@ -275,7 +278,7 @@ def _load_spatial_correlation_table(
             moran = h5ad_io.read_uns(f, "moranI")
             if moran is None:
                 continue
-            mz_by_var = read_elem(f["var"])["mz"]
+            mz_by_var = ad.io.read_elem(f["var"])["mz"]
         for var_name, i_score in moran["I"].items():
             mz = float(mz_by_var.loc[var_name])
             rows.append(
@@ -335,8 +338,8 @@ def _load_local_moran_layer_data(
         with h5py.File(h5ad_path, "r") as f:
             if "layers" not in f or "localMoranI" not in f["layers"]:
                 continue
-            layer = read_elem(f["layers"]["localMoranI"])
-            var = read_elem(f["var"])
+            layer = ad.io.read_elem(f["layers"]["localMoranI"])
+            var = ad.io.read_elem(f["var"])
         if hasattr(layer, "toarray"):
             layer = layer.toarray()
         mz_by_var = var["mz"]

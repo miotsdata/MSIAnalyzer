@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.optimize import curve_fit
-from scipy.stats import linregress
 
 _LOD_FACTOR = 3.3
 _LOQ_FACTOR = 10.0
@@ -104,6 +102,10 @@ def fit_calibration_curve(
 
     x = np.array([p[0] for p in points], dtype=float)
     y = np.array([p[1] for p in points], dtype=float)
+
+    # Deferred: scipy.stats + scipy.optimize cost ~0.4 s at GUI startup.
+    from scipy.optimize import curve_fit
+    from scipy.stats import linregress
 
     if fit_type == "linear":
         result = linregress(x, y)

@@ -35,16 +35,17 @@ Three handlers:
 again by `run_command` once the project folder and run id are known.
 
 The GUI (`gui/main.py`'s `main()`) calls `configure_logging(level=logging.DEBUG)`
-with no `debug_log_dir` — so it hits the default,
-`Path(__file__).resolve().parents[2] / "log"`, i.e. **inside the installed
-package itself** (`src/msianalyzer/log/` in a source checkout), not a
-project-relative `logs/` directory like a CLI `run` gets. This is a known
-wart, not a deliberate design: it's why every GUI debug run leaves a file
-there, silently, forever (never gitignored or git-tracked), and why
-`pdm build`'s packaging has to explicitly exclude that directory — see
-[distribution & packaging](distribution.md#packaging-excludes). Worth
-giving the GUI a real project-relative (or user-cache-directory) log
-destination at some point; not changed yet.
+with no `debug_log_dir`, so it gets the default, `default_debug_log_dir()`:
+the OS's per-user log folder via `platformdirs` (ADR 52).
+
+| OS | Folder |
+|---|---|
+| Linux | `~/.local/state/MSIAnalyzer/log/` |
+| Windows | `%LOCALAPPDATA%\MSIAnalyzer\Logs\` |
+
+The GUI's freeze dumps (`freeze_<ts>.txt`, ADR 50) go there too. This used
+to be `src/msianalyzer/log/`, inside the package itself, which isn't
+writable once the app is installed.
 
 ## Verbosity — `msianalyzer run -v` / `-l`
 

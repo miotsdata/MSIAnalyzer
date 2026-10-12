@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, QUrl, Slot
@@ -37,10 +38,9 @@ class Router(QObject):
         (`mkdocs build`'s default `site/` output, at the repo root) in the
         system's default browser.
 
-        Assumes a dev/repo-checkout deployment — this app isn't packaged/
-        distributed to end users yet, so there's no installed-package
-        location to resolve docs from. Revisit (a bundled PDF, or a
-        hosted docs URL opened directly) once that's actually decided.
+        In a source checkout that's the repo root; in a PyInstaller
+        build the build script bundles `site/` next to the app
+        (`sys._MEIPASS`). A plain `pip install` has neither.
 
         Returns:
             Whether `site/index.html` exists and was handed off to the
@@ -48,7 +48,8 @@ class Router(QObject):
             user the docs haven't been built (`mkdocs build`) rather than
             silently doing nothing.
         """
-        index_html = Path(__file__).resolve().parents[4] / "site" / "index.html"
+        root = getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parents[4]
+        index_html = Path(root) / "site" / "index.html"
         if not index_html.exists():
             return False
         return QDesktopServices.openUrl(QUrl.fromLocalFile(str(index_html)))

@@ -33,11 +33,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import anndata as ad
 import h5py
 import numpy as np
 import pandas as pd
-from anndata.io import read_elem
 from scipy.sparse import csc_matrix, issparse
 
 from msianalyzer.core.plotting.heatmap import (
@@ -45,6 +43,9 @@ from msianalyzer.core.plotting.heatmap import (
     _LOCAL_MORAN_LAYER,
     GRID_UNS_KEY,
 )
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 #: Layer local Moran's I is scored against (`render_local_moran_heatmap`'s
 #: own default), falling back to `.X` like every other layer lookup.
@@ -77,16 +78,16 @@ class LightSample:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         with h5py.File(self.path, "r") as f:
-            var = read_elem(f["var"])
+            var = ad.io.read_elem(f["var"])
             if "obsm" in f and "spatial" in f["obsm"]:
                 xy = np.asarray(f["obsm"]["spatial"][:], dtype=float)
             else:
                 xy = np.column_stack(
-                    [read_elem(f["obs"]["x"]), read_elem(f["obs"]["y"])]
+                    [ad.io.read_elem(f["obs"]["x"]), ad.io.read_elem(f["obs"]["y"])]
                 ).astype(float)
             uns = {}
             if "uns" in f and GRID_UNS_KEY in f["uns"]:
-                uns[GRID_UNS_KEY] = read_elem(f["uns"][GRID_UNS_KEY])
+                uns[GRID_UNS_KEY] = ad.io.read_elem(f["uns"][GRID_UNS_KEY])
             obs_group = f["obs"]
             order = obs_group.attrs.get("column-order", [])
             self._obs_on_disk = [str(c) for c in order]
@@ -110,16 +111,16 @@ class LightSample:
         if layer in self._layers_on_disk:
             if layer not in self.adata.layers:
                 with h5py.File(self.path, "r") as f:
-                    self.adata.layers[layer] = _as_csc(read_elem(f["layers"][layer]))
+                    self.adata.layers[layer] = _as_csc(ad.io.read_elem(f["layers"][layer]))
         elif self.adata.X is None:
             with h5py.File(self.path, "r") as f:
-                self.adata.X = _as_csc(read_elem(f["X"]))
+                self.adata.X = _as_csc(ad.io.read_elem(f["X"]))
 
     def ensure_obs(self, column: str) -> None:
         if column in self.adata.obs.columns or column not in self._obs_numeric:
             return
         with h5py.File(self.path, "r") as f:
-            self.adata.obs[column] = read_elem(f["obs"][column])
+            self.adata.obs[column] = ad.io.read_elem(f["obs"][column])
 
     def prepare(self, parts: list[str]) -> None:
         """Load whatever `render_heatmap_by_target(self.adata, parts[1],

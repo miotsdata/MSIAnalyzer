@@ -7,8 +7,11 @@
 # (QtWebEngineProcess) at a path relative to the app bundle at runtime;
 # onefile's self-extracting-to-a-temp-dir model is a worse fit for that
 # than a plain directory the exe already lives beside.
+import re
 import sys
 from pathlib import Path
+
+from PyInstaller.depend import bindepend
 
 block_cipher = None
 
@@ -50,8 +53,12 @@ a = Analysis(
     [str(SRC_ROOT / "msianalyzer" / "gui" / "main.py")],
     pathex=[str(SRC_ROOT)],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    # Help > User Guide (router.openUserGuide). The build scripts run
+    # `mkdocs build` first; a bare spec run without it just ships no guide.
+    datas=[(str(REPO_ROOT / "site"), "site")] if (REPO_ROOT / "site").is_dir() else [],
+    # Modules loaded through core.utils.lazy_import.lazy_module("..."): a
+    # name in a string is invisible to PyInstaller's import scan.
+    hiddenimports=["anndata"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -90,84 +97,50 @@ DROP_QTQUICK_PATH_FRAGMENTS = [
     "controls/fluentwinui3",
     "controls/designer",
 ]
-# Qt/lib/*.so residuals: once their only referrer (an excluded QML
-# plugin) is gone they're just orphaned dead weight, but they don't live
-# under a qml/<module> path themselves, so the filter above can't catch
-# them. A naive per-module substring guess here is dangerous — e.g.
-# "positioning" would wrongly drop libQt6Positioning.so.6, which
-# WebEngineCore actually needs directly (geolocation API) even though
-# the *QML* PositioningQuick wrapper is genuinely unused (confirmed: the
-# app crashed on startup with exactly that missing-library error until
-# this list was corrected). This exact set was computed by walking the
-# real ELF NEEDED closure from every library this app's roots (Core/Gui/
-# Widgets/Quick/Qml family, WebEngine[Quick|Core], Network, the kept
-# QuickControls2/QuickDialogs2/Labs* variants, ...) actually declare a
-# direct or transitive dependency on, via `readelf -d` — not a guess.
-# Regenerate rather than hand-edit if PySide6 is upgraded and this
-# starts missing a library again.
-UNREACHABLE_QT_LIBS = {
-    "libqt63danimation.so.6", "libqt63dcore.so.6", "libqt63dextras.so.6",
-    "libqt63dinput.so.6", "libqt63dlogic.so.6", "libqt63dquick.so.6",
-    "libqt63dquickanimation.so.6", "libqt63dquickextras.so.6",
-    "libqt63dquickinput.so.6", "libqt63dquicklogic.so.6",
-    "libqt63dquickrender.so.6", "libqt63dquickscene2d.so.6",
-    "libqt63dquickscene3d.so.6", "libqt63drender.so.6",
-    "libqt6bluetooth.so.6", "libqt6canvaspainter.so.6",
-    "libqt6charts.so.6", "libqt6chartsqml.so.6",
-    "libqt6datavisualization.so.6", "libqt6datavisualizationqml.so.6",
-    "libqt6designer.so.6", "libqt6designercomponents.so.6",
-    "libqt6ffmpegstub-crypto.so.3", "libqt6ffmpegstub-ssl.so.3",
-    "libqt6ffmpegstub-va-drm.so.2", "libqt6ffmpegstub-va-x11.so.2",
-    "libqt6ffmpegstub-va.so.2", "libqt6graphs.so.6",
-    "libqt6graphswidgets.so.6", "libqt6help.so.6", "libqt6httpserver.so.6",
-    "libqt6location.so.6", "libqt6lottie.so.6",
-    "libqt6lottievectorimagegenerator.so.6",
-    "libqt6lottievectorimagehelpers.so.6", "libqt6multimedia.so.6",
-    "libqt6multimediaquick.so.6", "libqt6multimediawidgets.so.6",
-    "libqt6networkauth.so.6", "libqt6nfc.so.6", "libqt6pdf.so.6",
-    "libqt6pdfquick.so.6", "libqt6pdfwidgets.so.6",
-    "libqt6positioningquick.so.6", "libqt6qmlcompiler.so.6",
-    "libqt6quick3d.so.6", "libqt6quick3dassetimport.so.6",
-    "libqt6quick3dassetutils.so.6", "libqt6quick3deffects.so.6",
-    "libqt6quick3dglslparser.so.6", "libqt6quick3dhelpers.so.6",
-    "libqt6quick3dhelpersimpl.so.6", "libqt6quick3diblbaker.so.6",
-    "libqt6quick3dparticleeffects.so.6", "libqt6quick3dparticles.so.6",
-    "libqt6quick3druntimerender.so.6", "libqt6quick3dspatialaudio.so.6",
-    "libqt6quick3dutils.so.6", "libqt6quick3dxr.so.6",
-    "libqt6quickcontrols2fluentwinui3styleimpl.so.6",
-    "libqt6quickcontrols2imagine.so.6",
-    "libqt6quickcontrols2imaginestyleimpl.so.6",
-    "libqt6quickcontrols2material.so.6",
-    "libqt6quickcontrols2materialstyleimpl.so.6",
-    "libqt6quickcontrols2universal.so.6",
-    "libqt6quickcontrols2universalstyleimpl.so.6", "libqt6quicktest.so.6",
-    "libqt6quickwidgets.so.6", "libqt6remoteobjects.so.6",
-    "libqt6remoteobjectsqml.so.6", "libqt6scxml.so.6",
-    "libqt6scxmlqml.so.6", "libqt6sensors.so.6", "libqt6sensorsquick.so.6",
-    "libqt6serialbus.so.6", "libqt6serialport.so.6",
-    "libqt6spatialaudio.so.6", "libqt6statemachine.so.6",
-    "libqt6statemachineqml.so.6", "libqt6svgwidgets.so.6",
-    "libqt6test.so.6", "libqt6texttospeech.so.6", "libqt6uitools.so.6",
-    "libqt6virtualkeyboard.so.6", "libqt6virtualkeyboardqml.so.6",
-    "libqt6virtualkeyboardsettings.so.6", "libqt6waylandcompositor.so.6",
-    "libqt6waylandeglcompositorhwintegration.so.6",
-    "libqt6webenginewidgets.so.6", "libqt6websockets.so.6",
-    "libqt6webview.so.6", "libqt6webviewquick.so.6",
-    "libqt6wlshellintegration.so.6", "libqt6xml.so.6",
-    "libavcodec.so", "libavcodec.so.61", "libavcodec.so.61.19.101",
-    "libavformat.so", "libavformat.so.61", "libavformat.so.61.7.103",
-    "libavutil.so", "libavutil.so.59", "libavutil.so.59.39.100",
-    "libswresample.so", "libswresample.so.5", "libswresample.so.5.3.100",
-    "libswscale.so", "libswscale.so.8", "libswscale.so.8.3.100",
-}
+# Qt shared libraries left orphaned once the QML plugins above are gone
+# (Qt6Charts, Qt6Quick3D, the FFmpeg libs behind Multimedia, ...). These
+# are computed, not listed: starting from every binary we keep, follow
+# real link-time imports (PyInstaller's own reader: ldd on Linux, the PE
+# import table on Windows) and drop only the Qt/FFmpeg libs nothing
+# reaches. A hand-written exclusion list once dropped libQt6Positioning,
+# which WebEngineCore links directly, and the app crashed at startup.
+# Only Qt6*/FFmpeg names are ever pruned: Qt loads a few other DLLs at
+# runtime without linking them (opengl32sw.dll, d3dcompiler_47.dll on
+# Windows), and an import walk can't see those.
+PRUNABLE_LIB = re.compile(
+    r"^(lib)?(qt6[\w-]*|avcodec|avformat|avutil|swresample|swscale)([.-][\w.-]*)?\.(so[\d.]*|dll)$"
+)
+
+
+def _unreachable_qt_libs(binaries) -> set[str]:
+    candidates = {
+        Path(dest).name.lower(): src
+        for dest, src, _ in binaries
+        if PRUNABLE_LIB.match(Path(dest).name.lower())
+    }
+    todo = [src for dest, src, _ in binaries if Path(dest).name.lower() not in candidates]
+    seen_src, reached = set(), set()
+    while todo:
+        src = todo.pop()
+        if src in seen_src:
+            continue
+        seen_src.add(src)
+        for name, _path in bindepend.get_imports(src):
+            key = Path(name).name.lower()
+            if key in candidates and key not in reached:
+                reached.add(key)
+                todo.append(candidates[key])
+    return set(candidates) - reached
 
 
 def _is_unwanted(path: str) -> bool:
     lowered = path.replace("\\", "/").lower()
+    # Linux wheels nest Qt's tree under PySide6/Qt/, Windows wheels don't.
+    lowered = lowered.replace("pyside6/qt/", "pyside6/")
 
-    if "qt/translations/qtwebengine_locales/" in lowered:
+    if "pyside6/translations/qtwebengine_locales/" in lowered:
         return "en-us" not in lowered
-    if "qt/translations/" in lowered:
+    if "pyside6/translations/" in lowered:
         # Nothing in this app calls QTranslator/installTranslator
         # (`grep -rn QTranslator src/msianalyzer` is empty) — none of
         # Qt's own 158 .qm files are ever loaded. QtWebEngine's locale
@@ -179,17 +152,11 @@ def _is_unwanted(path: str) -> bool:
         # app's WebEngineViews.
         return True
 
-    if "/qt/qml/" in lowered:
-        module = lowered.split("/qt/qml/", 1)[1].split("/", 1)[0]
+    if "pyside6/qml/" in lowered:
+        module = lowered.split("pyside6/qml/", 1)[1].split("/", 1)[0]
         if module not in KEEP_TOP_LEVEL_QML_DIRS:
             return True
         if any(frag in lowered for frag in DROP_QTQUICK_PATH_FRAGMENTS):
-            return True
-        return False
-
-    if "/qt/lib/" in lowered:
-        basename = lowered.rsplit("/", 1)[-1]
-        if basename in UNREACHABLE_QT_LIBS:
             return True
 
     return False
@@ -197,6 +164,9 @@ def _is_unwanted(path: str) -> bool:
 
 a.datas = [d for d in a.datas if not (_is_unwanted(d[0]) or _is_unwanted(d[1]))]
 a.binaries = [b for b in a.binaries if not (_is_unwanted(b[0]) or _is_unwanted(b[1]))]
+_unreachable = _unreachable_qt_libs(a.binaries)
+print(f"msianalyzer-gui.spec: pruning {len(_unreachable)} unreachable Qt libs: {sorted(_unreachable)}")
+a.binaries = [b for b in a.binaries if Path(b[0]).name.lower() not in _unreachable]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -211,6 +181,9 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    # PyInstaller converts the .png to the .ico Windows needs (via Pillow);
+    # ignored on Linux, where the AppImage carries its own icon.
+    icon=str(REPO_ROOT / "packaging" / "appimage" / "msianalyzer-placeholder-icon.png"),
 )
 
 coll = COLLECT(

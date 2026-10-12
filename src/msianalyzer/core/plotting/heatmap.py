@@ -1,4 +1,5 @@
-import anndata as ad
+from __future__ import annotations
+
 import matplotlib
 import matplotlib.cm
 import matplotlib.figure
@@ -6,6 +7,10 @@ import matplotlib.patches
 import matplotlib.ticker
 import numpy as np
 import pandas as pd
+
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 # x/y: obsm["spatial"]'s own coordinates, not a value to overlay on it.
 # scan_id: the raw per-pixel scan-id join string (one distinct value per

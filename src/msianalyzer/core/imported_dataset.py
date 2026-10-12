@@ -44,7 +44,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-import anndata as ad
 import h5py
 import numpy as np
 import pandas as pd
@@ -53,6 +52,9 @@ from msianalyzer.core import analysis_db
 from msianalyzer.core.plotting.heatmap import GRID_UNS_KEY
 from msianalyzer.core.utils import h5ad_io
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 

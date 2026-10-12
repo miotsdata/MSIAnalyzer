@@ -14,8 +14,6 @@ import csv
 import logging
 from pathlib import Path
 
-import anndata as ad
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -35,6 +33,10 @@ from .plotting.heatmap import (
     render_heatmap_figure,
 )
 from .plotting.roi import load_sample_rois
+
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +336,6 @@ def export_visual_inspection_images(
         )
         dest_path = dest_folder / f"{sample_name}.{ext}"
         fig.savefig(dest_path, bbox_inches="tight")
-        plt.close(fig)
         written += 1
 
     logger.info("exported %d visual inspection image(s) to %s", written, dest_folder)

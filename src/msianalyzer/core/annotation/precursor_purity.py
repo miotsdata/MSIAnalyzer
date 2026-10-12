@@ -59,7 +59,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
-from scipy.signal import find_peaks
 
 from ..analysis_db import create_analysis_schema
 from ..utils.db import safe_executemany
@@ -217,6 +216,8 @@ def snap_precursor_mz(
         return float(ref_mz), 0.0
     b_mz = np.asarray(mz[i0:i1], dtype=float)
     b_it = np.asarray(inten[i0:i1], dtype=float)
+    from scipy.signal import find_peaks  # deferred: GUI startup cost
+
     idx, _ = find_peaks(b_it)
     if idx.size == 0:
         return float(ref_mz), 0.0

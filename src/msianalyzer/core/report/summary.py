@@ -20,7 +20,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.colors import qualitative as _qualitative
 from plotly.subplots import make_subplots
-from scipy.stats import gaussian_kde
 
 from ..analysis_db import load_features
 from ..spectra.average_spectra import mad_threshold
@@ -1436,6 +1435,8 @@ def figure_purity_per_sample(assoc: AssociatedPuritySummary) -> go.Figure:
             density = np.zeros_like(_DENSITY_GRID)
             density[np.argmin(np.abs(_DENSITY_GRID - vals[0]))] = 1.0
         else:
+            from scipy.stats import gaussian_kde  # deferred: GUI startup cost
+
             density = gaussian_kde(vals)(_DENSITY_GRID)
         fig.add_scatter(
             x=_DENSITY_GRID, y=density, mode="lines",
@@ -1538,6 +1539,8 @@ def figure_base_peak_intensity_per_sample(summary: BasePeakIntensitySummary) -> 
             density = np.zeros_like(grid)
             density[np.argmin(np.abs(grid - log_vals[0]))] = 1.0
         else:
+            from scipy.stats import gaussian_kde  # deferred: GUI startup cost
+
             density = gaussian_kde(log_vals)(grid)
         fig.add_scatter(
             x=grid, y=density, mode="lines",

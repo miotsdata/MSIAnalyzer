@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import anndata as ad
-import squidpy as sq
 
 from msianalyzer.core.utils.logging_utils import log_call
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,10 @@ def compute_spatial_autocorr(
             (squidpy's own joblib-backed parallelism), not across samples;
             callers still process one sample at a time.
     """
+    # Deferred: squidpy drags in scanpy/spatialdata/dask/numba (~1.4 s),
+    # far too much to pay at GUI startup for a Run-time-only step.
+    import squidpy as sq
+
     h5ad_path = Path(h5ad_path)
     adata = ad.read_h5ad(h5ad_path)
 

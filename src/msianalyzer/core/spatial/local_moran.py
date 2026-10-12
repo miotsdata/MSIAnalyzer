@@ -5,7 +5,6 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import anndata as ad
 import numpy as np
 
 from msianalyzer.core.plotting.heatmap import (
@@ -15,6 +14,9 @@ from msianalyzer.core.plotting.heatmap import (
     _reconstruct_grid,
 )
 from msianalyzer.core.utils.logging_utils import log_call
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 

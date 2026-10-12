@@ -4,11 +4,13 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-import anndata as ad
 import numpy as np
 
 from msianalyzer.core.plotting.heatmap import _feature_column_index, _layer_column
 from msianalyzer.core.utils.logging_utils import log_call
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 

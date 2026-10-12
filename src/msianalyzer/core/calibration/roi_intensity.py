@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import anndata as ad
 import numpy as np
 
 from msianalyzer.core.plotting.heatmap import _feature_column_index, _layer_column
 from msianalyzer.core.plotting.roi import roi_obs_column
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 
 def roi_mean_intensity(

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import os
 import sqlite3
@@ -5,13 +7,15 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from uuid import UUID
 
-import anndata as ad
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 
 from msianalyzer.core.parser import blob_to_array
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
+from msianalyzer.core.utils.lazy_import import lazy_module
+
+ad = lazy_module("anndata")
 
 logger = logging.getLogger(__name__)
 
