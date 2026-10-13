@@ -141,7 +141,7 @@ Item {
         anchors.centerIn: parent
         visible: !plot.hasPeaks
         text: plot.emptyText
-        color: Theme.mutedTextColor
+        color: Theme.plotWeakColor
     }
 
     GraphsView {
@@ -154,9 +154,9 @@ Item {
         theme: GraphsTheme {
             colorScheme: Theme.isDark ? GraphsTheme.ColorScheme.Dark : GraphsTheme.ColorScheme.Light
             backgroundColor: Theme.backgroundColor
-            plotAreaBackgroundColor: Theme.backgroundColor
+            plotAreaBackgroundColor: Theme.plotBackgroundColor
             labelTextColor: Theme.textColor
-            grid.mainColor: Theme.borderColor
+            grid.mainColor: Theme.plotGridColor
         }
         axisX: ValueAxis {
             id: xAxis
@@ -221,7 +221,7 @@ Item {
         delegate: LineSeries {
             objectName: "stickSeries_" + modelData.key
             name: modelData.name
-            color: plot.colors[modelData.key] || Theme.textColor
+            color: plot.colors[modelData.key] || Theme.plotStrongColor
             width: 1.5
             Component.onCompleted: replace(plot._seriesPoints(modelData.peaks))
         }
@@ -232,7 +232,7 @@ Item {
     LineSeries {
         id: connectorSeries
         objectName: "stickPlotConnectors"
-        color: Theme.mutedTextColor
+        color: Theme.plotWeakColor
         width: 1
         strokeStyle: LineSeries.StrokeStyle.DashLine
         dashPattern: [2, 3]
@@ -254,7 +254,7 @@ Item {
     Rectangle {
         objectName: "stickPlotZeroLine"
         visible: plot.hasPeaks && graph.plotArea.width > 0
-        color: Theme.mutedTextColor
+        color: Theme.plotWeakColor
         x: graph.plotArea.x
         width: graph.plotArea.width
         height: 2
@@ -266,7 +266,7 @@ Item {
         objectName: "stickPlotHoverDot"
         visible: !!plot._hoverPeak
         width: 7; height: 7; radius: 3.5
-        color: plot._hoverPeak ? (plot.colors[plot._hoverPeak.key] || Theme.textColor) : "transparent"
+        color: plot._hoverPeak ? (plot.colors[plot._hoverPeak.key] || Theme.plotStrongColor) : "transparent"
         x: plot._hoverPeak ? plot.xToPixel(plot._hoverPeak.x) - width / 2 : 0
         y: plot._hoverPeak ? plot.yToPixel(plot._hoverPeak.y) - height / 2 : 0
     }
@@ -306,9 +306,9 @@ Item {
                 Rectangle {
                     width: 14; height: 3
                     anchors.verticalCenter: parent.verticalCenter
-                    color: plot.colors[modelData.key] || Theme.textColor
+                    color: plot.colors[modelData.key] || Theme.plotStrongColor
                 }
-                Text { text: modelData.name; color: Theme.textColor; font.pixelSize: 11 }
+                Text { text: modelData.name; color: Theme.plotTextColor; font.pixelSize: 11 }
             }
         }
         Row {
@@ -317,16 +317,16 @@ Item {
             Rectangle {
                 width: 14; height: 1
                 anchors.verticalCenter: parent.verticalCenter
-                color: Theme.mutedTextColor
+                color: Theme.plotWeakColor
             }
-            Text { text: plot.connectorName; color: Theme.textColor; font.pixelSize: 11 }
+            Text { text: plot.connectorName; color: Theme.plotTextColor; font.pixelSize: 11 }
         }
     }
 
     Text {
         visible: plot.hasPeaks && plot.topCaption !== ""
         text: plot.topCaption
-        color: Theme.mutedTextColor
+        color: Theme.plotTextColor
         font.pixelSize: 11
         x: graph.plotArea.x + graph.plotArea.width - width - 6
         y: graph.plotArea.y + 22
@@ -334,7 +334,7 @@ Item {
     Text {
         visible: plot.hasPeaks && plot.bottomCaption !== ""
         text: plot.bottomCaption
-        color: Theme.mutedTextColor
+        color: Theme.plotTextColor
         font.pixelSize: 11
         x: graph.plotArea.x + graph.plotArea.width - width - 6
         y: graph.plotArea.y + graph.plotArea.height - height - 6

@@ -47,9 +47,9 @@ ColumnLayout {
         theme: GraphsTheme {
             colorScheme: Theme.isDark ? GraphsTheme.ColorScheme.Dark : GraphsTheme.ColorScheme.Light
             backgroundColor: Theme.backgroundColor
-            plotAreaBackgroundColor: Theme.backgroundColor
+            plotAreaBackgroundColor: Theme.plotBackgroundColor
             labelTextColor: Theme.textColor
-            grid.mainColor: Theme.borderColor
+            grid.mainColor: Theme.plotGridColor
         }
         // "%.3g", not Qt's default: concentrations can be ~1e-7, and the
         // axis title already carries the unit.
