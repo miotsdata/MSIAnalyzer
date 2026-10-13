@@ -206,8 +206,8 @@ Page {
                 // the rare crash found while testing the loading overlay
                 // (see AnalysisPage.qml's own comment on it): nothing
                 // stopped a click from landing on a nav button, or "Back
-                // to project", while the *previous* tab's content
-                // (MS1's WebEngineView especially) was still mid-load.
+                // to project", while the *previous* tab's content was
+                // still mid-load.
                 enabled: analysisPage.currentSectionReady
                 opacity: enabled ? 1.0 : 0.5
 
@@ -373,14 +373,10 @@ Page {
                 Loader {
                     id: ms1Loader
                     objectName: "ms1SectionLoader"
-                    // Lazy (unlike Summary): this section owns a
-                    // WebEngineView, and StackLayout keeps every page as a
-                    // permanent sibling rather than destroying hidden ones
-                    // — an eagerly-loaded WebEngineView would sit in the
-                    // tree even while another tab is active, and any
-                    // childItems()-based search from `root` for that
-                    // *other* tab's content would recurse into it looking
-                    // for a non-match, which is unsafe (see find_visual_child).
+                    // Lazy (unlike Summary): StackLayout keeps every page
+                    // as a permanent sibling rather than destroying hidden
+                    // ones, so an eager section would be built (and its
+                    // spectrum fetched) on every workspace open.
                     active: sectionStack.currentIndex === 1
                     source: "qrc:/Views/MS1SpectraSection.qml"
                     onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })

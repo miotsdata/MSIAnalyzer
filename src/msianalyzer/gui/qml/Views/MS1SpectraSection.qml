@@ -2,8 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "qrc:/Style"
-import QtWebEngine
-import QtWebChannel
 
 Item {
     id: ms1Section
@@ -27,38 +25,24 @@ Item {
     // with less space given to them" — half of the top-hits cap.
     property int detailSecondaryListMaxHeight: detailListRowHeight * 5
 
-    // AnalysisPage.qml's loading overlay reads this to decide when the
-    // MS1 tab is truly ready ("the whole page is ready (plots
-    // included)") — `spectrumView.loading` alone would read `false`
-    // (nothing loaded yet) in the brief moment before `selectedSampleId`
-    // assigns a real URL, so also count "no URL assigned yet, but there
-    // are samples to load one for" as still loading.
-    readonly property bool plotLoading: ms1Section.samples.length > 0
-                                         && (spectrumView.url == "" || spectrumView.loading)
+    // AnalysisPage.qml's loading overlay reads this. The spectrum is
+    // fetched synchronously (plain data, nothing to load asynchronously).
+    readonly property bool plotLoading: false
 
-    WebChannel {
-        id: webChannel
-    }
+    // {groups: [...], error?} — AnalysisBridge.getSpectrumData.
+    property var spectrumData: ({groups: []})
 
-    Component.onCompleted: webChannel.registerObject("analysisBridge", AnalysisBridge)
-
-    Connections {
-        target: AnalysisBridge
-        function onSpectrumPointClicked(mz) {
-            if (analysis && analysis.analysisDbPath) {
-                ms1Section.featureDetail = AnalysisBridge.getFeatureDetail(
-                    analysis.analysisDbPath, mz, ms1Section.topN)
-            }
+    function showFeatureDetail(mz) {
+        if (analysis && analysis.analysisDbPath) {
+            ms1Section.featureDetail = AnalysisBridge.getFeatureDetail(
+                analysis.analysisDbPath, mz, ms1Section.topN)
         }
     }
 
     onSelectedSampleIdChanged: {
         if (selectedSampleId >= 0 && analysis && analysis.analysisDbPath && analysis.runId) {
-            // A file:// url, not loadHtml() — see AnalysisBridge.getSpectrumUrl:
-            // loadHtml()/setHtml() silently fail past Qt's ~2MB limit, and a
-            // plot with Plotly.js embedded is already ~4.6MB on its own.
-            spectrumView.url =
-                AnalysisBridge.getSpectrumUrl(analysis.analysisDbPath, analysis.runId, selectedSampleId)
+            ms1Section.spectrumData = AnalysisBridge.getSpectrumData(
+                analysis.analysisDbPath, analysis.runId, selectedSampleId)
         }
     }
 
@@ -78,15 +62,10 @@ Item {
     //
     // Plain Item + anchors here, not a ColumnLayout: `detailPanel` is
     // declared *before* the spectrum column even though it renders
-    // *below* it (anchored to the bottom) — a childItems()-based search
-    // (find_visual_child) for anything inside detailPanel must never have
-    // to walk through the WebEngineView's own internal item tree first to
-    // get there (matches every other section with a WebEngineView; see
-    // the sibling comment on AnnotationsSection.qml/that pattern's
-    // original introduction). A ColumnLayout lays out children in
-    // declaration order, so achieving "detail panel visually last" would
-    // otherwise force "detail panel declared last" too — anchors decouple
-    // the two.
+    // *below* it (anchored to the bottom), so a childItems()-based search
+    // (find_visual_child) for anything inside detailPanel never walks the
+    // plot's item tree first. Anchors decouple declaration order from
+    // visual order.
     Item {
         anchors.fill: parent
         anchors.margins: 12
@@ -384,12 +363,19 @@ Item {
                 }
             }
 
-            WebEngineView {
+            StickPlot {
                 id: spectrumView
                 objectName: "spectrumView"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                webChannel: webChannel
+                groups: ms1Section.spectrumData.groups
+                emptyText: ms1Section.spectrumData.error || "No peaks to show."
+                colors: ({
+                    no_ms2: Theme.plotWeakColor,
+                    non_annotated: Theme.plotStrongColor,
+                    annotated: Theme.plotAccentColor
+                })
+                onPeakClicked: (mz) => ms1Section.showFeatureDetail(mz)
             }
         }
     }

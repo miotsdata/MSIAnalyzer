@@ -4,7 +4,7 @@ import QtQuick.Controls
 // A full-opacity cover (not a dim/translucent one — the point is to hide
 // a not-yet-fully-constructed page, not let it show through) with a
 // centered spinner. Used while a Loader-based section (and, where
-// relevant, its own async content like a WebEngineView plot) isn't ready
+// relevant, its own async content like a table's rows) isn't ready
 // yet — see AnalysisPage.qml.
 Item {
     id: loadingOverlay

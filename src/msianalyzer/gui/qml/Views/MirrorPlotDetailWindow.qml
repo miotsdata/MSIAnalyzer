@@ -2,10 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
-import QtWebEngine
 import "qrc:/Style"
 
-// The full interactive (Plotly) mirror plot — matched/unmatched
+// The full interactive mirror plot (Qt Graphs StickPlot) — matched/unmatched
 // coloring, hover tooltips, connector lines, "Empirical"/"Library" side
 // labels on the plot itself — next to a metadata table (compound
 // identity, scores, coverage, peak counts; see the MirrorPlotMetadataRow
@@ -68,6 +67,8 @@ Window {
     property string empSource: "filtered"
     property string libSource: "filtered"
     property bool plotLoading: false
+    // AnalysisBridge.mirrorPlotReady's dict: mirror_plot_data, or {error}.
+    property var plotData: ({})
     // Compound identity/score/coverage/peak-count fields — rendered as a
     // side table next to the plot (see the MirrorPlotMetadataRow instances
     // below) instead of packed into the plot's own title/corner
@@ -145,9 +146,9 @@ Window {
 
     Connections {
         target: AnalysisBridge
-        function onMirrorPlotReady(url) {
+        function onMirrorPlotReady(data) {
             if (detailWindow.visible) {
-                mirrorPlotView.url = url
+                detailWindow.plotData = data
                 detailWindow.plotLoading = false
             }
         }
@@ -194,26 +195,11 @@ Window {
             Item { Layout.fillWidth: true }
         }
 
-        // A SplitView (not a plain RowLayout — see the pane cross-axis
-        // fix below), but a fixed 70/30 split, not user-resizable: each
-        // pane's min/max width are pinned to the same value as its
-        // preferred width, which leaves the handle with no room to drag.
-        // Interactively resizing the plot pane meant live-reflowing the
-        // WebEngineView's Chromium renderer on every drag frame, visibly
-        // laggy — not worth it for a two-pane detail window.
-        //
-        // SplitView over a plain RowLayout: a RowLayout here left the
-        // WebEngineView pane with an unreliable/zero effective size in
-        // the real app (Plotly then computed nonsensical "-Infinity" text
-        // positions, and the metadata panel visually overlapped the plot
-        // instead of sitting in its own column) even though it measured
-        // fine under the offscreen test platform. Same SplitView-with-
-        // explicit-cross-axis-height fix already proven for
-        // AnnotationsSection.qml's own panes (see its detailSplit/
-        // tablePanel/detailPanel comments) — each pane's `height:` is
-        // bound explicitly rather than relying on the SplitView to
-        // auto-fill it, a confirmed real-app SplitView quirk, not
-        // something a specific property change here caused.
+        // A fixed 70/30 SplitView: each pane's min/max width is pinned to
+        // its preferred width, so the handle can't be dragged. Each
+        // pane's `height:` is bound explicitly: SplitView doesn't reliably
+        // fill the cross axis in the real app (same fix as
+        // AnnotationsSection.qml's panes).
         SplitView {
             id: detailContentSplit
             objectName: "detailContentSplit"
@@ -229,10 +215,34 @@ Window {
                 SplitView.minimumWidth: SplitView.preferredWidth
                 SplitView.maximumWidth: SplitView.preferredWidth
 
-                WebEngineView {
-                    id: mirrorPlotView
-                    objectName: "detailMirrorPlotView"
+                ColumnLayout {
                     anchors.fill: parent
+                    spacing: 4
+                    Label {
+                        objectName: "detailMirrorPlotTitle"
+                        text: detailWindow.plotData.title || ""
+                        visible: text !== ""
+                        Layout.alignment: Qt.AlignHCenter
+                        elide: Text.ElideRight
+                        Layout.maximumWidth: parent.width
+                    }
+                    StickPlot {
+                        id: mirrorPlotView
+                        objectName: "detailMirrorPlotView"
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        groups: detailWindow.plotData.groups || []
+                        connectors: detailWindow.plotData.connectors || []
+                        emptyText: detailWindow.plotData.error || (detailWindow.plotLoading ? "" : "No peaks to show.")
+                        colors: ({matched: Theme.plotStrongColor, unmatched: Theme.plotWeakColor})
+                        yTitle: "Normalised intensity"
+                        yMin: -1.15
+                        yMax: 1.15
+                        yTickInterval: 0.5
+                        mirrored: true
+                        topCaption: "Empirical"
+                        bottomCaption: "Library"
+                    }
                 }
 
                 // A raw source can mean slow/remote file I/O (see

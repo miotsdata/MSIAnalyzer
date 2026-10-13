@@ -82,7 +82,6 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
         run: |
           $logs = "$env:LOCALAPPDATA\MSIAnalyzer\Logs"
           $p = Start-Process dist\msianalyzer-gui\msianalyzer-gui.exe -PassThru
@@ -120,7 +119,7 @@ jobs:
       # ci.yml's list, with 22.04's package names (no `t64` suffixes,
       # that rename came with 24.04). Needed to run the frozen app in the
       # smoke test; build-essential is for find-mfs's C extension.
-      - name: Install Qt/WebEngine runtime libraries
+      - name: Install Qt runtime libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -149,7 +148,6 @@ jobs:
       - name: Smoke test (app starts and loads its QML)
         env:
           QT_QPA_PLATFORM: offscreen
-          QTWEBENGINE_CHROMIUM_FLAGS: --no-sandbox --disable-gpu
         run: |
           logs="$HOME/.local/state/MSIAnalyzer/log"
           dist/msianalyzer-gui/msianalyzer-gui & pid=$!

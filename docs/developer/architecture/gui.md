@@ -57,8 +57,7 @@ Two different things flow through it:
 
 Pages are plain `StackView` items — nothing is destroyed on navigating away
 except by `StackView`'s own default replace behavior, so anything holding a
-resource across a page's lifetime (a `WebEngineView`, an image provider
-cache) needs to actually be re-created per page load if that's the intent,
+resource across a page's lifetime (an image provider cache) needs to actually be re-created per page load if that's the intent,
 not assumed torn down.
 
 ## The Analysis workspace: `AnalysisPage` + lazy `Loader` sections
@@ -73,9 +72,7 @@ switching sections should not re-run the whole page's construction.
 - The other three are lazy (`active: sectionStack.currentIndex === N`).
   `StackLayout` keeps every child as a permanent sibling instead of
   destroying hidden ones, so an eagerly-loaded section would sit fully
-  constructed in the tree even while another tab is active. This matters
-  most for MS1 Spectra and (for `find_visual_child`-style recursive
-  searches) any section holding a `WebEngineView` — see below.
+  constructed in the tree even while another tab is active.
 - Every Loader's `onLoaded` re-binds `item.analysis` via `Qt.binding(...)`,
   not a one-time assignment: `AnalysisPage.analysis` can still be unset at
   the exact moment a Loader first finishes when the page is reached via
@@ -84,33 +81,35 @@ switching sections should not re-run the whole page's construction.
   backdrop, with its own click/wheel-blocking `MouseArea`) covers the
   content area — and disables the nav rail / "Back to project" — until
   `AnalysisPage.currentSectionReady` is true for the active section. For
-  most sections that's just `Loader.status === Loader.Ready`; for MS1 it
-  additionally waits on the embedded plot's own load (`plotLoading` on
-  `MS1SpectraSection.qml`) — see
+  most sections that's `Loader.status === Loader.Ready` plus the section's
+  own async data (`rowsLoading`, `statsLoading`, `featuresLoading`) — see
   [ADR 14](../adr/0014-analysis-workspace-lazy-loading.md).
 
 ## Plotting: two different approaches for two different needs
 
-- **Line/mirror plots** (MS1 aggregated spectra, MS2 mirror plots) use
-  `core/plotting/plotter.py`'s existing Plotly figures, rendered via
-  `fig.to_html(...)` into a `QtWebEngineQuick` `WebEngineView`. Reuses the
-  same plotting code the CLI report already produces; buys interactive
-  zoom/pan for free.
+- **Line/mirror plots and the calibration curve** are Qt Graphs
+  (`GraphsView`) in QML: `StickPlot.qml` (MS1 spectrum, mirror plot) and
+  `CalibrationPlot.qml`. `AnalysisBridge` returns plain data built by
+  `core/plotting/plotter.py`'s `spectrum_groups` / `mirror_plot_data` /
+  calibration helpers — the same logic the report's Plotly figures use —
+  and the plots follow `Theme.qml` (`plotStrongColor`, `plotWeakColor`,
+  `plotAccentColor`). Qt Graphs has no stick series: each group is one
+  `LineSeries` zigzagging through y = 0; hover/click pick the nearest
+  peak in x. See [ADR 51](../adr/0051-qt-graphs-instead-of-plotly-in-gui.md).
+  The HTML report keeps Plotly.
 - **Spatial heatmaps** (Visual Inspection) render as raw raster images
   instead: `HeatmapImageProvider` (a `QQuickImageProvider`, registered as
   `image://heatmap/...`) reads `obsm['spatial']` + the requested feature or
   `obs` column out of the sample's `.h5ad`, maps it through a matplotlib
   colormap, and returns a `QImage`. QML requests tiles by a struct-like
   string id (`sample|mz|layer|colormap|vmin|vmax`, or `sample|obs:col|...`)
-  that Qt itself caches by, so an unchanged id is instant. Chosen over a
-  second `WebEngineView`-per-tile approach for speed and exact per-pixel
-  control over the black-background imshow style — see
-  [ADR 13](../adr/0013-hybrid-plotting-approach.md).
+  that Qt itself caches by, so an unchanged id is instant. Chosen for
+  speed and exact per-pixel control over the black-background imshow
+  style — see [ADR 13](../adr/0013-hybrid-plotting-approach.md).
 
-See `_find_visual_child` in `tests/gui/conftest.py` for a related gotcha:
-recursing into a live `WebEngineView`'s child tree while searching for an
-unrelated item's children is unsafe (can crash `getWrapperForQObject`) —
-scope any recursive `childItems()` search to the smallest relevant subtree.
+See `_find_visual_child` in `tests/gui/conftest.py`: scope any recursive
+`childItems()` search to the smallest relevant subtree (a wide search once
+crashed inside `getWrapperForQObject`).
 
 `HEImageProvider` (`image://he_image/...`) is the same shape as
 `HeatmapImageProvider` but simpler: it just reads one sample's attached
@@ -212,5 +211,5 @@ pass. See [ADR 15](../adr/0015-professional-desktop-theme-direction.md).
 
 No real display in CI or in this development environment — `QT_QPA_PLATFORM=offscreen`
 throughout. See [testing.md](../testing.md) for the full protocol
-(rebuild `resources_rc.py`, run `tests/gui` repeatedly — offscreen + WebEngine
-has known rare-crash and first-`QQuickView` flakiness that isn't a real bug).
+(rebuild `resources_rc.py`, run `tests/gui` repeatedly — offscreen has a
+known first-`QQuickView` flakiness that isn't a real bug).

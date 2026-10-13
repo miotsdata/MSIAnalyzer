@@ -6,7 +6,6 @@ from unittest.mock import patch
 import anndata as ad
 import pandas as pd
 import pytest
-from PySide6.QtCore import QUrl
 from scipy.sparse import csr_matrix
 
 from msianalyzer.core.analysis_db import init_analysis_db, log_command, register_sample
@@ -22,13 +21,6 @@ from msianalyzer.gui.utils.analysis_bridge import (
 )
 import numpy as np
 
-
-def _read_url(url: str) -> str:
-    """Reads back the HTML a `file://` URL (as returned by getSpectrumUrl /
-    getMirrorPlotUrl) points at — those write to disk instead of returning
-    HTML directly (WebEngineView.loadHtml()/setHtml() silently fail past
-    Qt's ~2MB limit, which a plot with Plotly.js embedded already exceeds)."""
-    return Path(QUrl(url).toLocalFile()).read_text(encoding="utf-8")
 
 _ZERO_SUMMARY = {
     "n_samples": 0,
@@ -974,79 +966,56 @@ def test_get_feature_top_hits_ms2_then_predicted_when_a_feature_has_both(tmp_pat
     assert [r["kind"] for r in rows] == ["ms2", "predicted"]
 
 
-def _request_mirror_plot_sync(bridge, qtbot, *args, timeout=5000) -> str:
+def _request_mirror_plot_sync(bridge, qtbot, *args, timeout=5000) -> dict:
     """`requestMirrorPlot` is fire-and-forget (see the class docstring —
     it runs on a background `MirrorPlotWorker` so slow/remote raw-source
     I/O never blocks the GUI thread); tests wait for `mirrorPlotReady`
-    and return the file:// URL it carried."""
+    and return the dict it carried."""
     with qtbot.waitSignal(bridge.mirrorPlotReady, timeout=timeout) as blocker:
         bridge.requestMirrorPlot(*args)
     return blocker.args[0]
 
 
-def test_request_mirror_plot_emits_ready_with_html_for_valid_annotation(tmp_path, qtbot):
+def test_request_mirror_plot_emits_plot_data_for_valid_annotation(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path)
 
     bridge = AnalysisBridge()
-    url = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
-    html = _read_url(url)
+    data = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
 
-    assert url.startswith("file://")
-    assert "<div" in html
-    assert "plotly" in html.lower()
-
-
-def test_request_mirror_plot_fills_container_instead_of_fixed_height(tmp_path, qtbot):
-    # "mirror plot part should take 60% [of the panel] and cannot scroll,
-    # so plot adapts to it" — same fix as MS1's getSpectrumUrl: autosize,
-    # no fixed pixel height baked into the figure, and CSS clearing the
-    # default body margin/overflow so nothing forces a scrollbar.
-    db_path = tmp_path / "analysis.db"
-    init_analysis_db(db_path).close()
-    _seed_annotated_feature(db_path)
-
-    bridge = AnalysisBridge()
-    html = _read_url(
-        _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
-    )
-
-    assert '"autosize": true' in html or '"autosize":true' in html
-    assert "overflow: hidden" in html
-    # The figure's own fixed height (default 500) must not survive into
-    # the emitted layout JSON.
-    assert '"height": 500' not in html and '"height":500' not in html
+    assert "error" not in data
+    assert data["title"].startswith("Caffeine  (C8H10N4O2)")
+    assert {g["key"] for g in data["groups"]} <= {"matched", "unmatched"}
+    peaks = [p for g in data["groups"] for p in g["peaks"]]
+    # Empirical sticks point up, library sticks down.
+    assert any(y > 0 for _, y in peaks) and any(y < 0 for _, y in peaks)
+    for mz, top, bottom in data["connectors"]:
+        assert top > 0 > bottom
 
 
-def test_request_mirror_plot_emits_error_message_for_unknown_id(tmp_path, qtbot):
+def test_request_mirror_plot_emits_error_for_unknown_id(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
 
     bridge = AnalysisBridge()
-    html = _read_url(
-        _request_mirror_plot_sync(bridge, qtbot, str(db_path), 999, "filtered", "filtered")
-    )
+    data = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 999, "filtered", "filtered")
 
-    assert "<p" in html
-    assert "No annotation found" in html
+    assert "No annotation found" in data["error"]
 
 
-def test_request_mirror_plot_emits_error_message_without_raw_spectra(tmp_path, qtbot):
+def test_request_mirror_plot_emits_error_without_raw_spectra(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _seed_annotated_feature(db_path, with_raw_spectra=False)
 
     bridge = AnalysisBridge()
-    html = _read_url(
-        _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
-    )
+    data = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
 
-    assert "<p" in html
-    assert "raw empirical spectrum not found" in html
+    assert "raw empirical spectrum not found" in data["error"]
 
 
-def test_request_mirror_plot_emits_error_message_for_unavailable_raw_source(tmp_path, qtbot):
+def test_request_mirror_plot_emits_error_for_unavailable_raw_source(tmp_path, qtbot):
     # No stored emp_raw_*, and 'a.db' (the seeded sample's raw_db_path)
     # doesn't exist on disk either -> both resolution paths fail.
     db_path = tmp_path / "analysis.db"
@@ -1054,26 +1023,9 @@ def test_request_mirror_plot_emits_error_message_for_unavailable_raw_source(tmp_
     _seed_annotated_feature(db_path, with_raw_spectra=False)
 
     bridge = AnalysisBridge()
-    html = _read_url(
-        _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "raw", "filtered")
-    )
+    data = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "raw", "filtered")
 
-    assert "<p" in html
-    assert "raw empirical spectrum not found" in html
-
-
-def test_request_mirror_plot_url_is_unique_per_call(tmp_path, qtbot):
-    # Each render needs a distinct URL — an unchanged QML `url` binding
-    # doesn't reload, even when the underlying file's content changed.
-    db_path = tmp_path / "analysis.db"
-    init_analysis_db(db_path).close()
-    _seed_annotated_feature(db_path)
-
-    bridge = AnalysisBridge()
-    url1 = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
-    url2 = _request_mirror_plot_sync(bridge, qtbot, str(db_path), 1, "filtered", "filtered")
-
-    assert url1 != url2
+    assert "raw empirical spectrum not found" in data["error"]
 
 
 def test_request_mirror_plot_stale_request_is_discarded(tmp_path, qtbot):
@@ -1370,7 +1322,7 @@ def test_categorize_peaks_defaults_to_non_annotated_without_features():
     assert list(result) == ["non_annotated", "non_annotated"]
 
 
-def test_get_spectrum_url_returns_plot_for_saved_spectrum(tmp_path):
+def test_get_spectrum_data_returns_peaks_for_saved_spectrum(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     sample_id = register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
@@ -1387,44 +1339,15 @@ def test_get_spectrum_url_returns_plot_for_saved_spectrum(tmp_path):
     )
 
     bridge = AnalysisBridge()
-    url = bridge.getSpectrumUrl(str(db_path), "run-1", sample_id)
-    html = _read_url(url)
+    data = bridge.getSpectrumData(str(db_path), "run-1", sample_id)
 
-    assert url.startswith("file://")
-    assert "plotly" in html.lower()
-    assert "onSpectrumPointClicked" in html
-    assert "qtwebchannel/qwebchannel.js" in html
-
-
-def test_get_spectrum_url_adapts_to_container_instead_of_scrolling(tmp_path):
-    # "The top row, the one with the plot, shouldn't be scrollable. Adapt
-    # the content to the row" — the plot used to render at a fixed pixel
-    # height regardless of the WebEngineView's actual size, showing a
-    # scrollbar whenever the container was shorter.
-    db_path = tmp_path / "analysis.db"
-    init_analysis_db(db_path).close()
-    sample_id = register_sample(db_path, name="s1", raw_db_path=tmp_path / "s1.db")
-    command_id = log_command(
-        db_path, "filter_spectra", {}, run_id="run-1", sample_id=sample_id
-    )
-    save_aggregated_spectra(
-        np.array([100.0, 200.0]),
-        np.array([10.0, 20.0]),
-        analysis_db_path=db_path,
-        run_id="run-1",
-        sample_id=sample_id,
-        command_id=command_id,
-    )
-
-    bridge = AnalysisBridge()
-    html = _read_url(bridge.getSpectrumUrl(str(db_path), "run-1", sample_id))
-
-    assert "overflow: hidden" in html
-    assert '"responsive": true' in html
-    assert '"autosize":true' in html
+    # No features at all -> every peak is "non_annotated".
+    assert data["groups"] == [
+        {"key": "non_annotated", "name": "Non-annotated", "peaks": [[100.0, 10.0], [200.0, 20.0]]}
+    ]
 
 
-def test_get_spectrum_url_colors_peaks_by_feature_category(tmp_path):
+def test_get_spectrum_data_groups_peaks_by_feature_category(tmp_path):
     # "I want to distinguish between features with no ms2 (gray), annotated
     # features (blue) and non annotated features (black)."
     db_path = tmp_path / "analysis.db"
@@ -1486,46 +1409,25 @@ def test_get_spectrum_url_colors_peaks_by_feature_category(tmp_path):
         con.commit()
 
     bridge = AnalysisBridge()
-    html = _read_url(bridge.getSpectrumUrl(str(db_path), "run-1", sample_id))
+    groups = bridge.getSpectrumData(str(db_path), "run-1", sample_id)["groups"]
 
-    assert "No MS2" in html
-    assert "Annotated" in html
-    assert "Non-annotated" in html
-    assert "#999999" in html  # no_ms2 gray
-    assert "#1f77b4" in html  # annotated blue
-    assert "#000000" in html  # non_annotated black
+    # Colors are the plot's (Theme.qml); the bridge only splits and labels.
+    assert [(g["key"], g["name"], g["peaks"]) for g in groups] == [
+        ("no_ms2", "No MS2", [[100.0, 10.0]]),
+        ("non_annotated", "Non-annotated", [[200.0, 20.0]]),
+        ("annotated", "Annotated", [[300.0, 30.0]]),
+    ]
 
 
-def test_get_spectrum_url_returns_error_message_when_missing(tmp_path):
+def test_get_spectrum_data_returns_error_when_missing(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
 
     bridge = AnalysisBridge()
-    html = _read_url(bridge.getSpectrumUrl(str(db_path), "run-1", 1))
+    data = bridge.getSpectrumData(str(db_path), "run-1", 1)
 
-    assert "<p" in html
-    assert "No spectrum found" in html
-
-
-def test_get_spectrum_url_is_unique_per_call(tmp_path):
-    db_path = tmp_path / "analysis.db"
-    init_analysis_db(db_path).close()
-
-    bridge = AnalysisBridge()
-    url1 = bridge.getSpectrumUrl(str(db_path), "run-1", 1)
-    url2 = bridge.getSpectrumUrl(str(db_path), "run-1", 1)
-
-    assert url1 != url2
-
-
-def test_on_spectrum_point_clicked_emits_signal(tmp_path):
-    bridge = AnalysisBridge()
-    received = []
-    bridge.spectrumPointClicked.connect(received.append)
-
-    bridge.onSpectrumPointClicked(123.456)
-
-    assert received == [123.456]
+    assert data["groups"] == []
+    assert "No spectrum found" in data["error"]
 
 
 def test_get_feature_detail_reports_presence_ms2_and_hits(tmp_path):
@@ -2456,26 +2358,36 @@ def test_delete_calibration_unknown(tmp_path):
     assert bridge.getCalibrationUnknowns(str(db_path)) == []
 
 
-def test_get_calibration_plot_url_empty_without_curve(tmp_path):
+def test_get_calibration_plot_data_empty_without_curve(tmp_path):
     db_path = _seed_calibration_fixture(tmp_path)
     bridge = AnalysisBridge()
-    assert bridge.getCalibrationPlotUrl(str(db_path)) == ""
+    assert bridge.getCalibrationPlotData(str(db_path)) == {}
 
 
-def test_get_calibration_plot_url_returns_file_url_after_fit(tmp_path):
-    db_path = _seed_calibration_fixture(tmp_path)
-    bridge = AnalysisBridge()
+def _fit_two_standards(bridge, db_path):
     bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
     bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
     bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
 
-    url = bridge.getCalibrationPlotUrl(str(db_path))
 
-    assert url.startswith("file://")
-    assert "concentration" in _read_url(url).lower() or "Concentration" in _read_url(url)
+def test_get_calibration_plot_data_after_fit(tmp_path):
+    db_path = _seed_calibration_fixture(tmp_path)
+    bridge = AnalysisBridge()
+    _fit_two_standards(bridge, db_path)
+
+    data = bridge.getCalibrationPlotData(str(db_path))
+
+    assert len(data["points"]) == 2
+    xs = [x for x, _ in data["points"]]
+    # The fit line runs 5% past the standards on both ends.
+    (x0, _), (x1, _) = data["fitLine"]
+    assert x0 < min(xs) and x1 > max(xs)
+    assert data["title"].startswith("y = ") and "R²" in data["title"]
+    assert data["xTitle"] == "Concentration (pmol/mm2)"
+    assert data["yTitle"] == "Signal (analyte / reference)"
 
 
-def test_get_calibration_plot_url_converts_to_requested_display_area_unit(tmp_path):
+def test_get_calibration_plot_data_converts_to_requested_display_area_unit(tmp_path):
     # Reported directly: toggling CalibrationSection.qml's "Report area/
     # concentration per" combo did nothing for an already-fitted curve —
     # the plot always rendered in whatever unit the curve was originally
@@ -2483,32 +2395,26 @@ def test_get_calibration_plot_url_converts_to_requested_display_area_unit(tmp_pa
     # redisplay: same underlying fit, converted axis/values.
     db_path = _seed_calibration_fixture(tmp_path)
     bridge = AnalysisBridge()
-    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
-    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
-    bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+    _fit_two_standards(bridge, db_path)
 
-    # Plotly's embedded JSON escapes "/" as "/" (json.dumps-style
-    # encoding, not a literal slash) — match its own encoding rather than
-    # a plain "/".
-    html_native = _read_url(bridge.getCalibrationPlotUrl(str(db_path)))
-    assert "pmol\\u002fmm2" in html_native
+    native = bridge.getCalibrationPlotData(str(db_path))
+    converted = bridge.getCalibrationPlotData(str(db_path), "um")
 
-    html_converted = _read_url(bridge.getCalibrationPlotUrl(str(db_path), "um"))
-    assert "pmol\\u002fum2" in html_converted
-    assert "pmol\\u002fmm2" not in html_converted
+    assert converted["xTitle"] == "Concentration (pmol/um2)"
+    # 1 mm2 = 1e6 um2: the same amount per area is 1e6 times smaller per um2.
+    for (x_mm, y_mm), (x_um, y_um) in zip(native["points"], converted["points"]):
+        assert x_um == pytest.approx(x_mm * 1e-6)
+        assert y_um == pytest.approx(y_mm)
 
 
-def test_get_calibration_plot_url_display_area_unit_matching_native_is_a_noop(tmp_path):
+def test_get_calibration_plot_data_display_area_unit_matching_native_is_a_noop(tmp_path):
     db_path = _seed_calibration_fixture(tmp_path)
     bridge = AnalysisBridge()
-    bridge.addCalibrationPoint(str(db_path), "s1", "std_high", 200.0, 10.0, "pmol", 0.1, "mm")
-    bridge.addCalibrationPoint(str(db_path), "s1", "std_low", 200.0, 4.0, "pmol", 0.1, "mm")
-    bridge.fitCalibrationCurve(str(db_path), 200.0, "linear", "")
+    _fit_two_standards(bridge, db_path)
 
-    html_default = _read_url(bridge.getCalibrationPlotUrl(str(db_path)))
-    html_explicit_mm = _read_url(bridge.getCalibrationPlotUrl(str(db_path), "mm"))
-    assert "pmol\\u002fmm2" in html_default
-    assert "pmol\\u002fmm2" in html_explicit_mm
+    assert bridge.getCalibrationPlotData(str(db_path), "mm") == bridge.getCalibrationPlotData(
+        str(db_path)
+    )
 
 
 def test_get_calibration_analyte_mz_none_recorded_yet(tmp_path):

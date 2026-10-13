@@ -2,13 +2,6 @@
 import subprocess
 import pytest
 
-# Must run before any QApplication/QGuiApplication is constructed — pytest-qt's
-# `qapp` fixture builds one lazily, but not before this module is imported, so
-# module-import time is early enough. Needed by WebEngineView-based views.
-from PySide6.QtWebEngineQuick import QtWebEngineQuick
-
-QtWebEngineQuick.initialize()
-
 # Same style as production (see gui/main.py) — before any QtQuick.Controls
 # import loads, so before qapp too. Keeps control geometry (and therefore
 # layout-dependent tests, e.g. the new-analysis tab Flow's row wrapping) in
@@ -45,7 +38,7 @@ def _apply_test_font_scale(qapp):
     # implicit sizes) in sync with what a real session renders.
     #
     # Must depend on `qapp` (not run at module-import time, unlike the
-    # style/WebEngine setup above): `QGuiApplication.font()` returns a
+    # style setup above): `QGuiApplication.font()` returns a
     # bogus font with neither a valid point nor pixel size before any
     # QGuiApplication instance exists — scaling *that* and setting it as
     # the buffered default poisoned the real one once `qapp` later

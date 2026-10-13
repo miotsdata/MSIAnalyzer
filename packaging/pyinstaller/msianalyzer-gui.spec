@@ -3,10 +3,8 @@
 # Build: pdm run pyinstaller packaging/pyinstaller/msianalyzer-gui.spec
 # (run from the repo root — paths below are relative to it)
 #
-# onedir, not onefile: QtWebEngine spawns its own helper process
-# (QtWebEngineProcess) at a path relative to the app bundle at runtime;
-# onefile's self-extracting-to-a-temp-dir model is a worse fit for that
-# than a plain directory the exe already lives beside.
+# onedir, not onefile: onefile unpacks the whole bundle to a temp dir on
+# every launch, which costs seconds of startup (ADR 52).
 import re
 import sys
 from pathlib import Path
@@ -83,7 +81,7 @@ a = Analysis(
 # plugin .so, which is what actually drags in most of the corresponding
 # Qt/lib/libQt6<Module>*.so too — trimming the qml/ tree is most of the
 # size win here, not just the qml/ directory's own weight.
-KEEP_TOP_LEVEL_QML_DIRS = {"qt", "qtcore", "qtqml", "qtquick", "qtwebengine", "qtwebchannel"}
+KEEP_TOP_LEVEL_QML_DIRS = {"qt", "qtcore", "qtqml", "qtquick", "qtgraphs"}
 # Within QtQuick: unused Controls styles (only Fusion is selected, via
 # QQuickStyle.setStyle in gui/main.py — Basic and impl/ stay, since other
 # styles build on those internally) and unused whole features (PDF
@@ -102,8 +100,8 @@ DROP_QTQUICK_PATH_FRAGMENTS = [
 # are computed, not listed: starting from every binary we keep, follow
 # real link-time imports (PyInstaller's own reader: ldd on Linux, the PE
 # import table on Windows) and drop only the Qt/FFmpeg libs nothing
-# reaches. A hand-written exclusion list once dropped libQt6Positioning,
-# which WebEngineCore links directly, and the app crashed at startup.
+# reaches. A hand-written exclusion list once dropped a Qt lib another
+# one linked directly (libQt6Positioning), and the app crashed at startup.
 # Only Qt6*/FFmpeg names are ever pruned: Qt loads a few other DLLs at
 # runtime without linking them (opengl32sw.dll, d3dcompiler_47.dll on
 # Windows), and an import walk can't see those.
@@ -138,18 +136,10 @@ def _is_unwanted(path: str) -> bool:
     # Linux wheels nest Qt's tree under PySide6/Qt/, Windows wheels don't.
     lowered = lowered.replace("pyside6/qt/", "pyside6/")
 
-    if "pyside6/translations/qtwebengine_locales/" in lowered:
-        return "en-us" not in lowered
     if "pyside6/translations/" in lowered:
         # Nothing in this app calls QTranslator/installTranslator
         # (`grep -rn QTranslator src/msianalyzer` is empty) — none of
-        # Qt's own 158 .qm files are ever loaded. QtWebEngine's locale
-        # .pak files (handled above) are a separate mechanism Chromium
-        # loads internally regardless of the app's own QTranslator use.
-        return True
-    if "qtwebengine_devtools_resources.pak" in lowered:
-        # Backs the Chromium DevTools inspector, never opened on this
-        # app's WebEngineViews.
+        # Qt's own .qm files are ever loaded.
         return True
 
     if "pyside6/qml/" in lowered:

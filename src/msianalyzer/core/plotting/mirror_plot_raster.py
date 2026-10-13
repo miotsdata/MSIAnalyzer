@@ -2,10 +2,9 @@
 mirror_plot_raster.py
 Fast, static (non-interactive) empirical-vs-library mirror plot as PNG bytes.
 
-The "basic" companion to Plotter.plot_ms2_annotation's interactive Plotly
-figure — the GUI's inline Annotations panel shows this by default (no
-WebEngineView/Chromium renderer needed for it at all) and only builds the
-full interactive one on demand, in a popup window. Renders directly via
+The "basic" companion to the GUI's interactive mirror plot — the inline
+Annotations panel shows this by default and only builds the interactive
+one on demand, in a popup window. Renders directly via
 matplotlib's Agg backend (Figure + FigureCanvasAgg), not pyplot — no
 global backend state, safe to call from a background thread or under the
 offscreen QPA platform used for tests.

@@ -110,10 +110,9 @@ Item {
     property int topN: 5
     property var topHits: []
     property var selectedHit: null
-    // Always the stored *filtered* spectra, rendered as a plain PNG — no
-    // WebEngineView/Chromium renderer for this inline panel at all. Raw
-    // sources and the full interactive Plotly view only exist in the
-    // "Details" popup (mirrorPlotDetailWindow below); see
+    // Always the stored *filtered* spectra, rendered as a plain PNG. Raw
+    // sources and the interactive mirror plot only exist in the "Details"
+    // popup (mirrorPlotDetailWindow below); see
     // AnalysisBridge.getBasicMirrorPlotImage's docstring.
     property string basicPlotImage: ""
 
@@ -616,7 +615,7 @@ Item {
                 // list — "all the stats are written better (list,
                 // clear)" — instead of packed into the interactive
                 // plot's own title/metadata box (still there in the
-                // "Details" popup's full Plotly view, just not the
+                // "Details" popup's interactive plot, just not the
                 // primary way to read them here).
                 ColumnLayout {
                     objectName: "statsPanel"
@@ -682,9 +681,9 @@ Item {
 
                 // Row 3 (of 3): a fast static raster plot — "a basic plot
                 // in that panel (no plotly)" — always the stored filtered
-                // spectra. No WebEngineView here at all; the "Details"
-                // button opens the full interactive Plotly view (with the
-                // raw/filtered toggles) in its own window instead.
+                // spectra. The "Details" button opens the interactive
+                // mirror plot (with the raw/filtered toggles) in its own
+                // window instead.
                 ColumnLayout {
                     objectName: "basicPlotPanel"
                     SplitView.preferredHeight: detailSplit.height * 0.4
@@ -702,7 +701,7 @@ Item {
                             objectName: "mirrorPlotDetailsButton"
                             text: "🔍 Details"
                             // A predicted hit (ADR 27) has no MS2 scan —
-                            // nothing for the interactive Plotly window
+                            // nothing for the interactive mirror plot
                             // to show.
                             enabled: !!annotationsSection.selectedHit
                                      && annotationsSection.selectedHit.kind === "ms2"
@@ -763,13 +762,8 @@ Item {
         }
     }
 
-    // Lazy — a WebEngineView (inside MirrorPlotDetailWindow) starts its
-    // Chromium renderer as soon as it's *constructed*, regardless of the
-    // owning Window's own `visible` state; declaring it as a plain child
-    // here got one spun up the moment the Annotations tab opened, even
-    // if "Details" was never clicked. Same reasoning as MS1/Annotations/
-    // VisualInspection themselves being lazy Loaders in AnalysisPage.qml
-    // rather than eager StackLayout children.
+    // Lazy, so opening the Annotations tab never builds a second
+    // top-level window nobody asked for ("Details" builds it on first use).
     Loader {
         id: mirrorPlotDetailWindowLoader
         objectName: "mirrorPlotDetailWindowLoader"

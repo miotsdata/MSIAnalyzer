@@ -130,8 +130,7 @@ def test_annotations_and_visual_sections_are_lazy(
     # Opening the workspace used to eagerly construct all four sections'
     # full QML trees at once even though only Summary was visible —
     # Annotations/Visual Inspection now only construct once their own tab
-    # is actually opened, matching MS1's existing (WebEngineView-driven)
-    # lazy pattern. Cuts the one-time cost of opening the workspace down
+    # is actually opened, like MS1. Cuts the one-time cost of opening the workspace down
     # to just Summary's.
     view = analysis_view(analysis_model)
     root = view.rootObject()
@@ -167,11 +166,8 @@ def test_loading_overlay_hides_once_summary_is_ready(analysis_view, analysis_mod
 def test_loading_overlay_covers_ms1_tab_until_plot_finishes_loading(
     analysis_view, analysis_model, find_visual_child, qtbot
 ):
-    # "plots included" — the overlay should stay up for the MS1 tab until
-    # the spectrum plot itself (not just the section's own QML) is ready.
-    # Needs a real sample + saved spectrum, or there's nothing for
-    # `plotLoading` to gate on (the empty-state case never counts as
-    # "still loading" — see MS1SpectraSection.qml's `plotLoading`).
+    # "plots included" — the overlay must be gone once the MS1 tab and its
+    # spectrum plot are up (MS1SpectraSection.qml's `plotLoading`).
     import numpy as np
 
     from msianalyzer.core.analysis_db import log_command, register_sample
@@ -208,29 +204,17 @@ def test_nav_rail_and_back_button_disabled_while_section_still_loading(
 ):
     # "is everything else disabled? So user cannot do more things while
     # loading... I don't want user to run back and forth while things are
-    # loading" — while the MS1 tab's plot is still loading, the nav rail
-    # and "Back to project" must be disabled (and visibly dimmed), then
-    # re-enabled once the plot finishes.
-    import numpy as np
-
-    from msianalyzer.core.analysis_db import log_command, register_sample
-    from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
-
-    db_path = analysis_model.analysisDbPath
-    sample_id = register_sample(db_path, name="s1", raw_db_path="a.db")
-    command_id = log_command(db_path, "filter_spectra", {}, run_id="test-run", sample_id=sample_id)
-    save_aggregated_spectra(
-        np.array([100.0, 200.0]), np.array([10.0, 20.0]),
-        analysis_db_path=db_path, run_id="test-run", sample_id=sample_id, command_id=command_id,
-    )
-
+    # loading" — while a tab is still loading (Annotations: its rows come
+    # from a background TableQueryWorker), the nav rail and "Back to
+    # project" must be disabled (and visibly dimmed), then re-enabled once
+    # it finishes.
     view = analysis_view(analysis_model)
     root = view.rootObject()
 
     nav_rail = root.findChild(QQuickItem, "navRail")
     back_button = root.findChild(QQuickItem, "backToProjectButton")
     overlay = root.findChild(QQuickItem, "sectionLoadingOverlay")
-    ms1_loader = root.findChild(QQuickItem, "ms1SectionLoader")
+    section_loader = root.findChild(QQuickItem, "annotationsSectionLoader")
 
     # Both are bound straight off `currentSectionReady` — the same
     # property the overlay's own `visible` is bound off — so every time
@@ -240,7 +224,7 @@ def test_nav_rail_and_back_button_disabled_while_section_still_loading(
     # re-evaluate in a guaranteed order *within* the same tick — reading
     # nav_rail synchronously inside overlay's own changed-signal handler
     # was observed to occasionally see a stale value) rather than a
-    # plain before/after check, since MS1's plot can finish loading fast
+    # plain before/after check, since the rows can finish loading fast
     # enough in this test environment that a before/after check might
     # never actually catch the still-loading state.
     from PySide6.QtCore import QTimer
@@ -259,14 +243,14 @@ def test_nav_rail_and_back_button_disabled_while_section_still_loading(
     overlay.visibleChanged.connect(lambda: QTimer.singleShot(0, record))
     record()
 
-    ms1_button = find_visual_child(root, "navButton_1")
-    center = ms1_button.mapToScene(ms1_button.boundingRect().center()).toPoint()
+    nav_button = find_visual_child(root, "navButton_2")
+    center = nav_button.mapToScene(nav_button.boundingRect().center()).toPoint()
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(10)
 
     qtbot.waitUntil(
-        lambda: ms1_loader.property("item") is not None
-                and not ms1_loader.property("item").property("plotLoading"),
+        lambda: section_loader.property("item") is not None
+                and not section_loader.property("item").property("rowsLoading"),
         timeout=2000,
     )
     qtbot.wait(10)
@@ -281,7 +265,7 @@ def test_nav_rail_and_back_button_disabled_while_section_still_loading(
         assert back_enabled is ready
         assert back_opacity == (1.0 if ready else 0.5)
     assert any(visible for visible, *_ in history), (
-        "test never observed the loading state — MS1's plot resolved too "
+        "test never observed the loading state — the rows resolved too "
         "fast in this run to exercise the disabled/dimmed branch"
     )
 

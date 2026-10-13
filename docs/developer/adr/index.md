@@ -21,11 +21,11 @@ useful).
 | [10](0010-score-weights-and-flat-fragmentation.md) | Configurable score weights + flat-fragmentation flag | Accepted |
 | [11](0011-run-progress-callback.md) | `Run` step-progress callback for GUI consumption | Accepted |
 | [12](0012-tic-normalization.md) | TIC normalization + merged AnnData | Accepted |
-| [13](0013-hybrid-plotting-approach.md) | Hybrid plotting: Plotly/WebEngineView + raster heatmaps | Accepted |
+| [13](0013-hybrid-plotting-approach.md) | Hybrid plotting: Plotly/WebEngineView + raster heatmaps | Accepted; GUI line plots superseded by 51 |
 | [14](0014-analysis-workspace-lazy-loading.md) | Analysis workspace: lazy `Loader` sections + blocking loading overlay | Accepted |
 | [15](0015-professional-desktop-theme-direction.md) | Professional desktop-app theme direction | Accepted |
 | [16](0016-store-raw-library-spectrum.md) | Persist the untouched library spectrum alongside the filtered one | Accepted; superseded by 18 |
-| [17](0017-mirror-plot-background-worker.md) | Background thread for mirror-plot data resolution, not figure-building | Accepted |
+| [17](0017-mirror-plot-background-worker.md) | Background thread for mirror-plot data resolution, not figure-building | Accepted; figure rule obsolete since 51 |
 | [18](0018-reconstruct-filtered-spectra-on-demand.md) | Reconstruct filtered spectra on demand instead of storing them | Accepted |
 | [19](0019-retire-feature-density-chimeric-flag-and-peak-based-purity.md) | Retire the feature-density chimeric flag and peak-based purity | Accepted |
 | [20](0020-already-parsed-db-only-samples.md) | Already-parsed, db-only samples | Accepted |
@@ -60,4 +60,5 @@ useful).
 | [48](0048-spatial-correlation-morans-i.md) | Spatial correlation (Moran's I), computed via squidpy on the `.h5ad` | Accepted |
 | [49](0049-imported-analyzed-h5ad-datasets.md) | Imported analyzed `.h5ad` datasets, linked to an analysis | Accepted |
 | [50](0050-gui-responsiveness-no-h5ad-io-on-gui-thread.md) | GUI responsiveness: no `.h5ad` I/O on the GUI thread | Accepted |
+| [51](0051-qt-graphs-instead-of-plotly-in-gui.md) | Qt Graphs instead of Plotly/WebEngine for the GUI's interactive plots | Accepted |
 | [52](0052-windows-build-and-fast-startup.md) | Windows build (one cross-platform spec + Inno Setup), and a fast-starting GUI | Accepted |

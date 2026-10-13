@@ -19,6 +19,8 @@ CalibrationSection 1.0 CalibrationSection.qml
 ZoomableImage 1.0 ZoomableImage.qml
 HeatmapControlsPanel 1.0 HeatmapControlsPanel.qml
 RoiOverlay 1.0 RoiOverlay.qml
+StickPlot 1.0 StickPlot.qml
+CalibrationPlot 1.0 CalibrationPlot.qml
 RoiDrawingCanvas 1.0 RoiDrawingCanvas.qml
 RoiDesignWindow 1.0 RoiDesignWindow.qml
 LandmarkOverlay 1.0 LandmarkOverlay.qml

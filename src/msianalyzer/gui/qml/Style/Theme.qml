@@ -128,6 +128,20 @@ QtObject {
     // black regardless of theme, same as most design systems' "shadow".
     readonly property color shadowColor: "#000000"
 
+    // --- Plot series (Qt Graphs plots, ADR 51) ----------------------
+
+    // The reports' Plotly look in both themes: a white plot area (the
+    // series stand out from the page instead of blending into it, asked
+    // for 2026-10-13) with black / gray / blue series. Axis labels sit
+    // outside the plot area and keep the theme's textColor.
+    readonly property color plotBackgroundColor: "#ffffff"
+    readonly property color plotGridColor: "#e5e5e5"
+    // Text drawn inside the plot area (the mirror plot's captions).
+    readonly property color plotTextColor: "#202020"
+    readonly property color plotStrongColor: "#000000"
+    readonly property color plotWeakColor: "#999999"
+    readonly property color plotAccentColor: "#1f77b4"
+
     // --- Type scale --------------------------------------------------
 
     // A page's own title (e.g. "Create project", a project's name on

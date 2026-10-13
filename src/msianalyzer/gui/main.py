@@ -8,7 +8,6 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QLibraryInfo, QUrl
 from PySide6.QtQuickControls2 import QQuickStyle
-from PySide6.QtWebEngineQuick import QtWebEngineQuick
 from pathlib import Path
 import logging
 
@@ -115,9 +114,6 @@ def main() -> int:
     # Overridable (MSIANALYZER_QT_STYLE=Basic, Material, ...) for the same
     # kind of style bisection that found this, without a separate build.
     QQuickStyle.setStyle(os.environ.get("MSIANALYZER_QT_STYLE", "Fusion"))
-    # Must run before the QGuiApplication is constructed — used by
-    # WebEngineView (Annotations mirror plots, MS1 spectra).
-    QtWebEngineQuick.initialize()
     app = QGuiApplication(sys.argv)
 
     # A second launch pings the first instance (see single_instance.py)
