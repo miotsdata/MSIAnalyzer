@@ -136,7 +136,7 @@ QtObject {
     // outside the plot area and keep the theme's textColor.
     readonly property color plotBackgroundColor: "#ffffff"
     readonly property color plotGridColor: "#e5e5e5"
-    // Text drawn inside the plot area (legend, captions).
+    // Text drawn inside the plot area (the mirror plot's captions).
     readonly property color plotTextColor: "#202020"
     readonly property color plotStrongColor: "#000000"
     readonly property color plotWeakColor: "#999999"

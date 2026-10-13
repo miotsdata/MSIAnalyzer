@@ -308,7 +308,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     color: plot.colors[modelData.key] || Theme.plotStrongColor
                 }
-                Text { text: modelData.name; color: Theme.plotTextColor; font.pixelSize: 11 }
+                Text { text: modelData.name; color: Theme.textColor; font.pixelSize: 11 }
             }
         }
         Row {
@@ -319,7 +319,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 color: Theme.plotWeakColor
             }
-            Text { text: plot.connectorName; color: Theme.plotTextColor; font.pixelSize: 11 }
+            Text { text: plot.connectorName; color: Theme.textColor; font.pixelSize: 11 }
         }
     }
 
