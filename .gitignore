@@ -224,6 +224,7 @@ __marimo__/
 *.mzMl
 *examples
 *.log
+ideas
 
 # GUI freeze dumps (ADR 50 freeze watchdog)
 freeze_*.txt
