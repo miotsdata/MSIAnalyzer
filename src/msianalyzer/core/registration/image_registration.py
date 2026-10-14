@@ -53,6 +53,18 @@ __all__ = [
 
 IMAGES_SUBDIR = "images"
 SUPPORTED_FORMATS = {"PNG", "JPEG", "TIFF"}
+# Longest side an attached image is downsampled to. MSI pixels are tens of
+# µm, so full whole-slide resolution adds nothing to landmark picking and
+# only costs memory in `he_image_provider` (one RGBA QImage per render).
+MAX_IMAGE_SIDE = 5000
+# Pillow's decompression-bomb guard errors at 2x this. Its default (~89 MP)
+# rejects ordinary slide exports; this lets ~1 GP through.
+# ponytail: whole-image decode; past ~1 GP the user must export a lower
+# pyramid level (a tiled/pyramid reader would lift this ceiling).
+_MAX_DECODE_PIXELS = 500_000_000
+# Page modes a channel-split TIFF (e.g. an ImageJ/Bio-Formats composite
+# saved from a CZI) stores each colour channel in.
+_CHANNEL_PAGE_MODES = {"L", "P", "I", "I;16", "I;16B", "I;16L", "F"}
 _FIT_FUNCS = {"affine": fit_affine_transform, "similarity": fit_similarity_transform}
 _MIN_LANDMARKS = {"affine": 3, "similarity": 2}
 
@@ -125,6 +137,47 @@ def _images_dir(raw_db_path: Path) -> Path:
     return raw_db_path.parent / IMAGES_SUBDIR / raw_db_path.stem
 
 
+def _is_channel_split(img: Image.Image) -> bool:
+    """A 3-page TIFF of same-size single-channel pages — colour stored as
+    separate R/G/B planes instead of interleaved RGB, which Pillow alone
+    would show as page 1 in grayscale."""
+    if img.format != "TIFF" or getattr(img, "n_frames", 1) != 3:
+        return False
+    sizes, modes = set(), set()
+    for i in range(3):
+        img.seek(i)
+        sizes.add(img.size)
+        modes.add(img.mode)
+    img.seek(0)
+    return len(sizes) == 1 and modes <= _CHANNEL_PAGE_MODES
+
+
+def _fit_size(size: tuple[int, int]) -> tuple[int, int]:
+    """`size` scaled to fit `MAX_IMAGE_SIDE`, aspect ratio kept."""
+    scale = min(1.0, MAX_IMAGE_SIDE / max(size))
+    return max(1, round(size[0] * scale)), max(1, round(size[1] * scale))
+
+
+def _merge_channel_pages(img: Image.Image) -> Image.Image:
+    """Merge a channel-split TIFF's 3 pages into one 8-bit RGB image,
+    downsampled to `MAX_IMAGE_SIDE` per page before stacking (keeps peak
+    memory at one full-size page). >8-bit data is scaled by one shared
+    factor so the channels' relative balance (the H&E colour) survives."""
+    target = _fit_size(img.size)
+    channels = []
+    for i in range(3):
+        img.seek(i)
+        page = Image.fromarray(np.asarray(img).astype(np.float32), mode="F")
+        if page.size != target:
+            page = page.resize(target, Image.Resampling.LANCZOS)
+        channels.append(np.asarray(page))
+    rgb = np.clip(np.stack(channels, axis=-1), 0, None)
+    peak = float(rgb.max())
+    if peak > 255:
+        rgb *= 255.0 / peak
+    return Image.fromarray(np.clip(np.rint(rgb), 0, 255).astype(np.uint8), mode="RGB")
+
+
 def resolve_image_path(raw_db_path: Path | str, image: AttachedImage) -> Path:
     """Full path to an attached image's file on disk, given the raw
     database it's attached to."""
@@ -138,6 +191,12 @@ def attach_he_image(raw_db_path: Path | str, image_path: Path | str) -> Attached
     image (and its registration/landmarks, which no longer apply to a
     different image).
 
+    A channel-split TIFF (3 single-channel pages, as ImageJ saves a CZI
+    composite) is merged into RGB, and anything longer than
+    `MAX_IMAGE_SIDE` is downsampled; either way the stored copy is a PNG
+    and `width`/`height` (and so every landmark) refer to that copy, not
+    the original file. Images needing neither are copied byte-for-byte.
+
     Args:
         raw_db_path: The sample's raw per-sample SQLite database (same file
             `map_pixels_to_db` writes `spatial_pixels` into).
@@ -147,27 +206,54 @@ def attach_he_image(raw_db_path: Path | str, image_path: Path | str) -> Attached
         The newly attached image's record.
 
     Raises:
-        ValueError: `image_path` isn't a PNG/JPEG/TIFF file Pillow can read.
+        ValueError: `image_path` isn't a PNG/JPEG/TIFF file Pillow can read,
+            or is too large to decode (see `_MAX_DECODE_PIXELS`).
     """
     raw_db_path = Path(raw_db_path)
     image_path = Path(image_path)
 
-    with Image.open(image_path) as img:
-        img_format = img.format
-        width, height = img.size
-
-    if img_format not in SUPPORTED_FORMATS:
+    default_limit = Image.MAX_IMAGE_PIXELS
+    Image.MAX_IMAGE_PIXELS = _MAX_DECODE_PIXELS
+    try:
+        with Image.open(image_path) as img:
+            img_format = img.format
+            if img_format not in SUPPORTED_FORMATS:
+                raise ValueError(
+                    f"{image_path}: unsupported image format {img_format!r}, "
+                    f"expected one of {sorted(SUPPORTED_FORMATS)}"
+                )
+            converted = None
+            if _is_channel_split(img):
+                converted = _merge_channel_pages(img)
+            elif max(img.size) > MAX_IMAGE_SIDE:
+                converted = img.resize(_fit_size(img.size), Image.Resampling.LANCZOS)
+            width, height = (converted or img).size
+    except Image.DecompressionBombError as e:
         raise ValueError(
-            f"{image_path}: unsupported image format {img_format!r}, "
-            f"expected one of {sorted(SUPPORTED_FORMATS)}"
-        )
+            f"{image_path}: image too large to load ({e}). Export a lower "
+            "resolution (e.g. a smaller pyramid level in Bio-Formats)."
+        ) from e
+    finally:
+        Image.MAX_IMAGE_PIXELS = default_limit
 
     images_dir = _images_dir(raw_db_path)
     images_dir.mkdir(parents=True, exist_ok=True)
     for old_file in images_dir.glob("he_image.*"):
         old_file.unlink()
-    filename = f"he_image{image_path.suffix.lower()}"
-    shutil.copyfile(image_path, images_dir / filename)
+    if converted is None:
+        filename = f"he_image{image_path.suffix.lower()}"
+        shutil.copyfile(image_path, images_dir / filename)
+    else:
+        img_format = "PNG"
+        filename = "he_image.png"
+        converted.save(images_dir / filename, format="PNG")
+        logger.info(
+            "Converted %s for display: stored %dx%d RGB PNG",
+            image_path,
+            width,
+            height,
+            extra={"source_file": raw_db_path},
+        )
 
     attached_at = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(raw_db_path) as conn:

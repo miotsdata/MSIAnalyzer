@@ -225,3 +225,36 @@ def test_fit_and_save_registration_replaces_previous_fit(tmp_path: Path, raw_db_
 
     info = load_registration(raw_db_path)
     assert info.fit.matrix[0, 0] == pytest.approx(0.2, abs=1e-9)
+
+
+def test_attach_he_image_merges_channel_split_tiff(tmp_path: Path, raw_db_path: Path):
+    # ImageJ saves a CZI composite as 3 single-channel (here 16-bit) pages.
+    image_path = tmp_path / "split.tif"
+    values = (4000, 2000, 1000)
+    pages = [Image.fromarray(np.full((30, 40), v, dtype=np.uint16)) for v in values]
+    pages[0].save(image_path, format="TIFF", save_all=True, append_images=pages[1:])
+
+    attached = attach_he_image(raw_db_path, image_path)
+
+    assert attached.image_format == "PNG"
+    assert (attached.width, attached.height) == (40, 30)
+    with Image.open(resolve_image_path(raw_db_path, attached)) as stored:
+        assert stored.mode == "RGB"
+        # One shared scale factor: brightest channel -> 255, ratios kept.
+        assert stored.getpixel((5, 5)) == (255, 128, 64)
+
+
+def test_attach_he_image_downsamples_large_image(
+    tmp_path: Path, raw_db_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        "msianalyzer.core.registration.image_registration.MAX_IMAGE_SIDE", 20
+    )
+    image_path = tmp_path / "big.jpg"
+    _make_image(image_path, size=(80, 40), fmt="JPEG")
+
+    attached = attach_he_image(raw_db_path, image_path)
+
+    assert (attached.width, attached.height) == (20, 10)
+    with Image.open(resolve_image_path(raw_db_path, attached)) as stored:
+        assert stored.size == (20, 10)
