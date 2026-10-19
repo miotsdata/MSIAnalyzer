@@ -5,7 +5,7 @@
 groups = ["default", "dev", "gui"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:38c1c698ffcc539089b467c8bac98cbdf247fc8c277d57621eea4b3de8a79a5a"
+content_hash = "sha256:690ec90f7eaca842a17e96e1167cb9b84ef2818992da992fc574f7b08471c7f8"
 
 [[metadata.targets]]
 requires_python = ">=3.13,<3.14"
@@ -223,6 +223,17 @@ marker = "platform_system == \"Darwin\""
 files = [
     {file = "appnope-1.0.0-py3-none-any.whl", hash = "sha256:6fe0c04218aab65c54c4ff81638cdbf848d89f5653b74d68638a137f200dd16e"},
     {file = "appnope-1.0.0.tar.gz", hash = "sha256:685db59cb6043c3c2e528adc0b3bce3a5f8d09bcf7492c6ea650d1b7421f3c49"},
+]
+
+[[package]]
+name = "archunitpython"
+version = "1.8.1"
+requires_python = ">=3.10"
+summary = "Architecture testing library for Python projects. Enforce dependency rules, detect cycles, validate metrics."
+groups = ["dev"]
+files = [
+    {file = "archunitpython-1.8.1-py3-none-any.whl", hash = "sha256:f8bc5f2cb8d662d4b0ea352bebaba99a2c07e03244b7e9792570814937812c2f"},
+    {file = "archunitpython-1.8.1.tar.gz", hash = "sha256:2d391317c8f0c637064665267bbdcd95ce0dfa164b2d0f6b6019076c124017e8"},
 ]
 
 [[package]]
