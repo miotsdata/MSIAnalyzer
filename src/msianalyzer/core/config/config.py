@@ -12,6 +12,7 @@ import tomli_w
 
 from msianalyzer.core.annotation.target_list import adducts_for_polarity
 from msianalyzer.core.project.project import NotInProjectFolderError, get_project_folder
+from msianalyzer.core.utils.logging_utils import RUN_LOG_LEVELS
 from msianalyzer.core.utils.logging_utils import log_call
 
 logger = logging.getLogger(__name__)
@@ -1293,12 +1294,13 @@ class H5adConfig:
 
 @dataclass
 class AnalysisConfig:
-    """Name the per-run SQLite database that collects this analysis' results.
+    """Name this run's analysis database and choose its log file. Both are
+    written inside `io.out_dir` (the GUI shows them on the Output tab).
 
     Every run writes one analysis database (features, MS2 associations,
     purity, annotations, consensus picks — everything derived during this
     run, as opposed to the raw per-sample databases, which are shared and
-    immutable). This section only controls what that file is called.
+    immutable).
 
     Attributes:
         db_name: File name for the analysis database, written inside
@@ -1309,9 +1311,26 @@ class AnalysisConfig:
             (e.g. for a script that always looks for the same path).
 
             **Interaction:** None.
+        log_level: How much the run writes to its log file,
+            `run_<date>_<time>.log` in `io.out_dir`, a new file per run:
+            `"off"` (no file), `"debug"`, `"info"`, `"warning"` or
+            `"error"`. Default `"info"`: each step's start, end and main
+            numbers. `"debug"`: every function call with its duration,
+            for troubleshooting. `"warning"`/`"error"`: only problems.
+
+            **Interaction:** None. The CLI's `-v`/`-l` options set the
+            console and an extra log file separately.
     """
 
     db_name: str | None = None
+    log_level: str = "info"
+
+    def __post_init__(self) -> None:
+        if self.log_level not in RUN_LOG_LEVELS:
+            raise ValueError(
+                f"analysis: log_level must be one of {RUN_LOG_LEVELS}, "
+                f"got {self.log_level!r}"
+            )
 
 
 @dataclass

@@ -65,3 +65,4 @@ useful).
 | [53](0053-heatmap-scale-bar-and-pixel-size.md) | Heatmap scale bar and per-sample pixel size | Accepted |
 | [54](0054-isotope-detection-before-ms2.md) | Isotope detection before MS2, isotopes taken out of the feature list | Accepted; image extraction superseded by 55 |
 | [55](0055-isotopes-from-the-h5ad-matrices.md) | Isotopes detected from the `.h5ad` matrices, built before MS2 | Accepted; supersedes part of 54 |
+| [56](0056-per-run-log-file-and-output-tab.md) | Per-run log file in the output folder, and an Output tab | Accepted |

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -148,6 +149,7 @@ class MockH5ADConfig:
 @dataclass
 class MockAnalysisConfig:
     db_name: str | None = None
+    log_level: str = "info"
 
 
 @dataclass
@@ -1991,3 +1993,34 @@ def test_run_core_detect_isotopes_disabled_is_not_called(mocker, tmp_path):
     _, order = _isotope_run(mocker, tmp_path, enabled=False)
 
     order.run_detect_isotopes.assert_not_called()
+
+
+def _start_with_run_core(mocker, tmp_path, run_core):
+    run = Run()
+    config = DummyConfig(tmp_path)
+    mock_proj_inst = mocker.MagicMock()
+    mock_proj_inst.runs = {}
+    mocker.patch("msianalyzer.core.run.run.Project").load.return_value = mock_proj_inst
+    mocker.patch.object(run, "run_core", side_effect=run_core)
+    return run, config
+
+
+def test_start_writes_a_run_log_into_the_output_folder(mocker, tmp_path):
+    run, config = _start_with_run_core(
+        mocker, tmp_path, lambda: logging.getLogger("msianalyzer.core.run.run").info("stage x done")
+    )
+
+    run.start(config=config)
+
+    [log] = list(Path(config.io.out_dir).glob("run_*.log"))
+    assert run.id in log.read_text().splitlines()[0]
+    assert "stage x done" in log.read_text()
+
+
+def test_start_writes_no_run_log_when_off(mocker, tmp_path):
+    run, config = _start_with_run_core(mocker, tmp_path, lambda: None)
+    config.analysis.log_level = "off"
+
+    run.start(config=config)
+
+    assert not list(Path(config.io.out_dir).glob("run_*.log"))

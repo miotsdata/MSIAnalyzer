@@ -26,6 +26,9 @@ Page {
         ? [] : ConfigSchema.groupsBeforeTargetList
     readonly property var groupsAfter: analysisType === "targeted"
         ? ConfigSchema.targetedGroups : ConfigSchema.groupsAfterTargetList
+    // The bespoke Output tab's page comes after every generic page.
+    readonly property int outputStackIndex: visibleGroups.length + 2
+    readonly property var logLevels: ["off", "debug", "info", "warning", "error"]
     property var sampleRows: []
     // Already-parsed samples: each entry here is a raw .db path that
     // skips the parse/pixel-map pipeline stages entirely (see ADR — core
@@ -377,6 +380,11 @@ Page {
             "out_dir": outDirField.text
         }
 
+        configDict["analysis"] = {
+            "db_name": dbNameField.text.trim() !== "" ? dbNameField.text.trim() : null,
+            "log_level": logLevelCombo.currentText
+        }
+
         configDict["target_list"] = {
             "paths": parseFieldValue("path_list", targetListPathsField),
             "polarity": targetListPolarityCombo.currentText,
@@ -433,6 +441,9 @@ Page {
         sampleRows = rows
         dbOnlyPaths = dbOnly
         outDirField.text = io.out_dir || (project ? project.folder + "/output" : "")
+        var an = configDict.analysis || {}
+        dbNameField.text = an.db_name || ""
+        logLevelCombo.currentIndex = Math.max(0, logLevels.indexOf(an.log_level || "info"))
 
         var tl = configDict.target_list || {}
         if (tl.paths !== undefined)
@@ -474,6 +485,8 @@ Page {
         sampleRows = []
         dbOnlyPaths = []
         outDirField.text = project ? project.folder + "/output" : ""
+        dbNameField.text = ""
+        logLevelCombo.currentIndex = logLevels.indexOf("info")
 
         applyFieldValue("path_list", targetListPathsField, null)
         targetListPolarityCombo.currentIndex = 0
@@ -684,12 +697,26 @@ Page {
             property int currentIndex: 0
 
             Button {
-                objectName: "tabButton_io"
-                text: "input/output"
+                objectName: "tabButton_input"
+                text: "input"
                 checkable: true
                 checked: tabBar.currentIndex === 0
                 highlighted: checked
                 onClicked: tabBar.currentIndex = 0
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
+            Button {
+                // Bespoke: output folder (io.out_dir) plus the `analysis`
+                // fields, with a dropdown for the log level (ADR 56).
+                objectName: "tabButton_output"
+                text: "output"
+                checkable: true
+                checked: tabBar.currentIndex === newAnalysisPage.outputStackIndex
+                highlighted: checked
+                onClicked: tabBar.currentIndex = newAnalysisPage.outputStackIndex
 
                 HoverHandler {
                     cursorShape: Qt.PointingHandCursor
@@ -740,9 +767,10 @@ Page {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            // --- IO tab (bespoke) ---
+            // --- Input tab (bespoke): project folder and samples ---
             Flickable {
                 id: ioFlickable
+                objectName: "groupTab_input"
                 clip: true
                 contentWidth: width
                 contentHeight: ioColumn.implicitHeight
@@ -761,25 +789,6 @@ Page {
                             text: project ? project.folder : ""
                             Layout.fillWidth: true
                             elide: Text.ElideMiddle
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: "Output folder:"; Layout.preferredWidth: 160 }
-                        TextField {
-                            id: outDirField
-                            objectName: "outDirField"
-                            Layout.fillWidth: true
-                            text: project ? project.folder + "/output" : ""
-                        }
-                        Button {
-                            text: "Browse..."
-                            onClicked: outDirDialog.open()
-
-                            HoverHandler {
-                                cursorShape: Qt.PointingHandCursor
-                            }
                         }
                     }
 
@@ -1341,6 +1350,107 @@ Page {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // --- Output tab (bespoke, ADR 56): output folder, analysis DB
+            // name and run log level. Placed after the generic pages, so
+            // their fixed index + 2 offsets don't move (outputStackIndex).
+            Flickable {
+                id: outputFlickable
+                objectName: "groupTab_output"
+                clip: true
+                contentWidth: width
+                contentHeight: outputColumn.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
+
+                ColumnLayout {
+                    id: outputColumn
+                    width: outputFlickable.width
+                    spacing: 8
+
+                    Label {
+                        text: ConfigSchema.analysisSchema.description
+                        color: Theme.mutedTextColor
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                        Layout.bottomMargin: 8
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { text: "Output folder"; Layout.preferredWidth: 260 }
+                        TextField {
+                            id: outDirField
+                            objectName: "outDirField"
+                            Layout.fillWidth: true
+                            text: project ? project.folder + "/output" : ""
+                        }
+                        Button {
+                            text: "Browse..."
+                            onClicked: outDirDialog.open()
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            text: ConfigSchema.analysisSchema.fields.db_name.label
+                            Layout.preferredWidth: 260
+                        }
+                        ToolButton {
+                            objectName: "field_analysis_db_name_help"
+                            text: "?"
+                            implicitWidth: 22
+                            implicitHeight: 22
+                            property string helpText: ConfigSchema.analysisSchema.fields.db_name.help
+                            onClicked: newAnalysisPage.openFieldHelp(
+                                ConfigSchema.analysisSchema.fields.db_name.label, helpText)
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+                        TextField {
+                            id: dbNameField
+                            objectName: "field_analysis_db_name"
+                            placeholderText: "analysis_<run id>.db"
+                            Layout.fillWidth: true
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            text: ConfigSchema.analysisSchema.fields.log_level.label
+                            Layout.preferredWidth: 260
+                        }
+                        ToolButton {
+                            objectName: "field_analysis_log_level_help"
+                            text: "?"
+                            implicitWidth: 22
+                            implicitHeight: 22
+                            property string helpText: ConfigSchema.analysisSchema.fields.log_level.help
+                            onClicked: newAnalysisPage.openFieldHelp(
+                                ConfigSchema.analysisSchema.fields.log_level.label, helpText)
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+                        ComboBox {
+                            id: logLevelCombo
+                            objectName: "field_analysis_log_level"
+                            model: newAnalysisPage.logLevels
+                            currentIndex: newAnalysisPage.logLevels.indexOf("info")
+                            Layout.preferredWidth: 160
+                        }
+                        Item { Layout.fillWidth: true }
                     }
                 }
             }

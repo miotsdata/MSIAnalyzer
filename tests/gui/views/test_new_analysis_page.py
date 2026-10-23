@@ -33,10 +33,13 @@ def test_back_to_project_button_navigates_to_project_home(
     assert received[0].name == model.name
 
 
-def test_tab_bar_has_one_tab_per_group_plus_io(new_analysis_view, project, find_visual_child):
+def test_tab_bar_has_one_tab_per_group_plus_input_and_output(new_analysis_view, project, find_visual_child):
     _, root, _ = _make_page(new_analysis_view, project)
 
-    assert find_visual_child(root, "tabButton_io") is not None
+    assert find_visual_child(root, "tabButton_input") is not None
+    assert find_visual_child(root, "tabButton_output") is not None
+    assert find_visual_child(root, "tabButton_io") is None
+    assert find_visual_child(root, "tabButton_analysis") is None
     for group in build_config_schema():
         assert find_visual_child(root, "tabButton_" + group["key"]) is not None
 
@@ -928,9 +931,14 @@ def test_run_click_emits_analysis_type_untargeted_by_default(
 
 
 
-def test_tabs_follow_pipeline_order(new_analysis_view, project, find_visual_child):
+def _tab_keys():
+    """Every tab, in the expected order: input, output, then each stage."""
     from msianalyzer.core.config.config import GROUPS
 
+    return ["input", "output"] + [k for k in GROUPS if k not in ("io", "analysis")]
+
+
+def test_tabs_follow_pipeline_order(new_analysis_view, project, find_visual_child):
     _, root, _ = _make_page(new_analysis_view, project, "untargeted")
 
     def position(key):
@@ -938,14 +946,12 @@ def test_tabs_follow_pipeline_order(new_analysis_view, project, find_visual_chil
         p = b.mapToScene(b.boundingRect().topLeft())
         return (round(p.y()), p.x())
 
-    assert sorted(GROUPS, key=position) == list(GROUPS)
+    assert sorted(_tab_keys(), key=position) == _tab_keys()
 
 
 def test_each_tab_opens_its_own_page(new_analysis_view, project, find_visual_child, qtbot):
-    from msianalyzer.core.config.config import GROUPS
-
     view, root, _ = _make_page(new_analysis_view, project, "untargeted")
-    keys = [k for k in GROUPS if k != "io"]
+    keys = _tab_keys()
 
     for key in keys:
         b = find_visual_child(root, "tabButton_" + key)
@@ -953,3 +959,63 @@ def test_each_tab_opens_its_own_page(new_analysis_view, project, find_visual_chi
         qtbot.wait(20)
         shown = [k for k in keys if find_visual_child(root, "groupTab_" + k).property("visible")]
         assert shown == [key]
+
+
+# ---------------------------------------------------------------------- #
+# Output tab (ADR 56): output folder, analysis DB name, run log level
+# ---------------------------------------------------------------------- #
+
+
+def _ancestor_names(item):
+    names = []
+    while item is not None:
+        names.append(item.objectName())
+        item = item.parentItem()
+    return names
+
+
+def test_output_tab_holds_output_folder_db_name_and_log_level(
+    new_analysis_view, project, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+
+    for name in ("outDirField", "field_analysis_db_name", "field_analysis_log_level"):
+        assert "groupTab_output" in _ancestor_names(find_visual_child(root, name)), name
+    combo = find_visual_child(root, "field_analysis_log_level")
+    assert combo.property("currentText") == "info"
+    assert [combo.property("model")[i] for i in range(5)] == ["off", "debug", "info", "warning", "error"]
+
+
+def _collected(root):
+    value = root.collectConfig()
+    return value.toVariant() if hasattr(value, "toVariant") else value
+
+
+def test_collect_config_reads_output_tab(new_analysis_view, project, find_visual_child):
+    _, root, _ = _make_page(new_analysis_view, project)
+    assert _collected(root)["analysis"] == {"db_name": None, "log_level": "info"}
+
+    find_visual_child(root, "field_analysis_db_name").setProperty("text", "my.db")
+    combo = find_visual_child(root, "field_analysis_log_level")
+    combo.setProperty("currentIndex", 1)
+
+    assert _collected(root)["analysis"] == {"db_name": "my.db", "log_level": "debug"}
+
+
+def test_apply_config_and_reset_fill_the_output_tab(new_analysis_view, project, find_visual_child):
+    _, root, _ = _make_page(new_analysis_view, project)
+    combo = find_visual_child(root, "field_analysis_log_level")
+    db_field = find_visual_child(root, "field_analysis_db_name")
+
+    root.applyConfig({"analysis": {"db_name": "old.db", "log_level": "warning"}})
+    assert (db_field.property("text"), combo.property("currentText")) == ("old.db", "warning")
+
+    root.resetToBlank()
+    assert (db_field.property("text"), combo.property("currentText")) == ("", "info")
+
+
+def test_targeted_mode_shows_input_and_output_tabs(new_analysis_view, project, find_visual_child):
+    _, root, _ = _make_page(new_analysis_view, project, "targeted")
+
+    assert find_visual_child(root, "tabButton_input").property("visible") is True
+    assert find_visual_child(root, "tabButton_output").property("visible") is True

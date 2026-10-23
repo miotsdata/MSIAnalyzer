@@ -11,13 +11,12 @@ from msianalyzer.gui.utils.config_schema import (
 )
 
 
-def test_schema_covers_every_group_except_io_and_target_list():
+def test_schema_covers_every_group_except_the_bespoke_ones():
     schema = build_config_schema()
     keys = [g["key"] for g in schema]
 
-    assert "io" not in keys
-    assert "target_list" not in keys
-    assert set(keys) == set(GROUPS) - {"io", "target_list"}
+    # io -> input tab, analysis -> output tab, target_list -> its own tab
+    assert set(keys) == set(GROUPS) - {"io", "target_list", "analysis"}
 
 
 def test_schema_field_covers_every_dataclass_field():
@@ -268,7 +267,7 @@ def test_config_schema_provider_target_list_schema_matches_module_function():
 def test_config_schema_provider_targeted_groups_is_the_expected_subset():
     provider = ConfigSchemaProvider()
     keys = [g["key"] for g in provider.targetedGroups]
-    assert keys == ["normalization", "analysis"]
+    assert keys == ["normalization"]
 
 
 def test_config_schema_provider_targeted_groups_are_from_the_same_schema():
@@ -285,4 +284,13 @@ def test_config_schema_provider_splits_groups_around_target_list():
     provider = ConfigSchemaProvider()
     before = [g["key"] for g in provider.groupsBeforeTargetList]
     after = [g["key"] for g in provider.groupsAfterTargetList]
-    assert before + ["target_list"] + after == [k for k in GROUPS if k != "io"]
+    assert before + ["target_list"] + after == [k for k in GROUPS if k not in ("io", "analysis")]
+
+
+def test_config_schema_provider_analysis_schema_has_db_name_and_log_level():
+    from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
+
+    fields = ConfigSchemaProvider().analysisSchema["fields"]
+    assert set(fields) == {"db_name", "log_level"}
+    assert fields["log_level"]["default"] == "info"
+    assert fields["log_level"]["help"]

@@ -58,6 +58,18 @@ there is no user log file. The always-on DEBUG project file is unaffected by
 msianalyzer run -c cfg.yaml -l results/run.log -v debug
 ```
 
+## Run log in the output folder (ADR 56)
+
+`Run.start` wraps the run in `run_log(out_dir, config.analysis.log_level,
+run_id=...)`, which adds a root `FileHandler` writing
+`<out_dir>/run_<YYYYmmdd_HHMMSS>.log` for the duration of the run, then
+removes it, also on failure. It keeps only `msianalyzer.core.*` records
+(`logging.Filter("msianalyzer.core")`), so GUI logging stays out, and worker
+records arrive through `worker_logging`'s `QueueListener`, which respects the
+handler's level. `"off"` writes no file. When the `msianalyzer.core` loggers
+would filter the chosen level out (no `configure_logging` call, e.g. a
+script), their level is lowered for the run and restored afterwards.
+
 ## Multiprocessing
 
 Worker processes have their own logging state, so

@@ -12,6 +12,7 @@ from msianalyzer.core.utils.logging_utils import (
     configure_logging,
     log_call,
     resolve_log_level,
+    run_log,
     worker_logging,
 )
 
@@ -149,3 +150,56 @@ def test_worker_logging_yields_queue_and_initializer():
             isinstance(h, QueueHandler) for h in logging.getLogger().handlers
         )
     logging.basicConfig(level=logging.WARNING, force=True)
+
+
+# ---------------------------------------------------------------------------
+# run_log (ADR 56)
+# ---------------------------------------------------------------------------
+
+
+def test_run_log_writes_core_records_at_level_to_a_timestamped_file(tmp_path):
+    core = logging.getLogger("msianalyzer.core.some_stage")
+    gui = logging.getLogger("msianalyzer.gui.heatmap")
+    n_handlers = len(logging.getLogger().handlers)
+
+    with run_log(tmp_path / "out", "info", run_id="abc123") as path:
+        core.info("stage done")
+        core.debug("too verbose")
+        gui.warning("gui noise")
+
+    assert path.parent == tmp_path / "out"
+    assert path.name.startswith("run_") and path.suffix == ".log"
+    text = path.read_text()
+    assert "abc123" in text.splitlines()[0]
+    assert "stage done" in text
+    assert "too verbose" not in text
+    assert "gui noise" not in text
+    assert len(logging.getLogger().handlers) == n_handlers
+
+
+def test_run_log_off_writes_nothing(tmp_path):
+    with run_log(tmp_path, "off", run_id="abc") as path:
+        logging.getLogger("msianalyzer.core.x").error("boom")
+    assert path is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_run_log_debug_works_even_if_core_loggers_filter_it(tmp_path):
+    core_root = logging.getLogger("msianalyzer.core")
+    before = core_root.level
+    core_root.setLevel(logging.WARNING)
+    try:
+        with run_log(tmp_path, "debug", run_id="abc") as path:
+            logging.getLogger("msianalyzer.core.x").debug("fine detail")
+        assert "fine detail" in path.read_text()
+        assert core_root.level == logging.WARNING  # restored
+    finally:
+        core_root.setLevel(before)
+
+
+def test_run_log_keeps_the_file_when_the_run_fails(tmp_path):
+    with pytest.raises(RuntimeError):
+        with run_log(tmp_path, "info", run_id="abc") as path:
+            logging.getLogger("msianalyzer.core.x").error("failed here")
+            raise RuntimeError
+    assert "failed here" in path.read_text()

@@ -53,7 +53,7 @@ from msianalyzer.core.spatial.moran import compute_spatial_autocorr
 from msianalyzer.core.spectra.isotopes import run_detect_isotopes
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 from msianalyzer.core.utils.create_adata import create_spatial_adata
-from msianalyzer.core.utils.logging_utils import log_call, worker_logging
+from msianalyzer.core.utils.logging_utils import log_call, run_log, worker_logging
 from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
 from msianalyzer.core.utils.tic_normalization import run_normalization
 
@@ -325,12 +325,20 @@ class Run:
 
         try:
             os.chdir(self.config.io.project_folder)
-            # Relative paths resolve against the project folder, so check
-            # only after the chdir.
-            Run._check_input_paths(self.config)
+            # Relative paths (out_dir, inputs) resolve against the project
+            # folder, so the log and the checks come only after the chdir.
+            with run_log(
+                self.config.io.out_dir, self.config.analysis.log_level, run_id=self.id
+            ):
+                Run._check_input_paths(self.config)
 
-            logger.info("run %s: pipeline started", self.id)
-            self.run_core()
+                logger.info("run %s: pipeline started", self.id)
+                self.run_core()
+                logger.info(
+                    "run %s: pipeline complete in %s",
+                    self.id,
+                    datetime.datetime.now() - self.start_date,
+                )
         except Exception:
             # Without this the GUI keeps the running step spinning and the
             # project records the run as RUNNING forever.
@@ -346,13 +354,9 @@ class Run:
         self.status = RunStatus.COMPLETED
         self.project.runs[self.id] = self.to_dict()
         self.project.export(project_path)
-        logger.info(
-            "run %s: pipeline complete in %s",
-            self.id,
-            self.end_date - self.start_date,
-        )
 
     @staticmethod
+    @log_call
     def _check_input_paths(config: Config) -> None:
         """Fail fast, before any work, if any configured input is missing or unusable.
 

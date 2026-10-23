@@ -640,3 +640,14 @@ def test_isotopes_section_round_trips_and_is_optional(sample_io_config):
 
     d.pop("isotopes")  # a config file written before ADR 54 still loads
     assert Config.from_dict(d).isotopes == IsotopesConfig()
+
+
+def test_analysis_log_level_defaults_to_info_and_accepts_off():
+    assert AnalysisConfig().log_level == "info"
+    for level in ("off", "debug", "info", "warning", "error"):
+        assert AnalysisConfig(log_level=level).log_level == level
+
+
+def test_analysis_log_level_rejects_unknown_level():
+    with pytest.raises(ValueError, match="log_level"):
+        AnalysisConfig(log_level="verbose")

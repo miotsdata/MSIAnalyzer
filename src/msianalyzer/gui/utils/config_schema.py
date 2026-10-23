@@ -3,11 +3,13 @@
 `NewAnalysisPage.qml` needs one tab per config group, with a control per
 field. Rather than hand-writing ~70 near-identical QML field blocks, this
 module introspects the `Config` dataclasses themselves and produces a plain,
-QML-friendly schema the page renders generically. `io` (`IOConfig`) and
-`target_list` (`TargetListConfig`) are excluded — `io` gets a bespoke tab
-(sample-pair pickers, output folder); `target_list` gets a bespoke tab
-because its `adducts` field needs a polarity-filtered multi-select control,
-not the single-control-per-field shape this generic schema produces (see
+QML-friendly schema the page renders generically. `io` (`IOConfig`),
+`analysis` (`AnalysisConfig`) and `target_list` (`TargetListConfig`) are
+excluded. `io` is split over the bespoke Input tab (sample-pair pickers) and
+Output tab (output folder), and `analysis` lives on that Output tab with a
+log-level dropdown (ADR 56). `target_list` gets a bespoke tab because its
+`adducts` field needs a polarity-filtered multi-select control, not the
+single-control-per-field shape this generic schema produces (see
 `ConfigSchemaProvider.positiveAdducts`/`negativeAdducts` below).
 """
 
@@ -22,9 +24,14 @@ import typing
 from PySide6.QtCore import Property, QObject
 
 from msianalyzer.core.annotation.target_list import adducts_for_polarity
-from msianalyzer.core.config.config import GROUPS, GROUP_TITLES, TargetListConfig
+from msianalyzer.core.config.config import (
+    GROUPS,
+    GROUP_TITLES,
+    AnalysisConfig,
+    TargetListConfig,
+)
 
-_BESPOKE_GROUPS = ("io", "target_list")
+_BESPOKE_GROUPS = ("io", "analysis", "target_list")
 
 #: Groups a `targeted` analysis actually asks the user about — everything
 #: else is either meaningless for it (ms1/centroid/peak/align/target_list/
@@ -33,10 +40,9 @@ _BESPOKE_GROUPS = ("io", "target_list")
 #: workflow's ROI/calibration focus, per user feedback) or shouldn't be
 #: user-configurable at all (h5ad's assembly parameters — a targeted
 #: `.h5ad` is just built with `H5adConfig()`'s own defaults, never asked
-#: about, same as `io` is always the bespoke tab regardless of type). `io`
-#: is shown too, but bespoke — not part of this filtered list, see
-#: `NewAnalysisPage.qml`.
-_TARGETED_GROUPS = ("normalization", "analysis")
+#: about). The Input and Output tabs (`io`, `analysis`) are shown too, but
+#: bespoke — not part of this filtered list, see `NewAnalysisPage.qml`.
+_TARGETED_GROUPS = ("normalization",)
 
 _UNION_ORIGINS = (typing.Union, types.UnionType)
 
@@ -322,24 +328,19 @@ def coerce_config_values(config_dict: dict) -> dict:
     return result
 
 
-def build_target_list_schema() -> dict:
-    """Build the bespoke form metadata for `TargetListConfig`.
-
-    Unlike every other group, `target_list`'s tab is hand-written QML (see
-    module docstring), but its labels/help text/defaults still come from
-    `TargetListConfig`'s docstring and field defaults, same as the generic
-    groups — only the *rendering* is bespoke, not where the text lives.
+def _bespoke_schema(cls: type, skip: tuple[str, ...] = ()) -> dict:
+    """Labels, help text and defaults for a group whose tab is hand-written
+    QML: the text still comes from the dataclass docstring and defaults,
+    like the generic groups — only the rendering is bespoke.
 
     Returns:
-        `{"description", "fields": {name: {"label", "help", "default"}}}`
-        for `paths`/`polarity`/`match_ppm` (`adducts` is covered separately
-        by `ConfigSchemaProvider.positiveAdducts`/`negativeAdducts`, since
-        it's a multi-select rather than a single control).
+        `{"description": str, "fields": {name: {"label", "help",
+        "default"}}}`, for every field not in `skip`.
     """
-    summary, field_help = _parse_docstring(TargetListConfig)
+    summary, field_help = _parse_docstring(cls)
     fields = {}
-    for f in dataclasses.fields(TargetListConfig):
-        if f.name == "adducts":
+    for f in dataclasses.fields(cls):
+        if f.name in skip:
             continue
         fields[f.name] = {
             "label": _prettify_label(f.name),
@@ -347,6 +348,14 @@ def build_target_list_schema() -> dict:
             "default": f.default if f.default is not dataclasses.MISSING else None,
         }
     return {"description": summary, "fields": fields}
+
+
+def build_target_list_schema() -> dict:
+    """Bespoke-tab metadata for `TargetListConfig`: `paths`, `polarity`,
+    `match_ppm` (`adducts` is covered by
+    `ConfigSchemaProvider.positiveAdducts`/`negativeAdducts`, since it's a
+    multi-select rather than a single control)."""
+    return _bespoke_schema(TargetListConfig, skip=("adducts",))
 
 
 class ConfigSchemaProvider(QObject):
@@ -370,6 +379,7 @@ class ConfigSchemaProvider(QObject):
         self._groups_before_target_list = [g for g in self._groups if g["key"] in before]
         self._groups_after_target_list = [g for g in self._groups if g["key"] not in before]
         self._target_list_schema = build_target_list_schema()
+        self._analysis_schema = _bespoke_schema(AnalysisConfig)
         self._positive_adducts = [a.label for a in adducts_for_polarity("positive")]
         self._negative_adducts = [a.label for a in adducts_for_polarity("negative")]
 
@@ -396,6 +406,11 @@ class ConfigSchemaProvider(QObject):
     @Property(dict, constant=True)
     def targetListSchema(self) -> dict:
         return self._target_list_schema
+
+    @Property(dict, constant=True)
+    def analysisSchema(self) -> dict:
+        """Help text and defaults for the Output tab's `analysis` fields."""
+        return self._analysis_schema
 
     @Property(list, constant=True)
     def positiveAdducts(self) -> list[str]:

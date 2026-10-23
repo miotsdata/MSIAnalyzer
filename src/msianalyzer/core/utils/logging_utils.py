@@ -18,8 +18,13 @@ __all__ = [
     "resolve_log_level",
     "configure_logging",
     "log_call",
+    "run_log",
     "worker_logging",
 ]
+
+#: Levels a run log can be written at (`AnalysisConfig.log_level`); "off"
+#: writes no file.
+RUN_LOG_LEVELS = ("off", "debug", "info", "warning", "error")
 
 
 class DefaultSourceFileFilter(logging.Filter):
@@ -76,6 +81,9 @@ def default_debug_log_dir() -> Path:
     return Path(platformdirs.user_log_dir("MSIAnalyzer", appauthor=False))
 
 
+_CONCISE_FORMAT = "%(asctime)s [%(levelname)s] (%(source_file)s) %(message)s"
+
+
 def configure_logging(
     *,
     level: int | str = logging.INFO,
@@ -113,9 +121,7 @@ def configure_logging(
     level = resolve_log_level(level)
     handlers: list[logging.Handler] = []
 
-    concise_formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] (%(source_file)s) %(message)s"
-    )
+    concise_formatter = logging.Formatter(_CONCISE_FORMAT)
     verbose_formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s.%(funcName)s (%(source_file)s): %(message)s"
     )
@@ -157,6 +163,52 @@ def configure_logging(
         handlers=handlers,
         force=True,
     )
+
+
+@contextmanager
+def run_log(out_dir: Path | str, level: str, *, run_id: str) -> Iterator[Path | None]:
+    """Write one run's pipeline log to ``<out_dir>/run_<timestamp>.log`` (ADR 56).
+
+    For the duration of the ``with`` block, records from the
+    ``msianalyzer.core`` loggers at `level` and above go to a new file,
+    including those forwarded from worker processes by `worker_logging`.
+    GUI records stay out. If the core loggers would filter `level` out,
+    they are lowered for the block and restored after.
+
+    Args:
+        out_dir: The run's output folder (created if missing).
+        level: One of `RUN_LOG_LEVELS`; ``"off"`` writes no file.
+        run_id: Named on the file's first line.
+
+    Yields:
+        The log file's path, or None when `level` is ``"off"``.
+    """
+    if level == "off":
+        yield None
+        return
+    numeric = resolve_log_level(level)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"run_{datetime.now():%Y%m%d_%H%M%S}.log"
+
+    handler = logging.FileHandler(path)
+    handler.setLevel(numeric)
+    handler.setFormatter(logging.Formatter(_CONCISE_FORMAT))
+    handler.addFilter(logging.Filter("msianalyzer.core"))
+    handler.addFilter(DefaultSourceFileFilter())
+    handler.stream.write(f"# MSIAnalyzer run {run_id}, log level {level}\n")
+
+    core = logging.getLogger("msianalyzer.core")
+    core_level = core.level
+    if core.getEffectiveLevel() > numeric:
+        core.setLevel(numeric)
+    logging.getLogger().addHandler(handler)
+    try:
+        yield path
+    finally:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
+        core.setLevel(core_level)
 
 
 def log_call(

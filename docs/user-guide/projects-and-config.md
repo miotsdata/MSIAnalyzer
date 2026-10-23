@@ -330,15 +330,18 @@ See [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md).
 | `local_threshold` | `1.0` | **not a pipeline parameter** — only the value the GUI's local-summary table starts at when it first opens; adjustable live in the GUI afterward with no re-run needed. **Not bounded to -1–1** like the global score — see the in-app field help (or [Concepts](concepts.md)) for what values mean. |
 | `local_n_workers` | `null` | worker processes scoring features in parallel for the local pass — it has no built-in parallelism of its own the way `n_jobs` gives the global pass, so every feature's score is split across worker processes instead. `null` uses `os.cpu_count()`; `1` forces a fully serial run. Independent of `n_jobs`, which only affects the global pass. |
 
-### `analysis` — per-analysis database
+### `analysis` — analysis database and run log
 
 Names the per-run SQLite database that collects this analysis' results
 (features, MS2 associations, purity, annotations, consensus picks) — as
-opposed to the raw per-sample databases, which are shared and immutable.
+opposed to the raw per-sample databases, which are shared and immutable —
+and sets the run's log file. In the GUI both are on the **output** tab,
+next to the output folder.
 
 | key | default | meaning |
 |---|---|---|
 | `db_name` | `null` | file name of the analysis DB inside `out_dir`, e.g. `"my_analysis.db"`; when null it is `analysis_<run-id>.db` — usually fine to leave as-is |
+| `log_level` | `"info"` | level of the run log `run_<date>_<time>.log` written in `out_dir`, a new file per run: `off` (no file), `debug` (every function call, for troubleshooting), `info` (each step and its main numbers), `warning`, `error` |
 
 ## Running
 
