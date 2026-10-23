@@ -17,11 +17,17 @@ import numpy as np
 import pandas as pd
 
 from msianalyzer.core import analysis_db
-from msianalyzer.core.annotation.annotate import run_annotation
+from msianalyzer.core.annotation.annotate import (
+    normalize_library_paths,
+    run_annotation,
+)
 from msianalyzer.core.annotation.consensus import run_consensus
 from msianalyzer.core.annotation.group_ms2 import run_grouper
 from msianalyzer.core.annotation.precursor_purity import run_precursor_purity
-from msianalyzer.core.annotation.target_list import run_target_list_matching
+from msianalyzer.core.annotation.target_list import (
+    normalize_target_list_paths,
+    run_target_list_matching,
+)
 from msianalyzer.core.report.summary import build_summary_report
 from msianalyzer.core.config import Config
 from msianalyzer.core.parser import (
@@ -56,6 +62,7 @@ class RunStatus(Enum):
 
     RUNNING = 1
     COMPLETED = 0
+    FAILED = 2
 
 
 #: Canonical, ordered list of `run_core` stages. Consumers (e.g. the GUI) can
@@ -220,6 +227,8 @@ class Run:
         self.project: Project | None = None
         self.on_step: Callable[[str, str], None] | None = None
         self.on_sample_progress: Callable[[int, int], None] | None = None
+        # Step currently "started", so a failure can mark it "failed".
+        self._current_step: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise the run to a plain, YAML-friendly dict.
@@ -234,7 +243,7 @@ class Run:
         """
         d: dict[str, Any] = {}
         for key, value in vars(self).items():
-            if key in ("project", "on_step", "on_sample_progress"):
+            if key in ("project", "on_step", "on_sample_progress", "_current_step"):
                 continue
             if isinstance(value, datetime.datetime):
                 d[key] = str(value)
@@ -310,10 +319,24 @@ class Run:
         self.project.runs[self.id] = self.to_dict()
         self.project.export(project_path)
 
-        os.chdir(self.config.io.project_folder)
+        try:
+            os.chdir(self.config.io.project_folder)
+            # Relative paths resolve against the project folder, so check
+            # only after the chdir.
+            Run._check_input_paths(self.config)
 
-        logger.info("run %s: pipeline started", self.id)
-        self.run_core()
+            logger.info("run %s: pipeline started", self.id)
+            self.run_core()
+        except Exception:
+            # Without this the GUI keeps the running step spinning and the
+            # project records the run as RUNNING forever.
+            if self._current_step is not None:
+                self._emit_step(self._current_step, "failed")
+            self.end_date = datetime.datetime.now()
+            self.status = RunStatus.FAILED
+            self.project.runs[self.id] = self.to_dict()
+            self.project.export(project_path)
+            raise
 
         self.end_date = datetime.datetime.now()
         self.status = RunStatus.COMPLETED
@@ -324,6 +347,29 @@ class Run:
             self.id,
             self.end_date - self.start_date,
         )
+
+    @staticmethod
+    def _check_input_paths(config: Config) -> None:
+        """Fail fast, before any work, if any configured input file is missing.
+
+        Checks the mzML/XML inputs, the raw databases of already-parsed
+        (db-only) samples, the spectral libraries and the target lists.
+
+        Raises:
+            FileNotFoundError: Listing every missing path, not just the first.
+        """
+        io = config.io
+        paths = [*io.mzml_paths, *io.xml_paths]
+        paths += [
+            db for m, db in zip(io.mzml_paths, io.raw_db_paths()) if m is None
+        ]
+        paths += normalize_library_paths(config.annotate.library_path)
+        paths += normalize_target_list_paths(config.target_list.paths)
+        missing = [str(p) for p in paths if p is not None and not Path(p).exists()]
+        if missing:
+            raise FileNotFoundError(
+                "Input path(s) not found:\n" + "\n".join(missing)
+            )
 
     @staticmethod
     def is_command_already_run(
@@ -672,6 +718,7 @@ class Run:
             step: One of `RUN_STEPS`.
             status: `"started"`, `"completed"`, `"skipped"` or `"failed"`.
         """
+        self._current_step = step if status == "started" else None
         if self.on_step is not None:
             self.on_step(step, status)
 

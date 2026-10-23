@@ -47,6 +47,6 @@ class RunWorker(QThread):
             )
         except Exception as e:
             logger.exception("run %s: failed", self._run.id)
-            self.failed.emit(str(e))
+            self.failed.emit(f"{type(e).__name__}: {e}")
         else:
             self.finished_ok.emit(self._run.id)

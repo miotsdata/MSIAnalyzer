@@ -173,6 +173,9 @@ class DummyConfig:
             mzml_paths=[tmp_path / "sample1.mzML", tmp_path / "sample2.mzML"],
             xml_paths=[tmp_path / "sample1.xml", tmp_path / "sample2.xml"],
         )
+        # Real files, so `Run._check_input_paths` passes in `start` tests.
+        for f in [*self.io.mzml_paths, *self.io.xml_paths]:
+            f.touch()
         self.ms1 = MockMS1Config()
         self.centroid = MockCentroidConfig()
         self.peak = MockPeakConfig()
@@ -1103,6 +1106,54 @@ def test_start_with_config_object_and_no_config_path_leaves_it_none(mocker, tmp_
     run.start(config=config)
 
     assert run.config_path is None
+
+
+def test_start_fails_fast_listing_every_missing_input_path(mocker, tmp_path):
+    run = Run()
+    config = DummyConfig(tmp_path)
+    config.io.xml_paths[1].unlink()
+    config.annotate.library_path = str(tmp_path / "missing_lib.db")
+
+    mock_proj_inst = mocker.MagicMock()
+    mock_proj_inst.runs = {}
+    mocker.patch("msianalyzer.core.run.run.Project").load.return_value = (
+        mock_proj_inst
+    )
+    mock_run_core = mocker.patch.object(run, "run_core")
+
+    with pytest.raises(FileNotFoundError) as exc:
+        run.start(config=config)
+
+    assert "sample2.xml" in str(exc.value)
+    assert "missing_lib.db" in str(exc.value)
+    mock_run_core.assert_not_called()
+    assert run.status == RunStatus.FAILED
+    assert mock_proj_inst.runs[run.id]["status"] == "FAILED"
+
+
+def test_start_marks_running_step_failed_and_run_failed_on_error(mocker, tmp_path):
+    run = Run()
+    config = DummyConfig(tmp_path)
+
+    mock_proj_inst = mocker.MagicMock()
+    mock_proj_inst.runs = {}
+    mocker.patch("msianalyzer.core.run.run.Project").load.return_value = (
+        mock_proj_inst
+    )
+
+    def failing_core():
+        run._emit_step("annotate_ms2", "started")
+        raise FileNotFoundError("lib.db")
+
+    mocker.patch.object(run, "run_core", side_effect=failing_core)
+
+    events = []
+    with pytest.raises(FileNotFoundError):
+        run.start(config=config, on_step=lambda *e: events.append(e))
+
+    assert events[-1] == ("annotate_ms2", "failed")
+    assert run.status == RunStatus.FAILED
+    assert mock_proj_inst.runs[run.id]["status"] == "FAILED"
 
 
 # ==============================================================================
