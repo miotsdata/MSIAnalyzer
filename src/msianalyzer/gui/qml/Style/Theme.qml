@@ -122,6 +122,17 @@ QtObject {
     // deliberately, for visibility, not an oversight.
     readonly property color borderColor: isDark ? "#48484c" : "#c8c8ce"
     readonly property color lightColor: isDark ? "#4a4a4a" : "#ffffff"
+
+    // --- Checkboxes -------------------------------------------------------
+
+    // The CheckBox box itself (AppCheckBox). White in both modes: on the
+    // dark background the Fusion default (`fieldColor` box, `borderColor`
+    // edge) left an unticked box nearly invisible (reported 2026-10-23).
+    // In light mode the white box needs a darker edge to stand out instead.
+    readonly property color checkBoxColor: "#ffffff"
+    readonly property color checkBoxBorderColor: isDark ? "#ffffff" : "#808088"
+    // The tick, on that white box.
+    readonly property color checkMarkColor: "#202020"
     readonly property color midlightColor: isDark ? "#414141" : "#e0e0e6"
     readonly property color darkColor: isDark ? "#1e1e1e" : "#a0a0a8"
     // Actual drop-shadow alpha effects, not a surface color — stays near-

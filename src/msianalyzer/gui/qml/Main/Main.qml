@@ -641,7 +641,7 @@ ApplicationWindow {
                 }
             }
 
-            CheckBox {
+            AppCheckBox {
                 id: imageScaleBarCheckBox
                 objectName: "imageScaleBarCheckBox"
                 text: "Include scale bar"

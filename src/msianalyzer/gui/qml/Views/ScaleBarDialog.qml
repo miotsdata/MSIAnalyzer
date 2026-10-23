@@ -110,7 +110,7 @@ Dialog {
         spacing: 10
 
         RowLayout {
-            CheckBox {
+            AppCheckBox {
                 objectName: "scaleBarEnabledCheckBox"
                 text: "Show scale bar"
                 checked: scaleBarDialog.barEnabled

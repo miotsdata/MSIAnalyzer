@@ -217,6 +217,11 @@ look (explicit light `palette` block in `Main.qml`, denser layouts, no
 mobile-app-style card chrome) — a standing direction, not a one-off styling
 pass. See [ADR 15](../adr/0015-professional-desktop-theme-direction.md).
 
+Use `AppCheckBox` (Style module), never a bare `CheckBox`. It is a white
+box with a dark tick in both themes (`Theme.checkBoxColor` /
+`checkBoxBorderColor` / `checkMarkColor`). Fusion's default box, drawn from
+`palette.base`, was nearly invisible on the dark background.
+
 ## Testing
 
 No real display in CI or in this development environment — `QT_QPA_PLATFORM=offscreen`

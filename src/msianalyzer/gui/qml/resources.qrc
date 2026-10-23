@@ -5,6 +5,7 @@
         <file>Style/qmldir</file>
         <file>Style/Theme.qml</file>
         <file>Style/AppMenuItem.qml</file>
+        <file>Style/AppCheckBox.qml</file>
         <file>Views/qmldir</file>
         <file>Views/StartPage.qml</file>
         <file>Views/ProjectHomePage.qml</file>

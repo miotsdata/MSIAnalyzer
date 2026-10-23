@@ -180,14 +180,14 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: "Which intensities to score: \"X\" is the imported file's own main matrix."
             }
-            CheckBox {
+            AppCheckBox {
                 id: globalMoranCheck
                 objectName: "datasetGlobalMoranCheck"
                 text: "Global"
                 checked: true
                 enabled: !spatialCorrelationSection.computing
             }
-            CheckBox {
+            AppCheckBox {
                 id: localMoranCheck
                 objectName: "datasetLocalMoranCheck"
                 text: "Local"

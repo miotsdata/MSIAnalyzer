@@ -899,7 +899,7 @@ Flickable {
             font.bold: true
             visible: controlsFlickable.showsColorScale
         }
-        CheckBox {
+        AppCheckBox {
             id: autoScaleCheckBox
             objectName: "autoScaleCheckBox"
             text: "Autoscale"
@@ -1096,7 +1096,7 @@ Flickable {
                 objectName: "sampleVisibilityRepeater"
                 model: controlsFlickable.samples
 
-                delegate: CheckBox {
+                delegate: AppCheckBox {
                     objectName: "sampleVisibility_" + modelData.name
                     // Truncated — real sample names (from the mzML
                     // filename) can be long enough to overflow the panel

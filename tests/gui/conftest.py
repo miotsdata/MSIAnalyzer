@@ -1,6 +1,22 @@
 # tests/gui/conftest.py
+import shutil
 import subprocess
+import sys
+from pathlib import Path
+
 import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+QRC_PATH = PROJECT_ROOT / "src/msianalyzer/gui/qml/resources.qrc"
+RC_PATH = PROJECT_ROOT / "src/msianalyzer/gui/resources_rc.py"
+
+# Compile the QML bundle at import time, BEFORE anything below imports
+# msianalyzer.gui.main (which imports resources_rc). As a session fixture
+# it ran after that import, so every run tested the QML compiled by the
+# *previous* run. Uses the rcc from this interpreter's own environment
+# (pyside6-rcc[.exe]), not whatever is first on PATH.
+_RCC = shutil.which("pyside6-rcc", path=str(Path(sys.executable).parent)) or "pyside6-rcc"
+subprocess.run([_RCC, str(QRC_PATH), "-o", str(RC_PATH)], check=True)
 
 # Same style as production (see gui/main.py) — before any QtQuick.Controls
 # import loads, so before qapp too. Keeps control geometry (and therefore
@@ -20,14 +36,6 @@ from PySide6.QtQuick import QQuickView
 from PySide6.QtCore import QUrl
 from PySide6.QtTest import QTest
 
-import os
-
-from pathlib import Path
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-QRC_PATH = PROJECT_ROOT / "src/msianalyzer/gui/qml/resources.qrc"
-RC_PATH = PROJECT_ROOT / "src/msianalyzer/gui/resources_rc.py"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -90,23 +98,6 @@ def _join_worker_threads():
             # means they already finished.
             if shiboken6.isValid(thread):
                 thread.wait(30_000)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def compile_qml_resources():
-    rc_path = "src/msianalyzer/gui/resources_rc.py"
-    if os.path.exists(rc_path):
-        os.remove(rc_path)
-    result = subprocess.run(
-        [
-            "pyside6-rcc",
-            str(QRC_PATH),
-            "-o",
-            str(RC_PATH),
-        ],
-        capture_output=True,
-        text=True,
-    )
 
 
 @pytest.fixture

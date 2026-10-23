@@ -1,3 +1,4 @@
 module Style
 singleton Theme 1.0 Theme.qml
 AppMenuItem 1.0 AppMenuItem.qml
+AppCheckBox 1.0 AppCheckBox.qml

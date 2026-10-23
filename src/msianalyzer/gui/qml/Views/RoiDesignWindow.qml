@@ -359,7 +359,7 @@ Window {
                 text: ScaleBar.sizeText(drawingCanvas.imageSize)
                 color: Theme.mutedTextColor
             }
-            CheckBox {
+            AppCheckBox {
                 id: drawOnHeCheckBox
                 objectName: "drawOnHeCheckBox"
                 text: "Draw on H&E image"
@@ -395,7 +395,7 @@ Window {
         RowLayout {
             Layout.fillWidth: true
             visible: roiWindow.drawSurface === "he"
-            CheckBox {
+            AppCheckBox {
                 id: roiShowOverlayCheckBox
                 objectName: "roiShowOverlayCheckBox"
                 text: "Overlay"

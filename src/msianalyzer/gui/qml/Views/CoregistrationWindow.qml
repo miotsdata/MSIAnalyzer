@@ -452,7 +452,7 @@ Window {
 
                 RowLayout {
                     visible: win.registrationInfo.hasFit
-                    CheckBox {
+                    AppCheckBox {
                         id: showOverlayCheckBox
                         objectName: "showOverlayCheckBox"
                         text: "Overlay"

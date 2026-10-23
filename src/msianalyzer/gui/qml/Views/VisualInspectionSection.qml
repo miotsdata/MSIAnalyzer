@@ -188,7 +188,7 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
-            CheckBox {
+            AppCheckBox {
                 id: showRoisCheckBox
                 objectName: "showRoisCheckBox"
                 text: "Show ROIs"

@@ -1106,7 +1106,7 @@ Page {
 
                             Repeater {
                                 model: targetListColumn.adductOptions
-                                delegate: CheckBox {
+                                delegate: AppCheckBox {
                                     objectName: "field_target_list_adduct_" + modelData
                                     text: modelData
                                     checked: newAnalysisPage.targetListSelectedAdducts.indexOf(modelData) !== -1
@@ -1225,7 +1225,7 @@ Page {
                                     }
                                 }
 
-                                CheckBox {
+                                AppCheckBox {
                                     objectName: modelData.kind === "bool" ? fieldRow.fieldObjectName : ""
                                     visible: modelData.kind === "bool"
                                     checked: modelData.default === true

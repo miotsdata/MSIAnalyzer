@@ -204,7 +204,7 @@ Window {
                         Repeater {
                             model: predictWindow.polarity === "negative"
                                    ? ConfigSchema.negativeAdducts : ConfigSchema.positiveAdducts
-                            delegate: CheckBox {
+                            delegate: AppCheckBox {
                                 objectName: "predictAdduct_" + modelData
                                 text: modelData
                                 checked: predictWindow.selectedAdducts.indexOf(modelData) !== -1
@@ -234,7 +234,7 @@ Window {
                         text: String(predictWindow.errorPpm)
                         Layout.preferredWidth: 60
                     }
-                    CheckBox {
+                    AppCheckBox {
                         id: halogenCheckBox
                         objectName: "predictHalogenCheckBox"
                         text: "Allow halogens (F/Cl/Br/I)"
@@ -288,7 +288,7 @@ Window {
                         objectName: "predictFeatureRow_" + modelData.feature_id
                         Layout.fillWidth: true
 
-                        CheckBox {
+                        AppCheckBox {
                             objectName: "predictFeatureCheck_" + modelData.feature_id
                             checked: predictWindow.selectedFeatureIds.indexOf(modelData.feature_id) !== -1
                             onToggled: predictWindow.toggleFeature(modelData.feature_id, checked)
