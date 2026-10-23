@@ -11,6 +11,7 @@ from msianalyzer.core.config.config import (
     PeakConfig,
     AlignMzSamples,
     TargetListConfig,
+    IsotopesConfig,
     GroupMs2Config,
     PurityConfig,
     AnnotateConfig,
@@ -611,3 +612,31 @@ def test_config_from_dict_round_trips_target_list_section(sample_io_config: IOCo
 
 def test_target_list_in_groups():
     assert GROUPS["target_list"] is TargetListConfig
+
+
+def test_groups_follow_pipeline_order():
+    # The GUI's config tabs and the saved YAML follow GROUPS, so it must
+    # match the order the stages run in (ADR 54, 55); `analysis` isn't a stage.
+    assert list(GROUPS) == [
+        "io", "ms1", "centroid", "peak", "align", "target_list", "h5ad",
+        "isotopes", "group_ms2", "purity", "annotate", "consensus",
+        "normalization", "spatial_correlation", "report", "analysis",
+    ]
+
+
+def test_isotopes_config_defaults():
+    cfg = IsotopesConfig()
+    assert (cfg.enabled, cfg.max_isotopes, cfg.ppm, cfg.max_charge, cfg.min_spatial_corr) == (
+        True, 3, 5.0, 1, 0.5,
+    )
+    assert GROUPS["isotopes"] is IsotopesConfig
+
+
+def test_isotopes_section_round_trips_and_is_optional(sample_io_config):
+    cfg = Config(io=sample_io_config, isotopes=IsotopesConfig(max_isotopes=2))
+    d = cfg.to_dict()
+    assert d["isotopes"]["max_isotopes"] == 2
+    assert Config.from_dict(d).isotopes.max_isotopes == 2
+
+    d.pop("isotopes")  # a config file written before ADR 54 still loads
+    assert Config.from_dict(d).isotopes == IsotopesConfig()

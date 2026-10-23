@@ -364,6 +364,11 @@ class ConfigSchemaProvider(QObject):
         self._targeted_groups = [
             g for g in self._groups if g["key"] in _TARGETED_GROUPS
         ]
+        # The bespoke target-list tab sits between these, so the tabs follow
+        # GROUPS (pipeline) order.
+        before = list(GROUPS)[: list(GROUPS).index("target_list")]
+        self._groups_before_target_list = [g for g in self._groups if g["key"] in before]
+        self._groups_after_target_list = [g for g in self._groups if g["key"] not in before]
         self._target_list_schema = build_target_list_schema()
         self._positive_adducts = [a.label for a in adducts_for_polarity("positive")]
         self._negative_adducts = [a.label for a in adducts_for_polarity("negative")]
@@ -377,6 +382,16 @@ class ConfigSchemaProvider(QObject):
         """The subset of `groups` a `targeted` analysis' `NewAnalysisPage.qml`
         actually shows tabs for — see `_TARGETED_GROUPS`."""
         return self._targeted_groups
+
+    @Property(list, constant=True)
+    def groupsBeforeTargetList(self) -> list[dict]:
+        """`groups` whose stages run before target-list matching."""
+        return self._groups_before_target_list
+
+    @Property(list, constant=True)
+    def groupsAfterTargetList(self) -> list[dict]:
+        """`groups` whose stages run after target-list matching."""
+        return self._groups_after_target_list
 
     @Property(dict, constant=True)
     def targetListSchema(self) -> dict:

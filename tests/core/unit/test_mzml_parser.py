@@ -30,6 +30,7 @@ from msianalyzer.core.parser.mzml_parser import (
     _parse_scan_id,
     _parse_scan_polarity,
     _parse_tic,
+    is_profile_mzml,
     load_raw_metadata_value,
     write_raw_metadata,
 )
@@ -317,6 +318,51 @@ def test_parse_tic():
     # Missing TIC cvParam
     xml_missing = '<cvParam accession="MS:1000511" value="1"/>'
     assert _parse_tic(xml_missing) is None
+
+
+def _profile_copy(src: Path, dst: Path) -> Path:
+    """`src` with its MS1 spectrum declared profile (MS:1000128)."""
+    text = src.read_text(encoding="utf-8").replace(
+        '<cvParam accession="MS:1000511" name="ms level" value="1"/>',
+        '<cvParam accession="MS:1000511" name="ms level" value="1"/>\n'
+        '          <cvParam accession="MS:1000128" name="profile spectrum"/>',
+    )
+    dst.write_text(text, encoding="utf-8")
+    return dst
+
+
+def test_is_profile_mzml_false_for_centroided_or_undeclared(synthetic_mzml_file: Path):
+    assert is_profile_mzml(synthetic_mzml_file) is False
+
+
+def test_is_profile_mzml_true_when_ms1_is_profile(synthetic_mzml_file: Path, tmp_path: Path):
+    assert is_profile_mzml(_profile_copy(synthetic_mzml_file, tmp_path / "p.mzML")) is True
+
+
+def test_is_profile_mzml_ignores_profile_ms2(synthetic_mzml_file: Path, tmp_path: Path):
+    text = synthetic_mzml_file.read_text(encoding="utf-8").replace(
+        '<cvParam accession="MS:1000511" name="ms level" value="2"/>',
+        '<cvParam accession="MS:1000511" name="ms level" value="2"/>\n'
+        '          <cvParam accession="MS:1000128" name="profile spectrum"/>',
+    )
+    p = tmp_path / "ms2_profile.mzML"
+    p.write_text(text, encoding="utf-8")
+    assert is_profile_mzml(p) is False
+
+
+def test_is_profile_mzml_false_for_empty_file(tmp_path: Path):
+    p = tmp_path / "empty.mzML"
+    p.touch()
+    assert is_profile_mzml(p) is False
+
+
+def test_mzml_parser_rejects_profile_ms1_before_writing_db(
+    synthetic_mzml_file: Path, tmp_path: Path
+):
+    db = tmp_path / "out.db"
+    with pytest.raises(ValueError, match="profile"):
+        MzmlParser().parse(_profile_copy(synthetic_mzml_file, tmp_path / "p.mzML"), db)
+    assert not db.exists()
 
 
 # ===========================================================================

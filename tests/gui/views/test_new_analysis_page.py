@@ -926,3 +926,30 @@ def test_run_click_emits_analysis_type_untargeted_by_default(
     assert config_dict["analysis_type"] == "untargeted"
 
 
+
+
+def test_tabs_follow_pipeline_order(new_analysis_view, project, find_visual_child):
+    from msianalyzer.core.config.config import GROUPS
+
+    _, root, _ = _make_page(new_analysis_view, project, "untargeted")
+
+    def position(key):
+        b = find_visual_child(root, "tabButton_" + key)
+        p = b.mapToScene(b.boundingRect().topLeft())
+        return (round(p.y()), p.x())
+
+    assert sorted(GROUPS, key=position) == list(GROUPS)
+
+
+def test_each_tab_opens_its_own_page(new_analysis_view, project, find_visual_child, qtbot):
+    from msianalyzer.core.config.config import GROUPS
+
+    view, root, _ = _make_page(new_analysis_view, project, "untargeted")
+    keys = [k for k in GROUPS if k != "io"]
+
+    for key in keys:
+        b = find_visual_child(root, "tabButton_" + key)
+        qtbot.mouseClick(view, Qt.LeftButton, pos=b.mapToScene(b.boundingRect().center()).toPoint())
+        qtbot.wait(20)
+        shown = [k for k in keys if find_visual_child(root, "groupTab_" + k).property("visible")]
+        assert shown == [key]

@@ -15,6 +15,7 @@ commands             one row per parameter-dependent step (JSON arguments)
 samples              one row per raw database feeding the analysis
 aggregated_spectra   averaged MS1 / centroids / filtered peaks, per sample
 features             aligned cross-sample master m/z list
+feature_isotopes     isotope features taken out of `features`, linked to their mono (ADR 54)
 ms2_associations     one row per MS2 scan snapped to a feature (grouper)
 feature_ms2_summary  per-feature MS2 coverage roll-up
 precursor_purity     per-MS2 precursor purity (purity_score) vs. its parent MS1
@@ -203,6 +204,31 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_features_mz ON features(mz)")
+
+    # --- Isotopes taken out of `features` (ADR 54) --------------------------
+    # Written by core.spectra.isotopes. A row keeps the feature's own id, m/z
+    # and members, so a wrong removal can be inspected (and restored).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS feature_isotopes (
+            feature_id       INTEGER PRIMARY KEY,
+            mz               REAL    NOT NULL,
+            members_json     TEXT    NOT NULL,
+            mono_feature_id  INTEGER NOT NULL,
+            isotope_index    INTEGER NOT NULL,
+            charge           INTEGER NOT NULL,
+            n_samples_linked INTEGER NOT NULL,
+            n_samples_both   INTEGER NOT NULL,
+            intensity_ratio  REAL,
+            spatial_corr     REAL,
+            command_id       INTEGER,
+            FOREIGN KEY (mono_feature_id) REFERENCES features(feature_id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feature_isotopes_mono "
+        "ON feature_isotopes(mono_feature_id)"
+    )
 
     # --- MS2 -> feature association (Stage A of annotation) ---------------
     # Written by core.annotation.group_ms2. One row per MS2 scan; a re-run
@@ -1009,6 +1035,55 @@ def append_injected_features(
             ids.append(int(cur.lastrowid))
         con.commit()
     return ids
+
+
+@log_call(source="db_path")
+def load_protected_feature_ids(db_path: Path | str) -> set[int]:
+    """Features the isotope stage must never remove: injected by, or matched
+    to, a target-list compound (ADR 54)."""
+    with connect(db_path) as con:
+        rows = con.execute(
+            "SELECT feature_id FROM features WHERE origin = 'injected' "
+            "UNION SELECT feature_id FROM target_list_matches"
+        ).fetchall()
+    return {int(r[0]) for r in rows}
+
+
+@log_call(source="db_path")
+def move_features_to_isotopes(
+    db_path: Path | str, isotopes: list, command_id: int | None = None
+) -> None:
+    """Move each isotope's `features` row to `feature_isotopes`, in one
+    transaction.
+
+    Args:
+        isotopes: `core.spectra.isotopes.AcceptedIsotope` items.
+    """
+    with connect(db_path) as con:
+        con.execute("DELETE FROM feature_isotopes")
+        for iso in isotopes:
+            mz, members = con.execute(
+                "SELECT mz, members_json FROM features WHERE feature_id = ?",
+                (iso.feature_id,),
+            ).fetchone()
+            safe_execute(
+                con,
+                "INSERT INTO feature_isotopes (feature_id, mz, members_json, "
+                "mono_feature_id, isotope_index, charge, n_samples_linked, "
+                "n_samples_both, intensity_ratio, spatial_corr, command_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    iso.feature_id, mz, members, iso.mono_feature_id,
+                    iso.isotope_index, iso.charge, iso.n_samples_linked,
+                    iso.n_samples_both, iso.intensity_ratio, iso.spatial_corr,
+                    command_id,
+                ),
+                table="feature_isotopes",
+                logger=logger,
+                source=db_path,
+            )
+            con.execute("DELETE FROM features WHERE feature_id = ?", (iso.feature_id,))
+        con.commit()
 
 
 def load_injected_feature_mzs(db_path: Path | str) -> list[float]:

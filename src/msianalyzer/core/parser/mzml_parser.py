@@ -142,6 +142,7 @@ _RE_RT = re.compile(
     r'[^>]*unitAccession="UO:(\d+)"'
 )
 _RE_MS_LEVEL = re.compile(r'accession="MS:1000511"[^>]*value="(\d+)"')
+_RE_PROFILE = re.compile(r'accession="MS:1000128"')  # profile spectrum
 _RE_SCAN_ID = re.compile(r'\bid="([^"]+)"')
 _RE_SCAN_NUM = re.compile(r"scan=(\d+)")
 
@@ -258,6 +259,9 @@ class MzmlParser:
         ms1_db_path: Path = Path(ms1_db_path)
 
         logger.debug("%s: Starting parsing file.", mzml_path)
+
+        if is_profile_mzml(mzml_path):
+            raise ValueError(profile_mzml_message([mzml_path]))
 
         instrument_info: dict[str, Any] = _parse_instrument_info(mzml_path)
 
@@ -660,6 +664,38 @@ def _parse_instrument_info(path: Path) -> dict:
         info["source_file"] = m.group(1)
 
     return info
+
+
+def is_profile_mzml(path: Path | str) -> bool:
+    """Whether the file's first MS1 spectrum is declared profile (MS:1000128).
+
+    The pipeline (MS1 averaging and centroid detection) assumes centroided
+    MS1. Reads only up to the first MS1 spectrum, so it's cheap even on a
+    multi-GB file. A file that declares neither mode counts as centroided.
+    """
+    buf: list[str] | None = None
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            if "<spectrum " in line:
+                buf = [line]
+            elif buf is not None:
+                buf.append(line)
+                if "</spectrum>" in line:
+                    text = "".join(buf)
+                    if _parse_ms_level(text) == 1:
+                        return bool(_RE_PROFILE.search(text))
+                    buf = None
+    return False
+
+
+def profile_mzml_message(paths: list[Path | str]) -> str:
+    """Error text for `paths`, which `is_profile_mzml` flagged."""
+    return (
+        "MS1 spectra are in profile mode; MSIAnalyzer needs centroided mzML. "
+        "Re-convert the .raw with ThermoRawFileParser (centroids by default) "
+        'or msconvert --filter "peakPicking vendor msLevel=1-":\n'
+        + "\n".join(str(p) for p in paths)
+    )
 
 
 # ---------------------------------------------------------------------------

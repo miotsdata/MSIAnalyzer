@@ -63,3 +63,5 @@ useful).
 | [51](0051-qt-graphs-instead-of-plotly-in-gui.md) | Qt Graphs instead of Plotly/WebEngine for the GUI's interactive plots | Accepted |
 | [52](0052-windows-build-and-fast-startup.md) | Windows build (one cross-platform spec + Inno Setup), and a fast-starting GUI | Accepted |
 | [53](0053-heatmap-scale-bar-and-pixel-size.md) | Heatmap scale bar and per-sample pixel size | Accepted |
+| [54](0054-isotope-detection-before-ms2.md) | Isotope detection before MS2, isotopes taken out of the feature list | Accepted; image extraction superseded by 55 |
+| [55](0055-isotopes-from-the-h5ad-matrices.md) | Isotopes detected from the `.h5ad` matrices, built before MS2 | Accepted; supersedes part of 54 |

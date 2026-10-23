@@ -83,6 +83,11 @@ class MockTargetListConfig:
 
 
 @dataclass
+class MockIsotopesConfig:
+    enabled: bool = True
+
+
+@dataclass
 class MockGroupMs2Config:
     assoc_ppm: float = 10.0
     include_unmatched: bool = True
@@ -181,6 +186,7 @@ class DummyConfig:
         self.peak = MockPeakConfig()
         self.align = MockAlignConfig()
         self.target_list = MockTargetListConfig()
+        self.isotopes = MockIsotopesConfig()
         self.group_ms2 = MockGroupMs2Config()
         self.purity = MockPurityConfig()
         self.annotate = MockAnnotateConfig()
@@ -798,6 +804,7 @@ def test_run_core_executes_successfully(mocker, tmp_path):
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
 
+    mocker.patch("msianalyzer.core.run.run.run_detect_isotopes")
     mock_run_grouper = mocker.patch(
         "msianalyzer.core.run.run.run_grouper",
         return_value=mocker.MagicMock(associations=[], feature_summary=[]),
@@ -914,6 +921,7 @@ def test_run_core_registers_already_parsed_sample_by_its_own_db_stem(mocker, tmp
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
 
+    mocker.patch("msianalyzer.core.run.run.run_detect_isotopes")
     mocker.patch(
         "msianalyzer.core.run.run.run_grouper",
         return_value=mocker.MagicMock(associations=[], feature_summary=[]),
@@ -1131,6 +1139,33 @@ def test_start_fails_fast_listing_every_missing_input_path(mocker, tmp_path):
     assert mock_proj_inst.runs[run.id]["status"] == "FAILED"
 
 
+def test_start_fails_fast_on_profile_mzml(mocker, tmp_path):
+    run = Run()
+    config = DummyConfig(tmp_path)
+    config.io.mzml_paths[1].write_text(
+        '<spectrum index="0" id="scan=1">\n'
+        '<cvParam accession="MS:1000511" name="ms level" value="1"/>\n'
+        '<cvParam accession="MS:1000128" name="profile spectrum"/>\n'
+        "</spectrum>\n",
+        encoding="utf-8",
+    )
+
+    mock_proj_inst = mocker.MagicMock()
+    mock_proj_inst.runs = {}
+    mocker.patch("msianalyzer.core.run.run.Project").load.return_value = (
+        mock_proj_inst
+    )
+    mock_run_core = mocker.patch.object(run, "run_core")
+
+    with pytest.raises(ValueError, match="profile") as exc:
+        run.start(config=config)
+
+    assert "sample2.mzML" in str(exc.value)
+    assert "sample1.mzML" not in str(exc.value)
+    mock_run_core.assert_not_called()
+    assert run.status == RunStatus.FAILED
+
+
 def test_start_marks_running_step_failed_and_run_failed_on_error(mocker, tmp_path):
     run = Run()
     config = DummyConfig(tmp_path)
@@ -1167,6 +1202,10 @@ _FULL_RUN_STAGES_SUCCESS = [
     ("align_mz", "completed"),
     ("match_target_list", "started"),
     ("match_target_list", "skipped"),
+    ("assemble_adata", "started"),
+    ("assemble_adata", "completed"),
+    ("detect_isotopes", "started"),
+    ("detect_isotopes", "completed"),
     ("group_ms2", "started"),
     ("group_ms2", "completed"),
     ("precursor_purity", "started"),
@@ -1175,8 +1214,6 @@ _FULL_RUN_STAGES_SUCCESS = [
     ("annotate_ms2", "completed"),
     ("ms2_consensus", "started"),
     ("ms2_consensus", "completed"),
-    ("assemble_adata", "started"),
-    ("assemble_adata", "completed"),
     ("normalize_tic", "started"),
     ("normalize_tic", "completed"),
     ("spatial_correlation", "skipped"),
@@ -1186,6 +1223,10 @@ _FULL_RUN_STAGES_SUCCESS = [
 
 
 def _patch_run_core_collaborators(mocker, mzs_index=(100.0, 200.0, 300.0)):
+    mocker.patch(
+        "msianalyzer.core.run.run.run_detect_isotopes",
+        return_value=mocker.MagicMock(n_features_before=0, n_candidates=0, n_isotopes=0),
+    )
     mocker.patch(
         "msianalyzer.core.run.run.run_grouper",
         return_value=mocker.MagicMock(associations=[], feature_summary=[]),
@@ -1422,6 +1463,7 @@ def test_run_core_orders_sample_results_by_submission_index_not_completion_order
 def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
     run = Run("test_config.yml")
     config = DummyConfig(tmp_path)
+    config.isotopes.enabled = False
     config.purity.enabled = False
     config.annotate.library_path = None
     config.consensus.enabled = False
@@ -1469,13 +1511,14 @@ def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
         ("align_mz", "completed"),
         ("match_target_list", "started"),
         ("match_target_list", "skipped"),
+        ("assemble_adata", "started"),
+        ("assemble_adata", "completed"),
+        ("detect_isotopes", "skipped"),
         ("group_ms2", "started"),
         ("group_ms2", "completed"),
         ("precursor_purity", "skipped"),
         ("annotate_ms2", "skipped"),
         ("ms2_consensus", "skipped"),
-        ("assemble_adata", "started"),
-        ("assemble_adata", "completed"),
         ("normalize_tic", "skipped"),
         ("spatial_correlation", "skipped"),
         ("summary_report", "skipped"),
@@ -1863,3 +1906,88 @@ def test_run_core_targeted_passes_targeted_flag_to_sample_worker(mocker, tmp_pat
     submit_calls = mock_executor.__enter__.return_value.submit.call_args_list
     worker = submit_calls[0].args[0]
     assert worker.keywords["targeted"] is True
+
+
+def test_run_steps_build_h5ad_then_isotopes_before_ms2():
+    from msianalyzer.core.run.run import RUN_STEPS
+
+    i = RUN_STEPS.index("assemble_adata")
+    assert RUN_STEPS[i - 1 : i + 3] == (
+        "match_target_list", "assemble_adata", "detect_isotopes", "group_ms2",
+    )
+
+
+def _isotope_run(mocker, tmp_path, *, already_run=False, enabled=True, reference_mz=None):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    config.isotopes.enabled = enabled
+    if reference_mz is not None:
+        config.normalization.mode = "reference_mz"
+        config.normalization.reference_mz = reference_mz
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    project_mock = mocker.MagicMock()
+    project_mock.uuid = "proj_uuid_123"
+    run.config = config
+    run.project = project_mock
+
+    res1 = SampleResult(out_db_path=out_dir / "sample1.db", peaks_mzs=np.array([100.0]))
+    res2 = SampleResult(out_db_path=out_dir / "sample2.db", peaks_mzs=np.array([100.0]))
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.side_effect = (
+        lambda name, *a, **k: already_run and name == "detect_isotopes"
+    )
+
+    _patch_run_core_collaborators(mocker, mzs_index=(100.0, 200.0, 300.0))
+    mocker.patch(
+        "msianalyzer.core.run.run.align_mz_across_samples",
+        return_value=pd.DataFrame(
+            {"sample1": [0, 1, 2], "sample2": [0, 1, 2]}, index=[100.0, 200.0, 300.0]
+        ),
+    )
+    order = mocker.Mock()
+    mocker.patch("msianalyzer.core.run.run.create_spatial_adata", order.create_spatial_adata)
+    mocker.patch("msianalyzer.core.run.run.run_detect_isotopes", order.run_detect_isotopes)
+    mocker.patch("msianalyzer.core.run.run.run_grouper", order.run_grouper)
+    order.run_grouper.return_value = mocker.MagicMock(associations=[], feature_summary=[])
+    _mock_pool_executor(mocker, [res1, res2])
+    run.run_core()
+    return run, order
+
+
+def test_run_core_builds_h5ad_before_isotopes_and_isotopes_before_ms2(mocker, tmp_path):
+    _, order = _isotope_run(mocker, tmp_path)
+
+    names = [c[0] for c in order.mock_calls if c[0] in (
+        "create_spatial_adata", "run_detect_isotopes", "run_grouper")]
+    assert names == ["create_spatial_adata", "create_spatial_adata", "run_detect_isotopes", "run_grouper"]
+
+
+def test_run_core_runs_detect_isotopes_on_every_samples_h5ad(mocker, tmp_path):
+    run, order = _isotope_run(mocker, tmp_path)
+
+    call = order.run_detect_isotopes.call_args
+    out_dir = Path(run.config.io.out_dir)
+    assert call.args[1] == {"sample1": out_dir / "sample1.h5ad", "sample2": out_dir / "sample2.h5ad"}
+    assert call.args[2] is run.config.isotopes
+    assert call.kwargs["keep_mzs"] == set()
+
+
+def test_run_core_detect_isotopes_keeps_the_reference_mz_column(mocker, tmp_path):
+    _, order = _isotope_run(mocker, tmp_path, reference_mz=250.0)
+
+    assert order.run_detect_isotopes.call_args.kwargs["keep_mzs"] == {250.0}
+
+
+def test_run_core_skips_detect_isotopes_already_run(mocker, tmp_path):
+    _, order = _isotope_run(mocker, tmp_path, already_run=True)
+
+    order.run_detect_isotopes.assert_not_called()
+
+
+def test_run_core_detect_isotopes_disabled_is_not_called(mocker, tmp_path):
+    _, order = _isotope_run(mocker, tmp_path, enabled=False)
+
+    order.run_detect_isotopes.assert_not_called()

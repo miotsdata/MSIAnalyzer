@@ -15,11 +15,17 @@ Page {
     // config-group tabs are shown (see visibleGroups) and whether
     // target_list matching is offered at all.
     property string analysisType: "untargeted"
-    // The generic-groups tab set both the tab-button Repeater and the
-    // stack-page Repeater below iterate — same list for both, so their
-    // indices (tabBar.currentIndex === index + 2) always line up.
+    // The generic-groups stack pages (stack index = index + 2, after the
+    // bespoke io and target-list pages). The tab *buttons* are shown in
+    // pipeline order instead: groupsBefore, then target list, then
+    // groupsAfter. visibleGroups is always groupsBefore + groupsAfter, so a
+    // button's stack index follows from its position in those lists.
     readonly property var visibleGroups: analysisType === "targeted"
         ? ConfigSchema.targetedGroups : ConfigSchema.groups
+    readonly property var groupsBefore: analysisType === "targeted"
+        ? [] : ConfigSchema.groupsBeforeTargetList
+    readonly property var groupsAfter: analysisType === "targeted"
+        ? ConfigSchema.targetedGroups : ConfigSchema.groupsAfterTargetList
     property var sampleRows: []
     // Already-parsed samples: each entry here is a raw .db path that
     // skips the parse/pixel-map pipeline stages entirely (see ADR — core
@@ -651,6 +657,24 @@ Page {
         // line at its natural width, never split mid-word; short rows like
         // "align all mzs" | "group MS2" sit together, a long one like
         // "TIC normalization" gets its own row's worth of space.
+        // One generic config-group tab button; `stackIndex` is its page in
+        // stackLayout (see visibleGroups).
+        component GroupTabButton: Button {
+            required property var modelData
+            required property int index
+            property int stackIndex
+            objectName: "tabButton_" + modelData.key
+            text: modelData.title
+            checkable: true
+            checked: tabBar.currentIndex === stackIndex
+            highlighted: checked
+            onClicked: tabBar.currentIndex = stackIndex
+
+            HoverHandler {
+                cursorShape: Qt.PointingHandCursor
+            }
+        }
+
         Flow {
             id: tabBar
             objectName: "tabBar"
@@ -671,9 +695,15 @@ Page {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            Repeater {
+                model: newAnalysisPage.groupsBefore
+                delegate: GroupTabButton {
+                    stackIndex: index + 2
+                }
+            }
             Button {
                 // Bespoke tab (not from the generic ConfigSchema.groups
-                // Repeater below) — target_list.adducts needs a
+                // Repeaters) — target_list.adducts needs a
                 // polarity-filtered multi-select, which the generic
                 // one-control-per-field renderer can't produce. See
                 // gui/utils/config_schema.py's module docstring.
@@ -683,7 +713,7 @@ Page {
                 // aligned feature list to match compounds against) — see
                 // Config's own docstring. Its StackLayout page (index 1)
                 // stays in place either way so tabBar.currentIndex's
-                // fixed offsets (generic groups start at index + 2) never
+                // fixed offsets (generic pages start at index 2) never
                 // need to shift; it's just unreachable via this button.
                 visible: newAnalysisPage.analysisType !== "targeted"
                 checkable: true
@@ -696,18 +726,9 @@ Page {
                 }
             }
             Repeater {
-                model: newAnalysisPage.visibleGroups
-                delegate: Button {
-                    objectName: "tabButton_" + modelData.key
-                    text: modelData.title
-                    checkable: true
-                    checked: tabBar.currentIndex === index + 2
-                    highlighted: checked
-                    onClicked: tabBar.currentIndex = index + 2
-
-                    HoverHandler {
-                        cursorShape: Qt.PointingHandCursor
-                    }
+                model: newAnalysisPage.groupsAfter
+                delegate: GroupTabButton {
+                    stackIndex: index + newAnalysisPage.groupsBefore.length + 2
                 }
             }
         }

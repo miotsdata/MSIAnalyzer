@@ -11,6 +11,13 @@ Per sample: one **mzML** file and one **raster XML** file. The run also needs a
 **project folder** (a directory containing `.msianalyzer.yml`) and an **output
 directory**.
 
+The mzML must hold **centroided** MS1 spectra. A run whose mzML declares
+profile MS1 (`MS:1000128`) stops before any work, listing those files.
+ThermoRawFileParser writes centroids by default; with msconvert, add
+`--filter "peakPicking vendor msLevel=1-"`. A raw DB parsed earlier from a
+profile mzML is not detected once the mzML has been replaced, so delete it
+from `parsed/` after re-converting.
+
 ## Stage 1 — Parse (→ raw DB)
 
 `MzmlParser().parse()` streams the mzML and writes the sample's **raw database**:
@@ -64,6 +71,27 @@ per-sample spectrum figure (`<sample>_filtered_ms1.html`) and CSV
   each sample contributed), and
 - `aligned_mzs.csv` for inspection.
 
+## Stage 6.5 — Spatial AnnData per sample
+
+`create_spatial_adata()` quantifies every feature m/z (plus injected target-list
+features and the normalization reference m/z) across each pixel's MS1 spectra
+(`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes `<sample>.h5ad`. It
+runs before the MS2 stages because isotope detection uses these matrices
+(ADR 55); nothing from the MS2 stages is stored in the `.h5ad`.
+
+## Stage 6.6 — Detect isotopes (→ analysis DB, `.h5ad`)
+
+`run_detect_isotopes()` finds ¹³C isotope features (M+1, M+2, …) and takes
+them out of `features` before the MS2 stages use the feature list, so they are
+never associated with MS2 or annotated. A feature is an isotope of a more
+intense one when it sits at `mono + k × 1.00336 / z` (within `isotopes.ppm`),
+is less intense, and its ion image (its `.h5ad` column) co-localizes with the
+monoisotopic one (`isotopes.min_spatial_corr`), in most of the samples where
+both are detected. Their columns are then removed from every `.h5ad`.
+Target-list features and the normalization reference m/z are never removed.
+Output: the `feature_isotopes` table, which keeps each isotope linked to its
+monoisotopic feature. See ADR 54 and 55.
+
 ## Stage 7 — Associate MS2 with features (→ analysis DB)
 
 `run_grouper()` reads `features` and every sample's `ms2_scans`, and snaps each
@@ -99,13 +127,7 @@ ranked). Each row also carries the scan's `precursor_frac`;
 `feature_ms2_consensus`. Works library-free and purity-free. Controlled by
 `consensus.*`; set `consensus.enabled: false` to skip.
 
-## Stage 11 — Spatial AnnData per sample
-
-`create_spatial_adata()` quantifies every feature m/z across each pixel's MS1
-spectra (`h5ad.integration_ppm`, `h5ad.scan_handling`) and writes
-`<sample>.h5ad`.
-
-## Stage 12 — TIC normalization
+## Stage 11 — TIC normalization
 
 `run_tic_normalization()` computes each pixel's TIC relative to the
 dataset-wide median TIC (across every pixel, every sample) and uses it to
@@ -115,7 +137,7 @@ samples concatenated with a `sample` obs column — needed to compute the
 median and kept for future cross-sample analyses. Controlled by
 `normalization.*`; set `normalization.enabled: false` to skip.
 
-## Stage 12.5 — Spatial correlation (opt-in)
+## Stage 11.5 — Spatial correlation (opt-in)
 
 Off by default (`spatial_correlation.enabled: false`). When enabled,
 `core.spatial.moran.compute_spatial_autocorr()` runs per sample, after TIC
@@ -136,7 +158,7 @@ moment it's selected. It doesn't need this pipeline stage enabled at all
 (it builds its own neighbor graph on the fly), so it's available
 regardless of `spatial_correlation.enabled`. See [Concepts](concepts.md).
 
-## Stage 13 — Summary report (→ out_dir)
+## Stage 12 — Summary report (→ out_dir)
 
 `build_summary_report()` writes `summary_report.html` + `summary.json`:
 per-sample scan / pixel / peak / feature counts, a feature-overlap UpSet plot,

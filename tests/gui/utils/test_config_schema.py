@@ -276,3 +276,13 @@ def test_config_schema_provider_targeted_groups_are_from_the_same_schema():
     by_key = {g["key"]: g for g in provider.groups}
     for group in provider.targetedGroups:
         assert group == by_key[group["key"]]
+
+
+def test_config_schema_provider_splits_groups_around_target_list():
+    from msianalyzer.core.config.config import GROUPS
+    from msianalyzer.gui.utils.config_schema import ConfigSchemaProvider
+
+    provider = ConfigSchemaProvider()
+    before = [g["key"] for g in provider.groupsBeforeTargetList]
+    after = [g["key"] for g in provider.groupsAfterTargetList]
+    assert before + ["target_list"] + after == [k for k in GROUPS if k != "io"]

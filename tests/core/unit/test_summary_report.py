@@ -39,6 +39,7 @@ from msianalyzer.core.report.summary import (
     figure_purity,
     figure_purity_per_sample,
     figure_unassociated_recheck,
+    isotope_summary,
     mad_filter_summary,
     ms2_summary,
     overlap_combos,
@@ -734,3 +735,45 @@ def test_build_summary_report_defaults_out_dir_to_db_parent(tmp_path):
     adb, raw_map = _analysis_db(tmp_path)
     html_path = build_summary_report(adb, raw_db_paths=raw_map)
     assert html_path.parent == adb.parent
+
+
+def _add_isotopes(adb: Path, rows: list[tuple[int, float, int, int]]) -> None:
+    """`(feature_id, mz, mono_feature_id, isotope_index)` rows, charge 1."""
+    with sqlite3.connect(adb) as con:
+        con.executemany(
+            "INSERT INTO feature_isotopes (feature_id, mz, members_json, "
+            "mono_feature_id, isotope_index, charge, n_samples_linked, "
+            "n_samples_both, intensity_ratio, spatial_corr) "
+            "VALUES (?, ?, '{}', ?, ?, 1, 1, 1, 0.2, 0.9)",
+            rows,
+        )
+
+
+def test_isotope_summary_none_when_stage_found_nothing(tmp_path):
+    adb, _ = _analysis_db(tmp_path)
+    assert isotope_summary(adb) is None
+
+
+def test_isotope_summary_counts(tmp_path):
+    adb, _ = _analysis_db(tmp_path)
+    _add_isotopes(adb, [(10, 501.0034, 1, 1), (11, 502.0067, 1, 2), (12, 601.0034, 2, 1)])
+
+    iso = isotope_summary(adb)
+
+    assert iso.n_isotopes == 3
+    assert iso.n_monos == 2
+    assert iso.n_features_before == 3 + 3  # 3 features left + 3 moved out
+    assert iso.by_index == {1: 2, 2: 1}
+
+
+def test_build_summary_report_includes_isotope_section(tmp_path):
+    adb, raw_map = _analysis_db(tmp_path)
+    _add_isotopes(adb, [(10, 501.0034, 1, 1)])
+
+    out = tmp_path / "r"
+    build_summary_report(adb, raw_db_paths=raw_map, out_dir=out)
+
+    assert "href='#isotopes'" in (out / "summary_report.html").read_text()
+    payload = json.loads((out / "summary.json").read_text())
+    assert payload["isotopes"]["n_isotopes"] == 1
+    assert payload["isotopes"]["by_index"] == {"1": 1}

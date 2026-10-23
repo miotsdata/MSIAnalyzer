@@ -39,6 +39,7 @@ __all__ = [
     "BasePeakIntensitySample",
     "BasePeakIntensitySummary",
     "TargetListSummary",
+    "IsotopeSummary",
     "MadFilterSample",
     "MadFilterSummary",
     "RecheckSummary",
@@ -53,6 +54,7 @@ __all__ = [
     "associated_purity",
     "base_peak_intensity",
     "target_list_summary",
+    "isotope_summary",
     "mad_filter_summary",
     "unassociated_recheck",
     "annotation_summary",
@@ -433,6 +435,25 @@ class TargetListSummary:
 
 
 @dataclass
+class IsotopeSummary:
+    """Roll-up of isotope detection (ADR 54) — only built when the stage
+    moved at least one feature to `feature_isotopes`.
+
+    Attributes:
+        n_features_before: Features before isotope detection (left +
+            moved out).
+        n_isotopes: Features moved to `feature_isotopes`.
+        n_monos: Distinct monoisotopic features with at least one isotope.
+        by_index: Isotopes per index (1 = M+1, 2 = M+2, …).
+    """
+
+    n_features_before: int
+    n_isotopes: int
+    n_monos: int
+    by_index: dict[int, int]
+
+
+@dataclass
 class SummaryStats:
     """Everything the report renders."""
 
@@ -444,6 +465,7 @@ class SummaryStats:
     associated_purity: AssociatedPuritySummary
     base_peak_intensity: BasePeakIntensitySummary
     target_list: "TargetListSummary | None"
+    isotopes: "IsotopeSummary | None"
     mad_filter: "MadFilterSummary | None"
     recheck: RecheckSummary
     annotation: "AnnotationSummary | None"
@@ -879,6 +901,32 @@ def target_list_summary(analysis_db_path: Path | str) -> TargetListSummary | Non
         n_matched_existing=int(n_existing or 0),
         n_injected_features=int(n_injected_features or 0),
         n_distinct_features=int(n_distinct_features or 0),
+    )
+
+
+def isotope_summary(analysis_db_path: Path | str) -> IsotopeSummary | None:
+    """Roll-up of `feature_isotopes` — `None` when it's empty or missing
+    (stage disabled, never ran, or found nothing)."""
+    with sqlite3.connect(Path(analysis_db_path)) as con:
+        try:
+            rows = con.execute(
+                "SELECT isotope_index, COUNT(*), COUNT(DISTINCT mono_feature_id) "
+                "FROM feature_isotopes GROUP BY isotope_index ORDER BY isotope_index"
+            ).fetchall()
+            n_monos = con.execute(
+                "SELECT COUNT(DISTINCT mono_feature_id) FROM feature_isotopes"
+            ).fetchone()[0]
+        except sqlite3.OperationalError:
+            return None
+        if not rows:
+            return None
+        n_features = con.execute("SELECT COUNT(*) FROM features").fetchone()[0]
+    n_isotopes = sum(n for _, n, _ in rows)
+    return IsotopeSummary(
+        n_features_before=int(n_features + n_isotopes),
+        n_isotopes=int(n_isotopes),
+        n_monos=int(n_monos),
+        by_index={int(k): int(n) for k, n, _ in rows},
     )
 
 
@@ -1707,6 +1755,7 @@ def collect_stats(
         associated_purity=associated_purity(analysis_db_path, cutoff=purity_score_cutoff),
         base_peak_intensity=base_peak_intensity(analysis_db_path, raw_db_paths),
         target_list=target_list_summary(analysis_db_path),
+        isotopes=isotope_summary(analysis_db_path),
         mad_filter=mad_filter_summary(analysis_db_path),
         recheck=unassociated_recheck(analysis_db_path),
         annotation=annotation_summary(
@@ -1739,6 +1788,19 @@ def _target_list_table_html(t: TargetListSummary) -> str:
         "<th>new feature injected (not in the filtered peak list)</th></tr>"
         f"<tr><td>{_fmt(t.n_matched_existing)}</td>"
         f"<td>{_fmt(t.n_injected_features)}</td></tr></table>"
+    )
+
+
+def _isotope_table_html(iso: IsotopeSummary) -> str:
+    head = "".join(f"<th>M+{k}</th>" for k in iso.by_index)
+    cells = "".join(f"<td>{_fmt(n)}</td>" for n in iso.by_index.values())
+    return (
+        f"<p>{_fmt(iso.n_isotopes)} of {_fmt(iso.n_features_before)} features "
+        f"were &sup1;&sup3;C isotopes of {_fmt(iso.n_monos)} monoisotopic "
+        "feature(s). They were taken out before MS2 association, so they are "
+        "not annotated nor in the <code>.h5ad</code>; they are kept in the "
+        "analysis database's <code>feature_isotopes</code> table.</p>"
+        f"<table><tr>{head}</tr><tr>{cells}</tr></table>"
     )
 
 
@@ -2023,6 +2085,8 @@ def build_summary_report(
         sections.append(
             ("mad-filter", "MS1 peak filtering (MAD)", _mad_table_html(stats.mad_filter))
         )
+    if stats.isotopes is not None:
+        sections.append(("isotopes", "Isotopes", _isotope_table_html(stats.isotopes)))
     sections.append(
         (
             "ms2-association",

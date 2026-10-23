@@ -56,11 +56,12 @@ every tab anyway.
 
 ## Sections
 
-Sections run in roughly this order during a pipeline execution: `ms1` →
-`centroid` → `peak` → `align` → `group_ms2` → `purity` → `annotate` →
-`consensus` → `report` → `h5ad` → `normalization` → `spatial_correlation` →
-`analysis`. `io` isn't a "stage" as such — it's the input/output paths
-every other stage reads from or writes into.
+Sections run in this order during a pipeline execution, which is also the
+order of the GUI's tabs: `ms1` → `centroid` → `peak` → `align` →
+`target_list` → `h5ad` → `isotopes` → `group_ms2` → `purity` → `annotate` →
+`consensus` → `normalization` → `spatial_correlation` → `report`.
+`io` isn't a "stage" as such — it's the input/output paths every other stage
+reads from or writes into — and `analysis` only names the analysis database.
 
 ### `io` — input/output (required)
 
@@ -147,6 +148,23 @@ keyed on these features, not on any one sample's raw peaks.
 | `align_ppm` | `5.0` | how close two peaks from different samples must be (ppm) to be treated as the same feature. Example: at `5.0` ppm, m/z 400 in one sample and 400.002 in another (5 ppm apart) are just barely grouped; 400.003 is not. Too tight splits one real compound into several features; too loose merges distinct close-mass compounds. Usually a bit looser than `centroid.merge_ppm`, since it also has to absorb run-to-run calibration drift. |
 | `sample_names` | `null` | *not exposed in the GUI* — optional per-sample column names for the aligned feature table (e.g. `["control_1", "treated_1"]` instead of the mzML file names). A GUI-started run always uses the mzML file names; set this only by hand-editing or scripting a config file. |
 | `mz_decimals` | `4` | decimal places a feature's consensus m/z is rounded to for display, e.g. `4` shows `400.1234`. Cosmetic only — doesn't change which peaks get grouped (that's `align_ppm`). |
+
+### `isotopes` — isotope detection
+
+Finds ¹³C isotope features (M+1, M+2, …) and takes them out of the feature list
+before MS2 association, so they are never annotated, kept in the `.h5ad` or
+scored. They are kept, linked to their monoisotopic feature, in the analysis
+database's `feature_isotopes` table. The ion images it compares are the `.h5ad`
+matrices, built just before; isotope columns are then removed from every
+`.h5ad` file.
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `true` | run isotope detection; when off, isotopes stay ordinary features |
+| `max_isotopes` | `3` | isotope peaks looked for after the monoisotopic one (M+1 … M+n). The chain stops at the first missing isotope. |
+| `ppm` | `5.0` | tolerance of each isotope against `mono + k × 1.0033548 / charge`. Example: mono 300.1000, M+1 expected at 301.1034 ± 0.0015. |
+| `max_charge` | `1` | highest charge tried; MALDI ions of small molecules are almost always singly charged |
+| `min_spatial_corr` | `0.5` | minimum Pearson correlation between the isotope's and the monoisotopic ion image, over the pixels where the monoisotopic ion is present. Lower links more (including unrelated ions in the same region); higher misses weak, noisy isotopes. |
 
 ### `group_ms2` — MS2→feature association
 

@@ -537,6 +537,80 @@ class TargetListConfig:
 
 
 @dataclass
+class IsotopesConfig:
+    """Find ¹³C isotope peaks (M+1, M+2, …) among the features and take
+    them out of the analysis, before MS2 association, so they are never
+    annotated, kept in the `.h5ad` or scored. They are kept, linked to
+    their monoisotopic feature, in the analysis database's
+    `feature_isotopes` table. See ADR 0054 and 0055.
+
+    In each sample, features are visited from the most intense down. For
+    each charge, M+1, M+2, … are collected while a feature is found at the
+    expected m/z that is less intense than the monoisotopic one and whose
+    ion image co-localizes with it. M+1 must also be no more intense than a
+    molecule with one carbon per 14 Da of mass allows; a stronger "M+1" is
+    another ion at that m/z, and stays a feature. A link is kept when it holds in most
+    of the samples where both features are present. Features matched or
+    injected by `target_list` are never removed.
+
+    Attributes:
+        enabled: Run isotope detection. Default `True`.
+
+            **Interaction:** When off, every other setting in this section
+            is unused and isotopes stay ordinary features.
+        max_isotopes: Maximum number of isotope peaks looked for after the
+            monoisotopic one (M+1 … M+n).
+
+            Range: **1** and up. Default **3**. Lower: only the first
+            isotopes are removed, heavier ones stay as features. Higher:
+            longer chains, mostly relevant for large molecules (lipids),
+            where M+3 and beyond are still visible.
+
+            **Interaction:** The chain stops at the first missing isotope,
+            so M+3 is never removed without M+1 and M+2.
+        ppm: m/z tolerance of each isotope against its expected position.
+
+            `expected = mono_mz + k × 1.0033548 / charge`
+
+            Range: above **0**. Default **5**. Lower: misses isotopes on
+            data with a larger mass error. Higher: links unrelated ions
+            that happen to sit near the expected m/z.
+
+            **Interaction:** Also decides which features are candidates,
+            whose ion images (`.h5ad` columns) are compared.
+        max_charge: Highest charge tried.
+
+            Range: **1** and up. Default **1**. MALDI ions of small
+            molecules are almost always singly charged. Higher: also looks
+            for isotopes 1/z apart, for multiply charged ions.
+
+            **Interaction:** None.
+        min_spatial_corr: Minimum Pearson correlation between the
+            isotope's and the monoisotopic ion image, over the pixels
+            where the monoisotopic ion is present. The MSI counterpart of
+            co-elution: a real isotope has the same distribution as its
+            monoisotopic ion.
+
+            Range: **-1** to **1**. Default **0.5**. Lower: links more,
+            including unrelated ions at the right m/z in the same region.
+            Higher: stricter; weak isotopes, whose images are sparse and
+            noisy, are missed and stay features. On a DAN tumor section,
+            random feature pairs reach 0.5 in about 2 % of cases; M+1
+            candidates in about 22 % (weak isotopes) to 74 % (strong ones).
+
+            **Interaction:** The images are the `.h5ad` matrices, built just
+            before with the `h5ad` section's settings; isotope columns are
+            then removed from every `.h5ad`.
+    """
+
+    enabled: bool = True
+    max_isotopes: int = 3
+    ppm: float = 5.0
+    max_charge: int = 1
+    min_spatial_corr: float = 0.5
+
+
+@dataclass
 class GroupMs2Config:
     """Attach each MS2 (fragmentation) scan to the feature it belongs to.
 
@@ -1516,7 +1590,9 @@ class SpatialCorrelationConfig:
 
 
 # Maps group name (used as the nested key in dicts/files) -> dataclass type,
-# and doubles as the canonical group order for __str__ and CLI wiring.
+# and doubles as the canonical group order for __str__, CLI wiring and the
+# GUI's config tabs: the order the pipeline runs the stages in (`analysis`,
+# not a stage, last).
 GROUPS: dict[str, type] = {
     "io": IOConfig,
     "ms1": MS1Config,
@@ -1524,14 +1600,15 @@ GROUPS: dict[str, type] = {
     "peak": PeakConfig,
     "align": AlignMzSamples,
     "target_list": TargetListConfig,
+    "h5ad": H5adConfig,
+    "isotopes": IsotopesConfig,
     "group_ms2": GroupMs2Config,
     "purity": PurityConfig,
     "annotate": AnnotateConfig,
     "consensus": ConsensusConfig,
-    "report": ReportConfig,
-    "h5ad": H5adConfig,
     "normalization": NormalizationConfig,
     "spatial_correlation": SpatialCorrelationConfig,
+    "report": ReportConfig,
     "analysis": AnalysisConfig,
 }
 
@@ -1543,14 +1620,15 @@ GROUP_TITLES: dict[str, str] = {
     "peak": "peak threshold",
     "align": "align all mzs",
     "target_list": "target list matching",
+    "h5ad": "create h5ad",
+    "isotopes": "detect isotopes",
     "group_ms2": "group MS2",
     "purity": "precursor purity",
     "annotate": "annotate MS2",
     "consensus": "MS2 consensus",
-    "report": "summary report",
-    "h5ad": "create h5ad",
     "normalization": "normalization",
     "spatial_correlation": "spatial correlation",
+    "report": "summary report",
     "analysis": "analysis database",
 }
 
@@ -1559,8 +1637,9 @@ class Config:
     """Full configuration for a processing run, grouped by pipeline stage.
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
-    `align`, `target_list`, `group_ms2`, `purity`, `annotate`, `consensus`,
-    `report`, `h5ad`, `normalization`, `analysis`) and provides
+    `align`, `target_list`, `h5ad`, `isotopes`, `group_ms2`, `purity`,
+    `annotate`, `consensus`, `normalization`, `spatial_correlation`,
+    `report`, `analysis`) and provides
     (de)serialization to and from YAML and TOML. Only `io` is required; the
     remaining groups fall back to their dataclass defaults.
 
@@ -1587,6 +1666,8 @@ class Config:
         target_list: Target-compound-list matching parameters. Ignored for
             `targeted` runs (compound-list matching against aligned
             features is meaningless without alignment).
+        isotopes: Isotope detection parameters. Ignored for `targeted`
+            runs (no feature list to search).
         group_ms2: MS2-to-feature association parameters. Ignored for
             `targeted` runs (MS1-only by definition).
         purity: Precursor-ion-purity parameters. Ignored for `targeted` runs.
@@ -1615,6 +1696,7 @@ class Config:
         peak: PeakConfig | None = None,
         align: AlignMzSamples | None = None,
         target_list: TargetListConfig | None = None,
+        isotopes: IsotopesConfig | None = None,
         group_ms2: GroupMs2Config | None = None,
         purity: PurityConfig | None = None,
         annotate: AnnotateConfig | None = None,
@@ -1638,6 +1720,7 @@ class Config:
         self.peak: PeakConfig = peak or PeakConfig()
         self.align: AlignMzSamples = align or AlignMzSamples()
         self.target_list: TargetListConfig = target_list or TargetListConfig()
+        self.isotopes: IsotopesConfig = isotopes or IsotopesConfig()
         self.group_ms2: GroupMs2Config = group_ms2 or GroupMs2Config()
         self.purity: PurityConfig = purity or PurityConfig()
         self.annotate: AnnotateConfig = annotate or AnnotateConfig()

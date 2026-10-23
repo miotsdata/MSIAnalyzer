@@ -32,9 +32,11 @@ from msianalyzer.core.report.summary import build_summary_report
 from msianalyzer.core.config import Config
 from msianalyzer.core.parser import (
     MzmlParser,
+    is_profile_mzml,
     load_raw_metadata_value,
     log_command,
     parse_raster_xml,
+    profile_mzml_message,
     write_raw_metadata,
 )
 from msianalyzer.core.plotting.plotter import Plotter
@@ -48,6 +50,7 @@ from msianalyzer.core.spectra.average_spectra import (
 )
 from msianalyzer.core.spatial.local_moran import compute_local_moran_layer
 from msianalyzer.core.spatial.moran import compute_spatial_autocorr
+from msianalyzer.core.spectra.isotopes import run_detect_isotopes
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 from msianalyzer.core.utils.create_adata import create_spatial_adata
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
@@ -72,11 +75,12 @@ RUN_STEPS: tuple[str, ...] = (
     "process_samples",
     "align_mz",
     "match_target_list",
+    "assemble_adata",
+    "detect_isotopes",
     "group_ms2",
     "precursor_purity",
     "annotate_ms2",
     "ms2_consensus",
-    "assemble_adata",
     "normalize_tic",
     "spatial_correlation",
     "summary_report",
@@ -350,13 +354,15 @@ class Run:
 
     @staticmethod
     def _check_input_paths(config: Config) -> None:
-        """Fail fast, before any work, if any configured input file is missing.
+        """Fail fast, before any work, if any configured input is missing or unusable.
 
         Checks the mzML/XML inputs, the raw databases of already-parsed
-        (db-only) samples, the spectral libraries and the target lists.
+        (db-only) samples, the spectral libraries and the target lists, then
+        that no mzML stores its MS1 spectra in profile mode.
 
         Raises:
             FileNotFoundError: Listing every missing path, not just the first.
+            ValueError: Listing every profile-mode mzML.
         """
         io = config.io
         paths = [*io.mzml_paths, *io.xml_paths]
@@ -370,6 +376,11 @@ class Run:
             raise FileNotFoundError(
                 "Input path(s) not found:\n" + "\n".join(missing)
             )
+        # Checked on every mzML, not only those still to parse: a raw DB
+        # reused from an earlier run is as unusable as a fresh parse.
+        profile = [p for p in io.mzml_paths if p is not None and is_profile_mzml(p)]
+        if profile:
+            raise ValueError(profile_mzml_message(profile))
 
     @staticmethod
     def is_command_already_run(
@@ -1163,12 +1174,79 @@ class Run:
 
         # A reference-m/z normalization needs that m/z present in every
         # sample's .h5ad too, exactly like an injected target-list compound
-        # above — union it in here, before assemble_adata.
-        if (
-            getattr(config, "normalization", None) is not None
+        # above — union it in here, before assemble_adata — and isotope
+        # detection must never drop its column.
+        keep_mzs = (
+            {config.normalization.reference_mz}
+            if getattr(config, "normalization", None) is not None
             and config.normalization.mode == "reference_mz"
-        ):
-            target_mz_set = target_mz_set | {config.normalization.reference_mz}
+            else set()
+        )
+        target_mz_set = target_mz_set | keep_mzs
+
+        # --- SPATIAL AnnData PER SAMPLE ---
+        self._emit_step("assemble_adata", "started")
+        for db_path in out_db_paths:
+            out_adata_path = out_dir / f"{db_path.stem}.h5ad"
+            if not out_adata_path.exists():
+                tmp_adata = create_spatial_adata(
+                    db_path=db_path,
+                    target_mz_set=target_mz_set,
+                    project_id=analysis_id,
+                    **vars(config.h5ad),
+                )
+                tmp_adata.write_h5ad(out_adata_path)
+                logger.info(
+                    "%s: wrote %s (%d pixels x %d features)",
+                    db_path,
+                    out_adata_path.name,
+                    tmp_adata.n_obs,
+                    tmp_adata.n_vars,
+                    extra={"source_file": db_path},
+                )
+            else:
+                logger.debug("%s: Already created adata object", db_path)
+        self._emit_step("assemble_adata", "completed")
+
+        # --- ISOTOPES (analysis DB + .h5ad) ---
+        # Right after the .h5ad files, whose matrices are the ion images,
+        # and before group_ms2, so isotopes are never associated or
+        # annotated: they move from `features` to `feature_isotopes` and
+        # their columns leave every .h5ad (ADR 54, 55). Target-list features
+        # and the normalization reference m/z are never dropped.
+        if config.isotopes.enabled:
+            self._emit_step("detect_isotopes", "started")
+            if not analysis_db.is_command_already_run(
+                "detect_isotopes", analysis_id, adb_path
+            ):
+                command_id = analysis_db.log_command(
+                    adb_path,
+                    command_name="detect_isotopes",
+                    arguments={**vars(config.isotopes)},
+                    run_id=analysis_id,
+                )
+                iso = run_detect_isotopes(
+                    adb_path,
+                    {
+                        name: out_dir / f"{db_path.stem}.h5ad"
+                        for name, db_path in zip(mzs_df.columns, out_db_paths)
+                    },
+                    config.isotopes,
+                    command_id=command_id,
+                    keep_mzs=keep_mzs,
+                )
+                logger.info(
+                    "run %s: %d of %d features are isotopes (%d candidates), "
+                    "moved to feature_isotopes",
+                    analysis_id, iso.n_isotopes, iso.n_features_before,
+                    iso.n_candidates,
+                )
+            else:
+                logger.debug("Already run detect_isotopes")
+            self._emit_step("detect_isotopes", "completed")
+        else:
+            logger.info("Isotope detection disabled; skipping")
+            self._emit_step("detect_isotopes", "skipped")
 
         # --- ASSOCIATE MS2 SCANS WITH FEATURES (analysis DB) ---
         self._emit_step("group_ms2", "started")
@@ -1306,30 +1384,6 @@ class Run:
         else:
             logger.info("MS2 consensus disabled; skipping")
             self._emit_step("ms2_consensus", "skipped")
-
-        # --- SPATIAL AnnData PER SAMPLE ---
-        self._emit_step("assemble_adata", "started")
-        for db_path in out_db_paths:
-            out_adata_path = out_dir / f"{db_path.stem}.h5ad"
-            if not out_adata_path.exists():
-                tmp_adata = create_spatial_adata(
-                    db_path=db_path,
-                    target_mz_set=target_mz_set,
-                    project_id=analysis_id,
-                    **vars(config.h5ad),
-                )
-                tmp_adata.write_h5ad(out_adata_path)
-                logger.info(
-                    "%s: wrote %s (%d pixels x %d features)",
-                    db_path,
-                    out_adata_path.name,
-                    tmp_adata.n_obs,
-                    tmp_adata.n_vars,
-                    extra={"source_file": db_path},
-                )
-            else:
-                logger.debug("%s: Already created adata object", db_path)
-        self._emit_step("assemble_adata", "completed")
 
         self._run_normalization_stage(head)
         self._run_spatial_correlation_stage(head)
