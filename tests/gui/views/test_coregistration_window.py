@@ -259,3 +259,45 @@ def test_fit_and_save_button_enables_after_3_landmarks_and_saves(
     assert "RMSE" in status_label.property("text")
     error_label = window.findChild(QQuickItem, "saveErrorLabel")
     assert error_label.property("visible") is False
+
+
+def test_msi_pane_shows_pixel_size_and_scale_bar(
+    analysis_view, coreg_analysis_model, find_visual_child, qtbot
+):
+    from msianalyzer.core.analysis_db import save_scale_bar
+
+    _write_grid_h5ad_for_scale_bar(Path(coreg_analysis_model.outDir) / "s1.h5ad")
+    save_scale_bar(coreg_analysis_model.analysisDbPath, {
+        "enabled": True, "bar_um": 20.0, "color": "#ffffff", "pixel_um": {"s1": 5.0},
+    })
+    view = analysis_view(coreg_analysis_model)
+    root = view.rootObject()
+    window = _open_coregistration_window(view, root, find_visual_child, qtbot)
+
+    grid = window.findChild(QQuickItem, "gridZoomableImage")
+    _wait_image_ready(grid, qtbot)
+    title = window.findChild(QQuickItem, "coregGridTitleLabel")
+    assert title.property("text") == "MSI Heatmap · 3 × 3 px"
+    bar = grid.findChild(QQuickItem, "scaleBar")
+    assert bar.property("visible") is True
+    rect = grid.findChild(QQuickItem, "scaleBarRect")
+    assert rect.property("width") == pytest.approx(4 * grid.property("effectiveScale"))
+    # The H&E pane never gets one (its pixels aren't MSI pixels).
+    he = window.findChild(QQuickItem, "heZoomableImage")
+    assert he.findChild(QQuickItem, "scaleBar").property("visible") is False
+
+
+def _write_grid_h5ad_for_scale_bar(path, n=3):
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+    from scipy.sparse import csr_matrix
+
+    coords = [(x, y) for y in range(n) for x in range(n)]
+    adata = ad.AnnData(
+        X=csr_matrix(np.ones((len(coords), 1), dtype=np.float32)),
+        obs=pd.DataFrame(index=[f"px{i}" for i in range(len(coords))]),
+        var=pd.DataFrame({"mz": [150.0]}, index=["mz_150.0000"]),
+    )
+    adata.obsm["spatial"] = np.array(coords, dtype=float)
+    adata.write_h5ad(path)

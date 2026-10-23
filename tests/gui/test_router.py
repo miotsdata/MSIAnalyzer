@@ -634,6 +634,10 @@ def test_export_image_menu_item_opens_choice_dialog_with_a_controls_snapshot(
     snapshot = dialog.property("controlsSnapshot").toVariant()
     assert snapshot is not None
     assert snapshot["layer"] == "TIC"
+    # No pixel size set anywhere yet: nothing to draw a scale bar with.
+    scale_bar_box = window.findChild(QObject, "imageScaleBarCheckBox")
+    assert scale_bar_box.property("enabled") is False
+    assert scale_bar_box.property("checked") is False
 
 
 def test_export_image_choose_folder_opens_folder_dialog_with_chosen_format(

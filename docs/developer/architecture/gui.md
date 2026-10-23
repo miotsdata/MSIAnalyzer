@@ -166,6 +166,16 @@ bridge call would be far too slow) before handing it to `RoiOverlay` for
 display, and converts a tap the other way before it ever reaches
 `vertexRequested`.
 
+## Scale bar
+
+`ZoomableImage` draws an optional scale bar pinned bottom-right of its
+viewport (`scaleBarUm` / `scaleBarPixelUm` / `scaleBarColor`; it's hidden
+while either length is 0). `VisualInspectionSection.scaleBar` holds the
+settings (`AnalysisBridge.getScaleBar`) and binds them into its tiles and
+both popup windows. `Utils/ScaleBar.js` turns them into one sample's pixel
+size. `ScaleBarDialog` edits them. See
+[ADR 53](../adr/0053-heatmap-scale-bar-and-pixel-size.md).
+
 ## Singleton popup windows: `Loader` + `showFor()`/`openFor()`
 
 `MirrorPlotDetailWindow`, `RoiDesignWindow`, and `CoregistrationWindow`

@@ -62,3 +62,4 @@ useful).
 | [50](0050-gui-responsiveness-no-h5ad-io-on-gui-thread.md) | GUI responsiveness: no `.h5ad` I/O on the GUI thread | Accepted |
 | [51](0051-qt-graphs-instead-of-plotly-in-gui.md) | Qt Graphs instead of Plotly/WebEngine for the GUI's interactive plots | Accepted |
 | [52](0052-windows-build-and-fast-startup.md) | Windows build (one cross-platform spec + Inno Setup), and a fast-starting GUI | Accepted |
+| [53](0053-heatmap-scale-bar-and-pixel-size.md) | Heatmap scale bar and per-sample pixel size | Accepted |

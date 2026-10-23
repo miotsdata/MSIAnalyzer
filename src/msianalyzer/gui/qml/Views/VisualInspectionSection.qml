@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "qrc:/Style"
+import "qrc:/Utils/ScaleBar.js" as ScaleBar
 
 Item {
     id: visualSection
@@ -33,6 +34,14 @@ Item {
         function onRegistrationChanged() { visualSection.refreshRegistrationMarks() }
     }
 
+    // Scale bar settings (ADR 53), AnalysisBridge.getScaleBar's shape —
+    // shared by every tile and both popup windows.
+    property var scaleBar: ({})
+    function refreshScaleBar() {
+        visualSection.scaleBar = (analysis && analysis.analysisDbPath)
+            ? AnalysisBridge.getScaleBar(analysis.analysisDbPath) : {}
+    }
+
     property int gridRows: 1
     property int gridCols: Math.max(1, Math.min(4, visualSection.samples.length))
 
@@ -60,7 +69,13 @@ Item {
             controls.refresh()
             visualSection.refreshSampleRois()
             visualSection.refreshRegistrationMarks()
+            visualSection.refreshScaleBar()
         }
+    }
+
+    ScaleBarDialog {
+        id: scaleBarDialog
+        onSaved: (settings) => visualSection.scaleBar = settings
     }
 
     // Forwarded from `controls` (HeatmapControlsPanel now fetches
@@ -201,6 +216,14 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            Button {
+                objectName: "openScaleBarButton"
+                text: "Scale bar…"
+                onClicked: scaleBarDialog.openFor(visualSection.analysis,
+                    visualSection.samples.map(function (s) { return s.name }),
+                    visualSection.scaleBar)
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
             Item { Layout.fillWidth: true }
         }
 
@@ -214,6 +237,7 @@ Item {
             active: false
             sourceComponent: RoiDesignWindow {
                 objectName: "roiDesignWindow"
+                scaleBar: visualSection.scaleBar
             }
             onLoaded: {
                 // Picks up whatever was saved/deleted during the session
@@ -235,6 +259,7 @@ Item {
             active: false
             sourceComponent: CoregistrationWindow {
                 objectName: "coregistrationWindow"
+                scaleBar: visualSection.scaleBar
             }
         }
 
@@ -320,7 +345,8 @@ Item {
 
                                 Label {
                                     objectName: "heatmapTileLabel_" + modelData.name
-                                    text: modelData.name + (visualSection.registrationMarks[modelData.name] || "")
+                                    text: modelData.name + ScaleBar.sizeSuffix(tileImage.imageSize)
+                                          + (visualSection.registrationMarks[modelData.name] || "")
                                           + (visualSection.moranIScores[modelData.name] !== undefined
                                           ? " (I=" + visualSection.moranIScores[modelData.name].toFixed(2) + ")" : "")
                                     Layout.fillWidth: true
@@ -328,10 +354,14 @@ Item {
                                 }
 
                                 ZoomableImage {
+                                    id: tileImage
                                     objectName: "heatmapImage_" + modelData.name
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     source: controls.tileSource(modelData.name)
+                                    scaleBarPixelUm: ScaleBar.pixelUm(visualSection.scaleBar, modelData.name)
+                                    scaleBarUm: visualSection.scaleBar.bar_um || 0
+                                    scaleBarColor: visualSection.scaleBar.color || "white"
 
                                     RoiOverlay {
                                         objectName: "roiOverlay_" + modelData.name

@@ -22,6 +22,7 @@ from msianalyzer.core.plotting.heatmap import (
     render_heatmap_figure,
     render_obs_categories_heatmap,
     render_obs_heatmap,
+    scale_bar_spec,
 )
 
 
@@ -558,3 +559,30 @@ def test_list_obs_columns_hides_imported_bookkeeping_columns():
     names = {c["name"] for c in list_obs_columns(adata)}
     assert "leiden" in names
     assert not names & {"sample", "source_obs_name"}
+
+
+def test_scale_bar_spec_converts_um_to_pixels_per_sample():
+    settings = {"enabled": True, "bar_um": 50.0, "color": "#ffffff",
+                "pixel_um": {"s1": 10.0, "s2": 25.0}}
+
+    assert scale_bar_spec(settings, "s1") == {"length_px": 5.0, "label": "50 µm", "color": "#ffffff"}
+    assert scale_bar_spec(settings, "s2")["length_px"] == 2.0
+    assert scale_bar_spec(settings, "unset") is None
+    assert scale_bar_spec({**settings, "enabled": False}, "s1") is None
+
+
+def test_render_heatmap_figure_draws_scale_bar_bottom_right():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+    bar = {"length_px": 1.0, "label": "10 µm", "color": "#ff0000"}
+
+    fig = render_heatmap_figure(adata, mode="feature", mz=100.0, scale_bar=bar)
+
+    ax = fig.axes[0]
+    rect = next(p for p in ax.patches if isinstance(p, matplotlib.patches.Rectangle))
+    assert rect.get_width() == 1.0
+    # Right edge inside the 2-pixel raster (extent -0.5..1.5).
+    assert -0.5 < rect.get_x() + rect.get_width() < 1.5
+    assert [t.get_text() for t in ax.texts] == ["10 µm"]
+
+    plain = render_heatmap_figure(adata, mode="feature", mz=100.0)
+    assert not plain.axes[0].patches and not plain.axes[0].texts

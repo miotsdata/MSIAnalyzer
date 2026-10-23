@@ -33,7 +33,9 @@
         <file>Views/LandmarkOverlay.qml</file>
         <file>Views/CoregistrationWindow.qml</file>
         <file>Views/ImportH5adDialog.qml</file>
+        <file>Views/ScaleBarDialog.qml</file>
         <file>Utils/SearchQuery.js</file>
         <file>Utils/AffineTransform.js</file>
+        <file>Utils/ScaleBar.js</file>
     </qresource>
 </RCC>

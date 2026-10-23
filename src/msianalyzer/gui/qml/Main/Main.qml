@@ -592,6 +592,7 @@ ApplicationWindow {
 
         property string format: "png"
         property var controlsSnapshot: null
+        property bool scaleBarAvailable: false
 
         onAboutToShow: {
             var section = stackView.currentItem ? stackView.currentItem.visualInspectionSection : null
@@ -606,6 +607,12 @@ ApplicationWindow {
                 "vmax": controls.vmaxToken(),
                 "showRois": section.showRois,
             } : null
+            // Offered once any sample has a pixel size (ADR 53), checked
+            // by default when the bar is on in Visual Inspection.
+            var bar = section ? section.scaleBar : null
+            exportImageDialog.scaleBarAvailable = !!(bar && bar.pixel_um
+                                                     && Object.keys(bar.pixel_um).length > 0)
+            imageScaleBarCheckBox.checked = exportImageDialog.scaleBarAvailable && !!bar.enabled
         }
 
         Column {
@@ -632,6 +639,13 @@ ApplicationWindow {
                     highlighted: exportImageDialog.format === "svg"
                     onClicked: exportImageDialog.format = "svg"
                 }
+            }
+
+            CheckBox {
+                id: imageScaleBarCheckBox
+                objectName: "imageScaleBarCheckBox"
+                text: "Include scale bar"
+                enabled: exportImageDialog.scaleBarAvailable
             }
 
             Button {
@@ -663,7 +677,8 @@ ApplicationWindow {
                 snap.colormap,
                 snap.vmin,
                 snap.vmax,
-                snap.showRois)
+                snap.showRois,
+                imageScaleBarCheckBox.checked)
         }
     }
 

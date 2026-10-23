@@ -1326,3 +1326,90 @@ def test_show_rois_checkbox_toggles_the_overlay_on_each_tile(
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.wait(50)
     assert overlay_s1.property("visible") is False
+
+
+def _assert_bar_on_visible_image(tile, image, bar, qtbot):
+    qtbot.wait(20)  # let x/y bindings settle after a zoom change
+    bar_rect = bar.mapRectToScene(bar.boundingRect())
+    visible = image.mapRectToScene(image.boundingRect()).intersected(
+        tile.mapRectToScene(tile.boundingRect())
+    )
+    assert visible.contains(bar_rect), (bar_rect, visible)
+
+
+def _save_scale_bar(model, pixel_um):
+    from msianalyzer.core.analysis_db import save_scale_bar
+
+    save_scale_bar(model.analysisDbPath, {
+        "enabled": True, "bar_um": 50.0, "color": "#ff0000", "pixel_um": pixel_um,
+    })
+
+
+def test_tiles_show_pixel_size_and_scale_bar_that_follows_zoom(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_sample_h5ad(out_dir / "s1.h5ad")
+    _write_sample_h5ad(out_dir / "s2.h5ad")
+    # 100 µm pixels: the 50 µm bar is half a pixel, so it fits on the 2x2 image.
+    _save_scale_bar(visual_analysis_model, {"s1": 100.0})  # s2 left unset
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    tile = find_visual_child(root, "heatmapImage_s1")
+    image = find_visual_child(tile, "zoomableImageContent")
+    qtbot.waitUntil(lambda: image.property("sourceSize").width() > 0, timeout=2000)
+
+    label = find_visual_child(root, "heatmapTileLabel_s1")
+    assert label.property("text").startswith("s1 · 2 × 2 px")
+
+    bar = find_visual_child(tile, "scaleBar")
+    rect = find_visual_child(bar, "scaleBarRect")
+    assert bar.property("visible") is True
+    assert find_visual_child(bar, "scaleBarLabel").property("text") == "50 µm"
+    # 50 µm / 100 µm per pixel = 0.5 image pixels.
+    assert rect.property("width") == pytest.approx(0.5 * tile.property("effectiveScale"))
+    # The 2x2 image is centered in a much wider tile: the bar must sit on
+    # the heatmap, not in the blank margin at the tile's own corner.
+    _assert_bar_on_visible_image(tile, image, bar, qtbot)
+
+    tile.setProperty("zoom", 2.0)
+    assert rect.property("width") == pytest.approx(0.5 * tile.property("effectiveScale"))
+    _assert_bar_on_visible_image(tile, image, bar, qtbot)
+
+    tile_s2 = find_visual_child(root, "heatmapImage_s2")
+    image_s2 = find_visual_child(tile_s2, "zoomableImageContent")
+    qtbot.waitUntil(lambda: image_s2.property("sourceSize").width() > 0, timeout=2000)
+    assert find_visual_child(tile_s2, "scaleBar").property("visible") is False
+
+
+def test_scale_bar_dialog_set_to_all_saves_and_updates_tiles(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    from PySide6.QtCore import QMetaObject, QObject
+
+    from msianalyzer.core.analysis_db import load_scale_bar
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    root.findChild(QObject, "openScaleBarButton").clicked.emit()
+    dialog = root.findChild(QObject, "scaleBarDialog")
+    qtbot.waitUntil(lambda: dialog.property("visible") is True, timeout=2000)
+
+    dialog.setProperty("barEnabled", True)
+    root.findChild(QObject, "scaleBarSetAllField").setProperty("text", "12.5")
+    root.findChild(QObject, "scaleBarSetAllButton").clicked.emit()
+    assert _as_list(dialog.property("pixelUmTexts")) == ["12.5", "12.5"]
+
+    QMetaObject.invokeMethod(dialog, "accept")
+    qtbot.wait(50)
+
+    saved = load_scale_bar(visual_analysis_model.analysisDbPath)
+    assert saved["enabled"] is True
+    assert saved["pixel_um"] == {"s1": 12.5, "s2": 12.5}
+    section = root.findChild(QObject, "visualSection")
+    assert _as_list(section.property("scaleBar"))["pixel_um"] == {"s1": 12.5, "s2": 12.5}

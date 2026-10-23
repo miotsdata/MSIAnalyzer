@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Window
 import QtQuick.Dialogs
 import "qrc:/Style"
+import "qrc:/Utils/ScaleBar.js" as ScaleBar
 
 // H&E/brightfield image coregistration: attach a microscopy image to a
 // sample's RAW database (see core/registration/), then click matching
@@ -22,6 +23,8 @@ Window {
     objectName: "coregistrationWindow"
     // Which samples are coregistered ("· H&E ✓" in the sample combo).
     property var registrationMarks: ({})
+    // Scale bar settings (ADR 53), bound by VisualInspectionSection.
+    property var scaleBar: ({})
     function refreshRegistrationMarks() {
         win.registrationMarks = (win.analysis && win.analysis.analysisDbPath)
             ? AnalysisBridge.getRegistrationMarks(win.analysis.analysisDbPath,
@@ -475,7 +478,11 @@ Window {
                 Layout.fillHeight: true
                 spacing: 4
 
-                Label { text: "MSI Heatmap"; font.bold: true }
+                Label {
+                    objectName: "coregGridTitleLabel"
+                    text: "MSI Heatmap" + ScaleBar.sizeSuffix(gridZoomImage.imageSize)
+                    font.bold: true
+                }
 
                 Item {
                     Layout.fillWidth: true
@@ -499,6 +506,10 @@ Window {
                         anchors.fill: parent
                         source: (win.selectedSample && win.controls)
                                 ? win.controls.tileSource(win.selectedSample.name) : ""
+                        scaleBarPixelUm: win.selectedSample
+                                         ? ScaleBar.pixelUm(win.scaleBar, win.selectedSample.name) : 0
+                        scaleBarUm: win.scaleBar.bar_um || 0
+                        scaleBarColor: win.scaleBar.color || "white"
 
                         LandmarkOverlay {
                             id: gridOverlay

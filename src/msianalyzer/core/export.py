@@ -24,6 +24,7 @@ from .analysis_db import (
     load_feature_ids_and_mzs,
     load_feature_representative_annotations,
     load_samples,
+    load_scale_bar,
 )
 from .plotting.heatmap import (
     _feature_column_index,
@@ -31,6 +32,7 @@ from .plotting.heatmap import (
     is_numeric_obs_column,
     obs_categories,
     render_heatmap_figure,
+    scale_bar_spec,
 )
 from .plotting.roi import load_sample_rois
 
@@ -243,6 +245,7 @@ def export_visual_inspection_images(
     vmax: float | None = None,
     show_rois: bool = False,
     rel_dir: str | None = None,
+    include_scale_bar: bool = False,
 ) -> int:
     """Write `<dest_folder>/<sample_name>.<image_format>` for every
     sample — the same raster + colorbar/legend `render_heatmap_figure`
@@ -276,6 +279,10 @@ def export_visual_inspection_images(
         rel_dir: Export an imported dataset's files (ADR 49) instead of
             the pipeline output — whichever Visual Inspection is showing.
             Samples the dataset doesn't cover are skipped.
+        include_scale_bar: Draw the analysis' scale bar (ADR 53) on
+            every sample that has a pixel size set, even while it's
+            switched off in Visual Inspection; the others are exported
+            without one (logged).
 
     Returns:
         The number of sample images written. A sample with no `.h5ad`
@@ -306,8 +313,19 @@ def export_visual_inspection_images(
                 union |= set(obs_categories(adata, obs_column))
         categories = sorted(union) if union else None
 
+    # The export's own checkbox decides, whatever the GUI's on/off switch says.
+    scale_bar_settings = (
+        {**load_scale_bar(db_path), "enabled": True} if include_scale_bar else None
+    )
+
     written = 0
     for sample_name, adata in loaded.items():
+        scale_bar = None
+        if scale_bar_settings is not None:
+            scale_bar = scale_bar_spec(scale_bar_settings, sample_name)
+            if scale_bar is None:
+                logger.warning("no scale bar on %s: no pixel size set", sample_name)
+
         if mode == "feature":
             render_mode = "feature"
         elif obs_column and is_numeric_obs_column(adata, obs_column):
@@ -333,6 +351,7 @@ def export_visual_inspection_images(
             vmax=vmax,
             rois=rois,
             title=sample_name,
+            scale_bar=scale_bar,
         )
         dest_path = dest_folder / f"{sample_name}.{ext}"
         fig.savefig(dest_path, bbox_inches="tight")

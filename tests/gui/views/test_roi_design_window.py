@@ -823,3 +823,31 @@ def test_show_overlay_checkbox_hides_overlay_image(
 
     assert window.property("showOverlay") is False
     assert overlay_image.property("visible") is False
+
+
+def test_scale_bar_and_size_shown_on_grid_surface_only(
+    analysis_view, registered_analysis_model, find_visual_child, qtbot
+):
+    from msianalyzer.core.analysis_db import save_scale_bar
+
+    save_scale_bar(registered_analysis_model.analysisDbPath, {
+        "enabled": True, "bar_um": 30.0, "color": "#ffffff", "pixel_um": {"s1": 10.0},
+    })
+    view = analysis_view(registered_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+
+    zoom_image = window.findChild(QQuickItem, "roiZoomableImage")
+    image = zoom_image.findChild(QQuickItem, "zoomableImageContent")
+    qtbot.waitUntil(lambda: image.property("sourceSize").width() > 0, timeout=3000)
+    size_label = window.findChild(QQuickItem, "roiSampleSizeLabel")
+    assert size_label.property("text") == "4 × 4 px"
+    bar = zoom_image.findChild(QQuickItem, "scaleBar")
+    assert bar.property("visible") is True
+    rect = zoom_image.findChild(QQuickItem, "scaleBarRect")
+    assert rect.property("width") == pytest.approx(3 * zoom_image.property("effectiveScale"))
+
+    window.setProperty("drawSurface", "he")
+    qtbot.wait(50)
+    assert bar.property("visible") is False
+    assert size_label.property("visible") is False

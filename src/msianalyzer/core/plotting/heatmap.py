@@ -445,6 +445,22 @@ def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -
 _SCIENTIFIC_NOTATION_THRESHOLD = 1000.0
 
 
+def scale_bar_spec(settings: dict, sample_name: str) -> dict | None:
+    """One sample's scale bar (ADR 53) from `analysis_db.load_scale_bar`'s
+    settings: `{"length_px", "label", "color"}`, or `None` when disabled
+    or that sample has no pixel size set. Pixels are assumed square.
+    """
+    pixel_um = settings.get("pixel_um", {}).get(sample_name)
+    if not settings.get("enabled") or not pixel_um or pixel_um <= 0:
+        return None
+    bar_um = float(settings["bar_um"])
+    return {
+        "length_px": bar_um / pixel_um,
+        "label": f"{bar_um:g} µm",
+        "color": settings["color"],
+    }
+
+
 def render_heatmap_figure(
     adata: ad.AnnData,
     *,
@@ -458,6 +474,7 @@ def render_heatmap_figure(
     vmax: float | None = None,
     rois: dict | None = None,
     title: str | None = None,
+    scale_bar: dict | None = None,
 ) -> matplotlib.figure.Figure:
     """A real Matplotlib `Figure` for one sample's spatial heatmap —
     what `export_visual_inspection_images` writes to PNG/PDF/SVG, unlike
@@ -493,6 +510,8 @@ def render_heatmap_figure(
             centers already use (no extra transform needed). `None`/`{}`
             draws nothing.
         title: Optional figure title (e.g. the sample name).
+        scale_bar: `scale_bar_spec`'s `{"length_px", "label", "color"}` —
+            drawn bottom-right on the raster. `None` draws nothing.
 
     Returns:
         A standalone `Figure` (not tied to `pyplot`'s global current-figure
@@ -550,6 +569,24 @@ def render_heatmap_figure(
                     edgecolor=info["color"], linewidth=1.5,
                 )
             )
+
+    if scale_bar:
+        # imshow's extent is [-0.5, w-0.5] x [h-0.5 (bottom), -0.5 (top)].
+        height, width = rgba.shape[:2]
+        pad = 0.04 * width
+        thickness = max(0.5, 0.015 * height)
+        right, bottom = width - 0.5 - pad, height - 0.5 - pad
+        ax.add_patch(
+            matplotlib.patches.Rectangle(
+                (right - scale_bar["length_px"], bottom - thickness),
+                scale_bar["length_px"], thickness,
+                facecolor=scale_bar["color"], edgecolor="none",
+            )
+        )
+        ax.text(
+            right - scale_bar["length_px"] / 2, bottom - thickness * 1.5,
+            scale_bar["label"], color=scale_bar["color"], ha="center", va="bottom",
+        )
 
     if legend_kind == "colorbar":
         if eff_vmax <= eff_vmin:

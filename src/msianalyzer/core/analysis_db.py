@@ -850,6 +850,30 @@ def load_metadata_value(db_path: Path | str, key: str) -> str | None:
         return row[0] if row else None
 
 
+#: `metadata` key holding the scale bar settings (ADR 53) as JSON.
+SCALE_BAR_KEY = "scale_bar"
+
+
+def load_scale_bar(db_path: Path | str) -> dict:
+    """The analysis' scale bar settings (ADR 53), defaults filled in.
+
+    Returns:
+        `{"enabled": bool, "bar_um": float, "color": "#rrggbb",
+        "pixel_um": {sample_name: float}}` — a sample missing from
+        `pixel_um` has no known pixel size and gets no bar.
+    """
+    settings = {"enabled": False, "bar_um": 50.0, "color": "#ffffff", "pixel_um": {}}
+    raw = load_metadata_value(db_path, SCALE_BAR_KEY)
+    if raw:
+        settings.update(json.loads(raw))
+    return settings
+
+
+def save_scale_bar(db_path: Path | str, settings: dict) -> None:
+    """Persist the scale bar settings (`load_scale_bar`'s shape)."""
+    write_metadata(db_path, {SCALE_BAR_KEY: json.dumps(settings)})
+
+
 # ---------------------------------------------------------------------------
 # Cross-database reads
 # ---------------------------------------------------------------------------

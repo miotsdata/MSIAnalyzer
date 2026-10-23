@@ -20,6 +20,15 @@ Flickable {
         ? Math.min(root.width / image.sourceSize.width, root.height / image.sourceSize.height)
         : 1.0
     readonly property real effectiveScale: baseScale * zoom
+    // One source pixel per spatial pixel, so this is the sample's own
+    // width x height in pixels once loaded (0x0 before).
+    readonly property size imageSize: image.sourceSize
+
+    // Scale bar (ADR 53): hidden while either length is 0 (bar off, or
+    // this sample's pixel size unknown). Pixels are assumed square.
+    property real scaleBarUm: 0
+    property real scaleBarPixelUm: 0
+    property color scaleBarColor: "white"
 
     clip: true
     boundsBehavior: Flickable.StopAtBounds
@@ -110,6 +119,36 @@ Flickable {
         height: width
         running: image.status === Image.Loading
         visible: running
+    }
+
+    // Parented to the Flickable like the BusyIndicator above, so it doesn't
+    // scroll away while panning. Placed at the bottom-right of the *visible
+    // part of the image*, not of the viewport: the image is centered with
+    // its aspect ratio kept, so the viewport's own corner is often blank
+    // margin outside the heatmap.
+    Column {
+        objectName: "scaleBar"
+        parent: root
+        readonly property real margin: 8
+        x: Math.min(root.width, image.x + image.width - root.contentX) - width - margin
+        y: Math.min(root.height, image.y + image.height - root.contentY) - height - margin
+        spacing: 2
+        visible: root.scaleBarUm > 0 && root.scaleBarPixelUm > 0 && image.status === Image.Ready
+
+        Label {
+            objectName: "scaleBarLabel"
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: root.scaleBarUm + " µm"
+            color: root.scaleBarColor
+            font.bold: true
+        }
+        Rectangle {
+            objectName: "scaleBarRect"
+            width: root.scaleBarPixelUm > 0
+                   ? root.scaleBarUm / root.scaleBarPixelUm * root.effectiveScale : 0
+            height: 4
+            color: root.scaleBarColor
+        }
     }
 
     WheelHandler {

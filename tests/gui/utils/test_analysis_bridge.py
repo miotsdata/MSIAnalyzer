@@ -239,7 +239,7 @@ def test_export_visual_inspection_images_writes_files_and_emits_finished(tmp_pat
     with qtbot.waitSignal(bridge.exportFinished, timeout=2000) as spy:
         bridge.exportVisualInspectionImages(
             str(db_path), str(dest_folder), "png", "feature", "100.0", "",
-            "TIC", "viridis", "auto", "auto", False,
+            "TIC", "viridis", "auto", "auto", False, False,
         )
 
     assert (dest_folder / "sampleA.png").exists()
@@ -255,7 +255,7 @@ def test_export_visual_inspection_images_failure_emits_export_failed(tmp_path, q
     with qtbot.waitSignal(bridge.exportFailed, timeout=2000):
         bridge.exportVisualInspectionImages(
             str(tmp_path / "does_not_exist.db"), str(dest_folder), "png", "feature",
-            "100.0", "", "TIC", "viridis", "auto", "auto", False,
+            "100.0", "", "TIC", "viridis", "auto", "auto", False, False,
         )
 
 

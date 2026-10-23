@@ -2178,6 +2178,21 @@ class AnalysisBridge(QObject):
                            else " · H&E not fitted" if info["hasImage"] else "")
         return marks
 
+    @Slot(str, result=dict)
+    def getScaleBar(self, analysis_db_path: str) -> dict:
+        """The analysis' scale bar settings (ADR 53) —
+        `analysis_db.load_scale_bar`'s shape, defaults if never set."""
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {}
+        return analysis_db.load_scale_bar(analysis_db_path)
+
+    @Slot(str, str)
+    def setScaleBar(self, analysis_db_path: str, settings_json: str) -> None:
+        """Save the scale bar dialog's settings, passed as
+        `JSON.stringify(...)` so the nested `pixel_um` map arrives as a
+        plain dict, never a QJSValue."""
+        analysis_db.save_scale_bar(analysis_db_path, json.loads(settings_json))
+
     @Slot(str, str, str, result=dict)
     def attachHeImage(self, analysis_db_path: str, sample_name: str, image_path: str) -> dict:
         """Attach (or replace) `sample_name`'s H&E/brightfield image —
@@ -2873,7 +2888,7 @@ class AnalysisBridge(QObject):
 
         self._run_export(_do_export)
 
-    @Slot(str, str, str, str, str, str, str, str, str, str, bool)
+    @Slot(str, str, str, str, str, str, str, str, str, str, bool, bool)
     def exportVisualInspectionImages(
         self,
         analysis_db_path: str,
@@ -2887,6 +2902,7 @@ class AnalysisBridge(QObject):
         vmin_token: str,
         vmax_token: str,
         show_rois: bool,
+        include_scale_bar: bool,
     ) -> None:
         """Start writing the Image export (one PNG/PDF/SVG per sample,
         matching Visual Inspection's own current display settings) on a
@@ -2912,6 +2928,8 @@ class AnalysisBridge(QObject):
                 `"auto"` or a numeric string.
             vmax_token: `HeatmapControlsPanel.vmaxToken()`'s own value.
             show_rois: Mirrors Visual Inspection's "Show ROIs" checkbox.
+            include_scale_bar: The export dialog's "Include scale bar"
+                checkbox (ADR 53).
         """
         # Resolved now, on the GUI thread — the export follows whatever
         # dataset Visual Inspection is showing when the user clicked.
@@ -2934,6 +2952,7 @@ class AnalysisBridge(QObject):
                 vmax=vmax,
                 show_rois=show_rois,
                 rel_dir=rel_dir,
+                include_scale_bar=include_scale_bar,
             )
             return f"Images exported for {n} sample(s) to {dest_folder}"
 

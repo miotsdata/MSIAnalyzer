@@ -183,6 +183,40 @@ def find_visual_child():
     return _find_visual_child
 
 
+def wait_renders_idle(qtbot, timeout=5000):
+    """Wait until no async image render (ADR 50) is still in flight.
+
+    A test's click comes from Python, so the GUI thread holds the GIL while
+    the click runs. If that click changes a tile whose render is still
+    pending, Qt cancels it on its pixmap-reader thread while holding the
+    reader mutex, and the PySide wrapper there needs the GIL: a deadlock
+    that hung the whole suite (confirmed with gdb, 2026-10-23). A real
+    user's click comes from Qt's event loop without the GIL, so the app
+    itself isn't exposed this way.
+    """
+    from msianalyzer.gui.utils import async_image
+
+    def idle():
+        with async_image._alive_lock:
+            return all(r.done for r in async_image._alive.values())
+
+    qtbot.waitUntil(idle, timeout=timeout)
+    qtbot.wait(20)  # let the reader thread handle the last `finished`
+
+
+@pytest.fixture(autouse=True)
+def _no_input_while_tiles_render(qtbot, monkeypatch):
+    """Every simulated click/key press first waits for `wait_renders_idle`."""
+    for name in ("mouseClick", "keyClick", "keyClicks"):
+        real = getattr(qtbot, name)
+
+        def guarded(*args, _real=real, **kwargs):
+            wait_renders_idle(qtbot)
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(qtbot, name, guarded)
+
+
 @pytest.fixture
 def project_home_view(application):
     """Factory: build a standalone ProjectHomePage view for a given project model."""

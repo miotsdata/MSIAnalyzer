@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Window
 import QtQuick.Dialogs
 import "qrc:/Style"
+import "qrc:/Utils/ScaleBar.js" as ScaleBar
 
 // The ROI-drawing tool: one sample at a time (picked via the combobox),
 // rendered with whatever feature/obs/colormap/vmin-vmax Visual Inspection
@@ -20,6 +21,8 @@ Window {
     objectName: "roiDesignWindow"
     // Which samples are coregistered ("· H&E ✓" in the sample combo).
     property var registrationMarks: ({})
+    // Scale bar settings (ADR 53), bound by VisualInspectionSection.
+    property var scaleBar: ({})
     function refreshRegistrationMarks() {
         roiWindow.registrationMarks = (roiWindow.analysis && roiWindow.analysis.analysisDbPath)
             ? AnalysisBridge.getRegistrationMarks(roiWindow.analysis.analysisDbPath,
@@ -349,6 +352,13 @@ Window {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            Label {
+                objectName: "roiSampleSizeLabel"
+                // The H&E surface shows the H&E image's size, not the sample's.
+                visible: roiWindow.drawSurface === "grid"
+                text: ScaleBar.sizeText(drawingCanvas.imageSize)
+                color: Theme.mutedTextColor
+            }
             CheckBox {
                 id: drawOnHeCheckBox
                 objectName: "drawOnHeCheckBox"
@@ -421,6 +431,11 @@ Window {
                            : roiWindow.controls.tileSource(roiWindow.selectedSample.name))
                         : ""
                 heMode: roiWindow.drawSurface === "he"
+                // H&E pixels aren't MSI pixels: no bar on that surface.
+                scaleBarPixelUm: (roiWindow.drawSurface === "grid" && roiWindow.selectedSample)
+                                 ? ScaleBar.pixelUm(roiWindow.scaleBar, roiWindow.selectedSample.name) : 0
+                scaleBarUm: roiWindow.scaleBar.bar_um || 0
+                scaleBarColor: roiWindow.scaleBar.color || "white"
                 heToGridMatrix: roiWindow.roiRegistrationInfo.matrix
                 heOverlaySource: roiWindow.heOverlaySource()
                 showOverlay: roiWindow.showOverlay

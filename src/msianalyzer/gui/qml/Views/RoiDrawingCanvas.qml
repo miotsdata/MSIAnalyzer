@@ -27,6 +27,10 @@ Item {
 
     property alias source: zoomImage.source
     property alias zoom: zoomImage.zoom
+    readonly property alias imageSize: zoomImage.imageSize
+    property alias scaleBarUm: zoomImage.scaleBarUm
+    property alias scaleBarPixelUm: zoomImage.scaleBarPixelUm
+    property alias scaleBarColor: zoomImage.scaleBarColor
     property var savedRois: []
     property var draftVertices: []
     property color draftColor: "white"

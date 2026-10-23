@@ -34,6 +34,8 @@ from msianalyzer.core.analysis_db import (
     load_features,
     load_injected_feature_mzs,
     load_metadata_value,
+    load_scale_bar,
+    save_scale_bar,
     load_ms2_annotations_for_feature,
     load_predicted_formulas_for_feature,
     load_top_predicted_formulas_for_feature,
@@ -358,6 +360,20 @@ def test_write_metadata_upserts(tmp_path: Path):
     with sqlite3.connect(db) as con:
         meta = dict(con.execute("SELECT key, value FROM metadata").fetchall())
     assert meta == {"analysis_id": "abc", "n_samples": "3"}
+
+
+def test_scale_bar_defaults_then_round_trips(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    assert load_scale_bar(db) == {
+        "enabled": False, "bar_um": 50.0, "color": "#ffffff", "pixel_um": {}
+    }
+
+    settings = {"enabled": True, "bar_um": 100.0, "color": "#ff0000",
+                "pixel_um": {"s1": 10.0, "s2": 20.0}}
+    save_scale_bar(db, settings)
+
+    assert load_scale_bar(db) == settings
 
 
 # ---------------------------------------------------------------------------

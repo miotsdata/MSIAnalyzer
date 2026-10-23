@@ -139,6 +139,9 @@ field.
 
 Analysis-level provenance (`analysis_id`, `project_id`, `created`, `n_samples`).
 
+Also `scale_bar`: the heatmap scale bar settings as JSON, with one pixel size per
+sample ([ADR 53](../adr/0053-heatmap-scale-bar-and-pixel-size.md)).
+
 ### `commands`
 
 As the raw `commands` plus a `sample_id` column (NULL for run-wide steps such as

@@ -16,6 +16,7 @@ from msianalyzer.core.analysis_db import (
     init_analysis_db,
     register_calibration_curve,
     register_sample,
+    save_scale_bar,
     upsert_calibration_point,
     upsert_calibration_unknown,
 )
@@ -485,3 +486,35 @@ def test_export_calibration_results_creates_destination_directory(tmp_path):
     export_calibration_results(db, tmp_path / "nested" / "dir")
 
     assert (tmp_path / "nested" / "dir" / "calibration_standards.csv").exists()
+
+
+def test_export_visual_inspection_images_scale_bar_only_when_requested(tmp_path, monkeypatch):
+    import msianalyzer.core.export as export_module
+
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_sample_with_obs(db, "sampleA")
+    _seed_sample_with_obs(db, "sampleB")
+    # Off in the GUI, sampleB has no pixel size: the export checkbox still
+    # wins, and sampleB gets no bar.
+    save_scale_bar(db, {"enabled": False, "bar_um": 20.0, "color": "#000000",
+                        "pixel_um": {"sampleA": 10.0}})
+    seen = {}
+    real = export_module.render_heatmap_figure
+
+    def spy(adata, **kwargs):
+        seen[kwargs["title"]] = kwargs["scale_bar"]
+        return real(adata, **kwargs)
+
+    monkeypatch.setattr(export_module, "render_heatmap_figure", spy)
+
+    export_visual_inspection_images(
+        db, tmp_path / "with", "png", "feature", mz=100.0, include_scale_bar=True
+    )
+    assert seen == {
+        "sampleA": {"length_px": 2.0, "label": "20 µm", "color": "#000000"},
+        "sampleB": None,
+    }
+
+    export_visual_inspection_images(db, tmp_path / "without", "png", "feature", mz=100.0)
+    assert seen == {"sampleA": None, "sampleB": None}
