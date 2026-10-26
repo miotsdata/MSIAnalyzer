@@ -17,6 +17,7 @@ from msianalyzer.core import analysis_db
 from msianalyzer.core import export as core_export
 from msianalyzer.core import imported_dataset
 from msianalyzer.core.parser import load_raw_metadata_value
+from msianalyzer.core.annotation import target_list
 from msianalyzer.core.annotation.formula_prediction import FormulaPredictionSettings
 from msianalyzer.core.calibration.curve_fit import (
     fit_calibration_curve,
@@ -585,6 +586,7 @@ class AnalysisBridge(QObject):
     datasetMoranFailed = Signal(str)
     roiSourceWriteFailed = Signal(str)  # ROI saved locally, write-back failed
     registrationChanged = Signal()  # an H&E image attached or a fit saved
+    targetListMatchesChanged = Signal(str)  # analysis_db_path (ADR 60)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -1789,18 +1791,19 @@ class AnalysisBridge(QObject):
     def computeDatasetMoran(
         self, analysis_db_path: str, layer: str, run_global: bool, run_local: bool
     ) -> None:
-        """Moran's I (global and/or local) over the active imported
-        dataset, on a background thread (see
+        """Moran's I (global and/or local) over the active dataset (the
+        pipeline output or an imported one), on a background thread (see
         `imported_dataset.compute_dataset_spatial_correlation`). Progress
         arrives via `datasetTaskProgress`. On success, the
         spatial-correlation caches are dropped, and
         `datasetMoranFinished(message)` fires so the section re-requests
         its models. On failure, `datasetMoranFailed(message)` fires."""
-        if self._active_rel_dir(analysis_db_path) is None:
-            self.datasetMoranFailed.emit("Select an imported dataset first.")
-            return
+        dataset_id = (
+            self._get_active_dataset_id()
+            if self._active_rel_dir(analysis_db_path) is not None else None
+        )
         task = functools.partial(
-            self._run_dataset_moran, analysis_db_path, self._get_active_dataset_id(),
+            self._run_dataset_moran, analysis_db_path, dataset_id,
             layer, run_global, run_local,
         )
         self._start_dataset_task(
@@ -1827,6 +1830,64 @@ class AnalysisBridge(QObject):
         self._spatial_correlation_model_rel_dir = None
         self._local_moran_summary_model_path = None
         self._local_moran_summary_model_rel_dir = None
+
+    # -----------------------------------------------------------------
+    # Target list after the run (ADR 60)
+    # -----------------------------------------------------------------
+
+    @Slot(str, list, str, list, float, result=dict)
+    def previewPostRunTargetList(
+        self, analysis_db_path: str, paths: list, polarity: str, adducts: list,
+        match_ppm: float,
+    ) -> dict:
+        """Match a target list against this analysis' features without
+        saving: `{"rows": [...]}` for the review table (see
+        `target_list.preview_post_run_matches`), or `{"error": message}`.
+        Synchronous: parsing a list and an m/z search is fast."""
+        try:
+            rows = target_list.preview_post_run_matches(
+                analysis_db_path, [str(p) for p in paths], polarity,
+                [str(a) for a in adducts], float(match_ppm),
+            )
+        except (target_list.TargetListError, OSError, ValueError) as e:
+            return {"error": str(e)}
+        return {"rows": rows}
+
+    @Slot(str, str, list, "QVariantMap", result=str)
+    def applyPostRunTargetList(
+        self, analysis_db_path: str, run_id: str, rows: list, settings: dict
+    ) -> str:
+        """Save the kept rows; `""` on success, else an error message."""
+        try:
+            target_list.apply_post_run_matches(
+                analysis_db_path, run_id, [dict(r) for r in rows], dict(settings)
+            )
+        except (target_list.TargetListError, sqlite3.Error, KeyError, ValueError) as e:
+            return str(e)
+        self._on_target_list_matches_changed(analysis_db_path)
+        return ""
+
+    @Slot(str, result=int)
+    def countPostRunTargetList(self, analysis_db_path: str) -> int:
+        return analysis_db.count_command_target_list_matches(
+            analysis_db_path, target_list.POST_RUN_COMMAND
+        )
+
+    @Slot(str, result=int)
+    def removePostRunTargetList(self, analysis_db_path: str) -> int:
+        """Undo every post-run match (the pipeline's own are kept)."""
+        n = analysis_db.delete_command_target_list_rows(
+            analysis_db_path, target_list.POST_RUN_COMMAND
+        )
+        self._on_target_list_matches_changed(analysis_db_path)
+        return n
+
+    def _on_target_list_matches_changed(self, analysis_db_path: str) -> None:
+        # Feature names changed: drop every cache that shows them.
+        self._feature_list_cache_path = None
+        self._summary_cache_path = None
+        self._drop_spatial_correlation_caches()
+        self.targetListMatchesChanged.emit(analysis_db_path)
 
     # -----------------------------------------------------------------
     # ROI Design

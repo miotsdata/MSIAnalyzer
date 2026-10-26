@@ -69,3 +69,4 @@ useful).
 | [57](0057-custom-categorical-colors.md) | Custom colors for categorical obs columns, and showing only some categories | Accepted |
 | [58](0058-roi-select-move-copy-paste.md) | Select, move, copy and paste ROIs in ROI Design | Accepted |
 | [59](0059-portable-project-paths.md) | Portable project paths: stored relative, resolved against the opened project | Accepted |
+| [60](0060-target-list-after-the-run.md) | Target list after the run: preview, choose per row, apply, undo | Accepted |

@@ -158,6 +158,47 @@ moment it's selected. It doesn't need this pipeline stage enabled at all
 (it builds its own neighbor graph on the fly), so it's available
 regardless of `spatial_correlation.enabled`. See [Concepts](concepts.md).
 
+Forgot to enable it? You don't need to re-run. The Spatial Correlation tab's
+**Compute Moran's I** button scores the analysis' own samples afterwards
+(global and/or local, on the normalized layer or raw `X`), still one sample
+at a time. If scores already exist, it asks before overwriting them.
+
+## After the run — target list without re-running
+
+Forgot some compounds, or have a new list? **Analyses → Match target list…**
+matches a target list against a finished analysis. It takes the same inputs
+as the config's `target_list` section (files, polarity, adducts,
+tolerance), pre-filled from the analysis' own settings.
+
+A target-list file (CSV/TXT, for both this and the config) has a `name`
+column, then `formula` and/or `mz` (or `m/z`); `inchikey` is optional. Each
+row needs a formula or an m/z:
+
+- **formula**: searched across the chosen adducts.
+- **mz**: searched at that ion m/z only, with no adducts. **When a row has
+  both, the m/z wins**: only the m/z is searched, and the formula is kept for
+  display. In the table its adduct shows as `m/z`.
+
+```
+name,formula,mz
+Glucose,C6H12O6,
+Unknown 1,,327.0718
+Citrate,C6H8O7,191.0197
+```
+
+**Find matches** shows a table, one row per compound and adduct that lands
+on an existing feature, with the feature's current name. Tick **Use** for
+the rows whose target name should label the feature. Rows are pre-ticked
+only where the feature has no name yet, and a feature takes at most one
+target name. Compounds no feature matched are listed greyed out as "not
+detected". Adding them as new features needs the raw data, so that only
+happens in a pipeline run.
+
+**Apply** saves the ticked rows. The names then appear everywhere
+(Annotations, Visual Inspection, MS1, Spatial Correlation, exports), with
+the same priority as run-time target-list matches. **Remove post-run
+matches** undoes every name saved this way and keeps the run's own matches.
+
 ## Stage 12 — Summary report (→ out_dir)
 
 `build_summary_report()` writes `summary_report.html` + `summary.json`:

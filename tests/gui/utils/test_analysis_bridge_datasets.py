@@ -279,11 +279,14 @@ def test_delete_active_dataset_falls_back_to_pipeline(analysis, qtbot):
     assert src.exists()
 
 
-def test_compute_dataset_moran_requires_active_dataset(analysis, qtbot):
+def test_compute_dataset_moran_on_the_pipeline_output(analysis, qtbot):
+    # No imported dataset active: the pipeline output's own files.
     db, _src, _result = analysis
     bridge = AnalysisBridge()
-    with qtbot.waitSignal(bridge.datasetMoranFailed, timeout=1000):
+    with qtbot.waitSignal(bridge.datasetMoranFinished, timeout=60000):
         bridge.computeDatasetMoran(str(db), "TIC", True, False)
+
+    assert len(_load_spatial_correlation_table(str(db))) == 3 * 3
 
 
 def test_compute_dataset_moran_populates_spatial_correlation(analysis, qtbot):

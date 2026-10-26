@@ -106,3 +106,15 @@ These choices were agreed with the user:
 - Integration export stays pipeline-only.
 - `ad.concat` can leave a `None` key in `.layers`, and the pipeline's own
   `merged.h5ad` has one. It is filtered out of every layer list.
+
+## Addendum: Moran's I after the run, on the pipeline output too
+
+The Spatial Correlation tab's "Compute Moran's I" bar now shows for
+whichever dataset is selected, including the pipeline output. It covers an
+analysis run without `spatial_correlation`, and recomputing on another
+layer. `compute_dataset_spatial_correlation(dataset_id=None)` scores the
+pipeline's own per-sample `.h5ad` files. Each sample is scored on its own
+grid, never pooled, and `merged.h5ad` is not touched. The layer choices
+for the pipeline output are the normalized layer (the default) and `X`
+(raw). If the tables already show scores for a selected pass, a "Recompute
+and overwrite?" confirmation comes first.

@@ -554,6 +554,21 @@ def test_compute_dataset_spatial_correlation_writes_every_sample(analysis, tmp_p
     assert "moranI" not in ad.read_h5ad(db.parent / "s1.h5ad").uns
 
 
+def test_compute_spatial_correlation_on_the_pipeline_output(analysis):
+    # dataset_id=None: the analysis' own sample files, each scored alone.
+    from msianalyzer.core.imported_dataset import compute_dataset_spatial_correlation
+
+    db, _samples = analysis
+    n = compute_dataset_spatial_correlation(
+        db, None, layer="TIC", run_global=True, run_local=False, n_workers=1,
+    )
+
+    assert n == 3
+    for name in SAMPLES:
+        out = ad.read_h5ad(sample_h5ad_path(db, name))
+        assert set(out.uns["moranI"].index) == set(out.var_names)
+
+
 def test_compute_dataset_spatial_correlation_needs_a_pass(analysis, tmp_path):
     from msianalyzer.core.imported_dataset import compute_dataset_spatial_correlation
 

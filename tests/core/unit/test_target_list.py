@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from pyteomics import mass as pt_mass
 
 from msianalyzer.core.analysis_db import (
     init_analysis_db,
@@ -64,13 +65,71 @@ def test_parse_target_list_file_raises_invalid_formula_error_with_file_row_and_c
     assert "NotAFormula123$$" in msg
 
 
-def test_parse_target_list_file_raises_on_missing_required_column(tmp_path: Path):
-    path = _write_csv(
-        tmp_path / "targets.csv",
-        [{"name": "Glucose", "formula": "C6H12O6"}],  # no inchikey column
-    )
-    with pytest.raises(TargetListError, match="inchikey"):
+def test_parse_target_list_file_needs_a_formula_or_mz_column(tmp_path: Path):
+    path = tmp_path / "targets.csv"
+    path.write_text("name,inchikey\nGlucose,ABC\n")
+    with pytest.raises(TargetListError, match="'formula' and/or 'mz'"):
         parse_target_list_file(path)
+
+
+def test_parse_target_list_file_inchikey_column_is_optional(tmp_path: Path):
+    path = tmp_path / "targets.csv"
+    path.write_text("name,formula\nGlucose,C6H12O6\n")
+    assert parse_target_list_file(path)[0].inchikey is None
+
+
+def test_parse_target_list_file_mz_only_formula_only_and_both(tmp_path: Path):
+    path = tmp_path / "targets.csv"
+    path.write_text(
+        "name,formula,m/z\n"
+        "ByMz,,181.0707\n"
+        "ByFormula,C6H12O6,\n"
+        "Both,C6H12O6,203.0526\n"
+    )
+    by_mz, by_formula, both = parse_target_list_file(path)
+    assert (by_mz.formula, by_mz.target_mz, by_mz.neutral_mass) == ("", 181.0707, 0.0)
+    assert by_formula.target_mz is None
+    assert by_formula.neutral_mass == pytest.approx(180.0634, abs=1e-3)
+    # Both: the m/z is kept as the search value, the formula for display.
+    assert both.target_mz == 203.0526 and both.formula == "C6H12O6"
+
+
+@pytest.mark.parametrize("row, message", [
+    ("Empty,,", "needs a formula or an m/z"),
+    ("Bad,,abc", "not a positive number"),
+    ("Negative,,-5", "not a positive number"),
+])
+def test_parse_target_list_file_rejects_bad_rows(tmp_path: Path, row, message):
+    path = tmp_path / "targets.csv"
+    path.write_text("name,formula,mz\n" + row + "\n")
+    with pytest.raises(TargetListError, match=message) as exc_info:
+        parse_target_list_file(path)
+    assert "row 1" in str(exc_info.value)
+
+
+def test_match_target_list_given_mz_wins_over_formula_and_adducts():
+    # Formula would give glucose [M+H]+ / [M+Na]+, but the given m/z wins.
+    compound = TargetCompound(
+        name="Both", formula="C6H12O6", inchikey=None, neutral_mass=180.0634,
+        source_file="t.csv", row_number=1, target_mz=500.0,
+    )
+    features = _features_df([(1, 181.0707), (2, 500.0001)])
+    result = match_target_list(
+        [compound], POSITIVE_ADDUCTS, features, match_ppm=10.0, sample_names=["s1"]
+    )
+    assert [(m.feature_id, m.adduct.label) for m in result.matches] == [(2, "m/z")]
+    assert result.matches[0].theoretical_mz == 500.0
+
+
+def test_match_target_list_unmatched_given_mz_is_injected_at_that_mz():
+    compound = TargetCompound(
+        name="ByMz", formula="", inchikey=None, neutral_mass=0.0,
+        source_file="t.csv", row_number=1, target_mz=321.1234,
+    )
+    result = match_target_list(
+        [compound], POSITIVE_ADDUCTS, _features_df([]), match_ppm=10.0, sample_names=["s1"]
+    )
+    assert [f.mz for f in result.injected_features] == [321.1234]
 
 
 def test_parse_target_list_file_raises_on_empty_file(tmp_path: Path):
@@ -433,3 +492,133 @@ def test_run_target_list_matching_matches_an_existing_feature_without_injecting(
 
     features = load_feature_ids_and_mzs(db)
     assert len(features) == 1  # no new feature added
+
+# ---------------------------------------------------------------------------
+# After the run (ADR 60)
+# ---------------------------------------------------------------------------
+
+
+def _analysis_with_features(tmp_path: Path, mzs: list[float]) -> Path:
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        for i, mz in enumerate(mzs, start=1):
+            con.execute(
+                "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+                (i, mz),
+            )
+        con.commit()
+    return db
+
+
+def test_post_run_preview_lists_matches_and_undetected_without_writing(tmp_path: Path):
+    from msianalyzer.core.annotation.target_list import preview_post_run_matches
+
+    glucose_mz = adduct_mz(pt_mass.calculate_mass(formula="C6H12O6"), _H_ADDUCT)
+    db = _analysis_with_features(tmp_path, [glucose_mz, glucose_mz + 0.00001])
+    targets = _write_csv(tmp_path / "t.csv", [
+        {"name": "Glucose", "formula": "C6H12O6", "inchikey": ""},
+        {"name": "Caffeine", "formula": "C8H10N4O2", "inchikey": ""},
+    ])
+
+    rows = preview_post_run_matches(db, [str(targets)], "positive", ["[M+H]+"], 10.0)
+
+    caffeine = [r for r in rows if r["name"] == "Caffeine"]
+    assert len(caffeine) == 1 and caffeine[0]["detected"] is False
+    glucose = [r for r in rows if r["name"] == "Glucose"]
+    # Two features within ppm: the nearest one, suggested (it has no name).
+    assert [(r["feature_id"], r["use"]) for r in glucose] == [(1, True)]
+    with sqlite3.connect(db) as con:
+        assert con.execute("SELECT COUNT(*) FROM target_list_matches").fetchone()[0] == 0
+
+
+def test_post_run_preview_suggests_one_name_per_feature_and_respects_existing_names(
+    tmp_path: Path,
+):
+    from msianalyzer.core.annotation.target_list import preview_post_run_matches
+
+    mz = adduct_mz(pt_mass.calculate_mass(formula="C6H12O6"), _H_ADDUCT)
+    db = _analysis_with_features(tmp_path, [mz])
+    targets = _write_csv(tmp_path / "t.csv", [
+        {"name": "Glucose", "formula": "C6H12O6", "inchikey": ""},
+        {"name": "Fructose", "formula": "C6H12O6", "inchikey": ""},
+    ])
+    rows = preview_post_run_matches(db, [str(targets)], "positive", ["[M+H]+"], 10.0)
+    assert sum(r["use"] for r in rows) == 1  # same feature: one suggestion
+
+    # Once named, a new match is not suggested over it.
+    from msianalyzer.core.annotation.target_list import apply_post_run_matches
+
+    apply_post_run_matches(db, "r1", [r for r in rows if r["name"] == "Glucose"], {})
+    rows = preview_post_run_matches(db, [str(targets)], "positive", ["[M+H]+"], 10.0)
+    assert not any(r["use"] for r in rows)
+    assert {r["current_name"] for r in rows} == {"Glucose"}
+
+
+def test_post_run_apply_names_the_feature_and_remove_undoes_only_it(tmp_path: Path):
+    from msianalyzer.core.analysis_db import (
+        count_command_target_list_matches,
+        delete_command_target_list_rows,
+        load_feature_list,
+    )
+    from msianalyzer.core.annotation.target_list import (
+        POST_RUN_COMMAND,
+        apply_post_run_matches,
+        preview_post_run_matches,
+    )
+
+    mz = adduct_mz(pt_mass.calculate_mass(formula="C6H12O6"), _H_ADDUCT)
+    db = _analysis_with_features(tmp_path, [mz, 500.0])
+    # A pipeline-time target match on feature 2 must survive the undo.
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO target_list_compounds (id, name, formula, neutral_mass, "
+            "source_file, row_number) VALUES (99, 'Pipeline', 'C', 12.0, 'x', 1)"
+        )
+        con.execute(
+            "INSERT INTO target_list_matches (target_compound_id, feature_id, adduct_label, "
+            "adduct_charge, adduct_delta_mass, multiplication_factor, theoretical_mz, "
+            "ppm_diff, match_type) VALUES (99, 2, '[M+H]+', 1, 1.0, 1, 500.0, 0, 'existing')"
+        )
+        con.commit()
+    targets = _write_csv(tmp_path / "t.csv", [{"name": "Glucose", "formula": "C6H12O6", "inchikey": ""}])
+    rows = preview_post_run_matches(db, [str(targets)], "positive", ["[M+H]+"], 10.0)
+
+    assert apply_post_run_matches(db, "r1", rows, {"match_ppm": 10.0}) == 1
+    names = dict(zip(load_feature_list(db)["feature_id"], load_feature_list(db)["compound_name"]))
+    assert names[1] == "Glucose"
+    assert count_command_target_list_matches(db, POST_RUN_COMMAND) == 1
+
+    assert delete_command_target_list_rows(db, POST_RUN_COMMAND) == 1
+    names = dict(zip(load_feature_list(db)["feature_id"], load_feature_list(db)["compound_name"]))
+    assert pd.isna(names[1]) and names[2] == "Pipeline"
+
+
+def test_post_run_preview_rejects_adduct_of_the_other_polarity(tmp_path: Path):
+    from msianalyzer.core.annotation.target_list import preview_post_run_matches
+
+    db = _analysis_with_features(tmp_path, [100.0])
+    targets = _write_csv(tmp_path / "t.csv", [{"name": "G", "formula": "C6H12O6", "inchikey": ""}])
+    with pytest.raises(TargetListError):
+        preview_post_run_matches(db, [str(targets)], "negative", ["[M+H]+"], 10.0)
+
+
+def test_post_run_mz_target_saves_with_target_mz_and_blank_formula_hidden(tmp_path: Path):
+    from msianalyzer.core.analysis_db import load_feature_representative_annotations
+    from msianalyzer.core.annotation.target_list import (
+        apply_post_run_matches,
+        preview_post_run_matches,
+    )
+
+    db = _analysis_with_features(tmp_path, [321.1234])
+    targets = tmp_path / "t.csv"
+    targets.write_text("name,mz\nMystery,321.1235\n")
+    rows = preview_post_run_matches(db, [str(targets)], "positive", None, 10.0)
+    assert [(r["adduct"], r["feature_id"], r["formula"]) for r in rows] == [("m/z", 1, "")]
+
+    apply_post_run_matches(db, "r1", rows, {})
+    with sqlite3.connect(db) as con:
+        assert con.execute("SELECT target_mz FROM target_list_compounds").fetchone()[0] == 321.1235
+    rep = load_feature_representative_annotations(db).iloc[0]
+    assert rep["compound_name"] == "Mystery" and rep["adduct"] == "m/z"
+    assert rep["compound_formula"] is None

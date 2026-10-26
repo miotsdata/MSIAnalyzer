@@ -206,6 +206,14 @@ ApplicationWindow {
                          && window.currentAnalysis.analysisType !== "targeted"
                 onTriggered: importH5adDialog.openFor(window.currentAnalysis)
             }
+            // Name features from a target list without re-running (ADR 60).
+            AppMenuItem {
+                objectName: "matchTargetListMenuItem"
+                text: "Match target list…"
+                enabled: window.currentAnalysis !== null
+                         && window.currentAnalysis.analysisType !== "targeted"
+                onTriggered: targetListMatchDialog.openFor(window.currentAnalysis)
+            }
             Menu {
                 objectName: "openAnalysisMenu"
                 title: "Open"
@@ -414,6 +422,10 @@ ApplicationWindow {
             window.currentAnalysis = null
             stackView.push("qrc:/Views/StartPage.qml")
         }
+    }
+
+    TargetListMatchDialog {
+        id: targetListMatchDialog
     }
 
     ImportH5adDialog {

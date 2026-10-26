@@ -3,7 +3,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt
 
 # NOTE on coverage in this file: SpatialCorrelationSection.qml renders its
 # table via TableView/HorizontalHeaderView (not the Repeater-in-Flickable
@@ -347,3 +347,20 @@ def test_show_local_spatial_distribution_jumps_to_visual_inspection_with_local_l
     assert controls.property("inspectionMode") == "feature"
     assert controls.property("selectedFeature")["mz"] == 123.4567
     assert controls.property("dataLayer") == "localMoran"
+
+
+def test_compute_moran_asks_before_overwriting_existing_scores(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    _seed_moran_h5ad(annotated_analysis_model)
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    section = _open_spatial_correlation_tab(view, root, find_visual_child, qtbot)
+    qtbot.waitUntil(lambda: len(section.property("sampleNames")) > 0, timeout=3000)
+
+    find_visual_child(root, "datasetComputeMoranButton").clicked.emit()
+    qtbot.wait(50)
+
+    dialog = section.findChild(QObject, "overwriteMoranDialog")
+    assert dialog.property("visible") is True
+    assert section.property("computing") is False  # nothing started yet

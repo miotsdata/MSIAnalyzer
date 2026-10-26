@@ -132,6 +132,11 @@ Flickable {
             controlsFlickable.refreshObsColumns()
             controlsFlickable.refresh()
         }
+        // Feature names changed (post-run target list, ADR 60).
+        function onTargetListMatchesChanged(dbPath) {
+            if (controlsFlickable.analysis && dbPath === controlsFlickable.analysis.analysisDbPath)
+                controlsFlickable.refreshFeatures()
+        }
     }
     Component.onCompleted: controlsFlickable.refreshDatasetLayers()
 

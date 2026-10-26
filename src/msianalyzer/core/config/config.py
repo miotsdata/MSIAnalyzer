@@ -482,8 +482,11 @@ class TargetListConfig:
     Attributes:
         paths: Path to one target-list CSV/TXT file, or a list of several,
             e.g. `"targets.csv"` or `["targets_a.csv", "targets_b.txt"]`.
-            Required columns (case-insensitive): `name`, `formula`,
-            `inchikey` (may be blank per row).
+            Columns (case-insensitive): `name`, then `formula` and/or
+            `mz` (or `m/z`), with a value in one of them on every row;
+            `inchikey` is optional. A row with an **m/z is searched at that
+            ion m/z only, with no adducts, even if it also has a
+            formula**: the m/z wins, and the formula is kept for display.
 
             **Interaction:** Leaving this `None` (the default) or an
             empty list disables target-list matching entirely — every

@@ -46,6 +46,12 @@ Item {
     }
 
     onAnalysisChanged: annotationsSection.refreshRows()
+    Connections {
+        target: AnalysisBridge
+        function onTargetListMatchesChanged(dbPath) {
+            if (analysis && dbPath === analysis.analysisDbPath) annotationsSection.refreshRows()
+        }
+    }
     onRefreshTokenChanged: annotationsSection.refreshRows()
 
     Connections {

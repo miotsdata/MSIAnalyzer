@@ -605,7 +605,7 @@ def remove_roi_from_source(
 @log_call(source="analysis_db_path")
 def compute_dataset_spatial_correlation(
     analysis_db_path: Path | str,
-    dataset_id: int,
+    dataset_id: int | None,
     *,
     layer: str,
     run_global: bool = True,
@@ -614,7 +614,9 @@ def compute_dataset_spatial_correlation(
     progress: Callable[[int, int, str], None] | None = None,
 ) -> int:
     """Global and/or local Moran's I for every sample file of an imported
-    dataset, written into those files exactly as the pipeline's
+    dataset, or of the pipeline output (`dataset_id=None`: the analysis
+    ran without `spatial_correlation`, or the user wants it recomputed),
+    written into those files exactly as the pipeline's
     `spatial_correlation` stage writes the pipeline's own
     (`uns["moranI"]`, `layers["localMoranI"]`), so the Spatial Correlation
     section reads them unchanged.
@@ -632,6 +634,9 @@ def compute_dataset_spatial_correlation(
     Returns:
         The number of samples processed.
 
+    Each sample is scored on its own file and its own pixel grid, never
+    pooled across samples.
+
     Raises:
         ImportedDatasetError: unknown dataset, or neither pass selected.
     """
@@ -642,13 +647,21 @@ def compute_dataset_spatial_correlation(
 
     if not (run_global or run_local):
         raise ImportedDatasetError("Select global and/or local Moran's I.")
-    info = analysis_db.load_imported_dataset(analysis_db_path, dataset_id)
-    if info is None:
-        raise ImportedDatasetError("That imported dataset no longer exists.")
+    if dataset_id is None:
+        rel_dir = None
+        samples = [
+            name for name in analysis_db.load_samples(analysis_db_path).get("name", [])
+            if sample_h5ad_path(analysis_db_path, name).exists()
+        ]
+    else:
+        info = analysis_db.load_imported_dataset(analysis_db_path, dataset_id)
+        if info is None:
+            raise ImportedDatasetError("That imported dataset no longer exists.")
+        rel_dir = info["rel_dir"]
+        samples = [s["name"] for s in info["samples"]]
     n_cpu = n_workers or os.cpu_count() or 1
-    samples = [s["name"] for s in info["samples"]]
     for done, sample_name in enumerate(samples, start=1):
-        path = sample_h5ad_path(analysis_db_path, sample_name, info["rel_dir"])
+        path = sample_h5ad_path(analysis_db_path, sample_name, rel_dir)
         if run_global:
             compute_spatial_autocorr(path, layer=layer, n_jobs=n_cpu)
         if run_local:

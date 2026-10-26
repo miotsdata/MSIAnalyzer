@@ -533,9 +533,13 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
             source_file  TEXT    NOT NULL,
             row_number   INTEGER NOT NULL,
             command_id   INTEGER,
+            target_mz    REAL,
             FOREIGN KEY (command_id) REFERENCES commands(id)
         )
     """)
+    # The ion m/z of a target given by m/z instead of (or over) a formula;
+    # NULL for a formula-only target. Added later, hence the ensure.
+    _ensure_column(con, "target_list_compounds", "target_mz", "REAL")
     # One row per (target compound, adduct) that matched a feature — either
     # an already-detected one (match_type='existing') or one created for it
     # because nothing was close enough (match_type='injected', see
@@ -1189,10 +1193,11 @@ def save_target_list_compounds(
                 con,
                 "INSERT INTO target_list_compounds "
                 "(name, formula, inchikey, neutral_mass, source_file, "
-                " row_number, command_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " row_number, command_id, target_mz) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     c.name, c.formula, c.inchikey, c.neutral_mass,
                     c.source_file, c.row_number, command_id,
+                    getattr(c, "target_mz", None),
                 ),
                 table="target_list_compounds",
                 logger=logger,
@@ -1239,6 +1244,46 @@ def save_target_list_matches(
             source=db_path,
         )
         con.commit()
+
+
+@log_call(source="db_path")
+def count_command_target_list_matches(db_path: Path | str, command_name: str) -> int:
+    """How many `target_list_matches` rows the `command_name` commands
+    wrote (e.g. post-run target-list matching, ADR 60). 0 when none, or
+    on an analysis DB without the tables."""
+    with connect(db_path) as con:
+        try:
+            row = con.execute(
+                "SELECT COUNT(*) FROM target_list_matches WHERE command_id IN "
+                "(SELECT id FROM commands WHERE command_name = ?)",
+                (command_name,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+    return int(row[0])
+
+
+@log_call(source="db_path")
+def delete_command_target_list_rows(db_path: Path | str, command_name: str) -> int:
+    """Delete every target-list match and compound written by the
+    `command_name` commands, and those commands themselves (the undo of
+    post-run target-list matching, ADR 60). Rows from the pipeline's own
+    target-list step are untouched.
+
+    Returns:
+        The number of matches deleted.
+    """
+    ids = "(SELECT id FROM commands WHERE command_name = ?)"
+    with connect(db_path) as con:
+        n = con.execute(
+            f"DELETE FROM target_list_matches WHERE command_id IN {ids}", (command_name,)
+        ).rowcount
+        con.execute(
+            f"DELETE FROM target_list_compounds WHERE command_id IN {ids}", (command_name,)
+        )
+        con.execute("DELETE FROM commands WHERE command_name = ?", (command_name,))
+        con.commit()
+    return int(n)
 
 
 @log_call(source="db_path")
@@ -1480,7 +1525,7 @@ _TARGET_REP_CTE = """
     target_rep AS (
         SELECT tlm.feature_id,
                GROUP_CONCAT(DISTINCT tlc.name) AS compound_name,
-               GROUP_CONCAT(DISTINCT tlc.formula) AS compound_formula,
+               GROUP_CONCAT(DISTINCT NULLIF(tlc.formula, '')) AS compound_formula,
                GROUP_CONCAT(DISTINCT tlc.inchikey) AS inchikey,
                GROUP_CONCAT(DISTINCT tlm.adduct_label) AS adduct
         FROM target_list_matches tlm

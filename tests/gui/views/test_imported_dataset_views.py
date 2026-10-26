@@ -179,7 +179,7 @@ def test_switching_dataset_while_on_visual_inspection_reloads_tiles(
     qtbot.waitUntil(lambda: image.property("sourceSize").width() == 3, timeout=3000)
 
 
-def test_spatial_correlation_shows_compute_bar_only_for_a_dataset(
+def test_spatial_correlation_compute_bar_follows_the_selected_dataset(
     analysis_view, visual_analysis_model, dataset_id, find_visual_child, application, qtbot
 ):
     view = analysis_view(visual_analysis_model)
@@ -191,11 +191,15 @@ def test_spatial_correlation_shows_compute_bar_only_for_a_dataset(
     qtbot.mouseClick(view, Qt.LeftButton, pos=center)
     qtbot.waitUntil(lambda: find_visual_child(root, "datasetMoranBar") is not None, timeout=2000)
     bar = find_visual_child(root, "datasetMoranBar")
-    assert bar.property("visible") is False
+    title = find_visual_child(root, "datasetMoranBarTitle")
+    layer_combo = find_visual_child(root, "datasetMoranLayerCombo")
+    # Pipeline output: computable after the run too, on its normalized layer.
+    assert bar.property("visible") is True
+    assert title.property("text").startswith("Pipeline output")
+    assert layer_combo.property("currentText") == "TIC"
 
     application.analysis_bridge.setActiveDataset(visual_analysis_model.analysisDbPath, dataset_id)
-    qtbot.waitUntil(lambda: bar.property("visible") is True, timeout=1000)
-    layer_combo = find_visual_child(root, "datasetMoranLayerCombo")
+    qtbot.waitUntil(lambda: title.property("text").startswith("Dataset"), timeout=1000)
     assert layer_combo.property("currentText") == "TIC"
 
 

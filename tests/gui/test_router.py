@@ -765,3 +765,24 @@ def test_open_user_guide_returns_false_when_docs_not_built(monkeypatch, applicat
         "msianalyzer.gui.utils.router.Path.exists", lambda self: False, raising=False
     )
     assert application.router.openUserGuide() is False
+
+
+def test_match_target_list_menu_item_opens_the_dialog(application, engine, qtbot, tmp_path):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    item = window.findChild(QObject, "matchTargetListMenuItem")
+    assert item.property("enabled") is False  # no analysis open
+
+    (tmp_path / "out").mkdir()
+    project_model = ProjectModel(Project(name="p"), str(tmp_path), application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+    assert item.property("enabled") is True
+
+    item.triggered.emit()
+    qtbot.wait(50)
+    assert window.findChild(QObject, "targetListMatchDialog").property("visible") is True

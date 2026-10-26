@@ -118,7 +118,13 @@ NEGATIVE_ADDUCTS: list[Adduct] = [
 ]
 
 ADDUCTS: list[Adduct] = POSITIVE_ADDUCTS + NEGATIVE_ADDUCTS
-_ADDUCTS_BY_LABEL: dict[str, Adduct] = {a.label: a for a in ADDUCTS}
+
+#: Pseudo-adduct of a target given by its ion m/z (an `mz` column): that
+#: m/z is searched as-is, with no adduct applied. Never offered as a
+#: choice, and never passed to `adduct_mz`.
+GIVEN_MZ = Adduct("m/z", "any", 0, 0.0)
+
+_ADDUCTS_BY_LABEL: dict[str, Adduct] = {a.label: a for a in [*ADDUCTS, GIVEN_MZ]}
 
 
 def adducts_for_polarity(polarity: str) -> list[Adduct]:
@@ -154,7 +160,8 @@ def adduct_mz(neutral_mass: float, adduct: Adduct) -> float:
 # Parsing
 # ---------------------------------------------------------------------------
 
-_REQUIRED_COLUMNS = ("name", "formula", "inchikey")
+#: Accepted headers of the ion m/z column.
+_MZ_COLUMNS = ("mz", "m/z")
 
 
 @dataclass
@@ -170,6 +177,10 @@ class TargetCompound:
         source_file: The file this row came from.
         row_number: 1-based row number within `source_file` (header
             excluded) — for error messages.
+        target_mz: The ion m/z given in the file's `mz` column, or `None`.
+            When set it **wins over the formula**: only this m/z is
+            searched, with no adducts. `formula` may then be `""` and
+            `neutral_mass` `0.0`.
     """
 
     name: str
@@ -178,6 +189,7 @@ class TargetCompound:
     neutral_mass: float
     source_file: str
     row_number: int
+    target_mz: float | None = None
 
 
 def normalize_target_list_paths(paths: str | list[str] | None) -> list[str]:
@@ -208,9 +220,12 @@ def normalize_target_list_paths(paths: str | list[str] | None) -> list[str]:
 def parse_target_list_file(path: str | Path) -> list[TargetCompound]:
     """Parse and validate one target-list CSV/TXT file.
 
-    Required columns (case-insensitive, whitespace-stripped): ``name``,
-    ``formula``, ``inchikey``. ``inchikey`` may be blank per row. Every
-    formula is parsed immediately — fail-fast on the first bad one, not
+    Columns (case-insensitive, whitespace-stripped): ``name`` (required),
+    then ``formula`` and/or ``mz`` (or ``m/z``): at least one of the two
+    columns, and a value in one of them on every row. ``inchikey`` is
+    optional. A row with an m/z is searched at that m/z only, **even if it
+    also has a formula** (see `TargetCompound.target_mz`). Every value is
+    checked immediately — fail-fast on the first bad one, not
     skip-and-continue — so a broken file is caught before any of it is used
     (the GUI relies on this to validate a file the moment it's selected).
 
@@ -221,45 +236,74 @@ def parse_target_list_file(path: str | Path) -> list[TargetCompound]:
         One `TargetCompound` per data row, in file order.
 
     Raises:
-        TargetListError: A required column is missing, or the file has no
-            data rows.
+        TargetListError: ``name`` is missing, there's neither a
+            ``formula`` nor an ``mz`` column, a row has neither value, an
+            m/z isn't a positive number, or the file has no data rows.
         InvalidFormulaError: A row's ``formula`` isn't a valid chemical
             formula.
     """
     path = Path(path)
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
     df.columns = [str(c).strip().lower() for c in df.columns]
+    mz_column = next((c for c in _MZ_COLUMNS if c in df.columns), None)
 
-    missing = [c for c in _REQUIRED_COLUMNS if c not in df.columns]
-    if missing:
+    if "name" not in df.columns or ("formula" not in df.columns and mz_column is None):
         raise TargetListError(
-            f"target list {path}: missing required column(s) {missing} "
-            f"(found {list(df.columns)})"
+            f"target list {path}: needs a 'name' column and a 'formula' and/or "
+            f"'mz' column (found {list(df.columns)})"
         )
     if df.empty:
         raise TargetListError(f"target list {path}: no data rows")
 
+    def cell(row: dict, column: str | None) -> str:
+        return str(row.get(column, "")).strip() if column else ""
+
     compounds: list[TargetCompound] = []
-    for i, row in enumerate(df.itertuples(index=False), start=1):
-        name = str(getattr(row, "name")).strip()
-        formula = str(getattr(row, "formula")).strip()
-        inchikey = str(getattr(row, "inchikey")).strip() or None
-        try:
-            neutral_mass = float(pt_mass.calculate_mass(formula=formula))
-        except PyteomicsError as exc:
-            raise InvalidFormulaError(
-                f"target list {path} row {i} ({name!r}): invalid formula "
-                f"{formula!r}: {exc}"
-            ) from exc
+    for i, row in enumerate(df.to_dict("records"), start=1):
+        name = cell(row, "name")
+        formula = cell(row, "formula")
+        mz_text = cell(row, mz_column)
+        if not formula and not mz_text:
+            raise TargetListError(
+                f"target list {path} row {i} ({name!r}): needs a formula or an m/z"
+            )
+        target_mz = None
+        if mz_text:
+            try:
+                target_mz = float(mz_text)
+            except ValueError:
+                target_mz = -1.0
+            if not target_mz > 0:
+                raise TargetListError(
+                    f"target list {path} row {i} ({name!r}): m/z {mz_text!r} "
+                    "is not a positive number"
+                )
+        neutral_mass = 0.0
+        if formula:
+            try:
+                neutral_mass = float(pt_mass.calculate_mass(formula=formula))
+            except PyteomicsError as exc:
+                raise InvalidFormulaError(
+                    f"target list {path} row {i} ({name!r}): invalid formula "
+                    f"{formula!r}: {exc}"
+                ) from exc
         compounds.append(
             TargetCompound(
                 name=name,
                 formula=formula,
-                inchikey=inchikey,
+                inchikey=cell(row, "inchikey") or None,
                 neutral_mass=neutral_mass,
                 source_file=str(path),
                 row_number=i,
+                target_mz=target_mz,
             )
+        )
+    n_both = sum(1 for c in compounds if c.formula and c.target_mz is not None)
+    if n_both:
+        logger.info(
+            "target list %s: %d row(s) have both a formula and an m/z; "
+            "the m/z is searched, the formula is kept for display",
+            path, n_both, extra={"source_file": str(path)},
         )
     return compounds
 
@@ -341,6 +385,9 @@ def match_target_list(
 ) -> TargetListMatchResult:
     """Match every (compound, adduct) pair against `existing_features` by m/z.
 
+    A compound with a `target_mz` is searched at that m/z only (adduct
+    `GIVEN_MZ`), whatever `adducts` and its formula say.
+
     Pure logic, no DB access.
 
     Args:
@@ -375,8 +422,13 @@ def match_target_list(
     unmatched: list[tuple[TargetCompound, Adduct, float]] = []
 
     for compound in compounds:
-        for adduct in adducts:
-            theoretical_mz = adduct_mz(compound.neutral_mass, adduct)
+        # A given m/z wins over the formula: searched as-is, no adducts.
+        searches = (
+            [(GIVEN_MZ, compound.target_mz)]
+            if compound.target_mz is not None
+            else [(a, adduct_mz(compound.neutral_mass, a)) for a in adducts]
+        )
+        for adduct, theoretical_mz in searches:
             feature_id, feature_mz, ppm_diff = _nearest_within_ppm(
                 sorted_mzs, sorted_ids, theoretical_mz, match_ppm
             )
@@ -569,3 +621,175 @@ def run_target_list_matching(
         extra={"source_file": str(analysis_db_path)},
     )
     return summary
+
+
+# ---------------------------------------------------------------------------
+# After the run (ADR 60): match a target list against a finished analysis
+# ---------------------------------------------------------------------------
+
+#: `commands.command_name` of post-run matching, so it can be undone
+#: without touching the pipeline's own target-list rows.
+POST_RUN_COMMAND = "match_target_list_post_run"
+
+
+def _adducts_for(polarity: str, labels: list[str] | None) -> list[Adduct]:
+    if polarity not in ("positive", "negative"):
+        raise TargetListError(f"polarity must be 'positive' or 'negative', got {polarity!r}")
+    allowed = adducts_for_polarity(polarity)
+    if not labels:
+        return allowed
+    by_label = {a.label: a for a in allowed}
+    bad = [label for label in labels if label not in by_label]
+    if bad:
+        raise TargetListError(f"not {polarity} adducts: {', '.join(bad)}")
+    return [by_label[label] for label in labels]
+
+
+@log_call(source="analysis_db_path")
+def preview_post_run_matches(
+    analysis_db_path: Path | str,
+    paths: str | list[str],
+    polarity: str,
+    adducts: list[str] | None,
+    match_ppm: float,
+) -> list[dict]:
+    """Match a target list against a finished analysis' features, without
+    writing anything: the rows of the GUI's review table.
+
+    One row per (compound, adduct) that lands within `match_ppm` of an
+    existing feature, plus one "not detected" row per compound that
+    matched nothing. Nothing is injected: that needs the raw data, which
+    only the pipeline run reads.
+
+    `use` is the suggested default: on when the feature has no name yet
+    (or only a predicted formula), off when it already has one, and on
+    for at most one row per feature (the closest by ppm).
+
+    Returns:
+        Row dicts: `name`, `formula`, `inchikey`, `neutral_mass`,
+        `source_file`, `row_number`, `detected`, `adduct` (`""` when not
+        detected), `theoretical_mz`, `feature_id` (`-1` when not
+        detected), `feature_mz`, `ppm_diff`, `current_name` (`""` when
+        none), `use`. Sorted by compound name, then |ppm|.
+
+    Raises:
+        TargetListError: unreadable file, bad formula, bad polarity/adduct.
+    """
+    compounds = parse_target_list_files(paths)
+    if not compounds:
+        raise TargetListError("No target-list file selected.")
+    result = match_target_list(
+        compounds,
+        _adducts_for(polarity, adducts),
+        analysis_db.load_feature_ids_and_mzs(analysis_db_path),
+        match_ppm=match_ppm,
+        sample_names=[],
+    )
+    reps = analysis_db.load_feature_representative_annotations(analysis_db_path)
+    names = dict(zip(reps.get("feature_id", []), reps.get("compound_name", [])))
+    sources = dict(zip(reps.get("feature_id", []), reps.get("source", [])))
+
+    def compound_fields(c: TargetCompound) -> dict:
+        return {
+            "name": c.name, "formula": c.formula, "inchikey": c.inchikey or "",
+            "neutral_mass": c.neutral_mass, "source_file": c.source_file,
+            "row_number": c.row_number, "target_mz": c.target_mz,
+        }
+
+    rows: list[dict] = []
+    detected: set[int] = set()
+    for m in result.matches:
+        if m.match_type != "existing":
+            continue
+        detected.add(id(m.compound))
+        fid = int(m.feature_id)
+        rows.append({
+            **compound_fields(m.compound),
+            "detected": True,
+            "adduct": m.adduct.label,
+            "theoretical_mz": m.theoretical_mz,
+            "feature_id": fid,
+            "feature_mz": m.feature_mz,
+            "ppm_diff": m.ppm_diff,
+            "current_name": names.get(fid) or "",
+            "use": sources.get(fid) in (None, "predicted"),
+        })
+    for c in compounds:
+        if id(c) not in detected:
+            rows.append({
+                **compound_fields(c), "detected": False, "adduct": "",
+                "theoretical_mz": 0.0, "feature_id": -1, "feature_mz": 0.0,
+                "ppm_diff": 0.0, "current_name": "", "use": False,
+            })
+
+    # One suggested name per feature: the closest match keeps `use`.
+    taken: set[int] = set()
+    for row in sorted(rows, key=lambda r: abs(r["ppm_diff"])):
+        if row["use"]:
+            if row["feature_id"] in taken:
+                row["use"] = False
+            taken.add(row["feature_id"])
+    rows.sort(key=lambda r: (r["name"].lower(), not r["detected"], abs(r["ppm_diff"])))
+    return rows
+
+
+@log_call(source="analysis_db_path")
+def apply_post_run_matches(
+    analysis_db_path: Path | str,
+    run_id: str,
+    rows: list[dict],
+    settings: dict,
+) -> int:
+    """Save the rows the user kept from `preview_post_run_matches` as
+    target-list matches (`match_type = 'existing'`) under one
+    `POST_RUN_COMMAND` command. From then on they label their features
+    everywhere, by the usual precedence (target list > MS2 > predicted,
+    ADR 26).
+
+    Args:
+        rows: The kept preview rows (each with `detected` true).
+        settings: The search settings, recorded as the command's arguments.
+
+    Returns:
+        The number of matches saved.
+    """
+    rows = [r for r in rows if r.get("detected")]
+    if not rows:
+        return 0
+    command_id = analysis_db.log_command(
+        analysis_db_path, POST_RUN_COMMAND, settings, run_id=run_id
+    )
+    compounds: dict[tuple, TargetCompound] = {}
+    for r in rows:
+        key = (r["source_file"], int(r["row_number"]))
+        compounds.setdefault(key, TargetCompound(
+            name=r["name"], formula=r["formula"], inchikey=r["inchikey"] or None,
+            neutral_mass=float(r["neutral_mass"]), source_file=r["source_file"],
+            row_number=int(r["row_number"]),
+            target_mz=None if r.get("target_mz") is None else float(r["target_mz"]),
+        ))
+    ids = analysis_db.save_target_list_compounds(
+        analysis_db_path, list(compounds.values()), command_id=command_id
+    )
+    id_of = dict(zip(compounds, ids))
+    matches = [
+        (
+            TargetMatch(
+                compound=compounds[(r["source_file"], int(r["row_number"]))],
+                adduct=adduct_by_label(r["adduct"]),
+                theoretical_mz=float(r["theoretical_mz"]),
+                feature_id=int(r["feature_id"]),
+                feature_mz=float(r["feature_mz"]),
+                ppm_diff=float(r["ppm_diff"]),
+                match_type="existing",
+            ),
+            id_of[(r["source_file"], int(r["row_number"]))],
+        )
+        for r in rows
+    ]
+    analysis_db.save_target_list_matches(analysis_db_path, matches, command_id=command_id)
+    logger.info(
+        "post-run target list: %d match(es) saved", len(matches),
+        extra={"source_file": str(analysis_db_path)},
+    )
+    return len(matches)

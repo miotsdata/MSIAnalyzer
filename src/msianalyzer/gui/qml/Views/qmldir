@@ -26,4 +26,5 @@ RoiDesignWindow 1.0 RoiDesignWindow.qml
 LandmarkOverlay 1.0 LandmarkOverlay.qml
 CoregistrationWindow 1.0 CoregistrationWindow.qml
 ImportH5adDialog 1.0 ImportH5adDialog.qml
+TargetListMatchDialog 1.0 TargetListMatchDialog.qml
 ScaleBarDialog 1.0 ScaleBarDialog.qml

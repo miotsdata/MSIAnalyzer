@@ -72,6 +72,12 @@ class AnalysisModel(QObject):
         db_name = analysis_cfg.get("db_name")
         return str(analysis_db.analysis_db_path(out_dir, self._run_id, db_name))
 
+    @Property("QVariantMap", constant=True)
+    def targetListConfig(self) -> dict:
+        """The run's `target_list` config section (polarity, adducts,
+        match_ppm, paths), to pre-fill post-run matching (ADR 60)."""
+        return dict((self._run_dict.get("config") or {}).get("target_list") or {})
+
     @Property(str, constant=True)
     def startDate(self) -> str:
         return self._run_dict.get("start_date") or ""
