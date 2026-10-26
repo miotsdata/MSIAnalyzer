@@ -91,6 +91,61 @@ Item {
     // with >= 3 vertices already placed.
     signal closePolygonRequested()
 
+    // Selecting and moving saved ROIs (ADR 58), only while not drawing.
+    // A tap inside a saved ROI selects it (the topmost one), a tap on
+    // empty space deselects (""). Dragging inside the selected ROI moves
+    // it: the image's own drag-to-pan is paused while the pointer is over
+    // it, so the drag reaches `moveDragHandler` instead of the Flickable.
+    property bool selectionEnabled: false
+    property string selectedRoiName: ""
+    signal roiTapped(string name)
+    // The finished drag, always in grid-index units (whole cells on the
+    // grid surface; converted from H&E pixels in heMode).
+    signal moveRequested(real dCol, real dRow)
+    property bool _pointerInSelected: false
+
+    // Ray-casting point-in-polygon, in overlay item pixels.
+    function _contains(vertices, x, y) {
+        var inside = false
+        for (var i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+            var xi = overlay.toItemX(vertices[i][0]), yi = overlay.toItemY(vertices[i][1])
+            var xj = overlay.toItemX(vertices[j][0]), yj = overlay.toItemY(vertices[j][1])
+            if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi)
+                inside = !inside
+        }
+        return inside
+    }
+    function _roiAt(x, y) {
+        var rois = canvas._displaySavedRois
+        for (var i = rois.length - 1; i >= 0; i--) {
+            if (canvas._contains(rois[i].vertices, x, y)) return rois[i].name
+        }
+        return ""
+    }
+    function _insideSelected(x, y) {
+        return canvas.selectedRoiName !== "" && canvas._roiAt(x, y) === canvas.selectedRoiName
+    }
+    // Item-pixel drag translation -> what the preview shows. On the grid
+    // surface it snaps to whole cells, so the preview is exactly where
+    // the ROI will land.
+    function _snappedOffset(t) {
+        if (canvas.heMode) return t
+        var s = zoomImage.effectiveScale
+        return Qt.point(Math.round(t.x / s) * s, Math.round(t.y / s) * s)
+    }
+    function _finishMove(t) {
+        var s = zoomImage.effectiveScale
+        var dx = t.x / s, dy = t.y / s
+        if (canvas.heMode && canvas.heToGridMatrix) {
+            // Only the linear part of the He-pixel -> grid affine applies
+            // to a displacement.
+            var m = canvas.heToGridMatrix
+            canvas.moveRequested(m[0][0] * dx + m[0][1] * dy, m[1][0] * dx + m[1][1] * dy)
+        } else {
+            canvas.moveRequested(Math.round(dx), Math.round(dy))
+        }
+    }
+
     // A fixed *screen*-pixel radius (not grid-space) so the close target
     // stays a constant visual size regardless of zoom level.
     readonly property real closeThresholdPx: 10
@@ -100,6 +155,7 @@ Item {
         id: zoomImage
         objectName: "roiZoomableImage"
         anchors.fill: parent
+        interactive: !(canvas._pointerInSelected || moveDragHandler.active)
 
         Image {
             objectName: "roiHeatmapOverlayImage"
@@ -125,12 +181,15 @@ Item {
             draftVertices: canvas._displayDraftVertices
             draftColor: canvas.draftColor
             firstVertexHighlighted: canvas._nearFirstVertex
+            selectedName: canvas.selectedRoiName
         }
 
         HoverHandler {
             id: hoverHandler
             objectName: "roiHoverHandler"
             onPointChanged: {
+                canvas._pointerInSelected = canvas.selectionEnabled
+                    && canvas._insideSelected(point.position.x, point.position.y)
                 if (canvas.draftVertices.length === 0) {
                     canvas._nearFirstVertex = false
                     return
@@ -163,6 +222,39 @@ Item {
                     var row = Math.floor(eventPoint.position.y / zoomImage.effectiveScale)
                     canvas.vertexRequested(col, row)
                 }
+            }
+        }
+
+        TapHandler {
+            objectName: "roiSelectTapHandler"
+            enabled: canvas.selectionEnabled
+            onTapped: (eventPoint) => canvas.roiTapped(
+                canvas._roiAt(eventPoint.position.x, eventPoint.position.y))
+        }
+
+        DragHandler {
+            id: moveDragHandler
+            objectName: "roiMoveDragHandler"
+            target: null
+            enabled: canvas.selectionEnabled && canvas.selectedRoiName !== ""
+            // Whether this drag began inside the selected ROI; a drag
+            // starting anywhere else is left alone.
+            property bool _moving: false
+            property point _last: Qt.point(0, 0)
+            onActiveChanged: {
+                if (active) {
+                    _moving = canvas._insideSelected(centroid.pressPosition.x, centroid.pressPosition.y)
+                    _last = Qt.point(0, 0)
+                    return
+                }
+                overlay.moveOffset = Qt.point(0, 0)
+                if (_moving && (_last.x !== 0 || _last.y !== 0)) canvas._finishMove(_last)
+                _moving = false
+            }
+            onActiveTranslationChanged: {
+                if (!active || !_moving) return
+                _last = canvas._snappedOffset(activeTranslation)
+                overlay.moveOffset = _last
             }
         }
     }

@@ -30,6 +30,12 @@ Item {
     property var draftVertices: []
     property color draftColor: "#ffffff"
     property bool firstVertexHighlighted: false
+    // ROI Design's selection (ADR 58): the saved ROI named here is drawn
+    // thicker with a light fill, shifted by `moveOffset` (item pixels)
+    // while it is being dragged — a preview only, nothing is saved until
+    // the drag ends.
+    property string selectedName: ""
+    property point moveOffset: Qt.point(0, 0)
     // false (default): vertices are grid-index coordinates, mapped to
     // their cell CENTER (`+0.5`) — the original, still-default
     // convention (see `core/plotting/roi.py::polygon_pixel_mask`'s
@@ -68,11 +74,16 @@ Item {
 
         delegate: Shape {
             objectName: "roiOverlaySavedShape_" + modelData.name
+            readonly property bool selected: modelData.name === overlay.selectedName
             anchors.fill: parent
+            transform: Translate {
+                x: selected ? overlay.moveOffset.x : 0
+                y: selected ? overlay.moveOffset.y : 0
+            }
             ShapePath {
                 strokeColor: modelData.color
-                strokeWidth: 2
-                fillColor: "transparent"
+                strokeWidth: selected ? 4 : 2
+                fillColor: selected ? Qt.alpha(modelData.color, 0.25) : "transparent"
                 PathPolyline { path: overlay._closedPoints(modelData.vertices) }
             }
         }

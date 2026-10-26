@@ -67,3 +67,4 @@ useful).
 | [55](0055-isotopes-from-the-h5ad-matrices.md) | Isotopes detected from the `.h5ad` matrices, built before MS2 | Accepted; supersedes part of 54 |
 | [56](0056-per-run-log-file-and-output-tab.md) | Per-run log file in the output folder, and an Output tab | Accepted |
 | [57](0057-custom-categorical-colors.md) | Custom colors for categorical obs columns | Accepted |
+| [58](0058-roi-select-move-copy-paste.md) | Select, move, copy and paste ROIs in ROI Design | Accepted |

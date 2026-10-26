@@ -851,3 +851,146 @@ def test_scale_bar_and_size_shown_on_grid_surface_only(
     qtbot.wait(50)
     assert bar.property("visible") is False
     assert size_label.property("visible") is False
+
+
+# ---------------------------------------------------------------------------
+# Select / move / copy-paste (ADR 58)
+# ---------------------------------------------------------------------------
+
+_SQUARE = [[2, 2], [5, 2], [5, 5], [2, 5]]
+
+
+def _seed_roi(model, sample, name, vertices=_SQUARE, color="#ff0000"):
+    from msianalyzer.core.analysis_db import register_roi
+    from msianalyzer.core.plotting.roi import save_roi_to_sample
+
+    save_roi_to_sample(Path(model.outDir) / f"{sample}.h5ad", name, color, vertices)
+    register_roi(model.analysisDbPath, name, color)
+
+
+def _open_with_roi(analysis_view, model, find_visual_child, qtbot):
+    out_dir = Path(model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad", n=12)
+    _write_grid_h5ad(out_dir / "s2.h5ad", n=12)
+    _seed_roi(model, "s1", "liver")
+    view = analysis_view(model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+    _wait_image_ready(canvas.findChild(QQuickItem, "roiZoomableImage"), qtbot)
+    return window, canvas
+
+
+def _vertices(window, name):
+    return next(r["vertices"] for r in _as_list(window.property("savedRois")) if r["name"] == name)
+
+
+def _mask_pixels(out_dir, sample, name):
+    obs = ad.read_h5ad(Path(out_dir) / f"{sample}.h5ad").obs
+    return sorted(int(i[2:]) for i in obs.index[obs[f"roi_{name}"].astype(bool)])
+
+
+def test_tapping_inside_a_saved_roi_selects_it_and_outside_deselects(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+
+    _tap_grid_point(window, canvas, 3, 3, qtbot)
+    assert window.property("selectedRoiName") == "liver"
+
+    _tap_grid_point(window, canvas, 9, 9, qtbot)
+    assert window.property("selectedRoiName") == ""
+
+
+def test_arrow_keys_move_the_selected_roi_and_undo_restores_it(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    out_dir = visual_analysis_model.outDir
+    before = _mask_pixels(out_dir, "s1", "liver")
+    window.setProperty("selectedRoiName", "liver")
+    window.requestActivate()
+    qtbot.waitUntil(lambda: window.isActive(), timeout=2000)
+
+    qtbot.keyClick(window, Qt.Key_Right)
+    qtbot.keyClick(window, Qt.Key_Down, Qt.ShiftModifier)
+    qtbot.wait(50)
+
+    assert _vertices(window, "liver") == [[v[0] + 1, v[1] + 10] for v in _SQUARE]
+    assert _mask_pixels(out_dir, "s1", "liver") != before
+
+    # One level of undo: back to before the last move (the Shift+Down).
+    qtbot.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
+    qtbot.wait(50)
+    assert _vertices(window, "liver") == [[v[0] + 1, v[1]] for v in _SQUARE]
+
+
+def test_dragging_the_selected_roi_moves_it_by_whole_cells(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    _tap_grid_point(window, canvas, 3, 3, qtbot)
+    assert window.property("selectedRoiName") == "liver"
+
+    holder = canvas.findChild(QQuickItem, "zoomableImageOverlayHolder")
+    scale = canvas.findChild(QQuickItem, "roiZoomableImage").property("effectiveScale")
+    start = holder.mapToScene(QPointF(3.5 * scale, 3.5 * scale)).toPoint()
+    qtbot.mouseMove(window, pos=start)
+    qtbot.mousePress(window, Qt.LeftButton, pos=start)
+    for step in range(1, 11):  # 2 cells right, in small steps past the drag threshold
+        qtbot.mouseMove(window, pos=holder.mapToScene(
+            QPointF((3.5 + 0.2 * step) * scale, 3.5 * scale)).toPoint())
+        qtbot.wait(5)
+    end = holder.mapToScene(QPointF(5.5 * scale, 3.5 * scale)).toPoint()
+    qtbot.mouseRelease(window, Qt.LeftButton, pos=end)
+    qtbot.wait(50)
+
+    assert _vertices(window, "liver") == [[v[0] + 2, v[1]] for v in _SQUARE]
+
+
+def test_copy_paste_on_same_sample_makes_an_offset_copy_with_a_new_name(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    window.setProperty("selectedRoiName", "liver")
+    _click(window, window.findChild(QQuickItem, "roiCopyButton"), qtbot)
+    _click(window, window.findChild(QQuickItem, "roiPasteButton"), qtbot)
+
+    assert window.property("draftState") == "naming"
+    assert window.property("draftName") == "liver_copy"
+    _click(window, window.findChild(QQuickItem, "roiStartDrawingButton"), qtbot)
+
+    assert window.property("saveError") == ""
+    assert window.property("selectedRoiName") == "liver_copy"
+    assert _vertices(window, "liver_copy") == [[v[0] + 5, v[1] + 5] for v in _SQUARE]
+    assert _vertices(window, "liver") == _SQUARE
+
+
+def test_paste_on_another_sample_keeps_the_name_and_position(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    window.setProperty("selectedRoiName", "liver")
+    _click(window, window.findChild(QQuickItem, "roiCopyButton"), qtbot)
+
+    window.setProperty("selectedSampleIndex", 1)
+    qtbot.wait(50)
+    _click(window, window.findChild(QQuickItem, "roiPasteButton"), qtbot)
+    assert window.property("draftName") == "liver"
+    _click(window, window.findChild(QQuickItem, "roiStartDrawingButton"), qtbot)
+
+    assert _vertices(window, "liver") == _SQUARE
+    out_dir = visual_analysis_model.outDir
+    assert _mask_pixels(out_dir, "s2", "liver") == _mask_pixels(out_dir, "s1", "liver")
+
+
+def test_new_roi_with_a_name_already_on_this_sample_is_refused(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    _click(window, window.findChild(QQuickItem, "roiAddButton"), qtbot)
+    window.setProperty("draftName", "liver")
+    _click(window, window.findChild(QQuickItem, "roiStartDrawingButton"), qtbot)
+
+    assert window.property("draftState") == "naming"
+    assert "already on this sample" in window.property("saveError")

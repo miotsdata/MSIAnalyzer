@@ -209,7 +209,127 @@ Window {
         roiWindow.draftVertices = []
         roiWindow.draftName = ""
         roiWindow.saveError = ""
+        roiWindow.pasteMode = false
     }
+
+    // --- Select / move / copy-paste saved ROIs (ADR 58) -------------------
+    // Only in "idle". Every change is an ordinary saveRoi of the same or a
+    // new name (saveRoi overwrites a name already on this sample), so
+    // masks, merged.h5ad and imported-dataset write-back all follow, and
+    // `roiSaved` fires as for a drawn ROI (calibration re-measures it).
+    property string selectedRoiName: ""
+    // {sample, name, color, vertices}, window-local, survives sample
+    // switches so an ROI can be copied onto another sample.
+    property var roiClipboard: null
+    // The selected ROI's geometry before its last move: one level of undo.
+    property var lastMove: null
+    // The naming step is reused for paste: "Paste" saves the clipboard
+    // geometry under the typed name instead of starting a drawing.
+    property bool pasteMode: false
+
+    function _savedRoi(name) {
+        for (var i = 0; i < roiWindow.savedRois.length; i++) {
+            if (roiWindow.savedRois[i].name === name) return roiWindow.savedRois[i]
+        }
+        return null
+    }
+    function _nameTakenHere(name) {
+        if (!roiWindow._savedRoi(name)) return false
+        roiWindow.saveError = "“" + name + "” is already on this sample."
+        return true
+    }
+    function _saveGeometry(name, color, vertices) {
+        var result = AnalysisBridge.saveRoi(
+            roiWindow.analysis.analysisDbPath, roiWindow.selectedSample.name,
+            name, color, vertices)
+        roiWindow.saveWarning = result.warning ? result.warning : ""
+        roiWindow.saveError = result.ok ? "" : result.error
+        if (result.ok) {
+            roiWindow.refreshSavedRois()
+            roiWindow.refreshCatalogRois()
+            roiWindow.roiSaved(roiWindow.selectedSample.name, name)
+        }
+        return result.ok
+    }
+    function selectRoi(name) {
+        roiWindow.selectedRoiName = name
+    }
+    function moveSelectedRoi(dCol, dRow) {
+        var roi = roiWindow._savedRoi(roiWindow.selectedRoiName)
+        if (!roi || (dCol === 0 && dRow === 0)) return
+        var moved = roi.vertices.map(function (v) { return [v[0] + dCol, v[1] + dRow] })
+        if (roiWindow._saveGeometry(roi.name, roi.color, moved)) {
+            roiWindow.lastMove = {name: roi.name, color: roi.color, vertices: roi.vertices}
+        }
+    }
+    function undoLastMove() {
+        var m = roiWindow.lastMove
+        if (!m || !roiWindow._savedRoi(m.name)) return
+        if (roiWindow._saveGeometry(m.name, m.color, m.vertices)) {
+            roiWindow.lastMove = null
+            roiWindow.selectedRoiName = m.name
+        }
+    }
+    function copySelectedRoi() {
+        var roi = roiWindow._savedRoi(roiWindow.selectedRoiName)
+        if (!roi) return
+        roiWindow.roiClipboard = {
+            sample: roiWindow.selectedSample.name,
+            name: roi.name, color: roi.color, vertices: roi.vertices,
+        }
+    }
+    // Opens the naming step for the clipboard ROI: the same name when
+    // this sample doesn't have it yet (the same ROI on another sample),
+    // else "<name>_copy" as a new ROI with a fresh color.
+    function startPaste() {
+        if (!roiWindow.roiClipboard) return
+        var clip = roiWindow.roiClipboard
+        roiWindow.pasteMode = true
+        roiWindow.draftState = "naming"
+        roiWindow.saveError = ""
+        if (roiWindow._savedRoi(clip.name)) {
+            roiWindow.draftName = clip.name + "_copy"
+            roiWindow._seedDraftColor()
+        } else {
+            roiWindow.draftName = clip.name
+            roiWindow.draftColor = clip.color
+        }
+    }
+    function commitPaste() {
+        var clip = roiWindow.roiClipboard
+        var name = roiWindow.draftName
+        if (!clip || !name || roiWindow._nameTakenHere(name)) return
+        // Offset on the sample it was copied from, so the copy isn't
+        // hidden exactly under the original; same place elsewhere.
+        var offset = clip.sample === roiWindow.selectedSample.name ? 5 : 0
+        var vertices = clip.vertices.map(function (v) { return [v[0] + offset, v[1] + offset] })
+        if (roiWindow._saveGeometry(name, roiWindow.draftColor.toString(), vertices)) {
+            roiWindow.resetDraft()
+            roiWindow.selectedRoiName = name
+        }
+    }
+
+    readonly property bool _canEditSelection: roiWindow.draftState === "idle" && roiWindow.selectedRoiName !== ""
+    Shortcut { sequence: "Left"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(-1, 0) }
+    Shortcut { sequence: "Right"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(1, 0) }
+    Shortcut { sequence: "Up"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(0, -1) }
+    Shortcut { sequence: "Down"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(0, 1) }
+    Shortcut { sequence: "Shift+Left"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(-10, 0) }
+    Shortcut { sequence: "Shift+Right"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(10, 0) }
+    Shortcut { sequence: "Shift+Up"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(0, -10) }
+    Shortcut { sequence: "Shift+Down"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(0, 10) }
+    Shortcut { sequences: [StandardKey.Copy]; enabled: roiWindow._canEditSelection; onActivated: roiWindow.copySelectedRoi() }
+    Shortcut {
+        sequences: [StandardKey.Paste]
+        enabled: roiWindow.draftState === "idle" && roiWindow.roiClipboard !== null
+        onActivated: roiWindow.startPaste()
+    }
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: roiWindow.draftState === "idle" && roiWindow.lastMove !== null
+        onActivated: roiWindow.undoLastMove()
+    }
+    Shortcut { sequence: "Escape"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.selectedRoiName = "" }
 
     function _seedDraftColor() {
         if (roiWindow.analysis && roiWindow.analysis.analysisDbPath) {
@@ -222,6 +342,8 @@ Window {
         // also hide "Draw on H&E image".
         roiWindow.refreshRoiRegistrationInfo()
         roiWindow.resetDraft()
+        roiWindow.selectedRoiName = ""
+        roiWindow.lastMove = null
         roiWindow.refreshSavedRois()
         roiWindow.refreshCatalogRois()
     }
@@ -273,7 +395,8 @@ Window {
     // "Start Drawing" — commits the name/color and switches the canvas
     // into vertex-placing mode.
     function beginDrawing() {
-        if (!roiWindow.draftName) return
+        // saveRoi would silently overwrite an ROI of the same name here.
+        if (!roiWindow.draftName || roiWindow._nameTakenHere(roiWindow.draftName)) return
         roiWindow.draftState = "drawing"
         roiWindow.draftVertices = []
     }
@@ -327,6 +450,8 @@ Window {
         AnalysisBridge.deleteRoiEverywhere(
             roiWindow.analysis.analysisDbPath,
             roiWindow.samples.map(function (s) { return s.name }), name)
+        if (roiWindow.selectedRoiName === name) roiWindow.selectedRoiName = ""
+        if (roiWindow.lastMove && roiWindow.lastMove.name === name) roiWindow.lastMove = null
         roiWindow.refreshSavedRois()
         roiWindow.refreshCatalogRois()
     }
@@ -446,6 +571,10 @@ Window {
                 draftColor: roiWindow.draftColor
                 onVertexRequested: (col, row) => roiWindow.addVertex(col, row)
                 onClosePolygonRequested: roiWindow.closePolygon()
+                selectionEnabled: roiWindow.draftState === "idle"
+                selectedRoiName: roiWindow.selectedRoiName
+                onRoiTapped: (name) => roiWindow.selectRoi(name)
+                onMoveRequested: (dCol, dRow) => roiWindow.moveSelectedRoi(dCol, dRow)
             }
 
             ColumnLayout {
@@ -474,7 +603,17 @@ Window {
                             color: modelData.color
                             border.color: palette.mid
                         }
-                        Label { text: modelData.name; Layout.fillWidth: true }
+                        Label {
+                            text: modelData.name
+                            Layout.fillWidth: true
+                            font.bold: modelData.name === roiWindow.selectedRoiName
+                            color: modelData.name === roiWindow.selectedRoiName ? Theme.primaryColor : palette.windowText
+                            TapHandler {
+                                enabled: roiWindow.draftState === "idle"
+                                onTapped: roiWindow.selectRoi(modelData.name)
+                            }
+                            HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        }
                         ToolButton {
                             objectName: "roiDeleteButton_" + modelData.name
                             text: "✕"
@@ -482,6 +621,38 @@ Window {
                             HoverHandler { cursorShape: Qt.PointingHandCursor }
                         }
                     }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: roiWindow.draftState === "idle"
+                             && (roiWindow.savedRois.length > 0 || roiWindow.roiClipboard !== null)
+                    Button {
+                        objectName: "roiCopyButton"
+                        text: "Copy"
+                        Layout.fillWidth: true
+                        enabled: roiWindow._canEditSelection
+                        onClicked: roiWindow.copySelectedRoi()
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    }
+                    Button {
+                        objectName: "roiPasteButton"
+                        text: "Paste"
+                        Layout.fillWidth: true
+                        enabled: roiWindow.roiClipboard !== null
+                        onClicked: roiWindow.startPaste()
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    }
+                }
+                Label {
+                    visible: roiWindow._canEditSelection
+                    text: "Drag the selected ROI or use the arrow keys (Shift = 10 px) "
+                          + "to move it; Ctrl+Z undoes the last move."
+                    color: Theme.mutedTextColor
+                    font.pixelSize: Theme.captionPixelSize
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 1
                 }
 
                 Item { Layout.preferredHeight: 8 }
@@ -546,7 +717,7 @@ Window {
                     Layout.fillWidth: true
                     visible: roiWindow.draftState === "naming"
 
-                    Label { text: "New ROI"; font.bold: true }
+                    Label { text: roiWindow.pasteMode ? "Paste ROI" : "New ROI"; font.bold: true }
                     TextField {
                         id: roiNameField
                         objectName: "roiNameField"
@@ -577,9 +748,9 @@ Window {
                     RowLayout {
                         Button {
                             objectName: "roiStartDrawingButton"
-                            text: "Start Drawing"
+                            text: roiWindow.pasteMode ? "Paste" : "Start Drawing"
                             enabled: roiWindow.draftName.length > 0
-                            onClicked: roiWindow.beginDrawing()
+                            onClicked: roiWindow.pasteMode ? roiWindow.commitPaste() : roiWindow.beginDrawing()
                             HoverHandler { cursorShape: Qt.PointingHandCursor }
                         }
                         Button {
