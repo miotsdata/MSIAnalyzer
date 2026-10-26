@@ -465,6 +465,25 @@ def test_render_heatmap_figure_legend_uses_custom_colors():
     ]
 
 
+def test_render_heatmap_figure_hidden_categories_are_black_and_not_in_legend():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+
+    fig = render_heatmap_figure(
+        adata, mode="obs_categorical", obs_column="polarity",
+        categories=["negative", "positive"], colors=["#ff0000", "#00ff00"],
+        hidden_categories={"negative"},
+    )
+
+    ax = fig.axes[0]
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["positive"]
+    raster = ax.get_images()[0].get_array()
+    assert tuple(raster[0, 0]) == (0, 0, 0, 255)
+    assert tuple(raster[0, 1]) == (0, 255, 0, 255)
+
+
 def test_category_color_is_stable_and_distinct_for_different_indices():
     assert category_color(0) == category_color(0)
     assert category_color(0) != category_color(1)

@@ -125,6 +125,7 @@ Flickable {
         // The sample list itself is rebound by the owner (samples ->
         // onSamplesChanged -> refreshObsColumns).
         function onActiveDatasetChanged() {
+            controlsFlickable.hiddenObsCategories = []
             controlsFlickable.refreshDatasetLayers()
             controlsFlickable.selectedFeatureIndex = 0
             controlsFlickable.refreshFeatures()
@@ -226,6 +227,23 @@ Flickable {
     // call AnalysisBridge.getObsCategories synchronously, real .h5ad work
     // on the GUI thread.
     property var obsCategoryLegend: []
+
+    // Categories unticked in the legend: drawn black, like pixels with no
+    // value. Temporary on purpose: never saved, cleared on a column or
+    // dataset change. A new array on every change, so bindings re-run.
+    property var hiddenObsCategories: []
+    function isCategoryHidden(category) {
+        return controlsFlickable.hiddenObsCategories.indexOf(category) !== -1
+    }
+    function setCategoryHidden(category, hidden) {
+        var rest = controlsFlickable.hiddenObsCategories.filter(function (c) { return c !== category })
+        controlsFlickable.hiddenObsCategories = hidden ? rest.concat([category]) : rest
+    }
+    function setAllCategoriesHidden(hidden) {
+        controlsFlickable.hiddenObsCategories = hidden
+            ? controlsFlickable.obsCategoryLegend.map(function (c) { return c.category }) : []
+    }
+
     function refreshObsCategoryLegend() {
         if (controlsFlickable.inspectionMode !== "obs" || !controlsFlickable.selectedObsColumn
                 || controlsFlickable.isSelectedObsNumeric) {
@@ -466,6 +484,7 @@ Flickable {
         }
     }
     onSelectedObsColumnChanged: {
+        controlsFlickable.hiddenObsCategories = []
         controlsFlickable.autoScale = true
         controlsFlickable.refreshAutoRange()
         controlsFlickable.refreshObsCategoryLegend()
@@ -539,7 +558,8 @@ Flickable {
             // a custom color change re-renders instead of hitting the
             // tile cache. No "#" — it would start the URL fragment.
             var cats = controlsFlickable.obsCategoryLegend.map(function (c) {
-                return c.category + "=" + c.color.substring(1)
+                var color = controlsFlickable.isCategoryHidden(c.category) ? "000000" : c.color.substring(1)
+                return c.category + "=" + color
             }).join(",")
             return sampleName + "|obs:" + controlsFlickable.selectedObsColumn + "|" + cats + ds
         }
@@ -1063,6 +1083,18 @@ Flickable {
                 Layout.fillWidth: true
             }
             Button {
+                objectName: "obsCategoriesShowAllButton"
+                text: "All"
+                flat: true
+                onClicked: controlsFlickable.setAllCategoriesHidden(false)
+            }
+            Button {
+                objectName: "obsCategoriesHideAllButton"
+                text: "None"
+                flat: true
+                onClicked: controlsFlickable.setAllCategoriesHidden(true)
+            }
+            Button {
                 objectName: "obsCategoryColorsResetButton"
                 text: "Reset colors"
                 flat: true
@@ -1098,11 +1130,24 @@ Flickable {
 
                 delegate: RowLayout {
                     objectName: "obsCategoryLegendRow_" + modelData.category
+                    readonly property bool categoryHidden: controlsFlickable.isCategoryHidden(modelData.category)
+                    AppCheckBox {
+                        objectName: "obsCategoryCheckBox_" + modelData.category
+                        checked: !parent.categoryHidden
+                        onToggled: {
+                            controlsFlickable.setCategoryHidden(modelData.category, !checked)
+                            // A click replaces the binding with a plain value;
+                            // restore it so All/None keep updating this box.
+                            checked = Qt.binding(function () { return !parent.categoryHidden })
+                        }
+                    }
                     Rectangle {
                         objectName: "obsCategorySwatch_" + modelData.category
                         width: 14
                         height: 14
                         radius: 2
+                        // Real color kept, faded: what comes back when re-ticked.
+                        opacity: parent.categoryHidden ? 0.3 : 1
                         color: modelData.color
                         border.color: palette.mid
                         TapHandler {

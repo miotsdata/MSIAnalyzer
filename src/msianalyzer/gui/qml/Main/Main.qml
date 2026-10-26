@@ -606,7 +606,10 @@ ApplicationWindow {
                 "vmin": controls.vminToken(),
                 "vmax": controls.vmaxToken(),
                 "showRois": section.showRois,
+                "hiddenCategories": controls.inspectionMode === "obs" && !controls.isSelectedObsNumeric
+                                    ? controls.hiddenObsCategories.slice() : [],
             } : null
+            imageShownCategoriesCheckBox.checked = true
             // Offered once any sample has a pixel size (ADR 53), checked
             // by default when the bar is on in Visual Inspection.
             var bar = section ? section.scaleBar : null
@@ -639,6 +642,16 @@ ApplicationWindow {
                     highlighted: exportImageDialog.format === "svg"
                     onClicked: exportImageDialog.format = "svg"
                 }
+            }
+
+            // Only when something is hidden in the categories legend:
+            // ticked exports what's on screen, unticked every category.
+            AppCheckBox {
+                id: imageShownCategoriesCheckBox
+                objectName: "imageShownCategoriesCheckBox"
+                text: "Only the categories shown"
+                visible: !!exportImageDialog.controlsSnapshot
+                         && exportImageDialog.controlsSnapshot.hiddenCategories.length > 0
             }
 
             AppCheckBox {
@@ -678,7 +691,8 @@ ApplicationWindow {
                 snap.vmin,
                 snap.vmax,
                 snap.showRois,
-                imageScaleBarCheckBox.checked)
+                imageScaleBarCheckBox.checked,
+                imageShownCategoriesCheckBox.checked ? snap.hiddenCategories : [])
         }
     }
 

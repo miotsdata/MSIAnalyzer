@@ -53,3 +53,18 @@ style or make two neighbouring clusters distinguishable.
 - Category names containing `,` or `|` still break the tile id, as before
   (unchanged by this ADR).
 - No config or pipeline change; no re-run needed.
+
+## Addendum: showing only some categories
+
+- **A checkbox on each legend row, plus "All"/"None" buttons.** An unticked
+  category is sent in the tile id as `cat=000000`, so it renders black,
+  like pixels with no value. There's no renderer, provider or DB change,
+  and each on/off state gets its own cache key. Its swatch keeps the real
+  color, faded.
+- **Temporary.** `HeatmapControlsPanel.hiddenObsCategories` is QML state
+  only, never saved. It is cleared on a column or dataset change.
+- **Export: "Only the categories shown"** in the image-export dialog. It
+  appears only when something is hidden and is ticked by default.
+  `render_heatmap_figure(hidden_categories=...)` draws those categories
+  black and leaves them out of the legend. Unticked, every category is
+  exported.

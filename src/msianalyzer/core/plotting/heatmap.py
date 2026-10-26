@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 import matplotlib
 import matplotlib.cm
 import matplotlib.figure
@@ -512,6 +513,7 @@ def render_heatmap_figure(
     rois: dict | None = None,
     title: str | None = None,
     scale_bar: dict | None = None,
+    hidden_categories: Collection[str] = (),
 ) -> matplotlib.figure.Figure:
     """A real Matplotlib `Figure` for one sample's spatial heatmap —
     what `export_visual_inspection_images` writes to PNG/PDF/SVG, unlike
@@ -551,6 +553,9 @@ def render_heatmap_figure(
         title: Optional figure title (e.g. the sample name).
         scale_bar: `scale_bar_spec`'s `{"length_px", "label", "color"}` —
             drawn bottom-right on the raster. `None` draws nothing.
+        hidden_categories: `mode="obs_categorical"` only — categories
+            switched off in Visual Inspection: drawn black, like pixels
+            with no value, and left out of the legend.
 
     Returns:
         A standalone `Figure` (not tied to `pyplot`'s global current-figure
@@ -592,7 +597,10 @@ def render_heatmap_figure(
     elif mode == "obs_categorical":
         if not obs_column:
             raise ValueError("mode='obs_categorical' requires obs_column")
-        colors = colors or category_colors(categories or [])
+        colors = [
+            "#000000" if cat in hidden_categories else color
+            for cat, color in zip(categories or [], colors or category_colors(categories or []))
+        ]
         rgba = render_obs_categories_heatmap(adata, obs_column, categories or [], colors)
         legend_kind = "categories"
     else:
@@ -642,6 +650,7 @@ def render_heatmap_figure(
         handles = [
             matplotlib.patches.Patch(facecolor=colors[i], label=cat)
             for i, cat in enumerate(categories or [])
+            if cat not in hidden_categories
         ]
         if handles:
             ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.0, 0.5))

@@ -2902,7 +2902,7 @@ class AnalysisBridge(QObject):
 
         self._run_export(_do_export)
 
-    @Slot(str, str, str, str, str, str, str, str, str, str, bool, bool)
+    @Slot(str, str, str, str, str, str, str, str, str, str, bool, bool, "QVariantList")
     def exportVisualInspectionImages(
         self,
         analysis_db_path: str,
@@ -2917,6 +2917,7 @@ class AnalysisBridge(QObject):
         vmax_token: str,
         show_rois: bool,
         include_scale_bar: bool,
+        hidden_categories: list,
     ) -> None:
         """Start writing the Image export (one PNG/PDF/SVG per sample,
         matching Visual Inspection's own current display settings) on a
@@ -2944,6 +2945,8 @@ class AnalysisBridge(QObject):
             show_rois: Mirrors Visual Inspection's "Show ROIs" checkbox.
             include_scale_bar: The export dialog's "Include scale bar"
                 checkbox (ADR 53).
+            hidden_categories: Categories to export black and leave out of
+                the legend; `[]` exports every category.
         """
         # Resolved now, on the GUI thread — the export follows whatever
         # dataset Visual Inspection is showing when the user clicked.
@@ -2967,6 +2970,7 @@ class AnalysisBridge(QObject):
                 show_rois=show_rois,
                 rel_dir=rel_dir,
                 include_scale_bar=include_scale_bar,
+                hidden_categories=[str(c) for c in hidden_categories],
             )
             return f"Images exported for {n} sample(s) to {dest_folder}"
 

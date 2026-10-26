@@ -518,3 +518,25 @@ def test_export_visual_inspection_images_scale_bar_only_when_requested(tmp_path,
 
     export_visual_inspection_images(db, tmp_path / "without", "png", "feature", mz=100.0)
     assert seen == {"sampleA": None, "sampleB": None}
+
+
+def test_export_visual_inspection_images_passes_hidden_categories(tmp_path, monkeypatch):
+    import msianalyzer.core.export as export_module
+
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_sample_with_obs(db, "sampleA", obs_columns={"polarity": ["neg", "pos", "neg", "pos"]})
+    seen = []
+    real = export_module.render_heatmap_figure
+
+    def spy(adata, **kwargs):
+        seen.append(kwargs["hidden_categories"])
+        return real(adata, **kwargs)
+
+    monkeypatch.setattr(export_module, "render_heatmap_figure", spy)
+
+    export_visual_inspection_images(
+        db, tmp_path / "shown", "png", "obs", obs_column="polarity", hidden_categories=["neg"]
+    )
+    export_visual_inspection_images(db, tmp_path / "all", "png", "obs", obs_column="polarity")
+    assert seen == [{"neg"}, set()]

@@ -1213,6 +1213,65 @@ def test_custom_category_color_reaches_legend_and_tiles_and_resets(
     assert reset.property("visible") is False
 
 
+def test_category_checkboxes_and_all_none_paint_hidden_categories_black(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {
+        "region": ["positive", "positive", "negative", "negative"],
+        "batch": ["a", "b", "a", "b"],
+    }
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(lambda: len(_as_list(section.property("obsColumns"))) > 1, timeout=2000)
+    names = [c["name"] for c in _as_list(section.property("obsColumns"))]
+    section.setProperty("selectedObsIndex", names.index("region"))
+    qtbot.waitUntil(
+        lambda: {c["category"] for c in _as_list(section.property("obsCategoryLegend"))}
+        == {"positive", "negative"},
+        timeout=2000,
+    )
+    tile = find_visual_child(root, "heatmapImage_s1")
+
+    def click(name):
+        item = find_visual_child(root, name)
+        _scroll_controls_panel_to(root, find_visual_child, item)
+        qtbot.mouseClick(
+            view, Qt.LeftButton, pos=item.mapToScene(item.boundingRect().center()).toPoint()
+        )
+        qtbot.wait(50)
+
+    positive_box = find_visual_child(root, "obsCategoryCheckBox_positive")
+    negative_box = find_visual_child(root, "obsCategoryCheckBox_negative")
+    assert positive_box.property("checked") is True
+
+    click("obsCategoryCheckBox_positive")
+    assert positive_box.property("checked") is False
+    assert "positive=000000" in tile.property("source").toString()
+    assert "negative=000000" not in tile.property("source").toString()
+
+    click("obsCategoriesHideAllButton")
+    assert negative_box.property("checked") is False
+    assert "negative=000000" in tile.property("source").toString()
+
+    # All re-ticks even the box the user clicked (its binding survives).
+    click("obsCategoriesShowAllButton")
+    assert positive_box.property("checked") is True
+    assert "000000" not in tile.property("source").toString()
+
+    # Temporary: a column change clears it.
+    click("obsCategoryCheckBox_positive")
+    assert _as_list(section.property("hiddenObsCategories")) == ["positive"]
+    section.setProperty("selectedObsIndex", names.index("batch"))
+    assert _as_list(section.property("hiddenObsCategories")) == []
+
+
 def test_obs_category_colors_stable_when_sample_hidden(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):

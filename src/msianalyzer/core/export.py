@@ -248,6 +248,7 @@ def export_visual_inspection_images(
     show_rois: bool = False,
     rel_dir: str | None = None,
     include_scale_bar: bool = False,
+    hidden_categories: list[str] | None = None,
 ) -> int:
     """Write `<dest_folder>/<sample_name>.<image_format>` for every
     sample — the same raster + colorbar/legend `render_heatmap_figure`
@@ -285,6 +286,9 @@ def export_visual_inspection_images(
             every sample that has a pixel size set, even while it's
             switched off in Visual Inspection; the others are exported
             without one (logged).
+        hidden_categories: Categories switched off in Visual Inspection,
+            exported black and left out of the legend (the export dialog's
+            "Only the categories shown"). `None` exports every category.
 
     Returns:
         The number of sample images written. A sample with no `.h5ad`
@@ -359,6 +363,7 @@ def export_visual_inspection_images(
             rois=rois,
             title=sample_name,
             scale_bar=scale_bar,
+            hidden_categories=set(hidden_categories or ()),
         )
         dest_path = dest_folder / f"{sample_name}.{ext}"
         fig.savefig(dest_path, bbox_inches="tight")

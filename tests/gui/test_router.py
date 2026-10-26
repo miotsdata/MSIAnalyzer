@@ -640,6 +640,9 @@ def test_export_image_menu_item_opens_choice_dialog_with_a_controls_snapshot(
     snapshot = dialog.property("controlsSnapshot").toVariant()
     assert snapshot is not None
     assert snapshot["layer"] == "TIC"
+    # Nothing hidden in a categories legend: no "Only the categories shown".
+    assert snapshot["hiddenCategories"] == []
+    assert window.findChild(QObject, "imageShownCategoriesCheckBox").property("visible") is False
     # No pixel size set anywhere yet: nothing to draw a scale bar with.
     scale_bar_box = window.findChild(QObject, "imageScaleBarCheckBox")
     assert scale_bar_box.property("enabled") is False
