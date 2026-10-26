@@ -68,3 +68,4 @@ useful).
 | [56](0056-per-run-log-file-and-output-tab.md) | Per-run log file in the output folder, and an Output tab | Accepted |
 | [57](0057-custom-categorical-colors.md) | Custom colors for categorical obs columns | Accepted |
 | [58](0058-roi-select-move-copy-paste.md) | Select, move, copy and paste ROIs in ROI Design | Accepted |
+| [59](0059-portable-project-paths.md) | Portable project paths: stored relative, resolved against the opened project | Accepted |

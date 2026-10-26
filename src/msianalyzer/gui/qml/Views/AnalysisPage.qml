@@ -16,6 +16,11 @@ Page {
     // page of the calibration curve"), not a 5th tab alongside the rest.
     readonly property bool isTargeted: analysisPage.analysis
                                         && analysisPage.analysis.analysisType === "targeted"
+    // The run's output folder isn't on this machine (moved, deleted, or a
+    // copy of the project without its output/). Every section would read
+    // missing files, so the page shows only a message instead.
+    readonly property bool outputMissing: !!analysisPage.analysis
+                                          && analysisPage.analysis.outDirMissing
     // `analysis` can still be unset at Component.onCompleted time for a
     // page reached via StackView.push({"analysis": ...}) — same timing
     // quirk noted on summaryLoader's own Qt.binding below — so this reacts
@@ -25,7 +30,8 @@ Page {
     // needing a full re-run; safe/idempotent, see
     // AnalysisBridge.ensureSchemaCurrent's own docstring.
     onAnalysisChanged: {
-        if (analysisPage.analysis && analysisPage.analysis.analysisDbPath) {
+        if (analysisPage.analysis && analysisPage.analysis.analysisDbPath
+                && !analysisPage.outputMissing) {
             AnalysisBridge.ensureSchemaCurrent(analysisPage.analysis.analysisDbPath)
             // Every workspace opens on the pipeline output, never on an
             // imported dataset (ADR 49) left active from a previous visit.
@@ -200,7 +206,7 @@ Page {
                 // A targeted analysis has exactly one page (Calibration —
                 // see `isTargeted`'s own comment) — no tabs to switch
                 // between, so the whole nav rail is pointless for it.
-                visible: !analysisPage.isTargeted
+                visible: !analysisPage.isTargeted && !analysisPage.outputMissing
                 // "I don't want user to run back and forth while things
                 // are loading" — also closes off a plausible trigger for
                 // the rare crash found while testing the loading overlay
@@ -320,7 +326,7 @@ Page {
                 objectName: "sectionStack"
                 currentIndex: 0
                 anchors.fill: parent
-                visible: !analysisPage.isTargeted
+                visible: !analysisPage.isTargeted && !analysisPage.outputMissing
 
                 // Annotations/Visual Inspection are now lazy too (`active:
                 // currentIndex === N`, matching MS1's existing pattern) —
@@ -358,7 +364,7 @@ Page {
                     // used to be eager regardless of analysis type, which
                     // would build SummarySection.qml — untargeted-shaped
                     // data throughout — for no reason on every targeted run).
-                    active: !analysisPage.isTargeted
+                    active: !analysisPage.isTargeted && !analysisPage.outputMissing
                     source: "qrc:/Views/SummarySection.qml"
                     // Qt.binding, not a one-time assignment: a plain
                     // `item.analysis = analysisPage.analysis` only runs once,
@@ -377,14 +383,14 @@ Page {
                     // as a permanent sibling rather than destroying hidden
                     // ones, so an eager section would be built (and its
                     // spectrum fetched) on every workspace open.
-                    active: sectionStack.currentIndex === 1
+                    active: sectionStack.currentIndex === 1 && !analysisPage.outputMissing
                     source: "qrc:/Views/MS1SpectraSection.qml"
                     onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
                 }
                 Loader {
                     id: annotationsLoader
                     objectName: "annotationsSectionLoader"
-                    active: sectionStack.currentIndex === 2
+                    active: sectionStack.currentIndex === 2 && !analysisPage.outputMissing
                     source: "qrc:/Views/AnnotationsSection.qml"
                     onLoaded: {
                         item.analysis = Qt.binding(function () { return analysisPage.analysis })
@@ -400,7 +406,7 @@ Page {
                 Loader {
                     id: visualLoader
                     objectName: "visualSectionLoader"
-                    active: sectionStack.currentIndex === 3
+                    active: sectionStack.currentIndex === 3 && !analysisPage.outputMissing
                     source: "qrc:/Views/VisualInspectionSection.qml"
                     onLoaded: {
                         item.analysis = Qt.binding(function () { return analysisPage.analysis })
@@ -433,7 +439,7 @@ Page {
                 Loader {
                     id: spatialCorrLoader
                     objectName: "spatialCorrelationSectionLoader"
-                    active: sectionStack.currentIndex === 4
+                    active: sectionStack.currentIndex === 4 && !analysisPage.outputMissing
                     source: "qrc:/Views/SpatialCorrelationSection.qml"
                     onLoaded: {
                         item.analysis = Qt.binding(function () { return analysisPage.analysis })
@@ -459,7 +465,7 @@ Page {
             Loader {
                 id: calibrationLoader
                 objectName: "calibrationSectionLoader"
-                active: analysisPage.isTargeted
+                active: analysisPage.isTargeted && !analysisPage.outputMissing
                 anchors.fill: parent
                 source: "qrc:/Views/CalibrationSection.qml"
                 onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
@@ -476,7 +482,20 @@ Page {
                 id: sectionLoadingOverlay
                 objectName: "sectionLoadingOverlay"
                 anchors.fill: parent
-                visible: !analysisPage.currentSectionReady
+                visible: !analysisPage.currentSectionReady && !analysisPage.outputMissing
+            }
+
+            Label {
+                objectName: "outputMissingLabel"
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 32, 640)
+                visible: analysisPage.outputMissing
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                text: "Output folder not found:\n" + (analysis ? analysis.outDir : "")
+                      + "\n\nThis analysis' results are not in this project folder on this "
+                      + "computer. Check that the project's output/ folder was copied or "
+                      + "is reachable from here."
             }
         }
     }

@@ -56,6 +56,7 @@ from msianalyzer.core.utils.create_adata import create_spatial_adata
 from msianalyzer.core.utils.logging_utils import log_call, run_log, worker_logging
 from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
 from msianalyzer.core.utils.tic_normalization import run_normalization
+from msianalyzer.core.utils.paths import relative_to_project
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,9 @@ class Run:
                 d[key] = value.to_dict()
             else:
                 d[key] = value
+        io = getattr(getattr(self, "config", None), "io", None)
+        if io is not None:
+            d["config_path"] = relative_to_project(d.get("config_path"), io.project_folder)
         return d
 
     @log_call

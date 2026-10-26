@@ -63,3 +63,23 @@ def test_analysis_model_analysis_type_reads_targeted(project):
     run_dict = {"config": {"analysis_type": "targeted"}}
     model = AnalysisModel(project_model, "run-123", run_dict)
     assert model.analysisType == "targeted"
+
+
+def test_out_dir_written_before_project_moved_resolves_into_project(project, tmp_path):
+    # "/data/Projects/P/output/run1" stored on Linux, project now opened
+    # from the NAS / Windows: the run's output is found in this folder.
+    (tmp_path / "output" / "run1").mkdir(parents=True)
+    project_model = ProjectModel(project, str(tmp_path))
+    run_dict = {"config": {"io": {"out_dir": "/data/Projects/P/output/run1"}}}
+    model = AnalysisModel(project_model, "run-123", run_dict)
+
+    assert model.outDir == str(tmp_path / "output" / "run1")
+    assert not model.outDirMissing
+
+
+def test_relative_out_dir_and_missing_flag(project, tmp_path):
+    project_model = ProjectModel(project, str(tmp_path))
+    model = AnalysisModel(project_model, "r", {"config": {"io": {"out_dir": "output/run1"}}})
+
+    assert model.outDir == str(tmp_path / "output" / "run1")
+    assert model.outDirMissing

@@ -583,14 +583,17 @@ def test_export_image_menu_item_disabled_on_non_visual_inspection_tab(
 
 
 def test_export_image_menu_item_enabled_after_switching_to_visual_inspection_tab(
-    application, engine, qtbot, find_visual_child
+    application, engine, qtbot, find_visual_child, tmp_path
 ):
     from msianalyzer.gui.models.analysis import AnalysisModel
 
     window = engine.rootObjects()[0]
-    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    # A real output folder: a missing one shows only "Output folder not
+    # found" and loads no section (ADR 59).
+    (tmp_path / "out").mkdir()
+    project_model = ProjectModel(Project(name="p"), str(tmp_path), application)
     analysis = AnalysisModel(
-        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "out"}}}
     )
     application.router.showAnalysisRequested.emit(analysis)
     qtbot.wait(100)
@@ -607,14 +610,17 @@ def test_export_image_menu_item_enabled_after_switching_to_visual_inspection_tab
 
 
 def test_export_image_menu_item_opens_choice_dialog_with_a_controls_snapshot(
-    application, engine, qtbot, find_visual_child
+    application, engine, qtbot, find_visual_child, tmp_path
 ):
     from msianalyzer.gui.models.analysis import AnalysisModel
 
     window = engine.rootObjects()[0]
-    project_model = ProjectModel(Project(name="p"), "/tmp/proj", application)
+    # A real output folder: a missing one shows only "Output folder not
+    # found" and loads no section (ADR 59).
+    (tmp_path / "out").mkdir()
+    project_model = ProjectModel(Project(name="p"), str(tmp_path), application)
     analysis = AnalysisModel(
-        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "/tmp/proj/out"}}}
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "out"}}}
     )
     application.router.showAnalysisRequested.emit(analysis)
     qtbot.wait(100)

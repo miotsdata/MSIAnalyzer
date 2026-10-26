@@ -376,3 +376,24 @@ def test_summary_section_shows_seeded_counts(
     assert features_value.property("text") == "3"
     # no library ran -> placeholder, not "0"
     assert annotated_value.property("text") == "—"
+
+
+def test_missing_output_folder_shows_message_not_sections(
+    analysis_view, project, tmp_path, find_visual_child
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+    from msianalyzer.gui.models.project import ProjectModel
+
+    model = AnalysisModel(
+        ProjectModel(project, str(tmp_path)),
+        "run-1",
+        {"config": {"io": {"out_dir": "/data/Projects/P/output/gone"}}},
+    )
+    view = analysis_view(model)
+    root = view.rootObject()
+
+    label = find_visual_child(root, "outputMissingLabel")
+    assert label.property("visible")
+    assert "/data/Projects/P/output/gone" in label.property("text")
+    assert not find_visual_child(root, "sectionStack").property("visible")
+    assert root.findChild(QQuickItem, "summarySectionLoader").property("active") is False

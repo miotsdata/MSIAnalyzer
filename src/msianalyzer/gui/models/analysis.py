@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PySide6.QtCore import Property, QObject
 
 from msianalyzer.core import analysis_db
@@ -36,8 +38,21 @@ class AnalysisModel(QObject):
 
     @Property(str, constant=True)
     def outDir(self) -> str:
+        """The run's output folder in this project folder on this machine:
+        stored relative to the project, or absolute from before the
+        project moved / from another OS (see `resolve_in_project`)."""
         io = (self._run_dict.get("config") or {}).get("io") or {}
-        return io.get("out_dir") or ""
+        out_dir = io.get("out_dir") or ""
+        if self._project_model is None:
+            return out_dir
+        return self._project_model.resolve_path(out_dir)
+
+    @Property(bool, constant=True)
+    def outDirMissing(self) -> bool:
+        """True when `outDir` can't be found here (moved/deleted, or the
+        project folder was copied without its `output/`), so the workspace
+        can say so instead of showing empty tabs."""
+        return not self.outDir or not Path(self.outDir).is_dir()
 
     @Property(str, constant=True)
     def analysisType(self) -> str:

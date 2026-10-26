@@ -44,7 +44,9 @@ import pandas as pd
 
 import logging
 
+from msianalyzer.core.project.project import NotInProjectFolderError, get_project_folder
 from msianalyzer.core.utils.db import safe_execute, safe_executemany
+from msianalyzer.core.utils.paths import relative_to_project, resolve_in_project
 from msianalyzer.core.utils.logging_utils import log_call
 
 logger = logging.getLogger(__name__)
@@ -733,6 +735,31 @@ def init_analysis_db(db_path: Path | str) -> sqlite3.Connection:
 
 
 # ---------------------------------------------------------------------------
+# Stored paths (ADR 59): relative to the project when inside it
+# ---------------------------------------------------------------------------
+
+
+def _project_of(db_path: Path | str) -> Path | None:
+    try:
+        return get_project_folder(Path(db_path).parent)
+    except NotInProjectFolderError:
+        return None
+
+
+def _path_for_storage(db_path: Path | str, path: Path | str) -> str:
+    """`path` relative to the project holding `db_path` when inside it,
+    else absolute — what gets written to the analysis DB."""
+    return relative_to_project(path, _project_of(db_path))
+
+
+def _stored_path_here(db_path: Path | str, stored: str) -> str:
+    """A stored path located in the project holding `db_path` on this
+    machine (see `resolve_in_project`); unchanged outside a project."""
+    root = _project_of(db_path)
+    return stored if root is None else str(resolve_in_project(stored, root))
+
+
+# ---------------------------------------------------------------------------
 # Samples
 # ---------------------------------------------------------------------------
 
@@ -746,10 +773,11 @@ def register_sample(
 ) -> int:
     """Insert a sample row (or return the existing one) and return its id.
 
-    Samples are keyed by ``raw_db_path``; calling this twice for the same
-    raw database is a no-op that returns the original ``sample_id``.
+    Samples are keyed by ``raw_db_path``, stored relative to the project
+    when inside it (ADR 59); calling this twice for the same raw database
+    is a no-op that returns the original ``sample_id``.
     """
-    raw_db_path = str(Path(raw_db_path))
+    raw_db_path = _path_for_storage(db_path, raw_db_path)
     with connect(db_path) as con:
         cur = con.execute(
             "SELECT sample_id FROM samples WHERE raw_db_path = ?", (raw_db_path,)
@@ -1703,8 +1731,11 @@ def get_sample_raw_db_path(db_path: Path | str, sample_name: str) -> str | None:
         sample_name: `samples.name` to look up.
 
     Returns:
-        The stored raw database path, or `None` if no sample named
-        `sample_name` exists (or the `samples` table doesn't exist yet).
+        The raw database path, located in the project folder holding
+        `db_path` when the stored absolute path is from before the project
+        moved or from another OS (see `resolve_in_project`); `None` if no
+        sample named `sample_name` exists (or the `samples` table doesn't
+        exist yet).
     """
     with connect(db_path) as con:
         try:
@@ -1713,7 +1744,7 @@ def get_sample_raw_db_path(db_path: Path | str, sample_name: str) -> str | None:
             ).fetchone()
         except sqlite3.OperationalError:
             return None
-    return row[0] if row else None
+    return _stored_path_here(db_path, row[0]) if row else None
 
 
 @log_call(source="db_path")
@@ -2337,7 +2368,8 @@ def insert_imported_dataset(
         db_path: The analysis database.
         name: Display name — `UNIQUE`.
         rel_dir: Per-sample `.h5ad` folder, relative to `db_path`'s folder.
-        source_path: The user's own source `.h5ad` (absolute).
+        source_path: The user's own source `.h5ad`; stored relative to
+            the project when inside it, else absolute (ADR 59).
         source_kind: `"merged"` or `"single"`.
         sample_column: The source's obs column naming each row's sample
             (`None` for a single-sample file).
@@ -2366,7 +2398,8 @@ def insert_imported_dataset(
             "INSERT INTO imported_datasets (name, rel_dir, source_path, source_kind, "
             "sample_column, layers, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                name, rel_dir, source_path, source_kind, sample_column,
+                name, rel_dir, _path_for_storage(db_path, source_path),
+                source_kind, sample_column,
                 json.dumps(list(layers)), datetime.now().astimezone().isoformat(),
             ),
             table="imported_datasets", logger=logger, source=db_path,
@@ -2435,6 +2468,7 @@ def load_imported_dataset(db_path: Path | str, dataset_id: int) -> dict | None:
     keys = ("id", "name", "rel_dir", "source_path", "source_kind", "sample_column",
             "layers", "imported_at")
     info = dict(zip(keys, row))
+    info["source_path"] = _stored_path_here(db_path, info["source_path"])
     info["layers"] = json.loads(info["layers"] or "[]")
     info["samples"] = [
         {"name": n, "sample_id": int(i), "source_label": label, "n_pixels": int(px)}

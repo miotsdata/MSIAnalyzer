@@ -35,6 +35,9 @@ report:   {enabled: true, purity_cutoff: 0.8}
 Relative paths (like `data/s1.mzML` above) are resolved against `project_folder`
 — so a config file can be checked into the project and moved around without
 editing paths, as long as it stays next to the project's data.
+Analyses store their paths the same way, so a whole project folder can be moved,
+or opened from a NAS on both Linux and Windows, and its analyses still open.
+Opening a project always shows the results inside *that* folder.
 
 The **GUI's New Analysis wizard** builds one of these config files for you
 interactively, one tab per section below (each field there shows this same

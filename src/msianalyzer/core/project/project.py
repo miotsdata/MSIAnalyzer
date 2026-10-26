@@ -7,6 +7,7 @@ import yaml
 import logging
 from msianalyzer.core.utils import MSIAnalyzerError
 from msianalyzer.core.utils.logging_utils import log_call
+from msianalyzer.core.utils.paths import resolve_in_project
 import re
 
 logger = logging.getLogger(__name__)
@@ -159,8 +160,9 @@ class Project:
 
         Args:
             run_id: The run to delete.
-            project_folder: Used to resolve `out_dir` / `config_path` when
-                either was stored as a relative path. Left unresolved
+            project_folder: Used to resolve `out_dir` / `config_path`
+                (see `resolve_in_project`: relative paths, and absolute
+                ones written before the project moved). Left unresolved
                 (used as-is, relative to the current working directory)
                 when None.
 
@@ -181,10 +183,9 @@ class Project:
         def _resolve(p: str | None) -> Path | None:
             if not p:
                 return None
-            path = Path(p)
-            if not path.is_absolute() and project_folder is not None:
-                path = Path(project_folder) / path
-            return path
+            if project_folder is None:
+                return Path(p)
+            return resolve_in_project(p, project_folder)
 
         out_path = _resolve(out_dir)
         if out_path is not None and out_path.exists():

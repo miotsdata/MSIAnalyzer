@@ -14,6 +14,7 @@ from msianalyzer.core.annotation.target_list import adducts_for_polarity
 from msianalyzer.core.project.project import NotInProjectFolderError, get_project_folder
 from msianalyzer.core.utils.logging_utils import RUN_LOG_LEVELS
 from msianalyzer.core.utils.logging_utils import log_call
+from msianalyzer.core.utils.paths import relative_to_project
 
 logger = logging.getLogger(__name__)
 
@@ -1802,6 +1803,12 @@ class Config:
             d[group_name] = {
                 f.name: convert(getattr(group_obj, f.name)) for f in fields(group_obj)
             }
+        # Paths inside the project are stored relative to it, so the project
+        # folder still works after a move or from another OS/mount.
+        io, root = d["io"], self.io.project_folder
+        io["out_dir"] = relative_to_project(io["out_dir"], root)
+        for key in ("mzml_paths", "xml_paths", "db_paths"):
+            io[key] = [relative_to_project(p, root) for p in io[key]]
         return d
 
     @classmethod

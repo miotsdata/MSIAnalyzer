@@ -2003,3 +2003,32 @@ def test_delete_calibration_curve_missing_id_returns_false(tmp_path: Path):
     init_analysis_db(db).close()
 
     assert delete_calibration_curve(db, 999) is False
+
+
+def test_paths_inside_a_project_are_stored_relative_and_resolved_back(tmp_path):
+    # ADR 59: raw DB (and so the H&E image next to it) and an imported
+    # dataset's source, stored relative to the project folder.
+    import sqlite3
+
+    from msianalyzer.core import analysis_db as adb
+
+    (tmp_path / ".msianalyzer.yml").write_text("")
+    out = tmp_path / "output" / "run1"
+    out.mkdir(parents=True)
+    db = out / "analysis.db"
+    adb.init_analysis_db(db).close()
+    raw = tmp_path / "parsed" / "s1.db"
+
+    adb.register_sample(db, "s1", raw)
+    adb.insert_imported_dataset(
+        db, name="d", rel_dir="imported/d", source_path=str(tmp_path / "nb" / "x.h5ad"),
+        source_kind="single", sample_column=None, layers=[], samples=[("s1", None, 1)],
+    )
+    with sqlite3.connect(db) as con:
+        assert con.execute("SELECT raw_db_path FROM samples").fetchone()[0] == "parsed/s1.db"
+        assert con.execute("SELECT source_path FROM imported_datasets").fetchone()[0] == "nb/x.h5ad"
+
+    assert adb.get_sample_raw_db_path(db, "s1") == str(raw)
+    assert adb.load_imported_dataset(db, 1)["source_path"] == str(tmp_path / "nb" / "x.h5ad")
+    # Same sample registered again: same row, not a duplicate.
+    assert adb.register_sample(db, "s1", raw) == 1

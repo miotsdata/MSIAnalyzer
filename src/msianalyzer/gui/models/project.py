@@ -3,6 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core.project.project import Project
+from msianalyzer.core.utils.paths import resolve_in_project
 from msianalyzer.gui.utils.formatting import format_minute_precision as _format_minute_precision
 
 _DATA_FILE_SUFFIXES = {
@@ -49,6 +50,13 @@ class ProjectModel(QObject):
         """The project's folder on disk (not stored on `Project` itself)."""
         return self._folder or ""
 
+    def resolve_path(self, path: str | None) -> str:
+        """A stored run path (`out_dir`, `config_path`) located in this
+        project folder on this machine; see `resolve_in_project`."""
+        if not path or not self._folder:
+            return path or ""
+        return str(resolve_in_project(path, self._folder))
+
     @Property(dict, notify=runsChanged)
     def runs(self) -> dict:
         return self._project.runs
@@ -64,7 +72,9 @@ class ProjectModel(QObject):
         actually shows — `out_dir`/`config_path` relative to the project
         folder, `start_date` truncated to minute precision — while the
         plain fields stay the full absolute path / timestamp, e.g. for a
-        "copy full path" action. `analysis_type` is `"untargeted"` for
+        "copy full path" action. Paths go through `resolve_path`, so a run
+        stored relative, or written before the project moved, still points
+        into this project folder. `analysis_type` is `"untargeted"` for
         every run predating this field (see `Config.analysis_type`).
         """
         entries = []
@@ -72,8 +82,8 @@ class ProjectModel(QObject):
             config = run.get("config") or {}
             io = config.get("io") or {}
             start_date = run.get("start_date") or ""
-            out_dir = io.get("out_dir") or ""
-            config_path = run.get("config_path") or ""
+            out_dir = self.resolve_path(io.get("out_dir"))
+            config_path = self.resolve_path(run.get("config_path"))
             entries.append(
                 {
                     "id": run_id,

@@ -2024,3 +2024,14 @@ def test_start_writes_no_run_log_when_off(mocker, tmp_path):
     run.start(config=config)
 
     assert not list(Path(config.io.out_dir).glob("run_*.log"))
+
+
+def test_run_to_dict_stores_config_path_relative_to_project(tmp_path):
+    from types import SimpleNamespace
+
+    run = Run("test_config.yml")
+    run.config = DummyObjectWithToDict()
+    run.config.io = SimpleNamespace(project_folder=tmp_path)
+    run.config_path = str(tmp_path / "configs" / "run_x.yaml")
+
+    assert run.to_dict()["config_path"] == "configs/run_x.yaml"

@@ -167,12 +167,13 @@ def test_config_round_trips_none_entries_in_mixed_sample_lists(tmp_path: Path):
     config = Config(io=io)
 
     d = config.to_dict()
-    assert d["io"]["mzml_paths"] == [None, str(tmp_path / "b.mzML")]
-    assert d["io"]["db_paths"] == [str(db), None]
+    # Stored relative to the project folder (see the test below).
+    assert d["io"]["mzml_paths"] == [None, "b.mzML"]
+    assert d["io"]["db_paths"] == ["parsed/already_parsed.db", None]
 
     reloaded = Config.from_dict(d)
-    assert reloaded.io.mzml_paths == [None, tmp_path / "b.mzML"]
-    assert reloaded.io.db_paths == [db, None]
+    assert reloaded.io.mzml_paths == [None, Path("b.mzML")]
+    assert reloaded.io.db_paths == [Path("parsed/already_parsed.db"), None]
 
 
 def test_default_dataclass_initializations():
@@ -324,6 +325,26 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
     assert isinstance(d["io"]["project_folder"], str)
     assert isinstance(d["io"]["mzml_paths"][0], str)
     assert d["ms1"]["chunk_size"] == 2000
+
+
+def test_config_to_dict_stores_paths_inside_project_relative(tmp_path: Path):
+    """Paths inside the project are stored relative to it, so the project
+    folder still works after a move or from another OS/mount; paths
+    outside it (e.g. raw data on another share) stay absolute."""
+    io = IOConfig(
+        project_folder=tmp_path,
+        mzml_paths=[tmp_path / "data/a.mzML", Path("/share/raw/b.mzML")],
+        xml_paths=[tmp_path / "data/a.xml", None],
+        db_paths=[None, tmp_path / "parsed/b.db"],
+        out_dir=tmp_path / "output/run1",
+    )
+    d = Config(io=io).to_dict()["io"]
+
+    assert d["project_folder"] == str(tmp_path)
+    assert d["out_dir"] == "output/run1"
+    assert d["mzml_paths"] == ["data/a.mzML", "/share/raw/b.mzML"]
+    assert d["xml_paths"] == ["data/a.xml", None]
+    assert d["db_paths"] == [None, "parsed/b.db"]
 
 
 def test_config_from_dict_success(sample_io_config: IOConfig):
