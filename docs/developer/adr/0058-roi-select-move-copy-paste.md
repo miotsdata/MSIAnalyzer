@@ -16,18 +16,28 @@ bridge or schema change. Every edit is an ordinary
 sample, so the mask, `merged.h5ad` and an imported dataset's write-back
 (ADR 49) all follow, as for a drawn ROI.
 
-- **Select** (idle only): click inside an ROI on the canvas (topmost one,
-  point-in-polygon in item pixels) or its name in the list; click on
-  empty space or Esc deselects. Drawn thicker with a light fill.
+- **Select** (idle only): click inside an ROI on the canvas or its name
+  in the list; click on empty space or Esc deselects. Drawn thicker with a
+  light fill. Where ROIs overlap, a click picks the smallest one under
+  the pointer, so an ROI drawn inside another can be selected whatever
+  the drawing order (the outer one by clicking outside the inner one).
 - **Move:** drag inside the selected ROI, or arrow keys (Shift = 10
-  pixels). While the pointer is over the selected ROI the image's
-  drag-to-pan is paused (`ZoomableImage.interactive`), so the drag reaches
-  a `DragHandler` instead of the Flickable; dragging elsewhere still pans.
+  pixels). While the pointer is over the selected ROI (its own outline,
+  even if another ROI overlaps it) the image's drag-to-pan is paused
+  (`ZoomableImage.interactive`), so the drag reaches a `DragHandler`
+  instead of the Flickable; dragging elsewhere still pans. That state is
+  refreshed on hover, on every press and on a selection change: on a real
+  Wayland session no hover may arrive between selecting and dragging, and
+  the image then took the drag (offscreen tests never showed it, since
+  there the handler always wins). A move cursor shows when a drag will
+  move the ROI.
   The preview snaps to whole cells on the grid surface; nothing is saved
   until release. On the H&E surface the drag is converted to grid units
   with the linear part of the He-pixel -> grid affine.
 - **Saved on release**, matching "closing the polygon saves". Ctrl+Z
-  undoes the last move (one level, cleared on a sample switch).
+  undoes moves one at a time, back through every move on the sample
+  (cleared on a sample switch). Pastes aren't undone by it; delete the
+  pasted ROI instead.
 - **Copy/paste:** Ctrl+C / Ctrl+V or the Copy/Paste buttons. The
   clipboard is window-local and survives a sample switch. Paste reuses the
   naming step: the same name when the target sample doesn't have it (the

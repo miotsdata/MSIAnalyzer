@@ -102,7 +102,20 @@ Item {
     // The finished drag, always in grid-index units (whole cells on the
     // grid surface; converted from H&E pixels in heMode).
     signal moveRequested(real dCol, real dRow)
+    // Whether the pointer is over the selected ROI, which pauses the
+    // image's pan. Refreshed on hover, on every press (a real compositor
+    // may deliver no hover between selecting and dragging, and then the
+    // image took the drag) and whenever the selection itself changes.
     property bool _pointerInSelected: false
+    function _refreshPointerInSelected(x, y) {
+        canvas._pointerInSelected = canvas.selectionEnabled && canvas._insideSelected(x, y)
+    }
+    onSelectedRoiNameChanged: {
+        if (hoverHandler.hovered)
+            canvas._refreshPointerInSelected(hoverHandler.point.position.x, hoverHandler.point.position.y)
+        else
+            canvas._pointerInSelected = false
+    }
 
     // Ray-casting point-in-polygon, in overlay item pixels.
     function _contains(vertices, x, y) {
@@ -115,15 +128,34 @@ Item {
         }
         return inside
     }
-    function _roiAt(x, y) {
-        var rois = canvas._displaySavedRois
-        for (var i = rois.length - 1; i >= 0; i--) {
-            if (canvas._contains(rois[i].vertices, x, y)) return rois[i].name
-        }
-        return ""
+    function _area(vertices) {
+        var a = 0
+        for (var i = 0, j = vertices.length - 1; i < vertices.length; j = i++)
+            a += (vertices[j][0] + vertices[i][0]) * (vertices[j][1] - vertices[i][1])
+        return Math.abs(a / 2)
     }
+    // The smallest ROI containing the point, so an ROI drawn inside
+    // another one can be picked by clicking it (the outer one by clicking
+    // outside the inner one), whatever their drawing order.
+    function _roiAt(x, y) {
+        var best = "", bestArea = Infinity
+        canvas._displaySavedRois.forEach(function (r) {
+            var a = canvas._area(r.vertices)
+            if (a < bestArea && canvas._contains(r.vertices, x, y)) {
+                best = r.name
+                bestArea = a
+            }
+        })
+        return best
+    }
+    // Tested against the selected ROI's own outline, not "the ROI under
+    // the pointer": a selected ROI overlapped by another must still move.
     function _insideSelected(x, y) {
-        return canvas.selectedRoiName !== "" && canvas._roiAt(x, y) === canvas.selectedRoiName
+        var rois = canvas._displaySavedRois
+        for (var i = 0; i < rois.length; i++) {
+            if (rois[i].name === canvas.selectedRoiName) return canvas._contains(rois[i].vertices, x, y)
+        }
+        return false
     }
     // Item-pixel drag translation -> what the preview shows. On the grid
     // surface it snaps to whole cells, so the preview is exactly where
@@ -187,9 +219,10 @@ Item {
         HoverHandler {
             id: hoverHandler
             objectName: "roiHoverHandler"
+            // The move cursor tells the user a drag here moves the ROI.
+            cursorShape: canvas._pointerInSelected ? Qt.SizeAllCursor : Qt.ArrowCursor
             onPointChanged: {
-                canvas._pointerInSelected = canvas.selectionEnabled
-                    && canvas._insideSelected(point.position.x, point.position.y)
+                canvas._refreshPointerInSelected(point.position.x, point.position.y)
                 if (canvas.draftVertices.length === 0) {
                     canvas._nearFirstVertex = false
                     return
@@ -228,6 +261,9 @@ Item {
         TapHandler {
             objectName: "roiSelectTapHandler"
             enabled: canvas.selectionEnabled
+            onPressedChanged: {
+                if (pressed) canvas._refreshPointerInSelected(point.position.x, point.position.y)
+            }
             onTapped: (eventPoint) => canvas.roiTapped(
                 canvas._roiAt(eventPoint.position.x, eventPoint.position.y))
         }

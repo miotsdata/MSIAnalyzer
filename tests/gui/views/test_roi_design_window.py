@@ -934,8 +934,11 @@ def test_dragging_the_selected_roi_moves_it_by_whole_cells(
 
     holder = canvas.findChild(QQuickItem, "zoomableImageOverlayHolder")
     scale = canvas.findChild(QQuickItem, "roiZoomableImage").property("effectiveScale")
+    # Press right where the selecting click was, with no hover in
+    # between: how a user selects and then drags. (Hovering first used to
+    # hide the bug where pan still won because the "pointer over the
+    # selected ROI" state was only refreshed by hover.)
     start = holder.mapToScene(QPointF(3.5 * scale, 3.5 * scale)).toPoint()
-    qtbot.mouseMove(window, pos=start)
     qtbot.mousePress(window, Qt.LeftButton, pos=start)
     for step in range(1, 11):  # 2 cells right, in small steps past the drag threshold
         qtbot.mouseMove(window, pos=holder.mapToScene(
@@ -994,3 +997,104 @@ def test_new_roi_with_a_name_already_on_this_sample_is_refused(
 
     assert window.property("draftState") == "naming"
     assert "already on this sample" in window.property("saveError")
+
+
+def test_drag_works_zoomed_in_when_selection_changed_without_a_hover(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # The pointer is already resting inside the ROI when it gets selected
+    # (from the list, or a click whose release brings no hover update, as
+    # on a real compositor): the drag must still move the ROI, not pan.
+    # The image's pan must be off from the press on, not only once the
+    # drag handler has won (which it always does offscreen, but not on a
+    # real Wayland session, where the image took the drag).
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    # Zoomed in, so the image can pan and competes for the drag (at zoom
+    # 1 there's nothing to pan and the bug never shows).
+    canvas.setProperty("zoom", 2.0)
+    qtbot.wait(50)
+    holder = canvas.findChild(QQuickItem, "zoomableImageOverlayHolder")
+    scale = canvas.findChild(QQuickItem, "roiZoomableImage").property("effectiveScale")
+    start = holder.mapToScene(QPointF(3.5 * scale, 3.5 * scale)).toPoint()
+    qtbot.mouseMove(window, pos=start)
+    qtbot.wait(20)
+    window.setProperty("selectedRoiName", "liver")
+
+    zoom_image = canvas.findChild(QQuickItem, "roiZoomableImage")
+    assert zoom_image.property("interactive") is False  # selection alone re-evaluates
+
+    qtbot.mousePress(window, Qt.LeftButton, pos=start)
+    assert zoom_image.property("interactive") is False
+    for step in range(1, 11):
+        qtbot.mouseMove(window, pos=holder.mapToScene(
+            QPointF((3.5 + 0.2 * step) * scale, 3.5 * scale)).toPoint())
+        qtbot.wait(5)
+    end = holder.mapToScene(QPointF(5.5 * scale, 3.5 * scale)).toPoint()
+    qtbot.mouseRelease(window, Qt.LeftButton, pos=end)
+    qtbot.wait(50)
+
+    assert _vertices(window, "liver") == [[v[0] + 2, v[1]] for v in _SQUARE]
+
+
+def test_ctrl_z_steps_back_through_several_moves(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    window.setProperty("selectedRoiName", "liver")
+    window.requestActivate()
+    qtbot.waitUntil(lambda: window.isActive(), timeout=2000)
+
+    for key in (Qt.Key_Right, Qt.Key_Right, Qt.Key_Down):
+        qtbot.keyClick(window, key)
+    qtbot.wait(50)
+    assert _vertices(window, "liver") == [[v[0] + 2, v[1] + 1] for v in _SQUARE]
+
+    for _ in range(3):
+        qtbot.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
+    qtbot.wait(50)
+    assert _vertices(window, "liver") == _SQUARE
+
+    # Nothing left to undo: a further Ctrl+Z changes nothing.
+    qtbot.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
+    qtbot.wait(50)
+    assert _vertices(window, "liver") == _SQUARE
+
+
+def test_inner_roi_inside_another_can_be_selected_and_dragged(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # "zone" (outer) sorts after "core" (inner), so it's drawn on top: the
+    # case where a click on the inner one used to pick the outer one and a
+    # drag on the selected inner one did nothing.
+    out_dir = Path(visual_analysis_model.outDir)
+    _write_grid_h5ad(out_dir / "s1.h5ad", n=12)
+    _write_grid_h5ad(out_dir / "s2.h5ad", n=12)
+    _seed_roi(visual_analysis_model, "s1", "core", [[3, 3], [5, 3], [5, 5], [3, 5]])
+    _seed_roi(visual_analysis_model, "s1", "zone", [[1, 1], [9, 1], [9, 9], [1, 9]], "#00ff00")
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    window = _open_roi_design_window(view, root, find_visual_child, qtbot)
+    canvas = window.findChild(QQuickItem, "roiDrawingCanvas")
+    _wait_image_ready(canvas.findChild(QQuickItem, "roiZoomableImage"), qtbot)
+
+    _tap_grid_point(window, canvas, 4, 4, qtbot)
+    assert window.property("selectedRoiName") == "core"
+    _tap_grid_point(window, canvas, 7, 7, qtbot)
+    assert window.property("selectedRoiName") == "zone"
+
+    window.setProperty("selectedRoiName", "core")
+    holder = canvas.findChild(QQuickItem, "zoomableImageOverlayHolder")
+    scale = canvas.findChild(QQuickItem, "roiZoomableImage").property("effectiveScale")
+    start = holder.mapToScene(QPointF(4.5 * scale, 4.5 * scale)).toPoint()
+    qtbot.mouseMove(window, pos=start)
+    qtbot.mousePress(window, Qt.LeftButton, pos=start)
+    for step in range(1, 11):
+        qtbot.mouseMove(window, pos=holder.mapToScene(
+            QPointF((4.5 + 0.1 * step) * scale, 4.5 * scale)).toPoint())
+        qtbot.wait(5)
+    qtbot.mouseRelease(window, Qt.LeftButton, pos=holder.mapToScene(
+        QPointF(5.5 * scale, 4.5 * scale)).toPoint())
+    qtbot.wait(50)
+
+    assert _vertices(window, "core") == [[4, 3], [6, 3], [6, 5], [4, 5]]
+    assert _vertices(window, "zone") == [[1, 1], [9, 1], [9, 9], [1, 9]]

@@ -221,8 +221,9 @@ Window {
     // {sample, name, color, vertices}, window-local, survives sample
     // switches so an ROI can be copied onto another sample.
     property var roiClipboard: null
-    // The selected ROI's geometry before its last move: one level of undo.
-    property var lastMove: null
+    // Geometry before each move on this sample, newest last: every Ctrl+Z
+    // restores one. Cleared on a sample switch.
+    property var moveHistory: []
     // The naming step is reused for paste: "Paste" saves the clipboard
     // geometry under the typed name instead of starting a drawing.
     property bool pasteMode: false
@@ -259,14 +260,18 @@ Window {
         if (!roi || (dCol === 0 && dRow === 0)) return
         var moved = roi.vertices.map(function (v) { return [v[0] + dCol, v[1] + dRow] })
         if (roiWindow._saveGeometry(roi.name, roi.color, moved)) {
-            roiWindow.lastMove = {name: roi.name, color: roi.color, vertices: roi.vertices}
+            roiWindow.moveHistory = roiWindow.moveHistory.concat(
+                [{name: roi.name, color: roi.color, vertices: roi.vertices}])
         }
     }
     function undoLastMove() {
-        var m = roiWindow.lastMove
-        if (!m || !roiWindow._savedRoi(m.name)) return
+        var history = roiWindow.moveHistory
+        if (history.length === 0) return
+        var m = history[history.length - 1]
+        roiWindow.moveHistory = history.slice(0, -1)
+        // An ROI deleted since then has nothing left to restore.
+        if (!roiWindow._savedRoi(m.name)) return
         if (roiWindow._saveGeometry(m.name, m.color, m.vertices)) {
-            roiWindow.lastMove = null
             roiWindow.selectedRoiName = m.name
         }
     }
@@ -326,7 +331,7 @@ Window {
     }
     Shortcut {
         sequences: [StandardKey.Undo]
-        enabled: roiWindow.draftState === "idle" && roiWindow.lastMove !== null
+        enabled: roiWindow.draftState === "idle" && roiWindow.moveHistory.length > 0
         onActivated: roiWindow.undoLastMove()
     }
     Shortcut { sequence: "Escape"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.selectedRoiName = "" }
@@ -343,7 +348,7 @@ Window {
         roiWindow.refreshRoiRegistrationInfo()
         roiWindow.resetDraft()
         roiWindow.selectedRoiName = ""
-        roiWindow.lastMove = null
+        roiWindow.moveHistory = []
         roiWindow.refreshSavedRois()
         roiWindow.refreshCatalogRois()
     }
@@ -451,7 +456,7 @@ Window {
             roiWindow.analysis.analysisDbPath,
             roiWindow.samples.map(function (s) { return s.name }), name)
         if (roiWindow.selectedRoiName === name) roiWindow.selectedRoiName = ""
-        if (roiWindow.lastMove && roiWindow.lastMove.name === name) roiWindow.lastMove = null
+        roiWindow.moveHistory = roiWindow.moveHistory.filter(function (m) { return m.name !== name })
         roiWindow.refreshSavedRois()
         roiWindow.refreshCatalogRois()
     }
@@ -647,7 +652,7 @@ Window {
                 Label {
                     visible: roiWindow._canEditSelection
                     text: "Drag the selected ROI or use the arrow keys (Shift = 10 px) "
-                          + "to move it; Ctrl+Z undoes the last move."
+                          + "to move it; Ctrl+Z undoes moves one at a time."
                     color: Theme.mutedTextColor
                     font.pixelSize: Theme.captionPixelSize
                     wrapMode: Text.Wrap
