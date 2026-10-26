@@ -1171,6 +1171,48 @@ def test_selecting_categorical_obs_column_hides_color_scale_and_shows_legend(
     assert legend_row_negative is not None
 
 
+def test_custom_category_color_reaches_legend_and_tiles_and_resets(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    from msianalyzer.core.analysis_db import save_obs_category_color
+
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {"region": ["positive", "positive", "negative", "negative"]}
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+    save_obs_category_color(visual_analysis_model.analysisDbPath, "region", "positive", "#ff0000")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(
+        lambda: len(_as_list(section.property("obsCategoryLegend"))) > 0, timeout=2000
+    )
+    legend = {c["category"]: c for c in _as_list(section.property("obsCategoryLegend"))}
+    assert legend["positive"]["color"] == "#ff0000"
+    assert legend["positive"]["custom"] is True
+
+    tile = find_visual_child(root, "heatmapImage_s1")
+    assert "positive=ff0000" in tile.property("source").toString()
+
+    reset = find_visual_child(root, "obsCategoryColorsResetButton")
+    assert reset.property("visible") is True
+    _scroll_controls_panel_to(root, find_visual_child, reset)
+    center = reset.mapToScene(reset.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+
+    qtbot.waitUntil(
+        lambda: not any(
+            c["custom"] for c in _as_list(section.property("obsCategoryLegend"))
+        ),
+        timeout=2000,
+    )
+    assert reset.property("visible") is False
+
+
 def test_obs_category_colors_stable_when_sample_hidden(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):

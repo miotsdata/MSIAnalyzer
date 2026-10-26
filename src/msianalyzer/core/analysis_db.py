@@ -900,6 +900,42 @@ def save_scale_bar(db_path: Path | str, settings: dict) -> None:
     write_metadata(db_path, {SCALE_BAR_KEY: json.dumps(settings)})
 
 
+#: `metadata` key holding the custom categorical colors (ADR 57) as JSON:
+#: `{obs_column: {category: "#rrggbb"}}`, analysis-wide.
+OBS_CATEGORY_COLORS_KEY = "obs_category_colors"
+
+
+def _load_all_obs_category_colors(db_path: Path | str) -> dict:
+    raw = load_metadata_value(db_path, OBS_CATEGORY_COLORS_KEY)
+    return json.loads(raw) if raw else {}
+
+
+def load_obs_category_colors(db_path: Path | str, obs_column: str) -> dict:
+    """The user's custom colors for one discrete obs column (ADR 57).
+
+    Returns:
+        `{category: "#rrggbb"}`; categories never customised are absent
+        (they keep the default palette, see `heatmap.category_colors`).
+    """
+    return _load_all_obs_category_colors(db_path).get(obs_column, {})
+
+
+def save_obs_category_color(
+    db_path: Path | str, obs_column: str, category: str, color: str
+) -> None:
+    """Set one category's custom color (`"#rrggbb"`)."""
+    colors = _load_all_obs_category_colors(db_path)
+    colors.setdefault(obs_column, {})[category] = color.lower()
+    write_metadata(db_path, {OBS_CATEGORY_COLORS_KEY: json.dumps(colors)})
+
+
+def reset_obs_category_colors(db_path: Path | str, obs_column: str) -> None:
+    """Drop every custom color of one obs column, back to the defaults."""
+    colors = _load_all_obs_category_colors(db_path)
+    colors.pop(obs_column, None)
+    write_metadata(db_path, {OBS_CATEGORY_COLORS_KEY: json.dumps(colors)})
+
+
 # ---------------------------------------------------------------------------
 # Cross-database reads
 # ---------------------------------------------------------------------------

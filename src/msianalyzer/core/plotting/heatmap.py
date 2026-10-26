@@ -351,8 +351,22 @@ def _category_rgba(index: int) -> tuple[int, int, int, int]:
     return int(r * 255), int(g * 255), int(b * 255), int(a * 255)
 
 
+def category_colors(categories: list[str], overrides: dict | None = None) -> list[str]:
+    """One `"#rrggbb"` per entry of `categories`: the user's custom color
+    for that category (ADR 57, `analysis_db.load_obs_category_colors`) or
+    else `category_color` by position. The one place defaults and
+    overrides combine, so tiles, legend and image export all agree."""
+    overrides = overrides or {}
+    return [overrides.get(cat) or category_color(i) for i, cat in enumerate(categories)]
+
+
+def _hex_rgba(color: str) -> tuple[int, int, int, int]:
+    return int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16), 255
+
+
 def render_obs_categories_heatmap(
-    adata: ad.AnnData, obs_column: str, categories: list[str]
+    adata: ad.AnnData, obs_column: str, categories: list[str],
+    colors: list[str] | None = None,
 ) -> np.ndarray:
     """One discrete `obs` column's per-pixel category as an RGBA `uint8`
     raster — each category colored by its position in `categories`
@@ -367,6 +381,8 @@ def render_obs_categories_heatmap(
             the union across every visible sample (see `getObsCategories`),
             so a category missing from this particular sample still isn't
             reused for a different one here.
+        colors: `"#rrggbb"` per entry of `categories` (`category_colors`);
+            None = the default palette.
 
     Returns:
         An `(n_unique_y, n_unique_x, 4)` `uint8` array (RGBA). Pixels whose
@@ -385,10 +401,30 @@ def render_obs_categories_heatmap(
 
     rgba = np.zeros((*grid.shape, 4), dtype=np.uint8)
     rgba[..., 3] = 255
+    colors = colors or category_colors(categories)
     for i in range(len(categories)):
-        rgba[grid == i] = _category_rgba(i)
+        rgba[grid == i] = _hex_rgba(colors[i])
 
     return np.ascontiguousarray(rgba)
+
+
+def parse_category_colors(field: str) -> tuple[list[str], list[str]]:
+    """Split a request id's categories field, `cat1=rrggbb,cat2=rrggbb`
+    (ADR 57), into categories and `"#rrggbb"` colors. The hex has no `#`:
+    in a QML `Image.source` URL a `#` starts the fragment and everything
+    after it never reaches the provider. An entry without a valid
+    `=rrggbb` suffix is a plain category with its default color."""
+    categories: list[str] = []
+    colors: list[str] = []
+    for i, item in enumerate(field.split(",") if field else []):
+        cat, sep, hex6 = item.rpartition("=")
+        if sep and len(hex6) == 6 and all(c in "0123456789abcdefABCDEF" for c in hex6):
+            categories.append(cat)
+            colors.append("#" + hex6.lower())
+        else:
+            categories.append(item)
+            colors.append(category_color(i))
+    return categories, colors
 
 
 def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -> np.ndarray:
@@ -417,8 +453,8 @@ def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -
             vmin = None if vmin_str == "auto" else float(vmin_str)
             vmax = None if vmax_str == "auto" else float(vmax_str)
             return render_obs_heatmap(adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax)
-        categories = parts[2].split(",") if parts[2] else []
-        return render_obs_categories_heatmap(adata, obs_column, categories)
+        categories, colors = parse_category_colors(parts[2])
+        return render_obs_categories_heatmap(adata, obs_column, categories, colors)
 
     mz_str, layer, colormap, vmin_str, vmax_str = parts[1:6]
     vmin = None if vmin_str == "auto" else float(vmin_str)
@@ -468,6 +504,7 @@ def render_heatmap_figure(
     mz: float | None = None,
     obs_column: str | None = None,
     categories: list[str] | None = None,
+    colors: list[str] | None = None,
     layer: str = "TIC",
     colormap: str = "viridis",
     vmin: float | None = None,
@@ -498,7 +535,9 @@ def render_heatmap_figure(
             shared category order (see `render_obs_categories_heatmap`),
             normally the union across every sample being exported so a
             category always gets the same color/legend entry.
-        layer: `"raw"` or `"TIC"` — `mode="feature"` only.
+        colors: `"#rrggbb"` per entry of `categories` (`category_colors`,
+            with the user's custom colors applied); None = default palette.
+        layer:`"raw"` or `"TIC"` — `mode="feature"` only.
         colormap: Any registered Matplotlib colormap name.
         vmin: Lower color-scale bound. `None` autoscales to this sample's
             own data (matching what an actual autoscaled GUI tile shows).
@@ -553,7 +592,8 @@ def render_heatmap_figure(
     elif mode == "obs_categorical":
         if not obs_column:
             raise ValueError("mode='obs_categorical' requires obs_column")
-        rgba = render_obs_categories_heatmap(adata, obs_column, categories or [])
+        colors = colors or category_colors(categories or [])
+        rgba = render_obs_categories_heatmap(adata, obs_column, categories or [], colors)
         legend_kind = "categories"
     else:
         raise ValueError(f"unknown mode {mode!r}")
@@ -600,7 +640,7 @@ def render_heatmap_figure(
             cbar.ax.yaxis.set_major_formatter(formatter)
     else:
         handles = [
-            matplotlib.patches.Patch(facecolor=category_color(i), label=cat)
+            matplotlib.patches.Patch(facecolor=colors[i], label=cat)
             for i, cat in enumerate(categories or [])
         ]
         if handles:

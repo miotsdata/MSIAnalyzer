@@ -2193,6 +2193,20 @@ class AnalysisBridge(QObject):
         plain dict, never a QJSValue."""
         analysis_db.save_scale_bar(analysis_db_path, json.loads(settings_json))
 
+    @Slot(str, str, str, str)
+    def setObsCategoryColor(
+        self, analysis_db_path: str, obs_column: str, category: str, color: str
+    ) -> None:
+        """Save one category's custom color (ADR 57), from the legend's
+        color picker. Tiles pick it up through their request id once the
+        legend is refreshed (`requestObsCategories`)."""
+        analysis_db.save_obs_category_color(analysis_db_path, obs_column, category, color)
+
+    @Slot(str, str)
+    def resetObsCategoryColors(self, analysis_db_path: str, obs_column: str) -> None:
+        """Back to the default palette for every category of `obs_column`."""
+        analysis_db.reset_obs_category_colors(analysis_db_path, obs_column)
+
     @Slot(str, str, str, result=dict)
     def attachHeImage(self, analysis_db_path: str, sample_name: str, image_path: str) -> dict:
         """Attach (or replace) `sample_name`'s H&E/brightfield image —

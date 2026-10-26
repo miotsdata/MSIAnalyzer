@@ -11,10 +11,12 @@ from scipy.sparse import csr_matrix
 from msianalyzer.core.plotting.heatmap import (
     GRID_UNS_KEY,
     category_color,
+    category_colors,
     feature_value_range,
     list_obs_columns,
     obs_categories,
     obs_value_range,
+    parse_category_colors,
     pixel_grid_indices,
     render_colorbar,
     render_feature_heatmap,
@@ -418,6 +420,49 @@ def test_render_heatmap_by_target_categorical_obs_empty_category_list():
     direct = render_obs_categories_heatmap(adata, "polarity", [])
 
     np.testing.assert_array_equal(dispatched, direct)
+
+
+def test_category_colors_applies_overrides_over_positional_defaults():
+    colors = category_colors(["a", "b", "c"], {"b": "#123456"})
+
+    assert colors == [category_color(0), "#123456", category_color(2)]
+
+
+def test_parse_category_colors_reads_hex_and_falls_back_to_default():
+    categories, colors = parse_category_colors("a=FF0000,x=y,b")
+
+    assert categories == ["a", "x=y", "b"]
+    assert colors == ["#ff0000", category_color(1), category_color(2)]
+
+
+def test_render_heatmap_by_target_categorical_obs_uses_colors_in_id():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+    parts = ["s1", "obs:polarity", "negative=ff0000,positive=00ff00"]
+
+    rgba = render_heatmap_by_target(adata, parts[1], parts)
+
+    assert tuple(rgba[0, 0]) == (255, 0, 0, 255)
+    assert tuple(rgba[0, 1]) == (0, 255, 0, 255)
+
+
+def test_render_heatmap_figure_legend_uses_custom_colors():
+    adata = _make_grid_adata(
+        [0.0, 0.0, 0.0, 0.0],
+        obs_columns={"polarity": ["negative", "positive", "negative", "positive"]},
+    )
+
+    fig = render_heatmap_figure(
+        adata, mode="obs_categorical", obs_column="polarity",
+        categories=["negative", "positive"], colors=["#ff0000", "#00ff00"],
+    )
+
+    handles = fig.axes[0].get_legend().legend_handles
+    assert [matplotlib.colors.to_hex(h.get_facecolor()) for h in handles] == [
+        "#ff0000", "#00ff00",
+    ]
 
 
 def test_category_color_is_stable_and_distinct_for_different_indices():

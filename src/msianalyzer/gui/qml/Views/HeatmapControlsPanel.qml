@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "qrc:/Style"
 import "qrc:/Utils/SearchQuery.js" as SearchQuery
 
@@ -257,8 +258,8 @@ Flickable {
     // unannotated feature by m/z, at the end).
     property string sortMode: "mz"
 
-    // Two separate fields (ADR 35) — name (contains) and m/z (a single
-    // value within a small tolerance, or an explicit "min-max" range),
+    // Two separate fields (ADR 35) — name (contains) and m/z (a prefix of
+    // the displayed 4-decimal value, or an explicit "min-max" range),
     // same syntax as Annotate's fields, see SearchQuery.matchesName/
     // matchesMz. Both must match when both are non-empty. Applied before
     // sorting; feature-mode only, an obs column has no name/mz to search.
@@ -534,7 +535,12 @@ Flickable {
                        + "|" + controlsFlickable.vminToken()
                        + "|" + controlsFlickable.vmaxToken() + ds
             }
-            var cats = controlsFlickable.obsCategoryLegend.map(function (c) { return c.category }).join(",")
+            // "category=rrggbb" (ADR 57): the color is part of the id, so
+            // a custom color change re-renders instead of hitting the
+            // tile cache. No "#" — it would start the URL fragment.
+            var cats = controlsFlickable.obsCategoryLegend.map(function (c) {
+                return c.category + "=" + c.color.substring(1)
+            }).join(",")
             return sampleName + "|obs:" + controlsFlickable.selectedObsColumn + "|" + cats + ds
         }
         if (!controlsFlickable.selectedFeature) return ""
@@ -1044,13 +1050,43 @@ Flickable {
         }
 
         // Discrete obs column (e.g. `polarity`) — no color scale, just
-        // a fixed-palette legend. Every tile colors by this same
-        // ordered category list (controlsFlickable.obsCategoryLegend),
-        // see the owning page's tileSource().
-        Label {
-            text: "Categories"
-            font.bold: true
+        // a legend. Every tile colors by this same ordered category list
+        // (controlsFlickable.obsCategoryLegend), see the owning page's
+        // tileSource(). Clicking a swatch picks a custom color (ADR 57),
+        // saved analysis-wide; "Reset" goes back to the default palette.
+        RowLayout {
+            Layout.fillWidth: true
             visible: controlsFlickable.inspectionMode === "obs" && !controlsFlickable.isSelectedObsNumeric
+            Label {
+                text: "Categories"
+                font.bold: true
+                Layout.fillWidth: true
+            }
+            Button {
+                objectName: "obsCategoryColorsResetButton"
+                text: "Reset colors"
+                flat: true
+                visible: controlsFlickable.obsCategoryLegend.some(function (c) { return c.custom })
+                onClicked: {
+                    AnalysisBridge.resetObsCategoryColors(
+                        controlsFlickable.analysis.analysisDbPath, controlsFlickable.selectedObsColumn)
+                    controlsFlickable.refreshObsCategoryLegend()
+                }
+            }
+        }
+        ColorDialog {
+            id: categoryColorDialog
+            objectName: "obsCategoryColorDialog"
+            // Always Qt's own dialog: hue wheel + hex field on every OS.
+            options: ColorDialog.DontUseNativeDialog
+            property string category: ""
+            title: "Color for “" + category + "”"
+            onAccepted: {
+                AnalysisBridge.setObsCategoryColor(
+                    controlsFlickable.analysis.analysisDbPath, controlsFlickable.selectedObsColumn,
+                    category, selectedColor.toString())
+                controlsFlickable.refreshObsCategoryLegend()
+            }
         }
         ColumnLayout {
             Layout.fillWidth: true
@@ -1063,11 +1099,20 @@ Flickable {
                 delegate: RowLayout {
                     objectName: "obsCategoryLegendRow_" + modelData.category
                     Rectangle {
+                        objectName: "obsCategorySwatch_" + modelData.category
                         width: 14
                         height: 14
                         radius: 2
                         color: modelData.color
                         border.color: palette.mid
+                        TapHandler {
+                            onTapped: {
+                                categoryColorDialog.category = modelData.category
+                                categoryColorDialog.selectedColor = modelData.color
+                                categoryColorDialog.open()
+                            }
+                        }
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
                     }
                     Label { text: modelData.category }
                 }

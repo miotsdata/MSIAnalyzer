@@ -398,6 +398,24 @@ def test_get_obs_categories_combines_and_orders_across_samples(tmp_path):
     assert result[0]["color"] != result[1]["color"]
 
 
+def test_get_obs_categories_applies_custom_colors(tmp_path):
+    from msianalyzer.core.analysis_db import init_analysis_db, save_obs_category_color
+
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    save_obs_category_color(db, "polarity", "positive", "#ff0000")
+    _write_sample_h5ad(
+        tmp_path / "s1.h5ad", obs_columns={"polarity": ["negative", "positive"] * 2}
+    )
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(db))
+
+    result = provider.getObsCategories(["s1"], "polarity")
+
+    assert result[0]["custom"] is False
+    assert result[1] == {"category": "positive", "color": "#ff0000", "custom": True}
+
+
 def test_request_image_renders_numeric_obs_column(tmp_path):
     _write_sample_h5ad(tmp_path / "s1.h5ad", obs_columns={"tic": [0.0, 10.0, 5.0, 15.0]})
     provider = HeatmapImageProvider()

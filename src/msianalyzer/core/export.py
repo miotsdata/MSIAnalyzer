@@ -23,12 +23,14 @@ from .analysis_db import (
     load_calibration_unknowns,
     load_feature_ids_and_mzs,
     load_feature_representative_annotations,
+    load_obs_category_colors,
     load_samples,
     load_scale_bar,
 )
 from .plotting.heatmap import (
     _feature_column_index,
     _layer_column,
+    category_colors,
     is_numeric_obs_column,
     obs_categories,
     render_heatmap_figure,
@@ -312,6 +314,10 @@ def export_visual_inspection_images(
             ):
                 union |= set(obs_categories(adata, obs_column))
         categories = sorted(union) if union else None
+    colors = (
+        category_colors(categories, load_obs_category_colors(db_path, obs_column))
+        if categories else None
+    )
 
     # The export's own checkbox decides, whatever the GUI's on/off switch says.
     scale_bar_settings = (
@@ -345,6 +351,7 @@ def export_visual_inspection_images(
             mz=mz,
             obs_column=obs_column,
             categories=categories,
+            colors=colors,
             layer=layer,
             colormap=colormap,
             vmin=vmin,

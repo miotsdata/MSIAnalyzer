@@ -34,7 +34,10 @@ from msianalyzer.core.analysis_db import (
     load_features,
     load_injected_feature_mzs,
     load_metadata_value,
+    load_obs_category_colors,
     load_scale_bar,
+    reset_obs_category_colors,
+    save_obs_category_color,
     save_scale_bar,
     load_ms2_annotations_for_feature,
     load_predicted_formulas_for_feature,
@@ -374,6 +377,23 @@ def test_scale_bar_defaults_then_round_trips(tmp_path: Path):
     save_scale_bar(db, settings)
 
     assert load_scale_bar(db) == settings
+
+
+def test_obs_category_colors_round_trip_per_column_and_reset(tmp_path: Path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    assert load_obs_category_colors(db, "region") == {}
+
+    save_obs_category_color(db, "region", "tumor", "#FF0000")
+    save_obs_category_color(db, "region", "stroma", "#00ff00")
+    save_obs_category_color(db, "polarity", "negative", "#0000ff")
+
+    assert load_obs_category_colors(db, "region") == {"tumor": "#ff0000", "stroma": "#00ff00"}
+
+    reset_obs_category_colors(db, "region")
+
+    assert load_obs_category_colors(db, "region") == {}
+    assert load_obs_category_colors(db, "polarity") == {"negative": "#0000ff"}
 
 
 # ---------------------------------------------------------------------------

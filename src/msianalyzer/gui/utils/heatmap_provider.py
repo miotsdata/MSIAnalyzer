@@ -11,9 +11,10 @@ from PySide6.QtCore import QSize
 from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickAsyncImageProvider, QQuickImageResponse
 
+from msianalyzer.core.analysis_db import load_obs_category_colors
 from msianalyzer.core.imported_dataset import sample_h5ad_path
 from msianalyzer.core.plotting.heatmap import (
-    category_color,
+    category_colors,
     feature_value_range,
     obs_categories,
     obs_value_range,
@@ -68,6 +69,9 @@ class HeatmapImageProvider(QQuickAsyncImageProvider):
         `categoriesCsv` is the full, comma-joined category order every
         tile colors by (see `render_obs_categories_heatmap`), normally
         produced once by `getObsCategories` and reused for every tile.
+        Each entry is `category=rrggbb` (ADR 57, see
+        `parse_category_colors`), so a color change is a new id and
+        the tile cache never serves the old color.
       - Colorbar legend (first field is the literal `"colorbar"`, no
         sample involved): `colorbar|colormap` — a flat gradient strip for
         the color-scale legend under vmin/vmax, see `render_colorbar`.
@@ -338,7 +342,9 @@ class HeatmapImageProvider(QQuickAsyncImageProvider):
         visibility is toggled).
 
         Returns:
-            `[{"category": ..., "color": "#rrggbb"}, ...]`, sorted.
+            `[{"category": ..., "color": "#rrggbb", "custom": bool}, ...]`,
+            sorted. `custom`: the color is the user's own (ADR 57), not
+            the default palette.
         """
         categories = set()
         for name in sample_names:
@@ -356,9 +362,13 @@ class HeatmapImageProvider(QQuickAsyncImageProvider):
                     )
                     continue
         ordered = sorted(categories)
+        overrides = (
+            load_obs_category_colors(self._analysis_db_path, obs_column)
+            if self._analysis_db_path else {}
+        )
         return [
-            {"category": cat, "color": category_color(i)}
-            for i, cat in enumerate(ordered)
+            {"category": cat, "color": color, "custom": cat in overrides}
+            for cat, color in zip(ordered, category_colors(ordered, overrides))
         ]
 
     # -- Qt entry points -----------------------------------------------------
