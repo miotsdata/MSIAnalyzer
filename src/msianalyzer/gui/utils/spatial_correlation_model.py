@@ -203,8 +203,7 @@ class SpatialCorrelationModel(QAbstractTableModel):
     def moranIForMz(self, mz: float) -> dict:
         """Per-sample Moran's I scores for the feature nearest `mz`, for
         Visual Inspection's per-sample-name label (`getMoranIForFeature`
-        on `AnalysisBridge`). Same 0.01 absolute tolerance as
-        `_matches_mz`'s single-value case, not a ppm cap — `mz` here comes
+        on `AnalysisBridge`). A 0.01 absolute tolerance, not a ppm cap — `mz` here comes
         from the very same feature list this model's own rows do, so it's
         a float round-trip tolerance, not a real chemical search.
         Returns `{}` if no rows are loaded yet or nothing is within
@@ -291,7 +290,7 @@ def _matches_mz(query: str, mz: float) -> bool:
             lo, hi = min(a, b), max(a, b)
             return lo <= mz <= hi
     try:
-        value = float(q)
+        float(q)
     except ValueError:
         return False
-    return abs(mz - value) <= 0.01
+    return f"{mz:.4f}".startswith(q)

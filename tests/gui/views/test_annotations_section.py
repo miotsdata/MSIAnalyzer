@@ -226,7 +226,7 @@ def test_search_by_mz_range_filters_to_matching_mz(
     assert [r["feature_id"] for r in rows] == [9]
 
 
-def test_search_by_single_mz_matches_within_tolerance(
+def test_search_by_single_mz_matches_exact_value(
     analysis_view, annotated_analysis_model, find_visual_child, qtbot
 ):
     _seed_second_feature(annotated_analysis_model.analysisDbPath)  # mz 50.0
@@ -240,6 +240,25 @@ def test_search_by_single_mz_matches_within_tolerance(
 
     rows = section.property("sortedRows").toVariant()
     assert [r["feature_id"] for r in rows] == [7]
+
+
+def test_search_by_mz_prefix_matches_integer_part(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    _seed_second_feature(annotated_analysis_model.analysisDbPath)  # mz 50.0
+
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("mzQuery", "123")  # prefix of 123.4567, not within 0.01
+
+    rows = section.property("sortedRows").toVariant()
+    assert [r["feature_id"] for r in rows] == [7]
+
+    section.setProperty("mzQuery", "123.5")  # not a prefix of 123.4567
+    assert section.property("sortedRows").toVariant() == []
 
 
 def test_name_and_mz_search_combine_with_and_not_or(

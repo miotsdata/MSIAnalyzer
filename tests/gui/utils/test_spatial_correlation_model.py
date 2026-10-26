@@ -101,6 +101,20 @@ def test_name_query_filters_and_persists():
     assert _labels(model) == ["300.0000: Glucose"]
 
 
+def test_mz_query_single_value_is_prefix_match():
+    model = SpatialCorrelationModel()
+    model.setRows(
+        [{"mz": m, "compound_name": None, "s1": 0.5} for m in (178.99, 179.0561, 179.9, 1179.1)],
+        ["s1"],
+    )
+
+    model.mzQuery = "179"
+    assert _labels(model) == ["m/z 179.0561", "m/z 179.9000"]
+
+    model.mzQuery = "179.05"
+    assert _labels(model) == ["m/z 179.0561"]
+
+
 def test_mz_query_range_filters():
     model = SpatialCorrelationModel()
     model.setRows(_rows(), ["s1", "s2"])
