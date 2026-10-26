@@ -148,12 +148,29 @@ Item {
         })
         return best
     }
+    // Arrow-key moves not saved yet (grid units, set by RoiDesignWindow):
+    // the selected ROI is drawn shifted by them, and hit-tested there.
+    property point nudgeCells: Qt.point(0, 0)
+    readonly property point _nudgePx: {
+        var s = zoomImage.effectiveScale
+        if (!canvas._gridToHeMatrix)
+            return Qt.point(canvas.nudgeCells.x * s, canvas.nudgeCells.y * s)
+        // Only the linear part of the grid -> He-pixel affine applies to
+        // a displacement.
+        var a = AffineTransform.apply(canvas._gridToHeMatrix, canvas.nudgeCells.x, canvas.nudgeCells.y)
+        var o = AffineTransform.apply(canvas._gridToHeMatrix, 0, 0)
+        return Qt.point((a.x - o.x) * s, (a.y - o.y) * s)
+    }
+    // The drag in progress, item pixels (moveDragHandler).
+    property point _dragPx: Qt.point(0, 0)
+
     // Tested against the selected ROI's own outline, not "the ROI under
     // the pointer": a selected ROI overlapped by another must still move.
     function _insideSelected(x, y) {
         var rois = canvas._displaySavedRois
         for (var i = 0; i < rois.length; i++) {
-            if (rois[i].name === canvas.selectedRoiName) return canvas._contains(rois[i].vertices, x, y)
+            if (rois[i].name === canvas.selectedRoiName)
+                return canvas._contains(rois[i].vertices, x - canvas._nudgePx.x, y - canvas._nudgePx.y)
         }
         return false
     }
@@ -214,6 +231,7 @@ Item {
             draftColor: canvas.draftColor
             firstVertexHighlighted: canvas._nearFirstVertex
             selectedName: canvas.selectedRoiName
+            moveOffset: Qt.point(canvas._nudgePx.x + canvas._dragPx.x, canvas._nudgePx.y + canvas._dragPx.y)
         }
 
         HoverHandler {
@@ -283,14 +301,14 @@ Item {
                     _last = Qt.point(0, 0)
                     return
                 }
-                overlay.moveOffset = Qt.point(0, 0)
                 if (_moving && (_last.x !== 0 || _last.y !== 0)) canvas._finishMove(_last)
+                canvas._dragPx = Qt.point(0, 0)
                 _moving = false
             }
             onActiveTranslationChanged: {
                 if (!active || !_moving) return
                 _last = canvas._snappedOffset(activeTranslation)
-                overlay.moveOffset = _last
+                canvas._dragPx = _last
             }
         }
     }

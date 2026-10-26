@@ -253,9 +253,41 @@ Window {
         return result.ok
     }
     function selectRoi(name) {
+        roiWindow.flushNudge()
         roiWindow.selectedRoiName = name
     }
+    // Arrow keys only shift the outline (`pendingNudge`, drawn by the
+    // canvas); the ROI is saved once they've been idle for
+    // `nudgeTimer.interval`. A save rewrites the sample's .h5ad and
+    // merged.h5ad and re-renders the tile, so one save per key press
+    // queued up into seconds of lag while a key was held. Anything that
+    // needs the real geometry flushes first (selection, drag, undo,
+    // copy/paste, delete, sample switch, closing). A burst of presses is
+    // one undo step.
+    property point pendingNudge: Qt.point(0, 0)
+    Timer {
+        id: nudgeTimer
+        interval: 400
+        onTriggered: roiWindow.flushNudge()
+    }
+    function nudgeSelectedRoi(dCol, dRow) {
+        roiWindow.pendingNudge = Qt.point(roiWindow.pendingNudge.x + dCol, roiWindow.pendingNudge.y + dRow)
+        nudgeTimer.restart()
+    }
+    function flushNudge() {
+        nudgeTimer.stop()
+        var n = roiWindow.pendingNudge
+        if (n.x === 0 && n.y === 0) return
+        // Save first, then drop the preview offset, so the outline never
+        // jumps back to the old place in between.
+        roiWindow._applyMove(n.x, n.y)
+        roiWindow.pendingNudge = Qt.point(0, 0)
+    }
     function moveSelectedRoi(dCol, dRow) {
+        roiWindow.flushNudge()
+        roiWindow._applyMove(dCol, dRow)
+    }
+    function _applyMove(dCol, dRow) {
         var roi = roiWindow._savedRoi(roiWindow.selectedRoiName)
         if (!roi || (dCol === 0 && dRow === 0)) return
         var moved = roi.vertices.map(function (v) { return [v[0] + dCol, v[1] + dRow] })
@@ -265,6 +297,7 @@ Window {
         }
     }
     function undoLastMove() {
+        roiWindow.flushNudge()
         var history = roiWindow.moveHistory
         if (history.length === 0) return
         var m = history[history.length - 1]
@@ -276,6 +309,7 @@ Window {
         }
     }
     function copySelectedRoi() {
+        roiWindow.flushNudge()
         var roi = roiWindow._savedRoi(roiWindow.selectedRoiName)
         if (!roi) return
         roiWindow.roiClipboard = {
@@ -287,6 +321,7 @@ Window {
     // this sample doesn't have it yet (the same ROI on another sample),
     // else "<name>_copy" as a new ROI with a fresh color.
     function startPaste() {
+        roiWindow.flushNudge()
         if (!roiWindow.roiClipboard) return
         var clip = roiWindow.roiClipboard
         roiWindow.pasteMode = true
@@ -315,14 +350,14 @@ Window {
     }
 
     readonly property bool _canEditSelection: roiWindow.draftState === "idle" && roiWindow.selectedRoiName !== ""
-    Shortcut { sequence: "Left"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(-1, 0) }
-    Shortcut { sequence: "Right"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(1, 0) }
-    Shortcut { sequence: "Up"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(0, -1) }
-    Shortcut { sequence: "Down"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(0, 1) }
-    Shortcut { sequence: "Shift+Left"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(-10, 0) }
-    Shortcut { sequence: "Shift+Right"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(10, 0) }
-    Shortcut { sequence: "Shift+Up"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(0, -10) }
-    Shortcut { sequence: "Shift+Down"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.moveSelectedRoi(0, 10) }
+    Shortcut { sequence: "Left"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(-1, 0) }
+    Shortcut { sequence: "Right"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(1, 0) }
+    Shortcut { sequence: "Up"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(0, -1) }
+    Shortcut { sequence: "Down"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(0, 1) }
+    Shortcut { sequence: "Shift+Left"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(-10, 0) }
+    Shortcut { sequence: "Shift+Right"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(10, 0) }
+    Shortcut { sequence: "Shift+Up"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(0, -10) }
+    Shortcut { sequence: "Shift+Down"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(0, 10) }
     Shortcut { sequences: [StandardKey.Copy]; enabled: roiWindow._canEditSelection; onActivated: roiWindow.copySelectedRoi() }
     Shortcut {
         sequences: [StandardKey.Paste]
@@ -331,10 +366,12 @@ Window {
     }
     Shortcut {
         sequences: [StandardKey.Undo]
-        enabled: roiWindow.draftState === "idle" && roiWindow.moveHistory.length > 0
+        enabled: roiWindow.draftState === "idle"
+                 && (roiWindow.moveHistory.length > 0
+                     || roiWindow.pendingNudge.x !== 0 || roiWindow.pendingNudge.y !== 0)
         onActivated: roiWindow.undoLastMove()
     }
-    Shortcut { sequence: "Escape"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.selectedRoiName = "" }
+    Shortcut { sequence: "Escape"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.selectRoi("") }
 
     function _seedDraftColor() {
         if (roiWindow.analysis && roiWindow.analysis.analysisDbPath) {
@@ -347,12 +384,17 @@ Window {
         // also hide "Draw on H&E image".
         roiWindow.refreshRoiRegistrationInfo()
         roiWindow.resetDraft()
+        // The combo flushes before switching; any other switch must not
+        // apply a pending arrow move to the new sample's ROI of that name.
+        nudgeTimer.stop()
+        roiWindow.pendingNudge = Qt.point(0, 0)
         roiWindow.selectedRoiName = ""
         roiWindow.moveHistory = []
         roiWindow.refreshSavedRois()
         roiWindow.refreshCatalogRois()
     }
     onVisibleChanged: {
+        if (!roiWindow.visible) roiWindow.flushNudge()
         if (roiWindow.visible) {
             // Always the first sample — which named ROIs exist elsewhere
             // in the analysis but not on the sample currently shown is
@@ -374,6 +416,7 @@ Window {
     // would otherwise sit on whatever sample/draft state was left over
     // from before — this covers that case explicitly instead.
     function openFor(analysisModel, sampleList, controlsPanel) {
+        roiWindow.flushNudge()
         var wasVisible = roiWindow.visible
         roiWindow.analysis = analysisModel
         roiWindow.samples = sampleList
@@ -451,6 +494,7 @@ Window {
         }
     }
     function deleteSavedRoi(name) {
+        roiWindow.flushNudge()
         if (!roiWindow.analysis) return
         AnalysisBridge.deleteRoiEverywhere(
             roiWindow.analysis.analysisDbPath,
@@ -476,7 +520,11 @@ Window {
                 // "· H&E ✓" marks the coregistered samples.
                 model: roiWindow.samples.map(function (s) { return s.name + (roiWindow.registrationMarks[s.name] || "") })
                 currentIndex: roiWindow.selectedSampleIndex
-                onActivated: (index) => roiWindow.selectedSampleIndex = index
+                onActivated: (index) => {
+                    // Pending arrow moves belong to the sample being left.
+                    roiWindow.flushNudge()
+                    roiWindow.selectedSampleIndex = index
+                }
                 HoverHandler {
                     objectName: "roiSampleComboHover"
                     cursorShape: Qt.PointingHandCursor
@@ -580,6 +628,7 @@ Window {
                 selectedRoiName: roiWindow.selectedRoiName
                 onRoiTapped: (name) => roiWindow.selectRoi(name)
                 onMoveRequested: (dCol, dRow) => roiWindow.moveSelectedRoi(dCol, dRow)
+                nudgeCells: roiWindow.pendingNudge
             }
 
             ColumnLayout {

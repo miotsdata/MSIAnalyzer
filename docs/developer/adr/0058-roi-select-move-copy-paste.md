@@ -38,6 +38,14 @@ sample, so the mask, `merged.h5ad` and an imported dataset's write-back
   undoes moves one at a time, back through every move on the sample
   (cleared on a sample switch). Pastes aren't undone by it; delete the
   pasted ROI instead.
+- **Arrow keys are batched:** each press only shifts the outline on
+  screen; the ROI is saved once the keys have been idle for 0.4 s. A save
+  rewrites the sample's `.h5ad` and `merged.h5ad` and re-renders the tile
+  (~0.1-0.2 s on a real dataset), so one save per press queued up into
+  seconds of freeze while a key was held. Anything that needs the real
+  geometry saves the pending moves first (selection, drag, undo,
+  copy/paste, delete, sample switch, closing the window). A burst of
+  presses is one undo step.
 - **Copy/paste:** Ctrl+C / Ctrl+V or the Copy/Paste buttons. The
   clipboard is window-local and survives a sample switch. Paste reuses the
   naming step: the same name when the target sample doesn't have it (the

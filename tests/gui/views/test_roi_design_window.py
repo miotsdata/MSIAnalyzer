@@ -902,27 +902,62 @@ def test_tapping_inside_a_saved_roi_selects_it_and_outside_deselects(
     assert window.property("selectedRoiName") == ""
 
 
-def test_arrow_keys_move_the_selected_roi_and_undo_restores_it(
+def _activate(window, qtbot):
+    window.requestActivate()
+    qtbot.waitUntil(lambda: window.isActive(), timeout=2000)
+
+
+def _wait_vertices(window, name, expected, qtbot):
+    qtbot.waitUntil(lambda: _vertices(window, name) == expected, timeout=3000)
+
+
+def test_arrow_keys_preview_then_save_once_and_undo_restores_it(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
     window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
     out_dir = visual_analysis_model.outDir
     before = _mask_pixels(out_dir, "s1", "liver")
     window.setProperty("selectedRoiName", "liver")
-    window.requestActivate()
-    qtbot.waitUntil(lambda: window.isActive(), timeout=2000)
+    _activate(window, qtbot)
 
     qtbot.keyClick(window, Qt.Key_Right)
     qtbot.keyClick(window, Qt.Key_Down, Qt.ShiftModifier)
-    qtbot.wait(50)
 
-    assert _vertices(window, "liver") == [[v[0] + 1, v[1] + 10] for v in _SQUARE]
+    # A burst of presses only moves the outline: nothing saved yet.
+    nudge = window.property("pendingNudge")
+    assert (nudge.x(), nudge.y()) == (1, 10)
+    assert _vertices(window, "liver") == _SQUARE
+    assert _mask_pixels(out_dir, "s1", "liver") == before
+    # ...which is shifted on screen by exactly the pending cells.
+    scale = canvas.findChild(QQuickItem, "roiZoomableImage").property("effectiveScale")
+    offset = canvas.findChild(QQuickItem, "roiOverlay").property("moveOffset")
+    assert (offset.x(), offset.y()) == pytest.approx((1 * scale, 10 * scale))
+
+    # Saved once, after the keys go idle.
+    _wait_vertices(window, "liver", [[v[0] + 1, v[1] + 10] for v in _SQUARE], qtbot)
     assert _mask_pixels(out_dir, "s1", "liver") != before
+    assert len(_as_list(window.property("moveHistory"))) == 1
 
-    # One level of undo: back to before the last move (the Shift+Down).
+    # The whole burst is one undo step.
     qtbot.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
     qtbot.wait(50)
-    assert _vertices(window, "liver") == [[v[0] + 1, v[1]] for v in _SQUARE]
+    assert _vertices(window, "liver") == _SQUARE
+
+
+def test_undo_right_after_arrow_keys_saves_and_undoes_the_burst(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    window.setProperty("selectedRoiName", "liver")
+    _activate(window, qtbot)
+
+    qtbot.keyClick(window, Qt.Key_Right)
+    qtbot.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
+    qtbot.wait(50)
+
+    assert _vertices(window, "liver") == _SQUARE
+    nudge = window.property("pendingNudge")
+    assert (nudge.x(), nudge.y()) == (0, 0)
 
 
 def test_dragging_the_selected_roi_moves_it_by_whole_cells(
@@ -1041,12 +1076,14 @@ def test_ctrl_z_steps_back_through_several_moves(
 ):
     window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
     window.setProperty("selectedRoiName", "liver")
-    window.requestActivate()
-    qtbot.waitUntil(lambda: window.isActive(), timeout=2000)
+    _activate(window, qtbot)
 
-    for key in (Qt.Key_Right, Qt.Key_Right, Qt.Key_Down):
+    # Three separate moves (each saved before the next key).
+    expected = [list(map(list, _SQUARE))]
+    for key, (dc, dr) in ((Qt.Key_Right, (1, 0)), (Qt.Key_Right, (1, 0)), (Qt.Key_Down, (0, 1))):
         qtbot.keyClick(window, key)
-    qtbot.wait(50)
+        expected.append([[v[0] + dc, v[1] + dr] for v in expected[-1]])
+        _wait_vertices(window, "liver", expected[-1], qtbot)
     assert _vertices(window, "liver") == [[v[0] + 2, v[1] + 1] for v in _SQUARE]
 
     for _ in range(3):
