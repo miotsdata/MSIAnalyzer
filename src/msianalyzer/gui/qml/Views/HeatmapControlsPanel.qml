@@ -213,6 +213,16 @@ Flickable {
                                          ? controlsFlickable.obsColumns[controlsFlickable.selectedObsIndex] : null
     property string selectedObsColumn: controlsFlickable.selectedObsColumnInfo
                                         ? controlsFlickable.selectedObsColumnInfo.name : ""
+    // The same answer as isSelectedObsNumeric, read from the source
+    // properties. For code that runs inside onSelectedObsColumnChanged:
+    // there, the derived isSelectedObsNumeric may not have re-evaluated
+    // yet. Switching from TIC (numeric) to a categorical column then still
+    // read `true`, so the legend was never fetched and every tile rendered
+    // black until you picked another categorical column.
+    function selectedObsIsNumericNow() {
+        var info = controlsFlickable.obsColumns[controlsFlickable.selectedObsIndex]
+        return info ? !!info.numeric : true
+    }
     property bool isSelectedObsNumeric: controlsFlickable.selectedObsColumnInfo
                                          ? !!controlsFlickable.selectedObsColumnInfo.numeric : true
 
@@ -246,7 +256,7 @@ Flickable {
 
     function refreshObsCategoryLegend() {
         if (controlsFlickable.inspectionMode !== "obs" || !controlsFlickable.selectedObsColumn
-                || controlsFlickable.isSelectedObsNumeric) {
+                || controlsFlickable.selectedObsIsNumericNow()) {
             controlsFlickable.obsCategoryLegend = []
             return
         }
@@ -377,7 +387,7 @@ Flickable {
     // request (see `vminToken()`/`vmaxToken()`, which return the literal
     // string "auto" whenever autoScale is on, independent of this).
     function refreshAutoRange() {
-        // Reads inspectionMode/isSelectedObsNumeric directly rather than
+        // Reads inspectionMode/selectedObsIsNumericNow() directly rather than
         // the cached showsColorScale property: this function runs
         // *synchronously* from onInspectionModeChanged/
         // onSelectedObsColumnChanged, i.e. within the very same change
@@ -390,7 +400,7 @@ Flickable {
         // unsafe to read from code executing inline with the very change
         // that invalidates it.
         var showsColorScale = controlsFlickable.inspectionMode === "feature"
-            || (controlsFlickable.inspectionMode === "obs" && controlsFlickable.isSelectedObsNumeric)
+            || (controlsFlickable.inspectionMode === "obs" && controlsFlickable.selectedObsIsNumericNow())
         if (!controlsFlickable.analysis || !controlsFlickable.analysis.analysisDbPath || !showsColorScale) {
             controlsFlickable.autoRange = {"vmin": 0, "vmax": 1}
             return

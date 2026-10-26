@@ -1171,6 +1171,37 @@ def test_selecting_categorical_obs_column_hides_color_scale_and_shows_legend(
     assert legend_row_negative is not None
 
 
+def test_first_switch_from_numeric_tic_to_categorical_column_loads_the_legend(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # Real bug: obs mode starts on "tic" (numeric); picking a categorical
+    # column from the combo left the legend empty and every tile black,
+    # until another categorical column was picked and then this one again.
+    out_dir = Path(visual_analysis_model.outDir)
+    obs_columns = {
+        "tic": [1.0, 2.0, 3.0, 4.0],
+        "region": ["positive", "positive", "negative", "negative"],
+    }
+    _write_sample_h5ad(out_dir / "s1.h5ad", obs_columns=obs_columns)
+    _write_sample_h5ad(out_dir / "s2.h5ad", obs_columns=obs_columns)
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    _switch_to_obs_mode(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(lambda: section.property("selectedObsColumn") == "tic", timeout=2000)
+
+    names = [c["name"] for c in _as_list(section.property("obsColumns"))]
+    find_visual_child(root, "obsColumnCombo").activated.emit(names.index("region"))
+
+    qtbot.waitUntil(
+        lambda: len(_as_list(section.property("obsCategoryLegend"))) == 2, timeout=2000
+    )
+    source = find_visual_child(root, "heatmapImage_s1").property("source").toString()
+    assert "positive=" in source and "negative=" in source
+
+
 def test_custom_category_color_reaches_legend_and_tiles_and_resets(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
