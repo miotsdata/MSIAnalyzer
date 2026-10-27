@@ -3,7 +3,7 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
-## Unreleased
+## 0.6.0 — 2026-10-27
 
 ### Added
 - **Normalize to a feature after the run** (ADR 61). **Analyses → Normalize
