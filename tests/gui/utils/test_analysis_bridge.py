@@ -81,6 +81,23 @@ def test_ensure_schema_current_is_a_no_op_on_an_already_current_db(tmp_path):
     assert rows == [("Caffeine",)]
 
 
+def test_ensure_schema_current_backfills_annotations_into_var(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (7, 100.0, '{}')"
+        )
+        con.commit()
+    _seed_sample_with_h5ad(db_path, "sampleA")
+
+    AnalysisBridge().ensureSchemaCurrent(str(db_path))
+
+    var = ad.read_h5ad(tmp_path / "sampleA.h5ad").var
+    assert list(var.index) == ["mz_100.0000"]
+    assert list(var["feature_id"]) == [7]
+
+
 def test_ensure_schema_current_missing_db_is_a_no_op(tmp_path):
     bridge = AnalysisBridge()
     bridge.ensureSchemaCurrent(str(tmp_path / "does_not_exist.db"))  # must not raise

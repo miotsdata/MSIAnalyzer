@@ -920,6 +920,22 @@ class AnalysisBridge(QObject):
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return
         analysis_db.init_analysis_db(analysis_db_path).close()
+        # Backfill: an analysis run before annotations went into `.var`.
+        paths = list(self._pipeline_sample_paths(analysis_db_path).values())
+        if paths and not core_export.var_has_annotations(paths[0]):
+            self._refresh_var_annotations(analysis_db_path)
+
+    def _refresh_var_annotations(self, analysis_db_path: str) -> None:
+        """Rewrite `.var`'s annotation columns in every sample `.h5ad` and
+        `merged.h5ad` after an annotation changed. Best effort: a failure
+        leaves the files as they were and never blocks the GUI action."""
+        paths = list(self._pipeline_sample_paths(analysis_db_path).values())
+        try:
+            core_export.write_annotations_to_var(
+                analysis_db_path, paths + [Path(analysis_db_path).parent / "merged.h5ad"]
+            )
+        except (OSError, sqlite3.Error, KeyError, ValueError):
+            logger.exception("could not write annotations into .var for %s", analysis_db_path)
 
     @Slot(str, result=dict)
     def getSummary(self, analysis_db_path: str) -> dict:
@@ -1279,6 +1295,7 @@ class AnalysisBridge(QObject):
     def _onFormulaPredictionSucceeded(self, analysis_db_path: str, rows: list) -> None:
         if self.sender() is not self._formula_prediction_worker:
             return  # superseded by a newer request — discard
+        self._refresh_var_annotations(analysis_db_path)
         self.formulaPredictionFinished.emit(analysis_db_path)
 
     @Slot(str, str)
@@ -1892,6 +1909,7 @@ class AnalysisBridge(QObject):
         self._feature_list_cache_path = None
         self._summary_cache_path = None
         self._drop_spatial_correlation_caches()
+        self._refresh_var_annotations(analysis_db_path)
         self.targetListMatchesChanged.emit(analysis_db_path)
 
     # -----------------------------------------------------------------

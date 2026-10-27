@@ -11,7 +11,8 @@ every feature switch re-read every file. That is what froze the GUI.
 `LightSample` opens the file once with h5py and reads only what
 rendering needs:
 
-- at construction: `var`, `obsm["spatial"]`, the imported-dataset grid
+- at construction: `var`'s index and `mz` (not the annotation text
+  columns, which are slow to decode and never rendered), `obsm["spatial"]`, the imported-dataset grid
   axes (`uns[GRID_UNS_KEY]`), and the names/dtypes of the obs columns and
   layers on disk (attributes only, no data);
 - on demand: exactly one layer (or `.X`), converted to CSC so a feature
@@ -71,6 +72,16 @@ def _as_csc(matrix):
     return csc_matrix(np.asarray(matrix))
 
 
+def _read_var_mz(var: h5py.Group) -> pd.DataFrame:
+    """`var`'s index plus its `mz` column, if it has one."""
+    index_key = var.attrs.get("_index", "_index")
+    if isinstance(index_key, bytes):
+        index_key = index_key.decode()
+    index = pd.Index(ad.io.read_elem(var[index_key]))
+    columns = {"mz": ad.io.read_elem(var["mz"])} if "mz" in var else {}
+    return pd.DataFrame(columns, index=index)
+
+
 class LightSample:
     """One sample's `.h5ad`, loaded piecemeal for rendering. See the module
     docstring."""
@@ -78,7 +89,7 @@ class LightSample:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         with h5py.File(self.path, "r") as f:
-            var = ad.io.read_elem(f["var"])
+            var = _read_var_mz(f["var"])
             if "obsm" in f and "spatial" in f["obsm"]:
                 xy = np.asarray(f["obsm"]["spatial"][:], dtype=float)
             else:

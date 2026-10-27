@@ -21,10 +21,13 @@ from msianalyzer.core.analysis_db import (
     upsert_calibration_unknown,
 )
 from msianalyzer.core.export import (
+    VAR_ANNOTATION_COLUMNS,
     export_annotation_table,
     export_calibration_results,
     export_integration_tables,
     export_visual_inspection_images,
+    var_has_annotations,
+    write_annotations_to_var,
 )
 from msianalyzer.core.plotting.roi import save_roi_to_sample
 
@@ -540,3 +543,43 @@ def test_export_visual_inspection_images_passes_hidden_categories(tmp_path, monk
     )
     export_visual_inspection_images(db, tmp_path / "all", "png", "obs", obs_column="polarity")
     assert seen == [{"neg"}, set()]
+
+
+def _write_var_h5ad(path: Path, mzs) -> None:
+    var = pd.DataFrame({"mz": list(mzs)}, index=[f"mz_{m:.4f}" for m in mzs])
+    X = csr_matrix(np.arange(2 * len(mzs), dtype=np.float32).reshape(2, -1))
+    ad.AnnData(X=X, obs=pd.DataFrame(index=["px0", "px1"]), var=var).write_h5ad(path)
+
+
+def test_write_annotations_to_var_matches_export_and_keeps_var_names(tmp_path):
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_features(db)
+    h5ad = tmp_path / "s1.h5ad"
+    # 300.0 has no feature (e.g. a targeted run's reference m/z).
+    _write_var_h5ad(h5ad, [50.0, 123.4567, 300.0])
+    before = ad.read_h5ad(h5ad)
+
+    write_annotations_to_var(db, [h5ad, tmp_path / "missing.h5ad"])
+    write_annotations_to_var(db, [h5ad])  # idempotent: replaces, never duplicates
+
+    after = ad.read_h5ad(h5ad)
+    assert list(after.var_names) == list(before.var_names)
+    assert (after.X != before.X).nnz == 0
+    assert list(after.var.columns) == ["mz", *VAR_ANNOTATION_COLUMNS]
+    assert list(after.var["feature_id"]) == [9, 7, -1]
+    row = after.var.loc["mz_123.4567"]
+    assert row["compound_name"] == "Caffeine, decaf?"
+    assert row["adduct"] == "[M+H]+"
+    assert row["source"] == "ms2"
+    assert row["score"] == pytest.approx(0.87)
+    assert after.var.loc["mz_50.0000", "compound_name"] == ""
+    assert np.isnan(after.var.loc["mz_50.0000", "score"])
+    assert var_has_annotations(h5ad)
+
+    # merged.h5ad is an `ad.concat(merge="same")` of the samples: the
+    # columns must survive it.
+    merged = ad.concat(
+        {"a": after, "b": after}, label="sample", index_unique="-", merge="same"
+    )
+    assert list(merged.var["compound_name"]) == list(after.var["compound_name"])

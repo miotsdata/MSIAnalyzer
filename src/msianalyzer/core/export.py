@@ -115,6 +115,63 @@ def export_annotation_table(db_path: str | Path, dest_path: str | Path) -> None:
     logger.info("exported annotation table (%d features) to %s", len(df), dest_path)
 
 
+#: `.var` columns `write_annotations_to_var` owns: the Annotation export's
+#: columns minus `mz`, which `.var` already has (and everything reads).
+VAR_ANNOTATION_COLUMNS = [c for c in _ANNOTATION_EXPORT_COLUMNS if c != "mz"]
+
+
+def annotation_var_table(db_path: str | Path, var: pd.DataFrame) -> pd.DataFrame:
+    """The Annotation export's rows, one per `.var` row, indexed and
+    ordered like `var` (so `.X` columns stay aligned). Joined on the
+    exact m/z: `.var["mz"]` is copied verbatim from `features.mz`. A
+    `.var` column with no feature (a targeted run's reference m/z) gets
+    `feature_id` -1, blank text and a `NaN` score."""
+    from msianalyzer.core.spectra.isotopes import _column_keys
+
+    df = load_feature_representative_annotations(db_path, include_unidentified=True)
+    records = {
+        k: {c: _export_annotation_cell(c, r) for c in VAR_ANNOTATION_COLUMNS}
+        for k, r in zip(_column_keys(df["mz"]), df.to_dict("records"))
+    }
+    blank = {c: "" for c in VAR_ANNOTATION_COLUMNS} | {"feature_id": -1, "score": None}
+    out = pd.DataFrame(
+        [records.get(k, blank) for k in _column_keys(var["mz"])],
+        index=var.index,
+        columns=VAR_ANNOTATION_COLUMNS,
+    )
+    out["feature_id"] = out["feature_id"].astype(np.int64)
+    out["score"] = out["score"].astype(float)
+    return out
+
+
+def write_annotations_to_var(db_path: str | Path, h5ad_paths) -> None:
+    """Write the Annotation export into each `.h5ad`'s `.var`, in place
+    (only the `var` element is rewritten, ADR 50). Replaces any earlier
+    copy, so it's called again whenever an annotation changes after the
+    run. Missing files are skipped."""
+    import h5py
+
+    for path in h5ad_paths:
+        if not Path(path).exists():
+            continue
+        with h5py.File(path, "r+") as f:
+            var = ad.io.read_elem(f["var"])
+            var = var.drop(columns=[c for c in VAR_ANNOTATION_COLUMNS if c in var])
+            var = var.join(annotation_var_table(db_path, var))
+            del f["var"]
+            ad.io.write_elem(f, "var", var)
+        logger.debug("%s: wrote annotations into .var", path)
+
+
+def var_has_annotations(h5ad_path: str | Path) -> bool:
+    """Whether `write_annotations_to_var` already ran on this file."""
+    import h5py
+
+    with h5py.File(h5ad_path, "r") as f:
+        order = f["var"].attrs.get("column-order", [])
+        return "feature_id" in [c.decode() if isinstance(c, bytes) else c for c in order]
+
+
 def _export_annotation_cell(col: str, record: dict):
     """One cell of the Annotation export. `score` is numeric but genuinely
     optional (only the ms2 tier has one), so a missing score is written

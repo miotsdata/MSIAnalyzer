@@ -30,6 +30,7 @@ from msianalyzer.core.annotation.target_list import (
 )
 from msianalyzer.core.report.summary import build_summary_report
 from msianalyzer.core.config import Config
+from msianalyzer.core.export import write_annotations_to_var
 from msianalyzer.core.parser import (
     MzmlParser,
     is_profile_mzml,
@@ -893,6 +894,15 @@ class Run:
             all_peaks_mzs=all_peaks_mzs,
         )
 
+    def _write_var_annotations(self, head: _SampleProcessingHead) -> None:
+        """Copy the Annotation export into every `.h5ad`'s `.var`, once
+        every annotation step is done. Before normalization, whose
+        `merged.h5ad` concat then carries the columns along; `merged.h5ad`
+        is listed too for a resumed run that already wrote it."""
+        paths = [head.out_dir / f"{p.stem}.h5ad" for p in head.out_db_paths]
+        write_annotations_to_var(head.adb_path, paths + [head.out_dir / "merged.h5ad"])
+        logger.info("run %s: wrote annotations into .var", head.analysis_id)
+
     def _run_normalization_stage(self, head: _SampleProcessingHead) -> None:
         """Normalize every sample's `.h5ad`, if `config.normalization` is
         enabled — shared verbatim by both `untargeted` and `targeted` runs.
@@ -1071,6 +1081,7 @@ class Run:
             )
         self._emit_step("assemble_adata", "completed")
 
+        self._write_var_annotations(head)
         self._run_normalization_stage(head)
 
     @log_call
@@ -1393,6 +1404,7 @@ class Run:
             logger.info("MS2 consensus disabled; skipping")
             self._emit_step("ms2_consensus", "skipped")
 
+        self._write_var_annotations(head)
         self._run_normalization_stage(head)
         self._run_spatial_correlation_stage(head)
 

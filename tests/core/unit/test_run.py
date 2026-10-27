@@ -1008,6 +1008,7 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     mock_run_normalization = mocker.patch(
         "msianalyzer.core.run.run.run_normalization"
     )
+    mocker.patch("msianalyzer.core.run.run.write_annotations_to_var")
 
     mock_executor = _mock_pool_executor(mocker, [res1, res2])
 
