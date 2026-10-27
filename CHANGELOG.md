@@ -13,7 +13,8 @@ ADRs under `docs/developer/adr/`.
     `merged.h5ad`. The existing layers are kept.
   - Visual Inspection lists it under **Normalized to feature…**, next to
     Raw / TIC.
-  - Normalizing to the same feature again replaces its layer.
+  - Normalizing to the same feature again replaces its layer. The dialog
+    also lists the existing layers, and each one can be removed.
 
 ## 0.5.0 — 2026-10-26
 

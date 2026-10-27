@@ -73,3 +73,22 @@ def test_search_normalize_then_offer_replace(dialog, application, qtbot):
     assert "feature_1" in dialog.property("statusText")
     assert dialog.property("selectedHasLayer")
     assert dialog.findChild(object, "normalizeRunButton").property("text") == "Replace layer"
+
+
+def test_remove_layer_after_confirmation(dialog, application, qtbot):
+    bridge = application.analysis_bridge
+    dialog.setProperty("selectedIndex", 0)
+    with qtbot.waitSignal(bridge.featureNormalizationFinished, timeout=60000):
+        QMetaObject.invokeMethod(dialog, "normalize")
+    assert len(_as_list(dialog.property("layerRows"))) == 1
+
+    # The ✕ chip is a Repeater delegate, out of findChild's reach: it only
+    # sets pendingRemoval, which the confirm row then acts on.
+    dialog.setProperty("pendingRemoval", 1)
+    with qtbot.waitSignal(bridge.featureLayersChanged, timeout=5000):
+        dialog.findChild(object, "normalizeConfirmRemoveButton").clicked.emit()
+
+    assert _as_list(dialog.property("layerRows")) == []
+    assert dialog.property("pendingRemoval") == -1
+    assert "removed" in dialog.property("statusText")
+    assert not dialog.property("selectedHasLayer")

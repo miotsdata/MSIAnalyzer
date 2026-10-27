@@ -26,7 +26,9 @@ Dialog {
     property var features: []           // {feature_id, mz, compound_name}
     property var order: []              // indices into `features` matching the search
     property int selectedIndex: -1      // into `features`
-    property var existingLayers: []     // layer names already on disk
+    property var layerRows: []          // getFeatureLayers: {layer, feature_id, mz}
+    readonly property var existingLayers: layerRows.map(function (l) { return l.layer })
+    property int pendingRemoval: -1     // feature id awaiting "Remove" confirmation
     property bool running: false
     property int progressDone: 0
     property int progressTotal: 0
@@ -46,15 +48,22 @@ Dialog {
         mzField.text = ""
         statusText = ""
         statusError = false
+        pendingRemoval = -1
         refreshExistingLayers()
         open()
         AnalysisBridge.requestFeatureList(analysisModel.analysisDbPath)
     }
 
     function refreshExistingLayers() {
-        existingLayers = analysis
-            ? AnalysisBridge.getFeatureLayers(analysis.analysisDbPath).map(function (l) { return l.layer })
-            : []
+        layerRows = analysis ? AnalysisBridge.getFeatureLayers(analysis.analysisDbPath) : []
+    }
+
+    function removeLayer(featureId) {
+        pendingRemoval = -1
+        var error = AnalysisBridge.removeFeatureLayer(analysis.analysisDbPath, analysis.runId, featureId)
+        statusText = error ? "Could not remove: " + error : "Layer feature_" + featureId + " removed."
+        statusError = !!error
+        refreshExistingLayers()
     }
 
     function applySearch() {
@@ -121,6 +130,58 @@ Dialog {
             color: Theme.mutedTextColor
             wrapMode: Text.Wrap
             Layout.fillWidth: true
+        }
+
+        // Existing layers, each removable after a confirmation.
+        Flow {
+            objectName: "normalizeLayersRow"
+            visible: normalizeDialog.layerRows.length > 0
+            Layout.fillWidth: true
+            spacing: 4
+            Label { text: "Normalized layers:"; font.bold: true; height: 28; verticalAlignment: Text.AlignVCenter }
+            Repeater {
+                model: normalizeDialog.layerRows.length
+                delegate: Row {
+                    property var row: normalizeDialog.layerRows[index]
+                    spacing: 2
+                    Label {
+                        text: "m/z " + Number(row.mz).toFixed(4) + " (feature " + row.feature_id + ")"
+                        height: 28
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    ToolButton {
+                        objectName: "normalizeRemoveLayer_" + index
+                        text: "✕"
+                        implicitWidth: 22
+                        implicitHeight: 22
+                        enabled: !normalizeDialog.running
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Remove this layer"
+                        onClicked: normalizeDialog.pendingRemoval = row.feature_id
+                    }
+                }
+            }
+        }
+        RowLayout {
+            visible: normalizeDialog.pendingRemoval >= 0
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Theme.errorColor
+                text: "Remove layer feature_" + normalizeDialog.pendingRemoval
+                      + " from every sample file and merged.h5ad?"
+            }
+            Button {
+                objectName: "normalizeConfirmRemoveButton"
+                text: "Remove"
+                onClicked: normalizeDialog.removeLayer(normalizeDialog.pendingRemoval)
+            }
+            Button {
+                objectName: "normalizeCancelRemoveButton"
+                text: "Cancel"
+                flat: true
+                onClicked: normalizeDialog.pendingRemoval = -1
+            }
         }
 
         RowLayout {

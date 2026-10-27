@@ -149,12 +149,17 @@ Flickable {
             controlsFlickable.refreshObsColumns()
             controlsFlickable.refresh()
         }
-        // A layer was added or replaced (ADR 61): the provider's caches
+        // A layer was added, replaced or removed (ADR 61): the provider's caches
         // are already dropped, so re-render in case it is the one shown.
         function onFeatureLayersChanged(dbPath) {
             if (!controlsFlickable.analysis || dbPath !== controlsFlickable.analysis.analysisDbPath)
                 return
             controlsFlickable.refreshFeatureLayers()
+            // The layer on screen was removed: back to the run's own.
+            if (controlsFlickable.dataLayer.indexOf("feature_") === 0
+                    && controlsFlickable.featureLayers.map(function (l) { return l.layer })
+                       .indexOf(controlsFlickable.dataLayer) < 0)
+                controlsFlickable.dataLayer = controlsFlickable.normalizedLayerName
             controlsFlickable.refresh()
         }
         // Feature names changed (post-run target list, ADR 60).

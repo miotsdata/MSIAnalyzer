@@ -1918,12 +1918,16 @@ class AnalysisBridge(QObject):
         )
 
     @staticmethod
-    def _run_feature_normalization(db, run_id, feature_id, mz, progress):
+    def _pipeline_sample_paths(db) -> dict:
         paths = {
             name: imported_dataset.sample_h5ad_path(db, name)
             for name in analysis_db.load_samples(db).get("name", [])
         }
-        paths = {name: path for name, path in paths.items() if path.exists()}
+        return {name: path for name, path in paths.items() if path.exists()}
+
+    @staticmethod
+    def _run_feature_normalization(db, run_id, feature_id, mz, progress):
+        paths = AnalysisBridge._pipeline_sample_paths(db)
         if not paths:
             raise ValueError("This analysis has no sample .h5ad files.")
         result = tic_normalization.add_feature_normalized_layer(
@@ -1951,6 +1955,28 @@ class AnalysisBridge(QObject):
             )
         self.featureLayersChanged.emit(self._normalization_db_path)
         self.featureNormalizationFinished.emit(result.layer_name, message)
+
+    @Slot(str, str, int, result=str)
+    def removeFeatureLayer(self, analysis_db_path: str, run_id: str, feature_id: int) -> str:
+        """Drop `feature_<id>` from every sample file and `merged.h5ad`;
+        `""` on success, else an error message. Synchronous: deleting two
+        HDF5 elements per file is fast."""
+        if self._dataset_task_worker is not None and self._dataset_task_worker.isRunning():
+            return "Another import, Moran's I or normalization is still running."
+        try:
+            tic_normalization.remove_feature_layer(
+                self._pipeline_sample_paths(analysis_db_path),
+                Path(analysis_db_path).parent / "merged.h5ad", int(feature_id),
+            )
+            analysis_db.log_command(
+                analysis_db_path, "remove_feature_layer",
+                {"feature_id": int(feature_id)}, run_id=run_id,
+            )
+        except (OSError, sqlite3.Error) as e:
+            return str(e)
+        self.heatmap_provider.clearCaches()
+        self.featureLayersChanged.emit(analysis_db_path)
+        return ""
 
     @Slot(str, result=list)
     def getFeatureLayers(self, analysis_db_path: str) -> list:

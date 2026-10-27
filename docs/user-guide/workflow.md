@@ -217,6 +217,10 @@ The result is a new layer, `feature_<id>`, in every sample `.h5ad` and in
 **Normalized to feature…** under the Raw / TIC buttons. Normalizing to the
 same feature again replaces its layer.
 
+The dialog lists the layers already added. Click ✕ next to one, then
+**Remove**, to delete it from every file. The files don't get smaller:
+HDF5 keeps the freed space.
+
 ## Stage 12 — Summary report (→ out_dir)
 
 `build_summary_report()` writes `summary_report.html` + `summary.json`:

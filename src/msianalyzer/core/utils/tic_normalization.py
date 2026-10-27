@@ -393,3 +393,30 @@ def add_feature_normalized_layer(
         reference_median=reference_median,
         merged_written=merged_written,
     )
+
+
+@log_call(source="merged_path")
+def remove_feature_layer(
+    sample_h5ad_paths: dict[str, Path], merged_path: Path | str, feature_id: int
+) -> int:
+    """Undo `add_feature_normalized_layer`: drop `layers["feature_<id>"]`
+    and `obs["norm_scale_feature_<id>"]` from every sample file and
+    `merged.h5ad`. HDF5 doesn't shrink a file when an element is deleted,
+    so the files keep their size until rewritten.
+
+    Returns:
+        The number of files the layer was removed from.
+    """
+    layer_name = feature_layer_name(feature_id)
+    paths = [Path(p) for p in sample_h5ad_paths.values()]
+    if Path(merged_path).exists():
+        paths.append(Path(merged_path))
+    removed = 0
+    for path in paths:
+        with h5py.File(path, "r+") as f:
+            had_layer = "layers" in f and layer_name in f["layers"]
+            if had_layer:
+                del f["layers"][layer_name]
+            h5ad_io.drop_obs_column(f, f"norm_scale_{layer_name}")
+        removed += had_layer
+    return removed

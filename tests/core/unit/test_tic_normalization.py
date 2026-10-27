@@ -215,3 +215,20 @@ def test_add_feature_normalized_layer_again_replaces_and_skips_missing_merged(tm
     np.testing.assert_allclose(
         a.layers["feature_7"].toarray()[:, 0], np.log1p([10.0, 10.0]), rtol=1e-5
     )
+
+
+def test_remove_feature_layer_drops_it_everywhere(tmp_path):
+    from msianalyzer.core.utils.tic_normalization import (
+        add_feature_normalized_layer,
+        remove_feature_layer,
+    )
+
+    paths, merged_path = _pipeline_output(tmp_path)
+    add_feature_normalized_layer(paths, merged_path, feature_id=7, mz=200.0, n_workers=1)
+
+    assert remove_feature_layer(paths, merged_path, 7) == 3
+    for path in (*paths.values(), merged_path):
+        a = ad.read_h5ad(path)
+        assert "feature_7" not in a.layers and "TIC" in a.layers
+        assert "norm_scale_feature_7" not in a.obs and "norm_scale" in a.obs
+    assert remove_feature_layer(paths, merged_path, 7) == 0

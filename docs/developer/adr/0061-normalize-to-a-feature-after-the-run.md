@@ -47,7 +47,24 @@ internal standard, a matrix peak) after the run had to re-run it.
 ## Consequences
 
 - No config version bump and no migration: old analyses just gain a layer.
-- Not covered: imported datasets, a "remove layer" action, the new layer
-  as an Integration export option or as the Moran's I source layer.
+- Not covered: imported datasets, the new layer as an Integration export
+  option or as the Moran's I source layer.
 - If the layer on screen is replaced, the visible tiles keep the old image
   until the layer or feature is changed: the tile URL is the same.
+
+## Addendum: removing a layer
+
+The dialog lists the existing `feature_<id>` layers. Each has a ✕ button
+that asks for confirmation inline. **Remove**
+(`tic_normalization.remove_feature_layer`, `AnalysisBridge.
+removeFeatureLayer`) deletes `layers/feature_<id>` and
+`obs/norm_scale_feature_<id>` from every sample file and `merged.h5ad`,
+and logs a `remove_feature_layer` command.
+
+- It runs synchronously, since deleting two elements per file is fast. It
+  is refused while a dataset task is running, which could be writing the
+  same files.
+- If Visual Inspection was showing the removed layer, it falls back to
+  the run's normalized layer.
+- HDF5 doesn't reclaim the space of a deleted element, so the files keep
+  their size until they are rewritten (for example with `h5repack`).
