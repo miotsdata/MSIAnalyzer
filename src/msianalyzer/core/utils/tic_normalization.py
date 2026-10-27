@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import logging
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
+import h5py
 import numpy as np
+from scipy.sparse import csr_matrix, vstack
 
 from msianalyzer.core.plotting.heatmap import _feature_column_index, _layer_column
-from msianalyzer.core.utils.logging_utils import log_call
+from msianalyzer.core.utils import h5ad_io
+from msianalyzer.core.utils.logging_utils import log_call, worker_logging
 from msianalyzer.core.utils.lazy_import import lazy_module
 
 ad = lazy_module("anndata")
@@ -36,6 +42,27 @@ class NormalizationResult:
     reference_median: float
     layer_name: str
     merged_path: Path
+
+
+def _normalize(raw, reference_values, dataset_reference: float):
+    """`(log1p(raw[i, :] * inv[i]), inv)` with `inv[i] = dataset_reference /
+    reference_values[i]`, or `0` where either is zero or non-finite. `raw`
+    is a float32 CSR matrix. The math of `_add_normalized_layers` and
+    `add_feature_normalized_layer`."""
+    reference_values = np.asarray(reference_values, dtype=float)
+
+    if dataset_reference > 0:
+        norm_factor = reference_values / dataset_reference
+    else:
+        norm_factor = np.zeros_like(reference_values)
+
+    inv_factor = np.zeros_like(norm_factor, dtype=np.float32)
+    nonzero = norm_factor > 0
+    inv_factor[nonzero] = (1.0 / norm_factor[nonzero]).astype(np.float32)
+
+    normalized = raw.multiply(inv_factor[:, None]).tocsr()
+    normalized.data = np.log1p(normalized.data).astype(np.float32)
+    return normalized, inv_factor
 
 
 def _add_normalized_layers(
@@ -69,20 +96,8 @@ def _add_normalized_layers(
         layer_name: The `adata.layers` key to write the normalized layer
             under.
     """
-    reference_values = np.asarray(reference_values, dtype=float)
-
-    if dataset_reference > 0:
-        norm_factor = reference_values / dataset_reference
-    else:
-        norm_factor = np.zeros_like(reference_values)
-
-    inv_factor = np.zeros_like(norm_factor, dtype=np.float32)
-    nonzero = norm_factor > 0
-    inv_factor[nonzero] = (1.0 / norm_factor[nonzero]).astype(np.float32)
-
     raw = adata.X.tocsr().astype(np.float32)
-    normalized = raw.multiply(inv_factor[:, None]).tocsr()
-    normalized.data = np.log1p(normalized.data).astype(np.float32)
+    normalized, inv_factor = _normalize(raw, reference_values, dataset_reference)
 
     adata.layers["raw"] = raw
     adata.layers[layer_name] = normalized
@@ -209,4 +224,172 @@ def run_normalization(
         reference_median=reference_median,
         layer_name=layer_name,
         merged_path=merged_path,
+    )
+
+
+# ---------------------------------------------------------------------------
+# After the run (ADR 61): normalize to one feature
+# ---------------------------------------------------------------------------
+
+
+def feature_layer_name(feature_id: int) -> str:
+    """The `.layers` key of the layer normalized to `feature_id`."""
+    return f"feature_{int(feature_id)}"
+
+
+@dataclass
+class FeatureNormalizationResult:
+    """Outcome of `add_feature_normalized_layer`.
+
+    Attributes:
+        layer_name: `feature_layer_name(feature_id)`.
+        n_samples: Samples written.
+        n_pixels: Pixels across every sample.
+        n_zero_pixels: Pixels where the reference feature is 0. They are
+            0 in the new layer.
+        reference_median: Dataset-wide median of the reference feature.
+        merged_written: False when the analysis has no `merged.h5ad`.
+    """
+
+    layer_name: str
+    n_samples: int
+    n_pixels: int
+    n_zero_pixels: int
+    reference_median: float
+    merged_written: bool
+
+
+def _read_reference_column(path: str, mz: float) -> np.ndarray:
+    """Raw intensity (`.X`, which the pipeline never normalizes in place)
+    of the `.var` column nearest `mz`, reading only that column."""
+    with h5py.File(path, "r") as f:
+        var_mz = np.asarray(ad.io.read_elem(f["var"])["mz"], dtype=float)
+        col = int(np.argmin(np.abs(var_mz - mz)))
+        X = ad.io.sparse_dataset(f["X"]) if isinstance(f["X"], h5py.Group) else f["X"]
+        column = X[:, [col]]
+    column = column.toarray() if hasattr(column, "toarray") else np.asarray(column)
+    return np.asarray(column, dtype=float).ravel()
+
+
+def _write_feature_layer(
+    path: str, reference_values: np.ndarray, reference_median: float, layer_name: str
+) -> str:
+    """One sample: write `layers[layer_name]` and `obs["norm_scale_<layer>"]`
+    in place, without rewriting the rest of the file (ADR 50)."""
+    with h5py.File(path, "r+") as f:
+        raw = csr_matrix(ad.io.read_elem(f["X"]), dtype=np.float32)
+        normalized, inv_factor = _normalize(raw, reference_values, reference_median)
+        layers = f.require_group("layers")
+        if layer_name in layers:
+            del layers[layer_name]
+        ad.io.write_elem(layers, layer_name, normalized)
+        h5ad_io.set_obs_column(f, f"norm_scale_{layer_name}", inv_factor)
+    return path
+
+
+def _write_merged_layer(
+    merged_path: Path, sample_paths: dict[str, Path], layer_name: str
+) -> None:
+    """Stack the per-sample layers into `merged.h5ad`'s row order (its
+    `sample` obs column) and write them as one layer."""
+    blocks, scales = {}, {}
+    for name, path in sample_paths.items():
+        with h5py.File(path, "r") as f:
+            blocks[name] = ad.io.read_elem(f["layers"][layer_name]).tocsr()
+            scales[name] = np.asarray(
+                h5ad_io.read_obs_column(f, f"norm_scale_{layer_name}"), dtype=np.float32
+            )
+    with h5py.File(merged_path, "r+") as f:
+        sample_col = np.asarray(h5ad_io.read_obs_column(f, "sample")).astype(str)
+        rows = [np.flatnonzero(sample_col == name) for name in blocks]
+        for name, idx in zip(blocks, rows):
+            if idx.size != blocks[name].shape[0]:
+                raise ValueError(
+                    f"merged.h5ad has {idx.size} rows for sample {name!r}, "
+                    f"its own file has {blocks[name].shape[0]}"
+                )
+        order = np.argsort(np.concatenate(rows), kind="stable")
+        stacked = vstack(list(blocks.values()), format="csr")[order]
+        scale = np.concatenate(list(scales.values()))[order]
+        if stacked.shape[0] != sample_col.size:
+            raise ValueError("merged.h5ad has rows of samples this analysis doesn't list")
+        layers = f.require_group("layers")
+        if layer_name in layers:
+            del layers[layer_name]
+        ad.io.write_elem(layers, layer_name, stacked)
+        h5ad_io.set_obs_column(f, f"norm_scale_{layer_name}", scale)
+
+
+@log_call(source="merged_path")
+def add_feature_normalized_layer(
+    sample_h5ad_paths: dict[str, Path],
+    merged_path: Path | str,
+    feature_id: int,
+    mz: float,
+    *,
+    n_workers: int | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> FeatureNormalizationResult:
+    """Normalize a finished analysis to one feature, as a new layer.
+
+    Same math as the run's `mode="reference_mz"` (`_normalize`): per pixel,
+    `log1p(raw / (ref / median(ref)))`, the median taken over every pixel
+    of every sample. The result goes to `layers[feature_layer_name(id)]`
+    and `obs["norm_scale_<layer>"]` of each sample file and of
+    `merged.h5ad` (if present). `.X`, `raw`, the run's own normalized
+    layer and `obs["norm_scale"]` are left alone. Running it again for
+    the same feature replaces that layer.
+
+    Args:
+        sample_h5ad_paths: Sample name -> that sample's `.h5ad`.
+        merged_path: The analysis' `merged.h5ad`; skipped if missing.
+        feature_id: Names the layer.
+        mz: The feature's m/z; the nearest `.var` column is the reference.
+        n_workers: Process pool size (`None` = every core).
+        progress: `(done, total, sample_name)` after each sample.
+    """
+    merged_path = Path(merged_path)
+    layer_name = feature_layer_name(feature_id)
+    paths = {name: str(path) for name, path in sample_h5ad_paths.items()}
+
+    reference = {name: _read_reference_column(path, mz) for name, path in paths.items()}
+    all_reference = np.concatenate(list(reference.values())) if reference else np.zeros(0)
+    n_pixels = int(all_reference.size)
+    reference_median = float(np.median(all_reference)) if n_pixels else 0.0
+    if reference_median <= 0:
+        logger.warning(
+            "Feature %s (m/z %.4f): median intensity is %.3g, more than half "
+            "the pixels have no signal; they normalize to 0.",
+            feature_id, mz, reference_median,
+        )
+
+    total = len(paths)
+    workers = max(1, min(n_workers or os.cpu_count() or 1, total))
+    by_path = {path: name for name, path in paths.items()}
+    with worker_logging() as (log_queue, initializer):
+        with ProcessPoolExecutor(
+            max_workers=workers, initializer=initializer, initargs=(log_queue,)
+        ) as executor:
+            futures = [
+                executor.submit(
+                    _write_feature_layer, path, reference[name], reference_median, layer_name
+                )
+                for name, path in paths.items()
+            ]
+            for done, future in enumerate(as_completed(futures), start=1):
+                path = future.result()
+                if progress is not None:
+                    progress(done, total, by_path[path])
+
+    merged_written = merged_path.exists()
+    if merged_written:
+        _write_merged_layer(merged_path, sample_h5ad_paths, layer_name)
+
+    return FeatureNormalizationResult(
+        layer_name=layer_name,
+        n_samples=total,
+        n_pixels=n_pixels,
+        n_zero_pixels=int(np.count_nonzero(~(all_reference > 0))),
+        reference_median=reference_median,
+        merged_written=merged_written,
     )

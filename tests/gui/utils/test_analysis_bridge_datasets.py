@@ -301,3 +301,30 @@ def test_compute_dataset_moran_populates_spatial_correlation(analysis, qtbot):
     assert len(df) == 3 * 2
     model = bridge.getSpatialCorrelationModel(str(db))
     qtbot.waitUntil(lambda: not model.rowsLoading, timeout=5000)
+
+
+def test_normalize_to_feature_adds_a_layer_and_lists_it(analysis, qtbot):
+    # ADR 61: pipeline output only, so the imported dataset is untouched.
+    db, _src, result = analysis
+    bridge = AnalysisBridge()
+    assert bridge.getFeatureLayers(str(db)) == []
+
+    with qtbot.waitSignal(bridge.featureLayersChanged, timeout=60000), \
+            qtbot.waitSignal(bridge.featureNormalizationFinished, timeout=60000) as blocker:
+        bridge.normalizeToFeature(str(db), "run1", 2, 200.0)
+
+    layer, message = blocker.args
+    assert layer == "feature_2"
+    assert "3 sample(s)" in message
+    assert bridge.getFeatureLayers(str(db)) == [
+        {"layer": "feature_2", "feature_id": 2, "mz": 200.0}
+    ]
+    for name in SAMPLES:
+        assert "feature_2" in ad.read_h5ad(sample_h5ad_path(db, name)).layers
+        assert "feature_2" not in ad.read_h5ad(
+            sample_h5ad_path(db, name, result.rel_dir)
+        ).layers
+    with analysis_db.connect(db) as con:
+        assert con.execute(
+            "SELECT COUNT(*) FROM commands WHERE command_name = 'normalize_feature'"
+        ).fetchone()[0] == 1

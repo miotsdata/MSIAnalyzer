@@ -52,6 +52,7 @@ from msianalyzer.core.registration import (
 )
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
 from msianalyzer.core.utils import h5ad_io
+from msianalyzer.core.utils import tic_normalization
 from msianalyzer.gui.utils.dataset_task_worker import DatasetTaskWorker
 from msianalyzer.gui.utils.export_worker import ExportWorker
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
@@ -587,6 +588,9 @@ class AnalysisBridge(QObject):
     roiSourceWriteFailed = Signal(str)  # ROI saved locally, write-back failed
     registrationChanged = Signal()  # an H&E image attached or a fit saved
     targetListMatchesChanged = Signal(str)  # analysis_db_path (ADR 60)
+    featureNormalizationFinished = Signal(str, str)  # layer name, message (ADR 61)
+    featureNormalizationFailed = Signal(str)
+    featureLayersChanged = Signal(str)  # analysis_db_path
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -656,6 +660,7 @@ class AnalysisBridge(QObject):
         self._h5ad_inspect_worker: TableQueryWorker | None = None
         self._dataset_task_worker: DatasetTaskWorker | None = None
         self._import_db_path: str | None = None
+        self._normalization_db_path: str | None = None
         self._summary_worker: TableQueryWorker | None = None
         self._summary_worker_path: str | None = None
         self._summary_cache_path: str | None = None
@@ -1720,7 +1725,7 @@ class AnalysisBridge(QObject):
 
     def _start_dataset_task(self, task_fn, on_succeeded, on_failed) -> bool:
         if self._dataset_task_worker is not None and self._dataset_task_worker.isRunning():
-            on_failed("Another import or Moran's I computation is still running.")
+            on_failed("Another import, Moran's I or normalization is still running.")
             return False
         worker = DatasetTaskWorker(task_fn, self)
         worker.progress.connect(self.datasetTaskProgress)
@@ -1888,6 +1893,92 @@ class AnalysisBridge(QObject):
         self._summary_cache_path = None
         self._drop_spatial_correlation_caches()
         self.targetListMatchesChanged.emit(analysis_db_path)
+
+    # -----------------------------------------------------------------
+    # Normalize to a feature after the run (ADR 61)
+    # -----------------------------------------------------------------
+
+    @Slot(str, str, int, float)
+    def normalizeToFeature(
+        self, analysis_db_path: str, run_id: str, feature_id: int, mz: float
+    ) -> None:
+        """Add `layers["feature_<id>"]` (every sample + `merged.h5ad`) on a
+        background thread (`tic_normalization.add_feature_normalized_layer`).
+        Progress arrives via `datasetTaskProgress`, the result via
+        `featureNormalizationFinished(layer, message)` /
+        `featureNormalizationFailed(message)`."""
+        self._normalization_db_path = analysis_db_path
+        task = functools.partial(
+            self._run_feature_normalization, analysis_db_path, run_id,
+            int(feature_id), float(mz),
+        )
+        self._start_dataset_task(
+            task, self._onFeatureNormalizationSucceeded,
+            self.featureNormalizationFailed.emit,
+        )
+
+    @staticmethod
+    def _run_feature_normalization(db, run_id, feature_id, mz, progress):
+        paths = {
+            name: imported_dataset.sample_h5ad_path(db, name)
+            for name in analysis_db.load_samples(db).get("name", [])
+        }
+        paths = {name: path for name, path in paths.items() if path.exists()}
+        if not paths:
+            raise ValueError("This analysis has no sample .h5ad files.")
+        result = tic_normalization.add_feature_normalized_layer(
+            paths, Path(db).parent / "merged.h5ad", feature_id, mz, progress=progress
+        )
+        analysis_db.log_command(
+            db, "normalize_feature",
+            {"feature_id": feature_id, "mz": mz, "layer": result.layer_name},
+            run_id=run_id,
+        )
+        return result
+
+    @Slot(object)
+    def _onFeatureNormalizationSucceeded(self, result) -> None:
+        if self.sender() is not self._dataset_task_worker:
+            return
+        self.heatmap_provider.clearCaches()  # the files changed on disk
+        message = f"Layer {result.layer_name} added to {result.n_samples} sample(s)"
+        message += " and merged.h5ad." if result.merged_written else "."
+        if result.n_zero_pixels:
+            pct = 100.0 * result.n_zero_pixels / max(result.n_pixels, 1)
+            message += (
+                f" {result.n_zero_pixels} of {result.n_pixels} pixels ({pct:.0f}%) "
+                "have no signal for this feature and are 0 in the new layer."
+            )
+        self.featureLayersChanged.emit(self._normalization_db_path)
+        self.featureNormalizationFinished.emit(result.layer_name, message)
+
+    @Slot(str, result=list)
+    def getFeatureLayers(self, analysis_db_path: str) -> list:
+        """The pipeline output's `feature_<id>` layers: `[{"layer",
+        "feature_id", "mz"}]`, by m/z. Read from the first sample file's
+        layer names, so it is exactly what the heatmap can show."""
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        for name in analysis_db.load_samples(analysis_db_path).get("name", []):
+            path = imported_dataset.sample_h5ad_path(analysis_db_path, name)
+            if path.exists():
+                with h5py.File(path, "r") as f:
+                    layers = list(f["layers"].keys()) if "layers" in f else []
+                break
+        else:
+            return []
+        ids = [int(l[len("feature_"):]) for l in layers
+               if l.startswith("feature_") and l[len("feature_"):].isdigit()]
+        if not ids:
+            return []
+        with sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True) as con:
+            mzs = dict(con.execute(
+                f"SELECT feature_id, mz FROM features WHERE feature_id IN "
+                f"({','.join('?' * len(ids))})", ids,
+            ).fetchall())
+        rows = [{"layer": tic_normalization.feature_layer_name(i), "feature_id": i,
+                 "mz": float(mzs.get(i, float("nan")))} for i in ids]
+        return sorted(rows, key=lambda r: r["mz"])
 
     # -----------------------------------------------------------------
     # ROI Design

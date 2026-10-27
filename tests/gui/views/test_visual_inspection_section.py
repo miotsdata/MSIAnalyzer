@@ -1545,3 +1545,28 @@ def test_scale_bar_dialog_set_to_all_saves_and_updates_tiles(
     assert saved["pixel_um"] == {"s1": 12.5, "s2": 12.5}
     section = root.findChild(QObject, "visualSection")
     assert _as_list(section.property("scaleBar"))["pixel_um"] == {"s1": 12.5, "s2": 12.5}
+
+
+def test_feature_layer_combo_lists_post_run_layers(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # ADR 61: a `feature_<id>` layer on disk shows up as a pickable layer.
+    out = Path(visual_analysis_model.analysisDbPath).parent
+    for name in ("s1", "s2"):
+        obs = pd.DataFrame({"tic": [1.0], "x": [0], "y": [0]}, index=[f"{name}_0"])
+        var = pd.DataFrame({"mz": [150.0]}, index=["mz_150.0000"])
+        a = ad.AnnData(X=csr_matrix(np.ones((1, 1), dtype=np.float32)), obs=obs, var=var)
+        a.layers["feature_1"] = a.X.copy()
+        a.write_h5ad(out / f"{name}.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    combo = find_visual_child(root, "featureLayerCombo")
+    assert combo.property("visible") is True
+    assert combo.property("displayText") == "Normalized to feature…"
+    combo.activated.emit(0)
+    assert section.property("dataLayer") == "feature_1"
+    assert combo.property("displayText") == "Norm. to m/z 150.0000"

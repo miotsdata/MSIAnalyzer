@@ -140,3 +140,78 @@ def test_run_normalization_reference_mz_mode_uses_dynamic_layer_name(tmp_path):
         a.layers["mz_100.0000"].toarray(), [expected_a0, expected_a1], rtol=1e-5
     )
     np.testing.assert_allclose(a.obs["norm_scale"].to_numpy(), [1.0, 0.5], rtol=1e-5)
+
+
+# -- add_feature_normalized_layer (ADR 61) ----------------------------------
+
+
+def _pipeline_output(tmp_path):
+    """Two samples as the run leaves them: `raw`/`TIC` layers, `norm_scale`,
+    and a merged.h5ad with the samples in the order b, a."""
+    a = _make_sample(tic=[10.0, 20.0], X=[[100.0, 4.0], [50.0, 0.0]], pixel_ids=[0, 1])
+    b = _make_sample(tic=[30.0, 5.0, 1.0], X=[[10.0, 2.0], [5.0, 8.0], [1.0, 1.0]])
+    paths = _write_samples(tmp_path, {"a": a, "b": b})
+    run_normalization({"b": paths["b"], "a": paths["a"]}, out_dir=tmp_path)
+    return paths, tmp_path / "merged.h5ad"
+
+
+def test_add_feature_normalized_layer_writes_samples_and_merged(tmp_path):
+    from msianalyzer.core.utils.tic_normalization import add_feature_normalized_layer
+
+    paths, merged_path = _pipeline_output(tmp_path)
+    before_a = ad.read_h5ad(paths["a"])
+    progress = []
+
+    result = add_feature_normalized_layer(
+        paths, merged_path, feature_id=7, mz=200.0, n_workers=1,
+        progress=lambda d, t, n: progress.append((d, t, n)),
+    )
+
+    assert result.layer_name == "feature_7"
+    assert result.n_samples == 2 and result.n_pixels == 5
+    assert result.n_zero_pixels == 1
+    # reference (m/z 200) = a [4, 0], b [2, 8, 1] -> median 2
+    assert result.reference_median == pytest.approx(2.0)
+    assert result.merged_written
+    assert sorted(n for _, _, n in progress) == ["a", "b"]
+
+    a = ad.read_h5ad(paths["a"])
+    b = ad.read_h5ad(paths["b"])
+    np.testing.assert_allclose(
+        a.layers["feature_7"].toarray(),
+        [np.log1p(np.array([100.0, 4.0]) * 0.5), [0.0, 0.0]],  # ref 0 -> 0
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(b.obs["norm_scale_feature_7"], [1.0, 0.25, 2.0])
+    # The run's own normalization is untouched.
+    np.testing.assert_allclose(a.layers["TIC"].toarray(), before_a.layers["TIC"].toarray())
+    np.testing.assert_allclose(a.obs["norm_scale"], before_a.obs["norm_scale"])
+
+    merged = ad.read_h5ad(merged_path)
+    for name, sample in (("a", a), ("b", b)):
+        rows = (merged.obs["sample"] == name).to_numpy()
+        np.testing.assert_allclose(
+            merged.layers["feature_7"][rows].toarray(), sample.layers["feature_7"].toarray()
+        )
+        np.testing.assert_allclose(
+            merged.obs["norm_scale_feature_7"][rows], sample.obs["norm_scale_feature_7"]
+        )
+
+
+def test_add_feature_normalized_layer_again_replaces_and_skips_missing_merged(tmp_path):
+    from msianalyzer.core.utils.tic_normalization import add_feature_normalized_layer
+
+    paths, merged_path = _pipeline_output(tmp_path)
+    add_feature_normalized_layer(paths, merged_path, feature_id=7, mz=200.0, n_workers=1)
+    merged_path.unlink()
+
+    result = add_feature_normalized_layer(
+        paths, merged_path, feature_id=7, mz=100.0, n_workers=1
+    )
+
+    assert not result.merged_written
+    a = ad.read_h5ad(paths["a"])
+    # reference (m/z 100) = a [100, 50], b [10, 5, 1] -> median 10
+    np.testing.assert_allclose(
+        a.layers["feature_7"].toarray()[:, 0], np.log1p([10.0, 10.0]), rtol=1e-5
+    )

@@ -3,6 +3,18 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
+## Unreleased
+
+### Added
+- **Normalize to a feature after the run** (ADR 61). **Analyses → Normalize
+  to feature…** searches a feature by name or m/z and normalizes the
+  finished analysis to it, on a background thread, with no re-run.
+  - The result is a new layer, `feature_<id>`, in every sample file and in
+    `merged.h5ad`. The existing layers are kept.
+  - Visual Inspection lists it under **Normalized to feature…**, next to
+    Raw / TIC.
+  - Normalizing to the same feature again replaces its layer.
+
 ## 0.5.0 — 2026-10-26
 
 ### Added

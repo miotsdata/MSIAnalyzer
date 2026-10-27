@@ -35,6 +35,7 @@
         <file>Views/CoregistrationWindow.qml</file>
         <file>Views/ImportH5adDialog.qml</file>
         <file>Views/TargetListMatchDialog.qml</file>
+        <file>Views/NormalizeFeatureDialog.qml</file>
         <file>Views/ScaleBarDialog.qml</file>
         <file>Utils/SearchQuery.js</file>
         <file>Utils/AffineTransform.js</file>

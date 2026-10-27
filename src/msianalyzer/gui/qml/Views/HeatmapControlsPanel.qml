@@ -85,7 +85,23 @@ Flickable {
         }
     }
 
+    // `feature_<id>` layers on the pipeline output (ADR 61):
+    // [{layer, feature_id, mz}], see AnalysisBridge.getFeatureLayers.
+    property var featureLayers: []
+
+    function refreshFeatureLayers() {
+        controlsFlickable.featureLayers = controlsFlickable.analysis
+            ? AnalysisBridge.getFeatureLayers(controlsFlickable.analysis.analysisDbPath) : []
+    }
+
+    function featureLayerLabel(l) {
+        var match = controlsFlickable.features.filter(function (f) { return f.feature_id === l.feature_id })
+        var name = match.length && match[0].compound_name ? " · " + match[0].compound_name : ""
+        return "Norm. to m/z " + Number(l.mz).toFixed(4) + name
+    }
+
     onAnalysisChanged: {
+        controlsFlickable.refreshFeatureLayers()
         controlsFlickable.refreshNormalizedLayerName()
         controlsFlickable.refreshFeatures()
         controlsFlickable.refreshObsColumns()
@@ -105,6 +121,7 @@ Flickable {
             // Back on the pipeline output: a dataset-only layer choice
             // means nothing here any more.
             if (["raw", controlsFlickable.normalizedLayerName, "localMoran"]
+                    .concat(controlsFlickable.featureLayers.map(function (l) { return l.layer }))
                     .indexOf(controlsFlickable.dataLayer) < 0)
                 controlsFlickable.dataLayer = controlsFlickable.normalizedLayerName
             return
@@ -130,6 +147,14 @@ Flickable {
             controlsFlickable.selectedFeatureIndex = 0
             controlsFlickable.refreshFeatures()
             controlsFlickable.refreshObsColumns()
+            controlsFlickable.refresh()
+        }
+        // A layer was added or replaced (ADR 61): the provider's caches
+        // are already dropped, so re-render in case it is the one shown.
+        function onFeatureLayersChanged(dbPath) {
+            if (!controlsFlickable.analysis || dbPath !== controlsFlickable.analysis.analysisDbPath)
+                return
+            controlsFlickable.refreshFeatureLayers()
             controlsFlickable.refresh()
         }
         // Feature names changed (post-run target list, ADR 60).
@@ -909,6 +934,21 @@ Flickable {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+        }
+        // Layers added by "Normalize to feature…" (ADR 61), pipeline
+        // output only. No selection shows the placeholder text.
+        ComboBox {
+            id: featureLayerCombo
+            objectName: "featureLayerCombo"
+            Layout.fillWidth: true
+            visible: controlsFlickable.inspectionMode === "feature" && !controlsFlickable.datasetActive
+                     && controlsFlickable.featureLayers.length > 0
+            model: controlsFlickable.featureLayers.map(controlsFlickable.featureLayerLabel)
+            currentIndex: controlsFlickable.featureLayers.map(function (l) { return l.layer })
+                          .indexOf(controlsFlickable.dataLayer)
+            displayText: currentIndex < 0 ? "Normalized to feature…" : currentText
+            onActivated: (index) => controlsFlickable.dataLayer = controlsFlickable.featureLayers[index].layer
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
         }
 
         Label {

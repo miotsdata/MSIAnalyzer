@@ -199,6 +199,24 @@ happens in a pipeline run.
 the same priority as run-time target-list matches. **Remove post-run
 matches** undoes every name saved this way and keeps the run's own matches.
 
+## After the run — normalize to a feature
+
+**Analyses → Normalize to feature…** normalizes a finished untargeted
+analysis to one feature (an internal standard, say) without re-running it.
+Search the feature by name or m/z, pick it, and click **Normalize**. It runs
+in the background with a progress bar.
+
+The math is the same as the config's `normalization.mode: reference_mz`.
+Each pixel is divided by the feature's intensity relative to that feature's
+median over every pixel of every sample, then `log1p`. Pixels where the
+feature has no signal are 0. The dialog reports how many there are, so
+pick a feature present across the tissue.
+
+The result is a new layer, `feature_<id>`, in every sample `.h5ad` and in
+`merged.h5ad`. Nothing else changes. In Visual Inspection, pick it from
+**Normalized to feature…** under the Raw / TIC buttons. Normalizing to the
+same feature again replaces its layer.
+
 ## Stage 12 — Summary report (→ out_dir)
 
 `build_summary_report()` writes `summary_report.html` + `summary.json`:

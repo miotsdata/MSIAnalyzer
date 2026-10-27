@@ -214,6 +214,14 @@ ApplicationWindow {
                          && window.currentAnalysis.analysisType !== "targeted"
                 onTriggered: targetListMatchDialog.openFor(window.currentAnalysis)
             }
+            // Normalize to one feature without re-running (ADR 61).
+            AppMenuItem {
+                objectName: "normalizeFeatureMenuItem"
+                text: "Normalize to feature…"
+                enabled: window.currentAnalysis !== null
+                         && window.currentAnalysis.analysisType !== "targeted"
+                onTriggered: normalizeFeatureDialog.openFor(window.currentAnalysis)
+            }
             Menu {
                 objectName: "openAnalysisMenu"
                 title: "Open"
@@ -426,6 +434,10 @@ ApplicationWindow {
 
     TargetListMatchDialog {
         id: targetListMatchDialog
+    }
+
+    NormalizeFeatureDialog {
+        id: normalizeFeatureDialog
     }
 
     ImportH5adDialog {
