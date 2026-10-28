@@ -1134,137 +1134,148 @@ Page {
 
                         Repeater {
                             model: groupTab.groupFields
-                            delegate: RowLayout {
-                                id: fieldRow
-                                objectName: "fieldRow_" + groupTab.groupKey + "_" + modelData.name
+                            delegate: ColumnLayout {
                                 Layout.fillWidth: true
-                                property string fieldObjectName:
-                                    "field_" + groupTab.groupKey + "_" + modelData.name
-                                // Fields with no `enabledWhenField` are
-                                // always enabled. Others read the
-                                // controlling field's own `checked` —
-                                // QML's automatic dependency tracking
-                                // follows that read through
-                                // `isFieldEnabled`'s `findByObjectName`
-                                // call, so this stays reactive to the
-                                // controlling checkbox without any extra
-                                // wiring, as long as that field is
-                                // declared earlier in the same group
-                                // (true for every current use: the schema
-                                // only sets `enabledWhenField` pointing at
-                                // an earlier sibling — see config_schema.py).
-                                enabled: newAnalysisPage.isFieldEnabled(groupTab.groupKey, modelData)
-
+                                spacing: 8
+                                // A field naming a `section` starts a titled part of the tab.
                                 Label {
-                                    text: modelData.label
-                                    Layout.preferredWidth: 260
+                                    visible: !!modelData.section
+                                    text: modelData.section || ""
+                                    font.bold: true
+                                    Layout.topMargin: 8
                                 }
+                                RowLayout {
+                                    id: fieldRow
+                                    objectName: "fieldRow_" + groupTab.groupKey + "_" + modelData.name
+                                    Layout.fillWidth: true
+                                    property string fieldObjectName:
+                                        "field_" + groupTab.groupKey + "_" + modelData.name
+                                    // Fields with no `enabledWhenField` are
+                                    // always enabled. Others read the
+                                    // controlling field's own `checked` —
+                                    // QML's automatic dependency tracking
+                                    // follows that read through
+                                    // `isFieldEnabled`'s `findByObjectName`
+                                    // call, so this stays reactive to the
+                                    // controlling checkbox without any extra
+                                    // wiring, as long as that field is
+                                    // declared earlier in the same group
+                                    // (true for every current use: the schema
+                                    // only sets `enabledWhenField` pointing at
+                                    // an earlier sibling — see config_schema.py).
+                                    enabled: newAnalysisPage.isFieldEnabled(groupTab.groupKey, modelData)
 
-                                ToolButton {
-                                    objectName: fieldRow.fieldObjectName + "_help"
-                                    text: "?"
-                                    implicitWidth: 22
-                                    implicitHeight: 22
-                                    // Kept as a plain property (not just
-                                    // read off modelData at click time) so
-                                    // tests can still read it directly, as
-                                    // before.
-                                    property string helpText: modelData.help
-                                    onClicked: newAnalysisPage.openFieldHelp(modelData.label, helpText)
-
-                                    HoverHandler {
-                                        cursorShape: Qt.PointingHandCursor
+                                    Label {
+                                        text: modelData.label
+                                        Layout.preferredWidth: 260
                                     }
-                                }
 
-                                AppCheckBox {
-                                    objectName: modelData.kind === "bool" ? fieldRow.fieldObjectName : ""
-                                    visible: modelData.kind === "bool"
-                                    checked: modelData.default === true
-                                    Layout.fillWidth: true
+                                    ToolButton {
+                                        objectName: fieldRow.fieldObjectName + "_help"
+                                        text: "?"
+                                        implicitWidth: 22
+                                        implicitHeight: 22
+                                        // Kept as a plain property (not just
+                                        // read off modelData at click time) so
+                                        // tests can still read it directly, as
+                                        // before.
+                                        property string helpText: modelData.help
+                                        onClicked: newAnalysisPage.openFieldHelp(modelData.label, helpText)
 
-                                    HoverHandler {
-                                        cursorShape: Qt.PointingHandCursor
+                                        HoverHandler {
+                                            cursorShape: Qt.PointingHandCursor
+                                        }
                                     }
-                                }
 
-                                TextField {
-                                    objectName: (modelData.kind !== "bool" && modelData.kind !== "path_list")
-                                                ? fieldRow.fieldObjectName : ""
-                                    visible: modelData.kind !== "bool" && modelData.kind !== "path_list"
-                                    text: (modelData.default === null || modelData.default === undefined)
-                                          ? "" : String(modelData.default)
-                                    // "float_list"/"optional_str_list" look
-                                    // identical to a plain single-value
-                                    // field otherwise — nothing on screen
-                                    // says "you can type more than one,
-                                    // comma-separated" (reported: a user
-                                    // typed exactly one m/z into
-                                    // NormalizationConfig.analyte_mzs and
-                                    // had no way to tell more were
-                                    // supported, even though collectConfig
-                                    // already parsed a comma list
-                                    // correctly all along).
-                                    placeholderText: modelData.kind === "float_list"
-                                                     ? "comma-separated, e.g. 154.0863, 200.1234"
-                                                     : (modelData.kind === "optional_str_list"
-                                                        ? "comma-separated" : "")
-                                    Layout.fillWidth: true
-                                }
-
-                                // library_path: a picked-files list with a
-                                // remove button per row (like the io tab's
-                                // sample-row table), not a single
-                                // semicolon-joined text field — the user
-                                // wanted to see and prune what's selected,
-                                // not read/edit a joined string.
-                                ColumnLayout {
-                                    objectName: modelData.kind === "path_list" ? fieldRow.fieldObjectName : ""
-                                    visible: modelData.kind === "path_list"
-                                    Layout.fillWidth: true
-                                    spacing: 4
-
-                                    RowLayout {
+                                    AppCheckBox {
+                                        objectName: modelData.kind === "bool" ? fieldRow.fieldObjectName : ""
+                                        visible: modelData.kind === "bool"
+                                        checked: modelData.default === true
                                         Layout.fillWidth: true
 
-                                        Label {
-                                            objectName: "libraryPathEmptyLabel"
-                                            visible: newAnalysisPage.libraryPaths.length === 0
-                                            text: "No libraries selected"
-                                            color: Theme.mutedTextColor
-                                            Layout.fillWidth: true
-                                        }
-                                        Item { Layout.fillWidth: newAnalysisPage.libraryPaths.length > 0 }
-
-                                        Button {
-                                            objectName: "libraryPathBrowseButton"
-                                            text: "Browse..."
-                                            onClicked: libraryPathDialog.open()
-
-                                            HoverHandler {
-                                                cursorShape: Qt.PointingHandCursor
-                                            }
+                                        HoverHandler {
+                                            cursorShape: Qt.PointingHandCursor
                                         }
                                     }
 
-                                    Repeater {
-                                        model: newAnalysisPage.libraryPaths
-                                        delegate: RowLayout {
-                                            objectName: "libraryPathRow_" + index
+                                    TextField {
+                                        objectName: (modelData.kind !== "bool" && modelData.kind !== "path_list")
+                                                    ? fieldRow.fieldObjectName : ""
+                                        visible: modelData.kind !== "bool" && modelData.kind !== "path_list"
+                                        text: (modelData.default === null || modelData.default === undefined)
+                                              ? "" : String(modelData.default)
+                                        // "float_list"/"optional_str_list" look
+                                        // identical to a plain single-value
+                                        // field otherwise — nothing on screen
+                                        // says "you can type more than one,
+                                        // comma-separated" (reported: a user
+                                        // typed exactly one m/z into
+                                        // NormalizationConfig.analyte_mzs and
+                                        // had no way to tell more were
+                                        // supported, even though collectConfig
+                                        // already parsed a comma list
+                                        // correctly all along).
+                                        placeholderText: modelData.kind === "float_list"
+                                                         ? "comma-separated, e.g. 154.0863, 200.1234"
+                                                         : (modelData.kind === "optional_str_list"
+                                                            ? "comma-separated" : "")
+                                        Layout.fillWidth: true
+                                    }
+
+                                    // library_path: a picked-files list with a
+                                    // remove button per row (like the io tab's
+                                    // sample-row table), not a single
+                                    // semicolon-joined text field — the user
+                                    // wanted to see and prune what's selected,
+                                    // not read/edit a joined string.
+                                    ColumnLayout {
+                                        objectName: modelData.kind === "path_list" ? fieldRow.fieldObjectName : ""
+                                        visible: modelData.kind === "path_list"
+                                        Layout.fillWidth: true
+                                        spacing: 4
+
+                                        RowLayout {
                                             Layout.fillWidth: true
 
                                             Label {
-                                                text: modelData
-                                                elide: Text.ElideMiddle
+                                                objectName: "libraryPathEmptyLabel"
+                                                visible: newAnalysisPage.libraryPaths.length === 0
+                                                text: "No libraries selected"
+                                                color: Theme.mutedTextColor
                                                 Layout.fillWidth: true
                                             }
+                                            Item { Layout.fillWidth: newAnalysisPage.libraryPaths.length > 0 }
+
                                             Button {
-                                                objectName: "removeLibraryPathButton_" + index
-                                                text: "Remove"
-                                                onClicked: newAnalysisPage.removeLibraryPath(index)
+                                                objectName: "libraryPathBrowseButton"
+                                                text: "Browse..."
+                                                onClicked: libraryPathDialog.open()
 
                                                 HoverHandler {
                                                     cursorShape: Qt.PointingHandCursor
+                                                }
+                                            }
+                                        }
+
+                                        Repeater {
+                                            model: newAnalysisPage.libraryPaths
+                                            delegate: RowLayout {
+                                                objectName: "libraryPathRow_" + index
+                                                Layout.fillWidth: true
+
+                                                Label {
+                                                    text: modelData
+                                                    elide: Text.ElideMiddle
+                                                    Layout.fillWidth: true
+                                                }
+                                                Button {
+                                                    objectName: "removeLibraryPathButton_" + index
+                                                    text: "Remove"
+                                                    onClicked: newAnalysisPage.removeLibraryPath(index)
+
+                                                    HoverHandler {
+                                                        cursorShape: Qt.PointingHandCursor
+                                                    }
                                                 }
                                             }
                                         }

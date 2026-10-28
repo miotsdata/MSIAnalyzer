@@ -39,6 +39,7 @@ Item {
     // Distinct from "stats is null" (no db path resolved at all) — an
     // existing-but-empty analysis (0 samples, 0 features) also counts as
     // "nothing to show" for the empty-state message.
+    readonly property var background: stats && stats.ms2_background ? stats.ms2_background : []
     readonly property bool hasData: !!stats && (stats.n_samples > 0 || stats.n_features > 0)
 
     readonly property var statDefs: [
@@ -143,6 +144,37 @@ Item {
             Repeater {
                 model: summarySection.outcomeDefs
                 delegate: StatTile {}
+            }
+        }
+
+        // MS2 cleaning (ADR 0064): fragments found in the spectra of many
+        // precursors, whether or not background removal was on.
+        Label {
+            objectName: "backgroundFragmentsTitle"
+            visible: summarySection.background.length > 0
+            text: "MS2 background fragments (in at least 5 % of precursors)"
+            font.bold: true
+            font.pixelSize: 14
+        }
+        ListView {
+            id: backgroundList
+            objectName: "backgroundFragmentsList"
+            visible: summarySection.background.length > 0
+            Layout.preferredWidth: 560
+            Layout.preferredHeight: Math.min(contentHeight, 240)
+            clip: true
+            model: summarySection.background.length
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            delegate: Label {
+                required property int index
+                readonly property var row: summarySection.background[index]
+                width: backgroundList.width
+                text: "m/z " + Number(row.mz).toFixed(4)
+                      + "  ·  " + (row.polarity ? row.polarity.toLowerCase() : "?")
+                      + "  ·  " + row.n_precursors + " precursors (" + Number(row.percent).toFixed(1) + " %)"
+                      + (row.removed ? "  ·  removed" : "")
+                font.bold: row.removed
+                color: row.removed ? Theme.textColor : Theme.mutedTextColor
             }
         }
     }

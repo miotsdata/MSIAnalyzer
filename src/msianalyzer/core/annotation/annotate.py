@@ -74,6 +74,7 @@ from ..analysis_db import create_analysis_schema
 from ..parser.mzml_parser import array_to_blob, blob_to_array
 from ..utils.db import safe_execute, safe_executemany
 from ..utils.logging_utils import log_call, worker_logging
+from .ms2_cleaning import load_cleaner, normalize_polarity  # noqa: F401 (re-exported)
 from .spectral_match import MatchResult, reverse_dot_product
 
 if TYPE_CHECKING:  # avoid a runtime import cycle / hard libviz dependency
@@ -233,29 +234,6 @@ class AnnotationResult:
 # ---------------------------------------------------------------------------
 # pure helpers
 # ---------------------------------------------------------------------------
-
-_POS_TOKENS = {"+", "pos", "positive", "p"}
-_NEG_TOKENS = {"-", "neg", "negative", "n"}
-
-
-def normalize_polarity(value: str | None) -> str | None:
-    """Map a free-form polarity string to ``"POSITIVE"`` / ``"NEGATIVE"`` / None.
-
-    Accepts ``"+"``, ``"pos"``, ``"positive"`` (any case), the negative
-    equivalents, and anything that merely *starts* with ``pos`` / ``neg``.
-    Everything else (including ``None`` and the empty string) becomes
-    ``None`` — "do not filter the library by polarity".
-    """
-    if value is None:
-        return None
-    v = str(value).strip().lower()
-    if not v:
-        return None
-    if v in _POS_TOKENS or v.startswith("pos"):
-        return "POSITIVE"
-    if v in _NEG_TOKENS or v.startswith("neg"):
-        return "NEGATIVE"
-    return None
 
 
 def score_scan_against_candidates(
@@ -453,15 +431,16 @@ def _row_from_match(
         flat_fragmentation=bool(scan.get("flat_fragmentation")),
         precursor_confirmed=scan.get("precursor_confirmed"),
         purity_score=scan.get("purity_score"),
-        # The untouched spectra — `scan["emp_mz"]`/`["emp_int"]` (this
-        # scan's own raw arrays, already read once by `_read_fragments`
-        # and reused for every candidate) and `cand.mz`/`.intensity`
+        # The untouched spectra — `scan["emp_raw_mz"]`/`["emp_raw_int"]`
+        # (this scan's own raw arrays, before MS2 cleaning, already read
+        # once by `_read_fragments` and reused for every candidate; the
+        # cleaned `emp_mz`/`emp_int` without cleaning) and `cand.mz`/`.intensity`
         # (never mutated by scoring, `reverse_dot_product` only reads
         # them) — neither is the filtered/normalised copy `m.filtered_*`/
         # `m.lib_filtered_*` carry; those exist for scoring's own
         # internal use and are no longer threaded into persisted storage.
-        emp_raw_mz=scan["emp_mz"],
-        emp_raw_intensity=scan["emp_int"],
+        emp_raw_mz=scan.get("emp_raw_mz", scan["emp_mz"]),
+        emp_raw_intensity=scan.get("emp_raw_int", scan["emp_int"]),
         lib_raw_mz=cand.mz,
         lib_raw_intensity=cand.intensity,
         adduct=cand.adduct,
@@ -707,16 +686,16 @@ def _read_fragments(
     if con is None:
         path = sample_raw_db.get(sample_id)
         if path is None:
-            return None, None
+            return None, None, None
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         raw_cons[sample_id] = con
     row = con.execute(
-        "SELECT mz_array, intensity_array FROM ms2_scans WHERE scan_id = ?",
+        "SELECT mz_array, intensity_array, precursor_charge FROM ms2_scans WHERE scan_id = ?",
         (scan_id,),
     ).fetchone()
     if row is None:
-        return None, None
-    return blob_to_array(row[0]), blob_to_array(row[1])
+        return None, None, None
+    return blob_to_array(row[0]), blob_to_array(row[1]), row[2]
 
 
 @log_call
@@ -751,6 +730,7 @@ def _annotate_feature_batch(
     rows: list[AnnotationRow] = []
     outcomes: list[FeatureOutcome] = []
     raw_cons: dict = {}
+    cleaner = load_cleaner(analysis_db_path)  # MS2 cleaning (ADR 0064)
     adb = sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True)
     try:
         for feature_id, feature_mz in batch:
@@ -783,12 +763,15 @@ def _annotate_feature_batch(
                 ):
                     n_low_purity += 1
                     continue
-                emp_mz, emp_int = _read_fragments(
+                raw_mz, raw_int, charge = _read_fragments(
                     raw_cons, sample_raw_db, sample_id, scan_id
                 )
-                if emp_mz is None:
+                if raw_mz is None:
                     n_unreadable += 1
                     continue
+                emp_mz, emp_int = cleaner.clean(
+                    raw_mz, raw_int, normalize_polarity(pol), float(feature_mz), charge
+                )
                 scans_by_pol[normalize_polarity(pol)].append(
                     {
                         "scan_id": scan_id,
@@ -801,6 +784,8 @@ def _annotate_feature_batch(
                         "purity_score": purity,
                         "emp_mz": emp_mz,
                         "emp_int": emp_int,
+                        "emp_raw_mz": raw_mz,
+                        "emp_raw_int": raw_int,
                     }
                 )
 

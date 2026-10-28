@@ -418,3 +418,35 @@ def test_run_grouper_end_to_end(ms2_grouper_mock_data, make_ms2_db, tmp_path):
 
 def test_summarize_features_empty_input():
     assert summarize_features([]) == []
+
+
+def test_run_grouper_stores_and_applies_ms2_cleaning(
+    ms2_grouper_mock_data, make_ms2_db, tmp_path
+):
+    from msianalyzer.core.analysis_db import init_analysis_db, register_sample, save_features
+    from msianalyzer.core.annotation.ms2_cleaning import load_cleaner
+    from msianalyzer.core.config.config import Ms2CleaningConfig
+
+    mock = ms2_grouper_mock_data(n=1000)
+    analysis_db = tmp_path / "analysis.db"
+    init_analysis_db(analysis_db).close()
+    register_sample(analysis_db, "s0", str(make_ms2_db(mock)), "+")
+    save_features(analysis_db, mock.features_df)
+
+    def n_peaks():
+        with sqlite3.connect(analysis_db) as con:
+            return con.execute("SELECT SUM(n_peaks) FROM ms2_associations").fetchone()[0]
+
+    run_grouper(analysis_db, assoc_ppm=mock.assoc_ppm, cleaning=Ms2CleaningConfig())
+    before = n_peaks()
+    with sqlite3.connect(analysis_db) as con:
+        assert con.execute("SELECT COUNT(*) FROM ms2_cleaning").fetchone()[0] == 1
+
+    settings = Ms2CleaningConfig(
+        background_enabled=True, background_min_percent=1.0, above_precursor_enabled=True
+    )
+    run_grouper(analysis_db, assoc_ppm=mock.assoc_ppm, cleaning=settings)
+    assert n_peaks() < before
+    with sqlite3.connect(analysis_db) as con:
+        assert con.execute("SELECT COUNT(*) FROM ms2_cleaning").fetchone()[0] == 1
+    assert load_cleaner(analysis_db).active

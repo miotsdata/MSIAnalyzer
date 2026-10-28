@@ -15,13 +15,13 @@ opened; older MSIAnalyzer versions can no longer open it after that.
 ## The config file
 
 A run is driven by one config file (`.yaml`/`.yml` or `.toml`). It has a
-`version` key (currently **15**) and one section per pipeline stage. Only `io` is
+`version` key (currently **23**) and one section per pipeline stage. Only `io` is
 required; every other section falls back to its defaults — you never need to
 write out every field, only the ones you want to change from the defaults shown
 below.
 
 ```yaml
-version: 15
+version: 23
 io:
   project_folder: .
   mzml_paths: [data/s1.mzML, data/s2.mzML]
@@ -66,7 +66,7 @@ every tab anyway.
 
 Sections run in this order during a pipeline execution, which is also the
 order of the GUI's tabs: `ms1` → `centroid` → `peak` → `align` →
-`target_list` → `h5ad` → `isotopes` → `group_ms2` → `purity` → `annotate` →
+`target_list` → `h5ad` → `isotopes` → `ms2_cleaning` → `group_ms2` → `purity` → `annotate` →
 `consensus` → `normalization` → `spatial_correlation` → `report`.
 `io` isn't a "stage" as such — it's the input/output paths every other stage
 reads from or writes into — and `analysis` only names the analysis database.
@@ -173,6 +173,20 @@ matrices, built just before; isotope columns are then removed from every
 | `ppm` | `5.0` | tolerance of each isotope against `mono + k × 1.0033548 / charge`. Example: mono 300.1000, M+1 expected at 301.1034 ± 0.0015. |
 | `max_charge` | `1` | highest charge tried; MALDI ions of small molecules are almost always singly charged |
 | `min_spatial_corr` | `0.5` | minimum Pearson correlation between the isotope's and the monoisotopic ion image, over the pixels where the monoisotopic ion is present. Lower links more (including unrelated ions in the same region); higher misses weak, noisy isotopes. |
+
+### `ms2_cleaning` — MS2 cleaning
+
+Removes background fragments and fragments above the precursor from every
+MS2 spectrum as it is read; raw data is never changed (ADR 64). The list of
+shared fragments is always computed and shown on the Summary page.
+
+| key | default | meaning |
+|---|---|---|
+| `background_enabled` | `false` | remove fragments found in the spectra of many different precursors |
+| `background_ppm` | `10.0` | fragments within this many ppm are the same fragment |
+| `background_min_percent` | `50.0` | a fragment in at least this % of the polarity's precursors is removed. A precursor is a feature with MS2 (or an unmatched scan's precursor m/z) and counts once, however many of its scans have the fragment. |
+| `above_precursor_enabled` | `false` | remove peaks above the precursor m/z (the matched feature's, else the scan's); skipped for precursor charge ≥ 2 |
+| `above_precursor_ppm` | `10.0` | tolerance above the precursor m/z before a peak is removed |
 
 ### `group_ms2` — MS2→feature association
 

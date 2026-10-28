@@ -38,6 +38,7 @@ import logging
 import sqlite3
 import warnings
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -47,6 +48,7 @@ import numpy as np
 from ..analysis_db import create_analysis_schema
 from ..utils.db import safe_executemany
 from ..utils.logging_utils import log_call
+from .ms2_cleaning import clean_scans, persist_cleaning
 
 logger = logging.getLogger(__name__)
 
@@ -594,9 +596,15 @@ def run_grouper(
     align_ppm: float | None = None,
     include_unmatched: bool = True,
     command_id: int | None = None,
+    cleaning=None,
     **group_kwargs,
 ) -> GroupingResult:
     """Read features + every sample's raw MS2 scans, group, and persist.
+
+    With `cleaning` (an `Ms2CleaningConfig`), the background-fragment table
+    is computed and the spectra cleaned before grouping (ADR 0064), so
+    flat-fragmentation, fragmentation factor and `n_peaks` see the cleaned
+    peaks; without it (older callers), spectra are used as read.
 
     Expects ``features`` and ``samples`` already populated in the analysis
     database. Raw databases are opened read-only.
@@ -616,15 +624,15 @@ def run_grouper(
     feature_ids = np.array([r[0] for r in feats], dtype=int)
     features = np.array([r[1] for r in feats], dtype=float)
 
-    scans: list[dict] = []
-    for sample_id, raw_db_path in samples:
+    def read_sample(sample):
+        sample_id, raw_db_path = sample
         # opened for reading only — the grouper never writes a raw database
         with sqlite3.connect(str(raw_db_path)) as rcon:
             rows = rcon.execute(
                 "SELECT scan_id, precursor_mz, isolation_window_target, "
                 "isolation_window_lower, isolation_window_upper, rt, "
-                "collision_energy, n_peaks, polarity, mz_array, intensity_array "
-                "FROM ms2_scans"
+                "collision_energy, n_peaks, polarity, mz_array, intensity_array, "
+                "precursor_charge FROM ms2_scans"
             ).fetchall()
         logger.info(
             "grouper: sample %s — %d MS2 scans",
@@ -632,23 +640,39 @@ def run_grouper(
             len(rows),
             extra={"source_file": str(raw_db_path)},
         )
-        for r in rows:
-            scans.append(
-                {
-                    "sample_id": sample_id,
-                    "scan_id": r[0],
-                    "precursor_mz": r[1],
-                    "isolation_window_target": r[2],
-                    "isolation_window_lower": r[3],
-                    "isolation_window_upper": r[4],
-                    "rt": r[5],
-                    "collision_energy": r[6],
-                    "n_peaks": r[7],
-                    "polarity": r[8],
-                    "mz_array": blob_to_array(r[9]),
-                    "intensity_array": blob_to_array(r[10]),
-                }
-            )
+        return [
+            {
+                "sample_id": sample_id,
+                "scan_id": r[0],
+                "precursor_mz": r[1],
+                "isolation_window_target": r[2],
+                "isolation_window_lower": r[3],
+                "isolation_window_upper": r[4],
+                "rt": r[5],
+                "collision_energy": r[6],
+                "n_peaks": r[7],
+                "polarity": r[8],
+                "mz_array": blob_to_array(r[9]),
+                "intensity_array": blob_to_array(r[10]),
+                "precursor_charge": r[11],
+            }
+            for r in rows
+        ]
+
+    # Threads, not processes: reading (often from a network share) and
+    # zlib decompression both release the GIL.
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(samples)))) as pool:
+        scans: list[dict] = [s for chunk in pool.map(read_sample, samples) for s in chunk]
+
+    cleaning_rows = None
+    if cleaning is not None:
+        _, cleaning_rows = clean_scans(
+            scans, features, feature_ids, assoc_ppm=assoc_ppm, settings=cleaning
+        )
+        logger.info(
+            "grouper: %d background fragment(s) listed, %d removed",
+            len(cleaning_rows), sum(r[4] for r in cleaning_rows),
+        )
 
     logger.info(
         "grouper: associating %d MS2 scans against %d features",
@@ -665,6 +689,9 @@ def run_grouper(
         **group_kwargs,
     )
     persist_grouping(analysis_db_path, result, command_id=command_id)
+    if cleaning_rows is not None:
+        with sqlite3.connect(analysis_db_path) as con:
+            persist_cleaning(con, cleaning, cleaning_rows)
     logger.info(
         "grouper: persisted %d associations, %d feature summaries",
         len(result.associations),

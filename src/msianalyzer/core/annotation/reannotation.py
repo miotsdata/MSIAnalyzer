@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 #: Tables owned by the MS2 stages, parents before children (restore
 #: inserts in this order and deletes in reverse).
 MS2_TABLES = (
+    "ms2_cleaning",
+    "ms2_background_fragments",
     "ms2_associations",
     "feature_ms2_summary",
     "precursor_purity",
@@ -48,7 +50,7 @@ MS2_TABLES = (
 MS2_STAGES = ("group_ms2", "precursor_purity", "annotate_ms2", "ms2_consensus")
 
 #: Config groups a re-annotation can change.
-MS2_GROUPS = ("group_ms2", "purity", "annotate", "consensus")
+MS2_GROUPS = ("ms2_cleaning", "group_ms2", "purity", "annotate", "consensus")
 
 HISTORY_DIR = "annotation_history"
 
@@ -58,6 +60,7 @@ class Ms2Settings:
     """Everything the MS2 stages read. `align_ppm` is the run's own and is
     not editable afterwards (the features it aligned stay as they are)."""
 
+    ms2_cleaning: object
     group_ms2: object
     purity: object
     annotate: object
@@ -84,7 +87,7 @@ class Ms2Settings:
         return cls(*(build(g) for g in MS2_GROUPS), align_ppm=float(align_ppm))
 
     def to_dict(self) -> dict:
-        """`{group: {field: value}}` for the four groups, JSON-friendly."""
+        """`{group: {field: value}}` for the `MS2_GROUPS`, JSON-friendly."""
 
         def plain(v):
             if isinstance(v, Path):
@@ -132,6 +135,7 @@ def run_ms2_stages(
                 **vars(gm),
                 "align_ppm": settings.align_ppm,
                 "fragmentation_factor_mz_tol_da": purity.fragmentation_factor_mz_tol_da,
+                "ms2_cleaning": vars(settings.ms2_cleaning),
             },
             run_id=run_id,
         )
@@ -141,6 +145,7 @@ def run_ms2_stages(
             align_ppm=settings.align_ppm,
             include_unmatched=gm.include_unmatched,
             command_id=command_id,
+            cleaning=settings.ms2_cleaning,
             default_isolation_half_width=gm.default_isolation_half_width,
             fragmentation_factor_mz_tol_da=purity.fragmentation_factor_mz_tol_da,
             flat_fragmentation_min_peaks=gm.flat_fragmentation_min_peaks,
@@ -222,6 +227,7 @@ def _snapshot(adb_path: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(adb_path)
     try:
+        analysis_db.create_analysis_schema(con)  # tables added since the run
         con.execute("ATTACH DATABASE ? AS snap", (str(dest),))
         for table in MS2_TABLES:
             con.execute(f"CREATE TABLE snap.{table} AS SELECT * FROM main.{table}")
@@ -245,6 +251,8 @@ def _restore_snapshot(adb_path: Path, src: Path) -> None:
         _clear(con)
         for table in MS2_TABLES:
             snap_cols = set(_columns(con, "snap", table))
+            if not snap_cols:
+                continue  # a snapshot from before the table existed
             cols = ", ".join(c for c in _columns(con, "main", table) if c in snap_cols)
             con.execute(f"INSERT INTO main.{table} ({cols}) SELECT {cols} FROM snap.{table}")
         con.commit()

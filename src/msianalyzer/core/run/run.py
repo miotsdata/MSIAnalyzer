@@ -1267,7 +1267,7 @@ class Run:
         run_ms2_stages(
             adb_path,
             Ms2Settings(
-                config.group_ms2, config.purity, config.annotate,
+                config.ms2_cleaning, config.group_ms2, config.purity, config.annotate,
                 config.consensus, align_ppm=config.align.align_ppm,
             ),
             analysis_id,

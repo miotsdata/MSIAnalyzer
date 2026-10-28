@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from msianalyzer.core.config.config import Ms2CleaningConfig
 from msianalyzer.core.run.run import (
     RUN_STEPS,
     TARGETED_RUN_STEPS,
@@ -189,6 +190,7 @@ class DummyConfig:
         self.align = MockAlignConfig()
         self.target_list = MockTargetListConfig()
         self.isotopes = MockIsotopesConfig()
+        self.ms2_cleaning = Ms2CleaningConfig()
         self.group_ms2 = MockGroupMs2Config()
         self.purity = MockPurityConfig()
         self.annotate = MockAnnotateConfig()

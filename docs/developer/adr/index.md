@@ -73,3 +73,4 @@ useful).
 | [61](0061-normalize-to-a-feature-after-the-run.md) | Normalize to a feature after the run, as a new layer | Accepted |
 | [62](0062-ms2-annotation-outcome.md) | Why a feature got no library hit: MS2 annotation outcome per feature | Accepted |
 | [63](0063-reannotate-a-finished-analysis.md) | Re-annotate a finished analysis, with every annotation kept in a history | Accepted |
+| [64](0064-ms2-cleaning.md) | MS2 cleaning: background fragments (counted per precursor) and fragments above the precursor | Accepted |

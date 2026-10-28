@@ -85,88 +85,99 @@ ColumnLayout {
 
     Repeater {
         model: form.group ? form.group.fields : []
-        delegate: RowLayout {
-            id: row
+        delegate: ColumnLayout {
             Layout.fillWidth: true
-            enabled: form.isEnabled(modelData)
-            readonly property string controlName: "field_" + form.group.key + "_" + modelData.name
-
+            spacing: 8
+            // A field naming a `section` starts a titled part of the tab.
             Label {
-                text: modelData.label
-                Layout.preferredWidth: 240
+                visible: !!modelData.section
+                text: modelData.section || ""
+                font.bold: true
+                Layout.topMargin: 8
             }
-            ToolButton {
-                objectName: row.controlName + "_help"
-                text: "?"
-                implicitWidth: 22
-                implicitHeight: 22
-                onClicked: form.helpRequested(modelData.label, modelData.help)
-                HoverHandler { cursorShape: Qt.PointingHandCursor }
-            }
-            AppCheckBox {
-                id: check
-                objectName: modelData.kind === "bool" ? row.controlName : ""
-                visible: modelData.kind === "bool"
+            RowLayout {
+                id: row
                 Layout.fillWidth: true
-                HoverHandler { cursorShape: Qt.PointingHandCursor }
-            }
-            TextField {
-                id: textField
-                objectName: modelData.kind !== "bool" && modelData.kind !== "path_list" ? row.controlName : ""
-                visible: modelData.kind !== "bool" && modelData.kind !== "path_list"
-                placeholderText: modelData.kind === "float_list" ? "comma-separated, e.g. 154.0863, 200.1234"
-                                 : (modelData.kind === "optional_str_list" ? "comma-separated" : "")
-                Layout.fillWidth: true
-            }
-            ColumnLayout {
-                objectName: modelData.kind === "path_list" ? row.controlName : ""
-                visible: modelData.kind === "path_list"
-                Layout.fillWidth: true
-                spacing: 4
+                enabled: form.isEnabled(modelData)
+                readonly property string controlName: "field_" + form.group.key + "_" + modelData.name
 
-                RowLayout {
-                    Label {
-                        visible: form.libraryPaths.length === 0
-                        text: "No libraries selected"
-                        color: Theme.mutedTextColor
-                        Layout.fillWidth: true
-                    }
-                    Item { Layout.fillWidth: form.libraryPaths.length > 0 }
-                    Button {
-                        objectName: row.controlName + "_browse"
-                        text: "Browse..."
-                        onClicked: libraryDialog.open()
-                        HoverHandler { cursorShape: Qt.PointingHandCursor }
-                    }
+                Label {
+                    text: modelData.label
+                    Layout.preferredWidth: 240
                 }
-                Repeater {
-                    model: form.libraryPaths
-                    delegate: RowLayout {
-                        Layout.fillWidth: true
+                ToolButton {
+                    objectName: row.controlName + "_help"
+                    text: "?"
+                    implicitWidth: 22
+                    implicitHeight: 22
+                    onClicked: form.helpRequested(modelData.label, modelData.help)
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                }
+                AppCheckBox {
+                    id: check
+                    objectName: modelData.kind === "bool" ? row.controlName : ""
+                    visible: modelData.kind === "bool"
+                    Layout.fillWidth: true
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                }
+                TextField {
+                    id: textField
+                    objectName: modelData.kind !== "bool" && modelData.kind !== "path_list" ? row.controlName : ""
+                    visible: modelData.kind !== "bool" && modelData.kind !== "path_list"
+                    placeholderText: modelData.kind === "float_list" ? "comma-separated, e.g. 154.0863, 200.1234"
+                                     : (modelData.kind === "optional_str_list" ? "comma-separated" : "")
+                    Layout.fillWidth: true
+                }
+                ColumnLayout {
+                    objectName: modelData.kind === "path_list" ? row.controlName : ""
+                    visible: modelData.kind === "path_list"
+                    Layout.fillWidth: true
+                    spacing: 4
+
+                    RowLayout {
                         Label {
-                            text: modelData
-                            elide: Text.ElideMiddle
+                            visible: form.libraryPaths.length === 0
+                            text: "No libraries selected"
+                            color: Theme.mutedTextColor
                             Layout.fillWidth: true
                         }
+                        Item { Layout.fillWidth: form.libraryPaths.length > 0 }
                         Button {
-                            objectName: "removeLibraryPathButton_" + index
-                            text: "Remove"
-                            onClicked: {
-                                var paths = form.libraryPaths.slice()
-                                paths.splice(index, 1)
-                                form.libraryPaths = paths
-                            }
+                            objectName: row.controlName + "_browse"
+                            text: "Browse..."
+                            onClicked: libraryDialog.open()
                             HoverHandler { cursorShape: Qt.PointingHandCursor }
                         }
                     }
+                    Repeater {
+                        model: form.libraryPaths
+                        delegate: RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                text: modelData
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                            Button {
+                                objectName: "removeLibraryPathButton_" + index
+                                text: "Remove"
+                                onClicked: {
+                                    var paths = form.libraryPaths.slice()
+                                    paths.splice(index, 1)
+                                    form.libraryPaths = paths
+                                }
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                            }
+                        }
+                    }
                 }
-            }
 
-            Component.onCompleted: {
-                if (modelData.kind !== "path_list")
-                    form.controls[modelData.name] = modelData.kind === "bool" ? check : textField
-                form.loadField(modelData)
-                form.registered += 1
+                Component.onCompleted: {
+                    if (modelData.kind !== "path_list")
+                        form.controls[modelData.name] = modelData.kind === "bool" ? check : textField
+                    form.loadField(modelData)
+                    form.registered += 1
+                }
             }
         }
     }

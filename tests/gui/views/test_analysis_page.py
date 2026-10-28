@@ -528,3 +528,26 @@ def test_summary_hides_the_outcome_funnel_without_recorded_outcomes(
     qtbot.wait(50)
 
     assert find_visual_child(root, "outcomeFunnel").property("visible") is False
+
+
+def test_summary_lists_ms2_background_fragments(
+    analysis_view, analysis_model, find_visual_child, qtbot
+):
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.execute("INSERT INTO features (feature_id, mz, members_json) VALUES (1, 100.0, '{}')")
+        con.executemany(
+            "INSERT INTO ms2_background_fragments (polarity, mz, n_precursors, fraction, removed) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [("POSITIVE", 184.0733, 40, 0.8, 1), ("POSITIVE", 104.107, 5, 0.1, 0)],
+        )
+        con.commit()
+
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+    qtbot.wait(50)
+
+    section = find_visual_child(root, "summarySection")
+    rows = section.property("background")
+    rows = rows.toVariant() if hasattr(rows, "toVariant") else rows
+    assert [r["removed"] for r in rows] == [True, False]  # most shared first
+    assert find_visual_child(root, "backgroundFragmentsList").property("visible") is True

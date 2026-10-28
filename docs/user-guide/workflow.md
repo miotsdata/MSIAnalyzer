@@ -99,6 +99,32 @@ MS2 scan to a feature. It writes two tables — `ms2_associations`,
 `feature_ms2_summary` — and drops nothing. Controlled by
 the `group_ms2.*` settings. Full detail in [MS2 annotation](ms2-annotation.md).
 
+**MS2 cleaning** (the `ms2_cleaning.*` settings, "MS2 cleaning" tab) runs
+first, on the spectra as they're read; the raw databases are never changed.
+
+- **Background fragments.** Every fragment is counted by how many
+  *precursors* have it: a feature with MS2, or for scans matching no
+  feature, their precursor m/z. A precursor counts once, however many of its
+  scans have the fragment, so an ion fragmented in hundreds of pixels can't
+  make its own fragments look like background. Fragments within
+  `background_ppm` are the same fragment. With `background_enabled`, those
+  found in at least `background_min_percent` % of the precursors (per
+  polarity) are removed from every spectrum. The list of shared fragments
+  (at least 5 % of precursors, or removed) is always computed and shown on
+  the Summary page, so you can look before turning removal on. Beware of
+  real fragments shared by a whole compound class, e.g. m/z 184.07 of
+  phosphocholine lipids.
+- **Fragments above the precursor.** With `above_precursor_enabled`, peaks
+  above the precursor m/z + `above_precursor_ppm` are removed: a singly
+  charged ion can't fragment into anything heavier. The precursor m/z is the
+  matched feature's, else the scan's own. Scans with a precursor charge of 2
+  or more are left alone.
+
+Grouping (flat-fragmentation, fragmentation factor, peak counts),
+annotation and the "filtered" mirror plot all use the cleaned spectra; the
+"raw" mirror plot shows the spectrum as acquired. Both settings can be tuned
+afterwards with **Re-annotate**. See ADR 64.
+
 ## Stage 8 — Precursor ion purity (→ analysis DB)
 
 `run_precursor_purity()` scores every MS2 scan's isolation window against its own
@@ -225,8 +251,8 @@ HDF5 keeps the freed space.
 
 Want another library, a different tolerance or a different flat-spectrum
 threshold? **Analyses → Re-annotate…** re-runs only the MS2 part of a
-finished untargeted analysis: MS2 grouping, precursor purity, library
-annotation and consensus. The features, images and normalization stay as
+finished untargeted analysis: MS2 cleaning and grouping, precursor purity,
+library annotation and consensus. The features, images and normalization stay as
 they are, so it takes minutes, not a full run.
 
 The dialog has one tab per settings group (the same fields as in New

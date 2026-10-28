@@ -17,7 +17,7 @@ Dialog {
     anchors.centerIn: parent
     standardButtons: Dialog.Close
 
-    readonly property var groupKeys: ["group_ms2", "purity", "annotate", "consensus"]
+    readonly property var groupKeys: ["ms2_cleaning", "group_ms2", "purity", "annotate", "consensus"]
     readonly property var groups: ConfigSchema.groups.filter(function (g) {
         return groupKeys.indexOf(g.key) >= 0
     })
@@ -132,7 +132,7 @@ Dialog {
         spacing: 8
 
         Label {
-            text: "Re-runs MS2 grouping, precursor purity, library annotation and consensus "
+            text: "Re-runs MS2 cleaning, grouping, precursor purity, library annotation and consensus "
                   + "with the settings below. Features, images and normalization stay as they are. "
                   + "The current annotation is kept in History and can be restored."
             color: Theme.mutedTextColor

@@ -230,9 +230,11 @@ def build_config_schema() -> list[dict]:
         One entry per group, in `GROUPS` order: `{"key", "title",
         "description", "fields"}`, where `fields` is a list of `{"name",
         "label", "kind", "default", "help", "enabledWhenField",
-        "enabledWhenEquals"}`. `description` is the group dataclass's
+        "enabledWhenEquals", "section"}`. `description` is the group dataclass's
         docstring summary; `help` is that field's docstring text (empty
         string if undocumented); `label` is `name` prettified for display.
+        `section` (from `metadata={"section": "..."}`) starts a titled
+        part of the tab at that field; `None` continues the current one.
         `enabledWhenField`/`enabledWhenEquals` come from that field's
         `dataclasses.field(metadata={"enabled_when": "..."})` (a bare
         field name, or `"not "` + a field name) — `None` when the field
@@ -278,6 +280,7 @@ def build_config_schema() -> list[dict]:
                     "help": field_help.get(f.name, ""),
                     "enabledWhenField": enabled_when_field,
                     "enabledWhenEquals": enabled_when_equals,
+                    "section": f.metadata.get("section"),
                 }
             )
         schema.append(

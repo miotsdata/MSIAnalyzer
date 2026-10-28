@@ -535,6 +535,30 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         )
     """)
 
+    # --- MS2 cleaning (ADR 0064) -------------------------------------------
+    # Written by the grouping stage (core.annotation.ms2_cleaning): the
+    # settings spectra are cleaned with, and the fragments shared by many
+    # precursors (`fraction` of the polarity's precursors; `removed` ones
+    # are taken out of every spectrum when background removal is on).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ms2_cleaning (
+            background_enabled       INTEGER NOT NULL,
+            background_ppm           REAL    NOT NULL,
+            background_min_percent   REAL    NOT NULL,
+            above_precursor_enabled  INTEGER NOT NULL,
+            above_precursor_ppm      REAL    NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ms2_background_fragments (
+            polarity      TEXT,
+            mz            REAL    NOT NULL,
+            n_precursors  INTEGER NOT NULL,
+            fraction      REAL    NOT NULL,
+            removed       INTEGER NOT NULL
+        )
+    """)
+
     # --- every MS2 annotation state of the analysis (ADR 0063) ------------
     # Written by core.annotation.reannotation: the pipeline's own state
     # (recorded at the first re-annotation), each re-annotation and each
@@ -1830,7 +1854,8 @@ def load_summary_counts(db_path: Path | str) -> dict:
         ``{"n_samples", "n_features", "n_ms2_associated_features",
         "annotation_ran", "n_annotated_features", "n_distinct_compounds",
         "outcomes_recorded", "n_outcome_<outcome>"}`` — one count per
-        ADR 0062 outcome plus ``no_ms2``.
+        ADR 0062 outcome plus ``no_ms2``, and ``"ms2_background"``: the
+        ``ms2_background_fragments`` rows (ADR 0064), most shared first.
         ``n_annotated_features``/``n_distinct_compounds`` are ``0`` (not
         ``None``) when ``annotation_ran`` is ``False`` — the caller decides
         how to show "no library configured" vs. "library ran, 0 hits".
@@ -1855,6 +1880,17 @@ def load_summary_counts(db_path: Path | str) -> dict:
             ).fetchall())
         except sqlite3.OperationalError:
             pass
+        try:  # MS2 cleaning (ADR 0064): the fragments shared by many precursors
+            background = [
+                {"polarity": p, "mz": mz, "n_precursors": n, "percent": 100 * f,
+                 "removed": bool(r)}
+                for p, mz, n, f, r in con.execute(
+                    "SELECT polarity, mz, n_precursors, fraction, removed "
+                    "FROM ms2_background_fragments ORDER BY fraction DESC, mz"
+                )
+            ]
+        except sqlite3.OperationalError:
+            background = []
     recorded = any(outcomes.values())
 
     return {
@@ -1869,6 +1905,7 @@ def load_summary_counts(db_path: Path | str) -> dict:
         "outcomes_recorded": recorded,
         "n_outcome_no_ms2": n_features - sum(outcomes.values()) if recorded else 0,
         **{f"n_outcome_{o}": n for o, n in outcomes.items()},
+        "ms2_background": background,
     }
 
 

@@ -713,6 +713,7 @@ def test_load_summary_counts_empty_db(tmp_path: Path):
         "n_outcome_no_shared_fragments": 0,
         "n_outcome_no_candidates": 0,
         "n_outcome_all_scans_skipped": 0,
+        "ms2_background": [],
     }
 
 

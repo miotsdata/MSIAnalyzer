@@ -18,6 +18,7 @@ from typing import Optional
 import numpy as np
 import plotly.graph_objects as go
 
+from msianalyzer.core.annotation.ms2_cleaning import load_cleaner
 from msianalyzer.core.parser.mzml_parser import blob_to_array
 from msianalyzer.core.annotation.spectral_match import (
     _align_peaks,
@@ -465,7 +466,7 @@ class Plotter:
 
         empirical_mz, empirical_int = self._resolve_side(
             ann, side="emp", source=emp_source, annotation_id=annotation_id,
-            noise_threshold=noise_threshold,
+            noise_threshold=noise_threshold, cleaner=load_cleaner(analysis_db_path),
         )
         library_mz, library_int = self._resolve_side(
             ann, side="lib", source=lib_source, annotation_id=annotation_id,
@@ -866,8 +867,9 @@ class Plotter:
                        a.library_spectrum_id, a.command_id,
                        lib.name AS library_name, lib.path AS library_path,
                        s.raw_db_path AS sample_raw_db_path,
-                       assoc.precursor_mz
+                       assoc.precursor_mz, assoc.polarity, f.mz AS feature_mz
                 FROM ms2_annotations a
+                LEFT JOIN features f ON f.feature_id = a.feature_id
                 LEFT JOIN annotation_libraries lib ON lib.id = a.library_id
                 LEFT JOIN samples s ON s.sample_id = a.sample_id
                 LEFT JOIN ms2_associations assoc
@@ -907,6 +909,8 @@ class Plotter:
             "library_path",
             "sample_raw_db_path",
             "precursor_mz",
+            "polarity",
+            "feature_mz",
         )
         d = dict(zip(keys, row))
 
@@ -965,7 +969,8 @@ class Plotter:
         return mz, intensity
 
     def _resolve_side(
-        self, ann: dict, side: str, source: str, annotation_id: int, noise_threshold: float
+        self, ann: dict, side: str, source: str, annotation_id: int, noise_threshold: float,
+        cleaner=None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """The (mz, intensity) arrays to plot for one side ("emp"/"lib").
 
@@ -980,6 +985,17 @@ class Plotter:
         mz, intensity = self._resolve_raw(ann, side, annotation_id)
         if source == "raw":
             return mz, intensity
+        if side == "emp" and cleaner is not None:
+            # What was scored: MS2 cleaning first (ADR 0064).
+            # ponytail: charge unknown here (not in the analysis DB), so a
+            # 2+ precursor's peaks above it are hidden in this view though
+            # scoring kept them; store the charge if that ever matters.
+            from msianalyzer.core.annotation.annotate import normalize_polarity
+
+            mz, intensity = cleaner.clean(
+                mz, intensity, normalize_polarity(ann.get("polarity")),
+                ann.get("feature_mz") or ann.get("precursor_mz"),
+            )
         return normalize_and_filter_spectrum(mz, intensity, noise_threshold)
 
     @staticmethod

@@ -620,6 +620,83 @@ class IsotopesConfig:
 
 
 @dataclass
+class Ms2CleaningConfig:
+    """Remove background fragments and fragments above the precursor from
+    every MS2 spectrum before grouping and annotation.
+
+    Raw data is never changed: spectra are cleaned when they're read (see
+    `core.annotation.ms2_cleaning` and ADR 64). Which fragments are
+    background is always computed and listed in the Summary tab; the
+    switches below only decide what is removed.
+
+    Attributes:
+        background_enabled: Remove fragments found in the MS2 spectra of
+            many different precursors: a fragment that shows up whatever
+            was fragmented is a contaminant or chemical noise, not part of
+            any one compound's fragmentation. Default `False`.
+
+            **Interaction:** Applies `background_ppm` and
+            `background_min_percent`.
+        background_ppm: Fragments closer than this (in ppm) count as the
+            same fragment when counting how many precursors have it, and a
+            peak this close to a background fragment is removed.
+
+            Range: **0** and up. Default **10.0**. Lower: one fragment may be
+            split in two and each counted less often. Higher: neighbouring
+            but different fragments merge.
+
+            **Interaction:** Clusters wider than twice this are cut, so a
+            dense run of noise peaks can't merge a whole m/z range.
+        background_min_percent: A fragment present in at least this
+            percentage of the precursors (of the same polarity) is removed.
+
+            `percent = 100 * n_precursors_with_fragment / n_precursors`.
+            A precursor is a feature with MS2 (or, for scans matching no
+            feature, their precursor m/z); it has the fragment if any of
+            its scans does. Counting precursors rather than scans keeps an
+            ion fragmented in hundreds of pixels from making its own
+            fragments look like background.
+
+            Range: **0**-**100**. Default **50**. Lower: removes more,
+            including real fragments shared by a compound class (e.g. m/z
+            184.07 of phosphocholine lipids, fatty-acid anions in negative
+            mode). Higher: removes only near-ubiquitous peaks.
+
+            **Interaction:** Check the background table in the Summary tab
+            before lowering it; tune it later with Re-annotate.
+        above_precursor_enabled: Remove fragment peaks with an m/z above the
+            precursor's: a singly charged ion can't fragment into anything
+            heavier, so such peaks come from co-isolated ions or noise. The
+            precursor m/z is the matched feature's (more accurate than the
+            scan's own), else the scan's. Default `False`.
+
+            **Interaction:** Skipped for scans whose precursor charge is
+            2 or more, where a fragment can lie above the precursor m/z.
+            The precursor's own isotope peaks are removed too.
+        above_precursor_ppm: Tolerance above the precursor m/z, in ppm,
+            before a peak is removed (the precursor peak itself stays).
+
+            Range: **0** and up. Default **10.0**.
+
+            **Interaction:** None.
+    """
+
+    background_enabled: bool = field(
+        default=False, metadata={"section": "Background fragments"}
+    )
+    background_ppm: float = field(default=10.0, metadata={"enabled_when": "background_enabled"})
+    background_min_percent: float = field(
+        default=50.0, metadata={"enabled_when": "background_enabled"}
+    )
+    above_precursor_enabled: bool = field(
+        default=False, metadata={"section": "Fragments above the precursor"}
+    )
+    above_precursor_ppm: float = field(
+        default=10.0, metadata={"enabled_when": "above_precursor_enabled"}
+    )
+
+
+@dataclass
 class GroupMs2Config:
     """Attach each MS2 (fragmentation) scan to the feature it belongs to.
 
@@ -1629,6 +1706,7 @@ GROUPS: dict[str, type] = {
     "target_list": TargetListConfig,
     "h5ad": H5adConfig,
     "isotopes": IsotopesConfig,
+    "ms2_cleaning": Ms2CleaningConfig,
     "group_ms2": GroupMs2Config,
     "purity": PurityConfig,
     "annotate": AnnotateConfig,
@@ -1649,6 +1727,7 @@ GROUP_TITLES: dict[str, str] = {
     "target_list": "target list matching",
     "h5ad": "create h5ad",
     "isotopes": "detect isotopes",
+    "ms2_cleaning": "MS2 cleaning",
     "group_ms2": "group MS2",
     "purity": "precursor purity",
     "annotate": "annotate MS2",
@@ -1664,7 +1743,7 @@ class Config:
     """Full configuration for a processing run, grouped by pipeline stage.
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
-    `align`, `target_list`, `h5ad`, `isotopes`, `group_ms2`, `purity`,
+    `align`, `target_list`, `h5ad`, `isotopes`, `ms2_cleaning`, `group_ms2`, `purity`,
     `annotate`, `consensus`, `normalization`, `spatial_correlation`,
     `report`, `analysis`) and provides
     (de)serialization to and from YAML and TOML. Only `io` is required; the
@@ -1695,6 +1774,8 @@ class Config:
             features is meaningless without alignment).
         isotopes: Isotope detection parameters. Ignored for `targeted`
             runs (no feature list to search).
+        ms2_cleaning: MS2 spectrum cleaning parameters. Ignored for
+            `targeted` runs.
         group_ms2: MS2-to-feature association parameters. Ignored for
             `targeted` runs (MS1-only by definition).
         purity: Precursor-ion-purity parameters. Ignored for `targeted` runs.
@@ -1713,7 +1794,7 @@ class Config:
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 22
+    version: int = 23
 
     def __init__(
         self,
@@ -1724,6 +1805,7 @@ class Config:
         align: AlignMzSamples | None = None,
         target_list: TargetListConfig | None = None,
         isotopes: IsotopesConfig | None = None,
+        ms2_cleaning: Ms2CleaningConfig | None = None,
         group_ms2: GroupMs2Config | None = None,
         purity: PurityConfig | None = None,
         annotate: AnnotateConfig | None = None,
@@ -1748,6 +1830,7 @@ class Config:
         self.align: AlignMzSamples = align or AlignMzSamples()
         self.target_list: TargetListConfig = target_list or TargetListConfig()
         self.isotopes: IsotopesConfig = isotopes or IsotopesConfig()
+        self.ms2_cleaning: Ms2CleaningConfig = ms2_cleaning or Ms2CleaningConfig()
         self.group_ms2: GroupMs2Config = group_ms2 or GroupMs2Config()
         self.purity: PurityConfig = purity or PurityConfig()
         self.annotate: AnnotateConfig = annotate or AnnotateConfig()
