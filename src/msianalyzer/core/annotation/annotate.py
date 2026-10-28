@@ -86,6 +86,7 @@ __all__ = [
     "LibraryInfo",
     "AnnotationRow",
     "AnnotationResult",
+    "FeatureOutcome",
     "normalize_polarity",
     "normalize_library_paths",
     "score_scan_against_candidates",
@@ -193,6 +194,30 @@ class AnnotationRow:
     adduct: str | None = None
     cas: str | None = None
     hmdb: str | None = None
+
+
+@dataclass(frozen=True)
+class FeatureOutcome:
+    """Why one MS2-bearing feature did or didn't get a library hit (one
+    ``feature_annotation_outcome`` row, ADR 0062). ``outcome`` is one of:
+
+    * ``"annotated"`` — at least one candidate stored;
+    * ``"no_shared_fragments"`` — candidates in the m/z window, none
+      sharing ``min_matched_peaks`` fragments with any scored scan;
+    * ``"no_candidates"`` — no library spectrum within ``candidate_ppm``
+      (for the scans' polarity);
+    * ``"all_scans_skipped"`` — every scan flat, below
+      ``min_purity_score``, or unreadable, so nothing was scored.
+    """
+
+    feature_id: int
+    outcome: str
+    n_scans: int
+    n_skipped_flat: int
+    n_skipped_purity: int
+    n_skipped_unreadable: int
+    n_candidates: int
+    best_n_matched_peaks: int
 
 
 @dataclass(frozen=True)
@@ -710,8 +735,9 @@ def _annotate_feature_batch(
     weight_dot: float = 1.0,
     weight_lib_coverage: float = 0.5,
     weight_emp_coverage: float = 0.5,
-) -> list[AnnotationRow]:
-    """Annotate one chunk of features (a worker task).
+) -> tuple[list[AnnotationRow], list[FeatureOutcome]]:
+    """Annotate one chunk of features (a worker task): their rows, and one
+    `FeatureOutcome` per feature saying how it ended.
 
     Candidates from every configured library are pooled per scan, so
     ``rank_ms2`` orders the best hit across all of them. Every MS2 scan
@@ -723,6 +749,7 @@ def _annotate_feature_batch(
     """
     libraries = _WORKER_LIBRARIES
     rows: list[AnnotationRow] = []
+    outcomes: list[FeatureOutcome] = []
     raw_cons: dict = {}
     adb = sqlite3.connect(f"file:{analysis_db_path}?mode=ro", uri=True)
     try:
@@ -741,22 +768,26 @@ def _annotate_feature_batch(
                 continue
 
             scans_by_pol: dict[str | None, list[dict]] = defaultdict(list)
+            n_flat = n_low_purity = n_unreadable = 0
             for (
                 scan_id, sample_id, frag_factor, flat_frag, pol,
                 confirmed, purity,
             ) in assoc:
                 if flat_frag:
+                    n_flat += 1
                     continue
                 if (
                     min_purity_score is not None
                     and purity is not None
                     and purity < min_purity_score
                 ):
+                    n_low_purity += 1
                     continue
                 emp_mz, emp_int = _read_fragments(
                     raw_cons, sample_raw_db, sample_id, scan_id
                 )
                 if emp_mz is None:
+                    n_unreadable += 1
                     continue
                 scans_by_pol[normalize_polarity(pol)].append(
                     {
@@ -773,6 +804,8 @@ def _annotate_feature_batch(
                     }
                 )
 
+            feature_rows: list[AnnotationRow] = []
+            n_candidates = best_matched = 0
             for polarity, scans in scans_by_pol.items():
                 candidates: list[Candidate] = []
                 for lib_id, library in libraries:
@@ -787,28 +820,67 @@ def _annotate_feature_batch(
                     )
                 if not candidates:
                     continue
-                rows.extend(
-                    annotate_feature(
-                        int(feature_id),
-                        float(feature_mz),
-                        scans,
-                        candidates,
-                        fragment_ppm=fragment_ppm,
-                        noise_threshold=noise_threshold,
-                        mz_power=mz_power,
-                        int_power=int_power,
-                        min_matched_peaks=min_matched_peaks,
-                        weight_dot=weight_dot,
-                        weight_lib_coverage=weight_lib_coverage,
-                        weight_emp_coverage=weight_emp_coverage,
-                        min_purity_score=min_purity_score,
-                    )
+                n_candidates += len(candidates)
+                scoring = dict(
+                    fragment_ppm=fragment_ppm,
+                    noise_threshold=noise_threshold,
+                    mz_power=mz_power,
+                    int_power=int_power,
+                    weight_dot=weight_dot,
+                    weight_lib_coverage=weight_lib_coverage,
+                    weight_emp_coverage=weight_emp_coverage,
                 )
+                pol_rows = annotate_feature(
+                    int(feature_id),
+                    float(feature_mz),
+                    scans,
+                    candidates,
+                    min_matched_peaks=min_matched_peaks,
+                    min_purity_score=min_purity_score,
+                    **scoring,
+                )
+                feature_rows.extend(pol_rows)
+                if pol_rows:
+                    best_matched = max(best_matched, max(r.n_matched_peaks for r in pol_rows))
+                elif min_matched_peaks > 1:
+                    # Nothing stored: with the default minimum of 1 that means
+                    # 0 shared fragments; above it, re-score to say how close
+                    # the best candidate came. ponytail: rescoring cost only
+                    # for unmatched features, and only when min > 1.
+                    best_matched = max(
+                        [best_matched]
+                        + [
+                            m.n_matched_peaks
+                            for scan in scans
+                            for _, m in score_scan_against_candidates(
+                                scan["emp_mz"], scan["emp_int"], candidates,
+                                min_matched_peaks=0, **scoring,
+                            )
+                        ]
+                    )
+            rows.extend(feature_rows)
+            outcomes.append(
+                FeatureOutcome(
+                    feature_id=int(feature_id),
+                    outcome=(
+                        "all_scans_skipped" if not scans_by_pol
+                        else "annotated" if feature_rows
+                        else "no_shared_fragments" if n_candidates
+                        else "no_candidates"
+                    ),
+                    n_scans=len(assoc),
+                    n_skipped_flat=n_flat,
+                    n_skipped_purity=n_low_purity,
+                    n_skipped_unreadable=n_unreadable,
+                    n_candidates=n_candidates,
+                    best_n_matched_peaks=best_matched,
+                )
+            )
     finally:
         adb.close()
         for c in raw_cons.values():
             c.close()
-    return rows
+    return rows, outcomes
 
 
 # ---------------------------------------------------------------------------
@@ -872,6 +944,7 @@ def persist_annotations(
     command_id: int | None = None,
     replace_existing: bool = True,
     store_raw_spectra: bool = True,
+    outcomes: Sequence[FeatureOutcome] | None = None,
 ) -> None:
     """Write annotation rows into the analysis database.
 
@@ -890,6 +963,8 @@ def persist_annotations(
             columns are all written NULL — the GUI mirror plot then has
             nothing to reconstruct a filtered or raw view from at all for
             these rows (see ADR 0018).
+        outcomes: When given, replace every `feature_annotation_outcome`
+            row with these (a run covers every MS2-bearing feature).
     """
     if isinstance(library_ids, int):
         library_ids = [library_ids]
@@ -951,6 +1026,23 @@ def persist_annotations(
                     for r in rows
                 ],
                 table="ms2_annotations",
+                logger=logger,
+                source=db_path,
+            )
+        if outcomes is not None:
+            con.execute("DELETE FROM feature_annotation_outcome")
+            safe_executemany(
+                con,
+                "INSERT INTO feature_annotation_outcome (feature_id, outcome, n_scans, "
+                "n_skipped_flat, n_skipped_purity, n_skipped_unreadable, n_candidates, "
+                "best_n_matched_peaks, command_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (o.feature_id, o.outcome, o.n_scans, o.n_skipped_flat,
+                     o.n_skipped_purity, o.n_skipped_unreadable, o.n_candidates,
+                     o.best_n_matched_peaks, command_id)
+                    for o in outcomes
+                ],
+                table="feature_annotation_outcome",
                 logger=logger,
                 source=db_path,
             )
@@ -1073,6 +1165,7 @@ def run_annotation(
             library_ids,
             command_id=command_id,
             store_raw_spectra=config.store_raw_spectra,
+            outcomes=[],
         )
         logger.info("No MS2-associated features to annotate")
         return AnnotationResult(
@@ -1109,12 +1202,15 @@ def run_annotation(
     )
 
     rows: list[AnnotationRow] = []
+    outcomes: list[FeatureOutcome] = []
     n_batches = len(batches)
     n_workers = config.n_workers
     if n_workers is not None and n_workers <= 1:
         _init_worker(lib_specs)
         for i, b in enumerate(batches, start=1):
-            rows.extend(worker(b))
+            part_rows, part_outcomes = worker(b)
+            rows.extend(part_rows)
+            outcomes.extend(part_outcomes)
             if i % 20 == 0 or i == n_batches:
                 logger.info("annotation: %d/%d batches done", i, n_batches)
     else:
@@ -1128,8 +1224,11 @@ def run_annotation(
                 initializer=_init_worker,
                 initargs=(lib_specs, log_queue),
             ) as executor:
-                for i, part in enumerate(executor.map(worker, batches), start=1):
-                    rows.extend(part)
+                for i, (part_rows, part_outcomes) in enumerate(
+                    executor.map(worker, batches), start=1
+                ):
+                    rows.extend(part_rows)
+                    outcomes.extend(part_outcomes)
                     if i % 20 == 0 or i == n_batches:
                         logger.info(
                             "annotation: %d/%d batches done", i, n_batches
@@ -1147,6 +1246,7 @@ def run_annotation(
         library_ids,
         command_id=command_id,
         store_raw_spectra=config.store_raw_spectra,
+        outcomes=outcomes,
     )
 
     scans_done = {(r.sample_id, r.scan_id) for r in rows}

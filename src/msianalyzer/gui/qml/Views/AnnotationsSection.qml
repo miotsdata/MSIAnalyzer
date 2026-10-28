@@ -216,6 +216,20 @@ Item {
     // hit (ADR 27) has no score/coverage/peak-count/sample/library — it
     // was never a scored MS2 match, just a mass-decomposition guess —
     // so it gets its own, much shorter, set of rows instead.
+    // A non-annotated row's label: why MS2 annotation found nothing (ADR
+    // 0062), or just whether it has MS2 for an analysis run before that.
+    function unannotatedLabel(r) {
+        switch (r.ms2_annotation_outcome) {
+        case "no_candidates": return "Unannotated · no library candidate"
+        case "no_shared_fragments":
+            return "Unannotated · no shared fragments"
+                   + (r.best_n_matched_peaks > 0 ? " (best " + r.best_n_matched_peaks + ")" : "")
+        case "all_scans_skipped": return "Unannotated · all MS2 scans skipped"
+        case "no_ms2": return "Unannotated · no MS2"
+        }
+        return r.ms2_scan_id != null ? "Unannotated" : "Unannotated · no MS2"
+    }
+
     readonly property var statsRows: {
         var h = annotationsSection.selectedHit
         var r = annotationsSection.selectedRow
@@ -227,6 +241,16 @@ Item {
                 ["Peaks", r.ms2_n_peaks !== null ? r.ms2_n_peaks : "?"],
                 ["Purity", r.ms2_purity_score !== null ? Number(r.ms2_purity_score).toFixed(2) : "?"],
             ]
+            if (r.n_candidates != null) {
+                var skipped = r.n_skipped_flat + r.n_skipped_purity + r.n_skipped_unreadable
+                scanPairs.push(
+                    ["Library candidates", r.n_candidates + " within the m/z window"],
+                    ["Best shared fragments", r.best_n_matched_peaks],
+                    ["Scans scored", (r.n_scans - skipped) + " of " + r.n_scans
+                        + (skipped > 0 ? "  (skipped: " + r.n_skipped_flat + " flat, "
+                           + r.n_skipped_purity + " low purity, "
+                           + r.n_skipped_unreadable + " unreadable)" : "")])
+            }
             return [].concat.apply([], scanPairs.map(function (p) { return [p[0] + ":", String(p[1])] }))
         }
         if (!h)
@@ -504,8 +528,7 @@ Item {
                                     objectName: "annotationRowCompound_" + modelData.feature_id
                                     readonly property bool unannotated: !modelData.source
                                     text: unannotated
-                                          ? (modelData.ms2_scan_id !== null && modelData.ms2_scan_id !== undefined
-                                             ? "Unannotated" : "Unannotated · no MS2")
+                                          ? annotationsSection.unannotatedLabel(modelData)
                                           : (modelData.compound_name || modelData.inchikey || "?")
                                     font.italic: unannotated
                                     elide: Text.ElideRight

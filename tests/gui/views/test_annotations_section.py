@@ -650,3 +650,34 @@ def test_annotations_tab_remembers_its_state_across_tab_switches(
     assert section.property("mzQuery") == "123"
     assert section.property("sortAscending") is False
     assert section.property("selectedHit")["compound_name"] == "Caffeine"
+
+
+def test_non_annotated_rows_say_why_ms2_annotation_found_nothing(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot, tmp_path
+):
+    _seed_unannotated(annotated_analysis_model.analysisDbPath, tmp_path / "raw_s2.db")
+    with sqlite3.connect(annotated_analysis_model.analysisDbPath) as con:
+        con.executemany(
+            "INSERT INTO feature_annotation_outcome (feature_id, outcome, n_scans, "
+            "n_skipped_flat, n_skipped_purity, n_skipped_unreadable, n_candidates, "
+            "best_n_matched_peaks) VALUES (?, ?, 3, 1, 0, 0, ?, ?)",
+            [(7, "annotated", 2, 2), (8, "no_shared_fragments", 4, 1)],
+        )
+        con.commit()
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "annotationsSection")
+    _click(view, find_visual_child(root, "showUnannotatedCheckBox"), qtbot)
+    qtbot.waitUntil(lambda: not section.property("rowsLoading"), timeout=2000)
+
+    assert (find_visual_child(root, "annotationRowCompound_8").property("text")
+            == "Unannotated · no shared fragments (best 1)")
+    # Outcomes recorded, and feature 10 has none: it never had MS2.
+    assert (find_visual_child(root, "annotationRowCompound_10").property("text")
+            == "Unannotated · no MS2")
+
+    _click(view, find_visual_child(root, "annotationRow_8"), qtbot)
+    stats = section.property("statsRows").toVariant()
+    assert stats[stats.index("Library candidates:") + 1] == "4 within the m/z window"
+    assert stats[stats.index("Scans scored:") + 1].startswith("2 of 3")

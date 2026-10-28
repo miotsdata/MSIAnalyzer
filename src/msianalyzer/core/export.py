@@ -63,6 +63,7 @@ _ANNOTATION_EXPORT_COLUMNS = [
     "library_name",
     "source",
     "score",
+    "ms2_annotation_outcome",
 ]
 
 #: Export column -> DataFrame column, where the two names differ.

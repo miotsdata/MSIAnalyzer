@@ -80,6 +80,12 @@ _EMPTY_SUMMARY = {
     "annotation_ran": False,
     "n_annotated_features": 0,
     "n_distinct_compounds": 0,
+    "outcomes_recorded": False,
+    "n_outcome_no_ms2": 0,
+    "n_outcome_annotated": 0,
+    "n_outcome_no_shared_fragments": 0,
+    "n_outcome_no_candidates": 0,
+    "n_outcome_all_scans_skipped": 0,
 }
 
 _EMPTY_ANNOTATION_METADATA = {
@@ -122,14 +128,20 @@ def _dataframe_to_records(df: pd.DataFrame) -> list:
 
 
 def _load_annotation_rows(analysis_db_path: str, include_unannotated: bool) -> pd.DataFrame:
-    """The Annotations table's rows, each with its feature's best MS2 scan."""
+    """The Annotations table's rows, each with its feature's best MS2 scan
+    and annotation-outcome counts (ADR 0062)."""
     df = analysis_db.load_feature_representative_annotations(
         analysis_db_path, include_unidentified=include_unannotated
     )
-    scans = analysis_db.load_feature_best_ms2_scans(analysis_db_path)
-    if df.empty or scans.empty:
+    if df.empty:
         return df
-    return df.merge(scans, on="feature_id", how="left")
+    for extra in (
+        analysis_db.load_feature_best_ms2_scans(analysis_db_path),
+        analysis_db.load_feature_annotation_outcomes(analysis_db_path),
+    ):
+        if not extra.empty:
+            df = df.merge(extra, on="feature_id", how="left")
+    return df
 
 
 def _render_best_scan_png(raw_db_path: str, scan_id: int) -> str:

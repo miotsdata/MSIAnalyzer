@@ -29,6 +29,12 @@ _ZERO_SUMMARY = {
     "annotation_ran": False,
     "n_annotated_features": 0,
     "n_distinct_compounds": 0,
+    "outcomes_recorded": False,
+    "n_outcome_no_ms2": 0,
+    "n_outcome_annotated": 0,
+    "n_outcome_no_shared_fragments": 0,
+    "n_outcome_no_candidates": 0,
+    "n_outcome_all_scans_skipped": 0,
 }
 
 

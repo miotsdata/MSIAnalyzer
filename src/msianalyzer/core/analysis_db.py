@@ -515,6 +515,26 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         GROUP BY feature_id, inchikey
     """)
 
+    # --- why each MS2-bearing feature did or didn't get a library hit -----
+    # Written by core.annotation.annotate.persist_annotations, one row per
+    # feature with MS2 associations; a re-run replaces every row. A feature
+    # with no row has no MS2 (or annotation never ran). See ADR 0062.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS feature_annotation_outcome (
+            feature_id            INTEGER PRIMARY KEY,
+            outcome               TEXT    NOT NULL,
+            n_scans               INTEGER NOT NULL,
+            n_skipped_flat        INTEGER NOT NULL,
+            n_skipped_purity      INTEGER NOT NULL,
+            n_skipped_unreadable  INTEGER NOT NULL,
+            n_candidates          INTEGER NOT NULL,
+            best_n_matched_peaks  INTEGER NOT NULL,
+            command_id            INTEGER,
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+
     # --- target-list compound matching -------------------------------------
     # Written by core.annotation.target_list.run_target_list_matching. A
     # target compound (name/formula/InChIKey, no m/z of its own) is matched
@@ -1600,7 +1620,12 @@ def load_feature_representative_annotations(
         ``hmdb``, ``library_name``, ``source``, ``best_score`` (``None``
         for a target-list-, predicted-, or unidentified row),
         ``n_matched_peaks``, ``n_lib_peaks``, ``best_sample_id``,
-        ``best_scan_id``, ``best_library_id``, ordered by ``feature_id``.
+        ``best_scan_id``, ``best_library_id``, ``ms2_annotation_outcome``,
+        ordered by ``feature_id``.
+        ``ms2_annotation_outcome`` is the feature's
+        ``feature_annotation_outcome.outcome`` (ADR 0062), ``"no_ms2"`` for
+        a feature without one, and ``None`` everywhere when annotation
+        never recorded outcomes (not run, or run before ADR 0062).
         ``adduct`` comes from ``target_list_matches.adduct_label`` (target
         tier) or the MS2 library candidate's own adduct (ms2 tier, see
         the export feature's own ADR) or ``predicted_formulas.adduct``
@@ -1609,6 +1634,19 @@ def load_feature_representative_annotations(
         ``annotate._gather_spectrum_extras``'s own docstring for why
         they're not guaranteed even for a library that has adduct info.
     """
+    # Not every analysis has the table: one never opened since ADR 0062.
+    with connect(db_path) as con:
+        has_outcomes = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'feature_annotation_outcome'"
+        ).fetchone() is not None
+    outcome_col, outcome_join = (
+        (
+            "COALESCE(o.outcome, CASE WHEN EXISTS "
+            "(SELECT 1 FROM feature_annotation_outcome) THEN 'no_ms2' END)",
+            "LEFT JOIN feature_annotation_outcome o ON o.feature_id = f.feature_id",
+        )
+        if has_outcomes else ("NULL", "")
+    )
     sql = f"""
         WITH {_TARGET_REP_CTE},
         ms2_rep AS (
@@ -1640,11 +1678,13 @@ def load_feature_representative_annotations(
                 ELSE NULL
             END AS source,
             m.best_score, m.n_matched_peaks, m.n_lib_peaks,
-            m.best_sample_id, m.best_scan_id, m.best_library_id
+            m.best_sample_id, m.best_scan_id, m.best_library_id,
+            {outcome_col} AS ms2_annotation_outcome
         FROM features f
         LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
         LEFT JOIN ms2_rep m ON m.feature_id = f.feature_id
         LEFT JOIN predicted_rep pr ON pr.feature_id = f.feature_id
+        {outcome_join}
         {"" if include_unidentified else '''
         WHERE tr.feature_id IS NOT NULL
            OR m.feature_id IS NOT NULL
@@ -1730,12 +1770,32 @@ def load_feature_best_ms2_scans(db_path: Path | str) -> pd.DataFrame:
     return df
 
 
+@log_call(source="db_path")
+def load_feature_annotation_outcomes(db_path: Path | str) -> pd.DataFrame:
+    """Every `feature_annotation_outcome` row (ADR 0062) — the counts
+    behind each MS2-bearing feature's outcome, for the GUI Annotations
+    details panel. Empty when annotation never recorded outcomes."""
+    sql = """
+        SELECT feature_id, n_scans, n_skipped_flat, n_skipped_purity,
+               n_skipped_unreadable, n_candidates, best_n_matched_peaks
+        FROM feature_annotation_outcome
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
 def _scalar_count(con: sqlite3.Connection, sql: str) -> int:
     try:
         row = con.execute(sql).fetchone()
     except sqlite3.OperationalError:
         return 0
     return int(row[0]) if row and row[0] is not None else 0
+
+
+_OUTCOMES = ("annotated", "no_shared_fragments", "no_candidates", "all_scans_skipped")
 
 
 @log_call(source="db_path")
@@ -1751,7 +1811,9 @@ def load_summary_counts(db_path: Path | str) -> dict:
 
     Returns:
         ``{"n_samples", "n_features", "n_ms2_associated_features",
-        "annotation_ran", "n_annotated_features", "n_distinct_compounds"}``.
+        "annotation_ran", "n_annotated_features", "n_distinct_compounds",
+        "outcomes_recorded", "n_outcome_<outcome>"}`` — one count per
+        ADR 0062 outcome plus ``no_ms2``.
         ``n_annotated_features``/``n_distinct_compounds`` are ``0`` (not
         ``None``) when ``annotation_ran`` is ``False`` — the caller decides
         how to show "no library configured" vs. "library ran, 0 hits".
@@ -1769,6 +1831,14 @@ def load_summary_counts(db_path: Path | str) -> dict:
         n_distinct_compounds = _scalar_count(
             con, "SELECT COUNT(DISTINCT inchikey) FROM feature_compound_scores"
         )
+        outcomes = {o: 0 for o in _OUTCOMES}
+        try:
+            outcomes.update(con.execute(
+                "SELECT outcome, COUNT(*) FROM feature_annotation_outcome GROUP BY outcome"
+            ).fetchall())
+        except sqlite3.OperationalError:
+            pass
+    recorded = any(outcomes.values())
 
     return {
         "n_samples": n_samples,
@@ -1777,6 +1847,11 @@ def load_summary_counts(db_path: Path | str) -> dict:
         "annotation_ran": n_libraries > 0,
         "n_annotated_features": n_annotated_features,
         "n_distinct_compounds": n_distinct_compounds,
+        # Where MS2 annotation lost each feature (ADR 0062); all 0 when
+        # outcomes were never recorded — `outcomes_recorded` tells which.
+        "outcomes_recorded": recorded,
+        "n_outcome_no_ms2": n_features - sum(outcomes.values()) if recorded else 0,
+        **{f"n_outcome_{o}": n for o, n in outcomes.items()},
     }
 
 

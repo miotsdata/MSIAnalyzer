@@ -707,6 +707,12 @@ def test_load_summary_counts_empty_db(tmp_path: Path):
         "annotation_ran": False,
         "n_annotated_features": 0,
         "n_distinct_compounds": 0,
+        "outcomes_recorded": False,
+        "n_outcome_no_ms2": 0,
+        "n_outcome_annotated": 0,
+        "n_outcome_no_shared_fragments": 0,
+        "n_outcome_no_candidates": 0,
+        "n_outcome_all_scans_skipped": 0,
     }
 
 
@@ -2032,3 +2038,57 @@ def test_paths_inside_a_project_are_stored_relative_and_resolved_back(tmp_path):
     assert adb.load_imported_dataset(db, 1)["source_path"] == str(tmp_path / "nb" / "x.h5ad")
     # Same sample registered again: same row, not a duplicate.
     assert adb.register_sample(db, "s1", raw) == 1
+
+
+def test_representative_annotations_carry_the_ms2_annotation_outcome(tmp_path):
+    from msianalyzer.core.analysis_db import (
+        load_feature_representative_annotations,
+        load_summary_counts,
+    )
+
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(1, 100.0), (2, 200.0), (3, 300.0)],
+        )
+        con.commit()
+
+    # Outcomes never recorded: unknown, not "no_ms2".
+    df = load_feature_representative_annotations(db, include_unidentified=True)
+    assert df["ms2_annotation_outcome"].isna().all()
+    assert load_summary_counts(db)["outcomes_recorded"] is False
+
+    with sqlite3.connect(db) as con:
+        con.executemany(
+            "INSERT INTO feature_annotation_outcome (feature_id, outcome, n_scans, "
+            "n_skipped_flat, n_skipped_purity, n_skipped_unreadable, n_candidates, "
+            "best_n_matched_peaks) VALUES (?, ?, 2, 0, 0, 0, ?, 0)",
+            [(1, "no_candidates", 0), (2, "no_shared_fragments", 4)],
+        )
+        con.commit()
+
+    df = load_feature_representative_annotations(db, include_unidentified=True)
+    assert dict(zip(df["feature_id"], df["ms2_annotation_outcome"])) == {
+        1: "no_candidates", 2: "no_shared_fragments", 3: "no_ms2",
+    }
+    counts = load_summary_counts(db)
+    assert counts["outcomes_recorded"] is True
+    assert counts["n_outcome_no_candidates"] == 1
+    assert counts["n_outcome_no_shared_fragments"] == 1
+    assert counts["n_outcome_no_ms2"] == 1
+
+
+def test_representative_annotations_work_on_a_db_without_the_outcome_table(tmp_path):
+    from msianalyzer.core.analysis_db import load_feature_representative_annotations
+
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute("DROP TABLE feature_annotation_outcome")
+        con.execute("INSERT INTO features (feature_id, mz, members_json) VALUES (1, 100.0, '{}')")
+        con.commit()
+
+    df = load_feature_representative_annotations(db, include_unidentified=True)
+    assert len(df) == 1 and df["ms2_annotation_outcome"].isna().all()

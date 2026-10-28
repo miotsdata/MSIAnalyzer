@@ -487,3 +487,44 @@ def test_inspect_visually_wins_over_the_remembered_feature(
     )
     qtbot.wait(50)
     assert controls.property("selectedFeature")["mz"] == 123.4567
+
+
+def test_summary_shows_the_annotation_outcome_funnel_once_recorded(
+    analysis_view, analysis_model, find_visual_child, qtbot
+):
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(1, 100.0), (2, 200.0), (3, 300.0)],
+        )
+        con.executemany(
+            "INSERT INTO feature_annotation_outcome (feature_id, outcome, n_scans, "
+            "n_skipped_flat, n_skipped_purity, n_skipped_unreadable, n_candidates, "
+            "best_n_matched_peaks) VALUES (?, ?, 1, 0, 0, 0, 0, 0)",
+            [(1, "no_candidates"), (2, "all_scans_skipped")],
+        )
+        con.commit()
+
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+    qtbot.wait(50)
+
+    assert find_visual_child(root, "outcomeFunnel").property("visible") is True
+    assert find_visual_child(root, "statValue_n_outcome_no_candidates").property("text") == "1"
+    assert find_visual_child(root, "statValue_n_outcome_all_scans_skipped").property("text") == "1"
+    assert find_visual_child(root, "statValue_n_outcome_no_ms2").property("text") == "1"
+    assert find_visual_child(root, "statValue_n_outcome_annotated").property("text") == "0"
+
+
+def test_summary_hides_the_outcome_funnel_without_recorded_outcomes(
+    analysis_view, analysis_model, find_visual_child, qtbot
+):
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.execute("INSERT INTO features (feature_id, mz, members_json) VALUES (1, 100.0, '{}')")
+        con.commit()
+
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+    qtbot.wait(50)
+
+    assert find_visual_child(root, "outcomeFunnel").property("visible") is False

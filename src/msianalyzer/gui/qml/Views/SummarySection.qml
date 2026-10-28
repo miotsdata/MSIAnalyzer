@@ -49,6 +49,16 @@ Item {
         { key: "n_distinct_compounds", label: "Distinct compounds" }
     ]
 
+    // Where MS2 library annotation lost each feature (ADR 0062), in
+    // pipeline order. Only shown once a run has recorded outcomes.
+    readonly property var outcomeDefs: [
+        { key: "n_outcome_no_ms2", label: "No MS2" },
+        { key: "n_outcome_all_scans_skipped", label: "All MS2 scans skipped" },
+        { key: "n_outcome_no_candidates", label: "No library candidate" },
+        { key: "n_outcome_no_shared_fragments", label: "No shared fragments" },
+        { key: "n_outcome_annotated", label: "Library-matched" }
+    ]
+
     function tileText(key) {
         if (!stats)
             return "—"
@@ -69,42 +79,70 @@ Item {
         color: Theme.mutedTextColor
     }
 
-    GridLayout {
-        anchors.fill: parent
+    component StatTile: Rectangle {
+        required property var modelData
+        objectName: "statTile_" + modelData.key
+        Layout.preferredWidth: 180
+        Layout.preferredHeight: 100
+        color: Theme.secondaryColor
+        border.color: palette.mid
+        border.width: 1
+        radius: 6
+
+        ColumnLayout {
+            anchors.centerIn: parent
+            spacing: 4
+
+            Label {
+                objectName: "statValue_" + modelData.key
+                text: summarySection.tileText(modelData.key)
+                font.pixelSize: 22
+                font.bold: true
+                Layout.alignment: Qt.AlignHCenter
+            }
+            Label {
+                text: modelData.label
+                Layout.alignment: Qt.AlignHCenter
+            }
+        }
+    }
+
+    ColumnLayout {
+        anchors.left: parent.left
+        anchors.top: parent.top
         anchors.margins: 24
         visible: hasData
-        columns: 3
-        columnSpacing: 16
-        rowSpacing: 16
+        spacing: 16
 
-        Repeater {
-            model: summarySection.statDefs
+        GridLayout {
+            columns: 3
+            columnSpacing: 16
+            rowSpacing: 16
 
-            delegate: Rectangle {
-                objectName: "statTile_" + modelData.key
-                Layout.preferredWidth: 180
-                Layout.preferredHeight: 100
-                color: Theme.secondaryColor
-                border.color: palette.mid
-                border.width: 1
-                radius: 6
+            Repeater {
+                model: summarySection.statDefs
 
-                ColumnLayout {
-                    anchors.centerIn: parent
-                    spacing: 4
+                delegate: StatTile {}
+            }
+        }
 
-                    Label {
-                        objectName: "statValue_" + modelData.key
-                        text: summarySection.tileText(modelData.key)
-                        font.pixelSize: 22
-                        font.bold: true
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                    Label {
-                        text: modelData.label
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                }
+        Label {
+            objectName: "outcomeFunnelTitle"
+            visible: !!summarySection.stats && summarySection.stats.outcomes_recorded
+            text: "Where MS2 annotation lost features"
+            font.bold: true
+            font.pixelSize: 14
+        }
+        GridLayout {
+            objectName: "outcomeFunnel"
+            visible: !!summarySection.stats && summarySection.stats.outcomes_recorded
+            columns: 3
+            columnSpacing: 16
+            rowSpacing: 16
+
+            Repeater {
+                model: summarySection.outcomeDefs
+                delegate: StatTile {}
             }
         }
     }

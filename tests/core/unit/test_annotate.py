@@ -835,3 +835,88 @@ def test_run_annotation_re_run_replaces_all_configured_libraries(
     assert first > 0
     assert second == first  # replaced, not appended
     assert n_libs == 1  # library row upserted, not duplicated
+
+
+# ---------------------------------------------------------------------------
+# feature_annotation_outcome (ADR 0062)
+# ---------------------------------------------------------------------------
+
+
+def _outcome_of_scan(adb, scan_id):
+    with sqlite3.connect(adb) as con:
+        return con.execute(
+            "SELECT o.outcome, o.n_scans, o.n_skipped_flat, o.n_skipped_purity, "
+            "o.n_candidates, o.best_n_matched_peaks "
+            "FROM feature_annotation_outcome o "
+            "JOIN ms2_associations a ON a.feature_id = o.feature_id "
+            "WHERE a.scan_id = ?",
+            (scan_id,),
+        ).fetchone()
+
+
+def test_run_annotation_records_one_outcome_per_ms2_feature(
+    ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
+):
+    mock = ms2_grouper_mock_data(n=1000)
+    adb = _seeded_analysis_db(tmp_path, mock, make_ms2_db)
+    lib = make_library_db(mock, case="single")
+    single_scan = mock.planted["single"].scan_id
+
+    run_annotation(adb, AnnotateConfig(library_path=str(lib), candidate_ppm=25.0, n_workers=1))
+
+    outcome, _, _, _, n_candidates, best = _outcome_of_scan(adb, single_scan)
+    assert outcome == "annotated"
+    assert n_candidates >= 1 and best >= 1
+    with sqlite3.connect(adb) as con:
+        n_ms2_features = con.execute(
+            "SELECT COUNT(DISTINCT feature_id) FROM ms2_associations WHERE feature_id IS NOT NULL"
+        ).fetchone()[0]
+        by_outcome = dict(con.execute(
+            "SELECT outcome, COUNT(*) FROM feature_annotation_outcome GROUP BY outcome"
+        ).fetchall())
+    assert sum(by_outcome.values()) == n_ms2_features
+    # The library holds one compound: nearly every other feature has none in range.
+    assert by_outcome["no_candidates"] > 0
+
+
+def test_outcome_no_shared_fragments_reports_how_close_the_best_candidate_came(
+    ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
+):
+    mock = ms2_grouper_mock_data(n=1000)
+    adb = _seeded_analysis_db(tmp_path, mock, make_ms2_db)
+    lib = make_library_db(mock, case="single")
+    single_scan = mock.planted["single"].scan_id
+    run_annotation(adb, AnnotateConfig(library_path=str(lib), candidate_ppm=25.0, n_workers=1))
+    shared = _outcome_of_scan(adb, single_scan)[5]
+
+    run_annotation(adb, AnnotateConfig(
+        library_path=str(lib), candidate_ppm=25.0, n_workers=1, min_matched_peaks=999,
+    ))
+
+    outcome, _, _, _, n_candidates, best = _outcome_of_scan(adb, single_scan)
+    assert outcome == "no_shared_fragments"
+    assert n_candidates >= 1
+    assert best == shared  # re-scored below the minimum, not reported as 0
+
+
+def test_outcome_all_scans_skipped_counts_flat_and_low_purity_scans(
+    ms2_grouper_mock_data, make_ms2_db, make_library_db, tmp_path
+):
+    mock = ms2_grouper_mock_data(n=1000)
+    adb = _seeded_analysis_db(tmp_path, mock, make_ms2_db)
+    lib = make_library_db(mock, case="single")
+    single_scan = mock.planted["single"].scan_id
+    with sqlite3.connect(adb) as con:
+        con.execute(
+            "UPDATE ms2_associations SET flat_fragmentation = 1 WHERE feature_id = "
+            "(SELECT feature_id FROM ms2_associations WHERE scan_id = ?)",
+            (single_scan,),
+        )
+        con.commit()
+
+    run_annotation(adb, AnnotateConfig(library_path=str(lib), candidate_ppm=25.0, n_workers=1))
+
+    outcome, n_scans, n_flat, n_purity, n_candidates, _ = _outcome_of_scan(adb, single_scan)
+    assert outcome == "all_scans_skipped"
+    assert n_flat == n_scans >= 1
+    assert n_purity == 0 and n_candidates == 0

@@ -77,6 +77,7 @@ def test_export_annotation_table_writes_header_and_rows(tmp_path):
     assert rows[0] == [
         "feature_id", "mz", "compound_name", "compound_formula", "adduct",
         "inchikey", "cas", "hmdb", "library_name", "source", "score",
+        "ms2_annotation_outcome",
     ]
     assert len(rows) == 3  # header + 2 features
 
@@ -116,7 +117,7 @@ def test_export_annotation_table_includes_unidentified_feature_with_blank_fields
     rows = {r[0]: r for r in _read_rows(dest, ",")[1:]}
     row9 = rows["9"]
     assert row9[1] == "50.0"
-    assert row9[2:] == [""] * 9  # every identity field blank, not "None"/"nan"/"0"
+    assert row9[2:] == [""] * 10  # every identity field blank, not "None"/"nan"/"0"
 
 
 def test_export_annotation_table_txt_extension_is_tab_delimited(tmp_path):
@@ -172,7 +173,7 @@ def test_export_annotation_table_quotes_every_string_field_even_without_a_comma(
     assert '"ms2"' in row7_line
     # feature_id/mz themselves stay unquoted numbers.
     assert row7_line.startswith("7,123.4567,")
-    assert row7_line.endswith(',"ms2",0.87')  # score is an unquoted number too
+    assert row7_line.endswith(',"ms2",0.87,""')  # score is an unquoted number too
 
 
 def test_export_annotation_table_creates_destination_directory(tmp_path):
