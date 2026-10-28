@@ -8,7 +8,7 @@ run once. Any stage whose output already exists is skipped
 ## Inputs
 
 Per sample: one **mzML** file and one **raster XML** file. The run also needs a
-**project folder** (a directory containing `.msianalyzer.yml`) and an **output
+**project folder** (a directory containing `msianalyzer.yml`) and an **output
 directory**.
 
 The mzML must hold **centroided** MS1 spectra. A run whose mzML declares

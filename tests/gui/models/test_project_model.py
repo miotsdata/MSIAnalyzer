@@ -163,7 +163,8 @@ def test_delete_run_removes_files_entry_and_persists_to_yaml(tmp_path):
     assert not config_path.exists()
     assert spy.count() == 1
 
-    reloaded = yaml.safe_load((tmp_path / ".msianalyzer.yml").read_text())
+    # Seeded under the legacy name: re-exporting migrated it.
+    reloaded = yaml.safe_load((tmp_path / "msianalyzer.yml").read_text())
     assert reloaded["runs"] == {}
 
 

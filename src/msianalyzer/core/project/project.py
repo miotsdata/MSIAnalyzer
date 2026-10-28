@@ -14,11 +14,47 @@ logger = logging.getLogger(__name__)
 
 _VALID_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_\- ]+$")
 
+PROJECT_FILE_NAME = "msianalyzer.yml"
+# The name until 0.6. SMB servers mark dotfiles Hidden, and Windows refuses
+# to open a hidden file for overwriting — runs failed with EACCES.
+_LEGACY_PROJECT_FILE_NAME = ".msianalyzer.yml"
+
+
+def is_project_folder(directory: str | Path) -> bool:
+    """Whether `directory` holds a project file, current or legacy name."""
+    directory = Path(directory)
+    return any(
+        (directory / name).is_file()
+        for name in (PROJECT_FILE_NAME, _LEGACY_PROJECT_FILE_NAME)
+    )
+
+
+def project_file(folder: str | Path) -> Path:
+    """`folder`'s project file, migrating a legacy `.msianalyzer.yml` first.
+
+    Migrated by writing a new file and deleting the old one, not renaming:
+    a rename keeps the server-side Hidden attribute. If that fails (e.g. a
+    read-only share), the legacy file is returned and keeps working.
+    """
+    folder = Path(folder)
+    path = folder / PROJECT_FILE_NAME
+    legacy = folder / _LEGACY_PROJECT_FILE_NAME
+    if path.exists() or not legacy.exists():
+        return path
+    try:
+        path.write_bytes(legacy.read_bytes())
+        legacy.unlink()
+    except OSError as e:
+        logger.warning("could not migrate %s to %s: %s", legacy, PROJECT_FILE_NAME, e)
+        return path if path.exists() else legacy
+    logger.info("migrated project file %s to %s", legacy, PROJECT_FILE_NAME)
+    return path
+
 
 class Project:
     """An msianalyzer project and its processing-run history.
 
-    Serialised to `.msianalyzer.yml` at the project-folder root.
+    Serialised to `msianalyzer.yml` at the project-folder root.
 
     Attributes:
         version: Project file schema version.
@@ -101,7 +137,7 @@ class Project:
     @classmethod
     @log_call
     def load(cls, start_path: str | Path | None = None) -> "Project":
-        """Locate the enclosing project and load its ``.msianalyzer.yml``.
+        """Locate the enclosing project and load its ``msianalyzer.yml``.
 
         Walks up from ``start_path`` (or the current working directory) to
         find the project folder, then delegates to :meth:`load_from_yaml`.
@@ -110,7 +146,7 @@ class Project:
             NotInProjectFolderError: If no project file is found.
         """
         folder = get_project_folder(start_path)
-        return cls.load_from_yaml(folder / ".msianalyzer.yml")
+        return cls.load_from_yaml(project_file(folder))
 
     @classmethod
     @log_call(source="yaml_path")
@@ -207,7 +243,7 @@ class Project:
 def create_project_folder(path: str | Path, name: str) -> None:
     """Create a new project folder on disk.
 
-    Creates `path`, writes a `.msianalyzer.yml` project file into it, and
+    Creates `path`, writes a `msianalyzer.yml` project file into it, and
     adds the standard `output`, `data` and `configs` subdirectories.
 
     Args:
@@ -223,7 +259,7 @@ def create_project_folder(path: str | Path, name: str) -> None:
     path.mkdir()
 
     p = Project(name)
-    p.export(path / ".msianalyzer.yml")
+    p.export(path / PROJECT_FILE_NAME)
 
     for subdir in ["output", "data", "configs"]:
         (path / subdir).mkdir(exist_ok=True)
@@ -253,8 +289,7 @@ def get_project_folder(start_path: Path | str | None = None) -> Path:
     current = Path(start_path or Path.cwd()).resolve()
 
     for directory in [current] + list(current.parents):
-        project_candidate = directory / f".msianalyzer.yml"
-        if project_candidate.is_file():
+        if is_project_folder(directory):
             return directory
 
     # If loop finishes at filesystem root without finding anything:

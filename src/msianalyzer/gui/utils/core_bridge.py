@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from msianalyzer.core.config import Config
-from msianalyzer.core.project.project import Project, create_project_folder
+from msianalyzer.core.project.project import Project, create_project_folder, project_file
 from msianalyzer.core.run.run import RUN_STEPS, TARGETED_RUN_STEPS, Run
 from msianalyzer.gui.utils.config_schema import coerce_config_values
 from msianalyzer.gui.utils.run_worker import RunWorker
@@ -55,13 +55,13 @@ class CoreBridge(QObject):
 
         Args:
             path: The project's folder on disk (the one containing
-                `.msianalyzer.yml`), not the yaml file itself.
+                `msianalyzer.yml`), not the yaml file itself.
         """
         if not path:
             self.invalidProjectPath.emit("no file provided.")
             return
 
-        yaml_path = Path(path) / ".msianalyzer.yml"
+        yaml_path = project_file(path)
         try:
             project = Project.load_from_yaml(yaml_path)
         except ValueError as ve:

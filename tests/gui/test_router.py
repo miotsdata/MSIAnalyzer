@@ -121,7 +121,7 @@ def test_run_started_then_completed_shows_running_page_then_analysis_page(
     # The real run pipeline would have persisted "run-1" into the project
     # file by the time runCompleted fires; write it in directly so the
     # post-run reload (real disk I/O, same as production) finds it.
-    project = Project.load_from_yaml(proj_path / ".msianalyzer.yml")
+    project = Project.load_from_yaml(proj_path / "msianalyzer.yml")
     project.runs["run-1"] = {
         "id": "run-1",
         "start_date": "2026-01-01 12:00:00",
@@ -130,7 +130,7 @@ def test_run_started_then_completed_shows_running_page_then_analysis_page(
             "analysis": {"db_name": None},
         },
     }
-    project.export(proj_path / ".msianalyzer.yml")
+    project.export(proj_path / "msianalyzer.yml")
 
     application.core_bridge.runCompleted.emit("run-1")
     qtbot.wait(100)

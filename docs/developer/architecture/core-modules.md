@@ -268,7 +268,7 @@ Detail in [MS2 annotation](../../user-guide/ms2-annotation.md) and
 
 ## `project/project.py`
 
-- `Project` — the `.msianalyzer.yml` model and run history.
+- `Project` — the `msianalyzer.yml` model and run history.
 - `get_project_folder(start_path)` — walk up to the project marker;
   `NotInProjectFolderError` when there is none.
 

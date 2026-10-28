@@ -1,7 +1,7 @@
 import pytest
 import yaml
 from pathlib import Path
-from msianalyzer.core.project import Project, create_project_folder
+from msianalyzer.core.project import Project, create_project_folder, project_file
 from msianalyzer.core.run import Run
 from hypothesis import given, settings, strategies as st
 import string
@@ -222,7 +222,7 @@ def test_create_project_folder_success(tmp_path: Path):
         assert (target_dir / subdir).is_dir()
 
     # Check project YAML file
-    yml_file = target_dir / ".msianalyzer.yml"
+    yml_file = target_dir / "msianalyzer.yml"
     assert yml_file.is_file()
 
     # Check project file can be reloaded
@@ -237,3 +237,29 @@ def test_create_project_folder_already_exists(tmp_path: Path):
 
     with pytest.raises(FileExistsError):
         create_project_folder(path=target_dir, name="existing_proj")
+
+
+def test_project_file_migrates_the_legacy_dotted_file(tmp_path: Path):
+    """Old projects' `.msianalyzer.yml` becomes `msianalyzer.yml` (a new
+    file, so no server-side Hidden attribute comes along) on first open."""
+    p = Project("alpha")
+    p.export(tmp_path / ".msianalyzer.yml")
+
+    loaded = Project.load(tmp_path)
+
+    assert loaded.uuid == p.uuid
+    assert (tmp_path / "msianalyzer.yml").is_file()
+    assert not (tmp_path / ".msianalyzer.yml").exists()
+
+
+def test_project_file_keeps_the_legacy_file_when_it_cannot_migrate(tmp_path: Path, monkeypatch):
+    legacy = tmp_path / ".msianalyzer.yml"
+    Project("alpha").export(legacy)
+
+    def refuse(self, data):
+        raise PermissionError("read-only share")
+
+    monkeypatch.setattr(Path, "write_bytes", refuse)
+
+    assert project_file(tmp_path) == legacy
+    assert legacy.is_file()

@@ -41,7 +41,7 @@ from msianalyzer.core.parser import (
     write_raw_metadata,
 )
 from msianalyzer.core.plotting.plotter import Plotter
-from msianalyzer.core.project import Project
+from msianalyzer.core.project import Project, project_file
 from msianalyzer.core.spectra.average_spectra import (
     detect_ms1_centroids,
     filter_intensities_mad,
@@ -315,7 +315,7 @@ class Run:
         else:
             raise ValueError("Neither config_file nor config was provided.")
 
-        project_path = Path(self.config.io.project_folder) / ".msianalyzer.yml"
+        project_path = project_file(self.config.io.project_folder)
         # Explicit start_path, not cwd-derived — the calling process's cwd
         # (the GUI's launch directory, not necessarily inside any project)
         # has no bearing on which project this run belongs to; that's

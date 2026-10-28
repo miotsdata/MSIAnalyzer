@@ -11,7 +11,11 @@ import tomllib
 import tomli_w
 
 from msianalyzer.core.annotation.target_list import adducts_for_polarity
-from msianalyzer.core.project.project import NotInProjectFolderError, get_project_folder
+from msianalyzer.core.project.project import (
+    NotInProjectFolderError,
+    get_project_folder,
+    is_project_folder,
+)
 from msianalyzer.core.utils.logging_utils import RUN_LOG_LEVELS
 from msianalyzer.core.utils.logging_utils import log_call
 from msianalyzer.core.utils.paths import relative_to_project
@@ -38,7 +42,7 @@ class IOConfig:
 
     Attributes:
         project_folder: The MSIAnalyzer project's root directory — the one
-            containing the `.msianalyzer.yml` marker file created by
+            containing the `msianalyzer.yml` marker file created by
             `msianalyzer init`/`create_project`. Every relative path in
             this config (mzML/XML/DB paths, `out_dir`) is resolved against
             this.
@@ -2004,7 +2008,7 @@ def create_config_file(
         FileExistsError: If `file` exists and `force` is False.
         FileNotFoundError: If `project_folder` is given but does not exist.
         NotInProjectFolderError: If `project_folder` is given but contains
-            no `.msianalyzer.yml`.
+            no `msianalyzer.yml`.
     """
     # Safely assign empty lists if None was passed
     mzml_files = mzml_files if mzml_files is not None else []
@@ -2022,7 +2026,7 @@ def create_config_file(
     else:
         if not project_folder.exists():
             raise FileNotFoundError(f"Project folder not found: {project_folder}.")
-        if not (project_folder / ".msianalyzer.yml").exists():
+        if not is_project_folder(project_folder):
             raise NotInProjectFolderError(
                 f"No project found at provided folder {project_folder}."
             )

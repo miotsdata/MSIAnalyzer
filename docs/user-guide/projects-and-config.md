@@ -2,10 +2,15 @@
 
 ## The project folder
 
-An MSIAnalyzer **project** is a directory containing a `.msianalyzer.yml` marker
+An MSIAnalyzer **project** is a directory containing a `msianalyzer.yml` marker
 file. It records the project name and the history of runs executed inside it.
 Commands locate the project by walking up from the current directory until they
 find that marker.
+
+Projects created before 0.7 used a hidden `.msianalyzer.yml`. Network shares
+mark dotfiles Hidden, and Windows refuses to overwrite a hidden file, so runs
+failed. Such a project is migrated to `msianalyzer.yml` the first time it is
+opened; older MSIAnalyzer versions can no longer open it after that.
 
 ## The config file
 
@@ -73,7 +78,7 @@ put the results.
 
 | key | meaning |
 |---|---|
-| `project_folder` | project root (contains `.msianalyzer.yml`) |
+| `project_folder` | project root (contains `msianalyzer.yml`) |
 | `mzml_paths` | input mzML files to process, e.g. `[data/s1.mzML, data/s2.mzML]` |
 | `xml_paths` | raster/imaging XML files, one per entry in `mzml_paths`, in the same order — needed to place each scan at its pixel position |
 | `db_paths` | parsed raw-database path per sample, paired with `mzml_paths`. Leave empty to use `<project_folder>/parsed/<stem>.db` (the recommended default — raw DBs are shared across analyses, so they belong at the project level, not in an analysis `out_dir`). Only set this if you deliberately want the parsed database somewhere else. |
