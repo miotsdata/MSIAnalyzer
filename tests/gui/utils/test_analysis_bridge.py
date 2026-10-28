@@ -36,6 +36,7 @@ _ZERO_SUMMARY = {
     "n_outcome_no_candidates": 0,
     "n_outcome_all_scans_skipped": 0,
     "ms2_background": [],
+    "ms2_cleaning_ran": False,
     "precursor_ran": False,
     "n_precursor_matched_features": 0,
 }

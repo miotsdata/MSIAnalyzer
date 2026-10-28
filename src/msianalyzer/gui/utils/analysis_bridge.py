@@ -88,6 +88,7 @@ _EMPTY_SUMMARY = {
     "n_outcome_no_candidates": 0,
     "n_outcome_all_scans_skipped": 0,
     "ms2_background": [],
+    "ms2_cleaning_ran": False,
     "precursor_ran": False,
     "n_precursor_matched_features": 0,
 }
@@ -2010,6 +2011,14 @@ class AnalysisBridge(QObject):
     # -----------------------------------------------------------------
     # Re-annotate a finished analysis, with history (ADR 63)
     # -----------------------------------------------------------------
+
+    @Slot(str, result="QVariantMap")
+    def getMs2Background(self, analysis_db_path: str) -> dict:
+        """`analysis_db.load_ms2_background` — the Re-annotate dialog's MS2
+        cleaning tab. A few hundred rows at most, so synchronous."""
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return {"ran": False, "rows": []}
+        return analysis_db.load_ms2_background(analysis_db_path)
 
     @Slot(str, "QVariantMap", result="QVariantMap")
     def getAnnotationSettings(self, analysis_db_path: str, run_config: dict) -> dict:

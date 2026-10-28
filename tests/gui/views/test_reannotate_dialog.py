@@ -68,6 +68,8 @@ def test_reannotate_with_edited_settings_then_restore(
     assert [e["kind"] for e in history] == ["pipeline", "reannotate"]
     assert _plain(dialog.property("settings"))["annotate"]["candidate_ppm"] == 7.0
     assert not dialog.property("statusError"), dialog.property("statusText")
+    # The MS2 cleaning tab lists the new annotation's shared fragments.
+    assert _plain(dialog.property("ms2Background"))["ran"] is True
     saved = analysis_model.project._project.runs[analysis_model.runId]["config"]
     assert saved["annotate"]["candidate_ppm"] == 7.0
 

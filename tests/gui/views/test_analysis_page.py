@@ -551,3 +551,29 @@ def test_summary_lists_ms2_background_fragments(
     rows = rows.toVariant() if hasattr(rows, "toVariant") else rows
     assert [r["removed"] for r in rows] == [True, False]  # most shared first
     assert find_visual_child(root, "backgroundFragmentsList").property("visible") is True
+
+
+def test_summary_reloads_after_a_reannotation_and_says_when_nothing_is_shared(
+    analysis_view, analysis_model, application, find_visual_child, qtbot
+):
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.execute("INSERT INTO features (feature_id, mz, members_json) VALUES (1, 100.0, '{}')")
+        con.commit()
+    view = analysis_view(analysis_model)
+    root = view.rootObject()
+    qtbot.wait(50)
+    assert find_visual_child(root, "summaryBackgroundFragments").property("visible") is False
+
+    # A re-annotation computed the table: nothing shared by 5 % of precursors.
+    with sqlite3.connect(analysis_model.analysisDbPath) as con:
+        con.execute(
+            "INSERT INTO ms2_cleaning VALUES (0, 10.0, 50.0, 0, 10.0)"
+        )
+        con.commit()
+    application.analysis_bridge._on_target_list_matches_changed(analysis_model.analysisDbPath)
+
+    section = find_visual_child(root, "summaryBackgroundFragments")
+    qtbot.waitUntil(lambda: section.property("visible") is True, timeout=2000)
+    empty = find_visual_child(root, "backgroundFragmentsEmpty")
+    assert empty.property("visible") is True
+    assert "No fragment" in empty.property("text")

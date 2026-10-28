@@ -29,6 +29,12 @@ Item {
 
     Connections {
         target: AnalysisBridge
+        // Names, outcomes or MS2 tables changed (post-run target list,
+        // re-annotate, restore): the cached counts were dropped.
+        function onTargetListMatchesChanged(dbPath) {
+            if (summarySection.analysis && dbPath === summarySection.analysis.analysisDbPath)
+                summarySection.refreshStats()
+        }
         function onSummaryReady(dbPath, counts) {
             if (!summarySection.analysis || dbPath !== summarySection.analysis.analysisDbPath)
                 return
@@ -111,73 +117,64 @@ Item {
         }
     }
 
-    ColumnLayout {
-        anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.margins: 24
+    // Scrolls: the tiles and the background list don't fit a small window.
+    Flickable {
+        objectName: "summaryFlickable"
+        anchors.fill: parent
         visible: hasData
-        spacing: 16
+        clip: true
+        contentWidth: width
+        contentHeight: summaryColumn.implicitHeight + 48
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-        GridLayout {
-            columns: 3
-            columnSpacing: 16
-            rowSpacing: 16
+        ColumnLayout {
+            id: summaryColumn
+            x: 24
+            y: 24
+            spacing: 16
 
-            Repeater {
-                model: summarySection.statDefs
+            GridLayout {
+                columns: 3
+                columnSpacing: 16
+                rowSpacing: 16
 
-                delegate: StatTile {}
+                Repeater {
+                    model: summarySection.statDefs
+
+                    delegate: StatTile {}
+                }
             }
-        }
 
-        Label {
-            objectName: "outcomeFunnelTitle"
-            visible: !!summarySection.stats && summarySection.stats.outcomes_recorded
-            text: "Where MS2 annotation lost features"
-            font.bold: true
-            font.pixelSize: 14
-        }
-        GridLayout {
-            objectName: "outcomeFunnel"
-            visible: !!summarySection.stats && summarySection.stats.outcomes_recorded
-            columns: 3
-            columnSpacing: 16
-            rowSpacing: 16
-
-            Repeater {
-                model: summarySection.outcomeDefs
-                delegate: StatTile {}
+            Label {
+                objectName: "outcomeFunnelTitle"
+                visible: !!summarySection.stats && summarySection.stats.outcomes_recorded
+                text: "Where MS2 annotation lost features"
+                font.bold: true
+                font.pixelSize: 14
             }
-        }
+            GridLayout {
+                objectName: "outcomeFunnel"
+                visible: !!summarySection.stats && summarySection.stats.outcomes_recorded
+                columns: 3
+                columnSpacing: 16
+                rowSpacing: 16
 
-        // MS2 cleaning (ADR 0064): fragments found in the spectra of many
-        // precursors, whether or not background removal was on.
-        Label {
-            objectName: "backgroundFragmentsTitle"
-            visible: summarySection.background.length > 0
-            text: "MS2 background fragments (in at least 5 % of precursors)"
-            font.bold: true
-            font.pixelSize: 14
-        }
-        ListView {
-            id: backgroundList
-            objectName: "backgroundFragmentsList"
-            visible: summarySection.background.length > 0
-            Layout.preferredWidth: 560
-            Layout.preferredHeight: Math.min(contentHeight, 240)
-            clip: true
-            model: summarySection.background.length
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-            delegate: Label {
-                required property int index
-                readonly property var row: summarySection.background[index]
-                width: backgroundList.width
-                text: "m/z " + Number(row.mz).toFixed(4)
-                      + "  ·  " + (row.polarity ? row.polarity.toLowerCase() : "?")
-                      + "  ·  " + row.n_precursors + " precursors (" + Number(row.percent).toFixed(1) + " %)"
-                      + (row.removed ? "  ·  removed" : "")
-                font.bold: row.removed
-                color: row.removed ? Theme.textColor : Theme.mutedTextColor
+                Repeater {
+                    model: summarySection.outcomeDefs
+                    delegate: StatTile {}
+                }
+            }
+
+            // MS2 cleaning (ADR 0064): fragments found in the spectra of many
+            // precursors, whether or not background removal was on.
+            BackgroundFragmentsList {
+                objectName: "summaryBackgroundFragments"
+                visible: !!summarySection.stats && (summarySection.stats.ms2_cleaning_ran
+                                                     || summarySection.background.length > 0)
+                Layout.preferredWidth: 560
+                rows: summarySection.background
+                ran: !!summarySection.stats && summarySection.stats.ms2_cleaning_ran
             }
         }
     }

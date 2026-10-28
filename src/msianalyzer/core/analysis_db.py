@@ -1936,6 +1936,31 @@ def _scalar_count(con: sqlite3.Connection, sql: str) -> int:
     return int(row[0]) if row and row[0] is not None else 0
 
 
+def _load_ms2_background(con: sqlite3.Connection) -> dict:
+    try:
+        ran = con.execute("SELECT 1 FROM ms2_cleaning").fetchone() is not None
+        rows = [
+            {"polarity": p, "mz": mz, "n_precursors": n, "percent": 100 * f,
+             "removed": bool(r)}
+            for p, mz, n, f, r in con.execute(
+                "SELECT polarity, mz, n_precursors, fraction, removed "
+                "FROM ms2_background_fragments ORDER BY fraction DESC, mz"
+            )
+        ]
+    except sqlite3.OperationalError:
+        return {"ran": False, "rows": []}
+    return {"ran": ran, "rows": rows}
+
+
+@log_call(source="db_path")
+def load_ms2_background(db_path: Path | str) -> dict:
+    """MS2 cleaning's shared fragments (ADR 0064): ``{"ran", "rows"}``,
+    `ran` whether the grouping stage computed them, `rows` the
+    ``ms2_background_fragments`` rows, most shared first."""
+    with connect(db_path) as con:
+        return _load_ms2_background(con)
+
+
 _OUTCOMES = ("annotated", "no_shared_fragments", "no_candidates", "all_scans_skipped")
 
 
@@ -1955,7 +1980,8 @@ def load_summary_counts(db_path: Path | str) -> dict:
         "annotation_ran", "n_annotated_features", "n_distinct_compounds",
         "outcomes_recorded", "n_outcome_<outcome>"}`` — one count per
         ADR 0062 outcome plus ``no_ms2``, and ``"ms2_background"``: the
-        ``ms2_background_fragments`` rows (ADR 0064), most shared first;
+        ``ms2_background_fragments`` rows (ADR 0064), most shared first,
+        and ``"ms2_cleaning_ran"`` (whether they were ever computed);
         ``"precursor_ran"``/``"n_precursor_matched_features"`` for the
         precursor-m/z annotation (ADR 0065).
         ``n_annotated_features``/``n_distinct_compounds`` are ``0`` (not
@@ -1989,17 +2015,7 @@ def load_summary_counts(db_path: Path | str) -> dict:
         precursor_ran = _scalar_count(
             con, "SELECT COUNT(*) FROM commands WHERE command_name = 'annotate_precursor'"
         ) > 0
-        try:  # MS2 cleaning (ADR 0064): the fragments shared by many precursors
-            background = [
-                {"polarity": p, "mz": mz, "n_precursors": n, "percent": 100 * f,
-                 "removed": bool(r)}
-                for p, mz, n, f, r in con.execute(
-                    "SELECT polarity, mz, n_precursors, fraction, removed "
-                    "FROM ms2_background_fragments ORDER BY fraction DESC, mz"
-                )
-            ]
-        except sqlite3.OperationalError:
-            background = []
+        background = _load_ms2_background(con)
     recorded = any(outcomes.values())
 
     return {
@@ -2014,7 +2030,8 @@ def load_summary_counts(db_path: Path | str) -> dict:
         "outcomes_recorded": recorded,
         "n_outcome_no_ms2": n_features - sum(outcomes.values()) if recorded else 0,
         **{f"n_outcome_{o}": n for o, n in outcomes.items()},
-        "ms2_background": background,
+        "ms2_background": background["rows"],
+        "ms2_cleaning_ran": background["ran"],
         "precursor_ran": precursor_ran,
         "n_precursor_matched_features": n_precursor_matched,
     }

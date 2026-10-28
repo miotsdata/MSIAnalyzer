@@ -25,6 +25,7 @@ Dialog {
     property var analysis: null
     property var settings: ({})          // {group: {field: value}}
     property var history: []             // AnalysisBridge.getAnnotationHistory
+    property var ms2Background: ({})     // AnalysisBridge.getMs2Background
     property int pendingDelete: -1       // history id awaiting confirmation
     property bool running: false
     property int progressDone: 0
@@ -44,6 +45,7 @@ Dialog {
     function refresh() {
         var db = analysis.analysisDbPath
         history = AnalysisBridge.getAnnotationHistory(db)
+        ms2Background = AnalysisBridge.getMs2Background(db)
         settings = AnalysisBridge.getAnnotationSettings(db, analysis.runConfig)
     }
 
@@ -285,6 +287,18 @@ Dialog {
                     }
                 }
             }
+        }
+
+        // The current annotation's shared fragments, under the MS2 cleaning
+        // tab, to pick a removal threshold from (ADR 0064). Outside the
+        // tab's ScrollView: a layout around the form there never settled.
+        BackgroundFragmentsList {
+            objectName: "reannotateBackgroundFragments"
+            visible: tabs.currentIndex === reannotateDialog.groupKeys.indexOf("ms2_cleaning")
+            Layout.fillWidth: true
+            listHeight: 140
+            rows: reannotateDialog.ms2Background.rows || []
+            ran: !!reannotateDialog.ms2Background.ran
         }
 
         ProgressBar {
