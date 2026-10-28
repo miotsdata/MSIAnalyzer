@@ -75,3 +75,24 @@ def test_gui_startup_does_not_import_heavy_scientific_libraries():
     ).stdout.strip()
 
     assert out == "", f"imported at GUI startup: {out}"
+
+
+def test_load_qt_graphs_2d_impl_loads_the_dll_on_windows(monkeypatch, tmp_path, caplog):
+    import ctypes
+    import sys as sys_mod
+
+    import PySide6
+
+    from msianalyzer.gui.main import load_qt_graphs_2d_impl
+
+    loaded = []
+    monkeypatch.setattr(sys_mod, "platform", "win32")
+    monkeypatch.setattr(ctypes, "WinDLL", loaded.append, raising=False)
+    monkeypatch.setattr(PySide6, "__file__", str(tmp_path / "__init__.py"))
+
+    load_qt_graphs_2d_impl()  # missing: warns instead of crashing at startup
+    assert loaded == [] and "Qt6Graphs2DImpl.dll is missing" in caplog.text
+
+    (tmp_path / "Qt6Graphs2DImpl.dll").write_bytes(b"")
+    load_qt_graphs_2d_impl()
+    assert loaded == [str(tmp_path / "Qt6Graphs2DImpl.dll")]

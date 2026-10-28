@@ -47,6 +47,28 @@ def apply_font_scale(scale: float = 0.9) -> None:
     QGuiApplication.setFont(font)
 
 
+def load_qt_graphs_2d_impl() -> None:
+    """Load Qt6Graphs2DImpl.dll on Windows, before any QML.
+
+    It holds Qt Graphs' `QtGraphs2D.impl` QML module, which registers itself
+    when the DLL loads. On Linux libQt6Graphs links it, but no Windows DLL
+    imports it, so nothing ever loaded it: every Qt Graphs plot (MS1, the
+    mirror plot, calibration) then crashed the app ("QtGraphs2D.impl
+    module's qmldir file not found", then an access violation in Qt6Core).
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    import PySide6
+
+    dll = Path(PySide6.__file__).parent / "Qt6Graphs2DImpl.dll"
+    if dll.exists():
+        ctypes.WinDLL(str(dll))
+    else:
+        logging.getLogger(__name__).warning("%s is missing: Qt Graphs plots will crash", dll)
+
+
 def build_engine(
     app: QGuiApplication, application: Application
 ) -> QQmlApplicationEngine:
@@ -120,6 +142,7 @@ def main() -> int:
     # Overridable (MSIANALYZER_QT_STYLE=Basic, Material, ...) for the same
     # kind of style bisection that found this, without a separate build.
     QQuickStyle.setStyle(os.environ.get("MSIANALYZER_QT_STYLE", "Fusion"))
+    load_qt_graphs_2d_impl()
     app = QGuiApplication(sys.argv)
 
     # A second launch pings the first instance (see single_instance.py)

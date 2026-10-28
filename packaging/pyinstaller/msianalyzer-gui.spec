@@ -18,6 +18,18 @@ SRC_ROOT = REPO_ROOT / "src"
 
 sys.path.insert(0, str(SRC_ROOT))
 
+# Qt Graphs' 2D internals (the `QtGraphs2D.impl` QML module, embedded in
+# Qt6Graphs2DImpl) are linked by libQt6Graphs on Linux, but no Windows DLL
+# imports Qt6Graphs2DImpl.dll. PyInstaller's import walk never collects it,
+# and without it every Qt Graphs plot crashed (access violation in Qt6Core).
+# Collected by hand here and loaded by gui/main.py (load_qt_graphs_2d_impl).
+import PySide6  # noqa: E402
+
+_GRAPHS_2D_IMPL = Path(PySide6.__file__).parent / "Qt6Graphs2DImpl.dll"
+EXTRA_BINARIES = [(str(_GRAPHS_2D_IMPL), "PySide6")] if _GRAPHS_2D_IMPL.exists() else []
+# Kept by the pruning below although nothing imports them (see above).
+ALWAYS_KEEP_LIBS = {"qt6graphs2dimpl.dll"}
+
 # Dev/test/doc tooling that has shown up in the built bundle despite
 # nothing under src/msianalyzer importing it directly (traced as far as
 # confirming that — not worth blocking the build on pinning the exact
@@ -50,7 +62,7 @@ excludes = [
 a = Analysis(
     [str(SRC_ROOT / "msianalyzer" / "gui" / "main.py")],
     pathex=[str(SRC_ROOT)],
-    binaries=[],
+    binaries=EXTRA_BINARIES,
     # Help > User Guide (router.openUserGuide). The build scripts run
     # `mkdocs build` first; a bare spec run without it just ships no guide.
     datas=[(str(REPO_ROOT / "site"), "site")] if (REPO_ROOT / "site").is_dir() else [],
@@ -128,7 +140,7 @@ def _unreachable_qt_libs(binaries) -> set[str]:
             if key in candidates and key not in reached:
                 reached.add(key)
                 todo.append(candidates[key])
-    return set(candidates) - reached
+    return set(candidates) - reached - ALWAYS_KEEP_LIBS
 
 
 def _is_unwanted(path: str) -> bool:
