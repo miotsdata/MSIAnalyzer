@@ -251,6 +251,9 @@ setting below is then unused.
 | `store_raw_spectra` | `true` | persist the untouched empirical + library spectra on every row, so mirror plots never need to re-open the raw per-sample database or the library file (either can be a slow/remote mount). The noise-filtered view shown in a mirror plot is reconstructed on demand from these plus `noise_threshold`, not stored a second time. `false` writes the raw columns NULL and keeps the table smaller. |
 | `batch_size` | `200` | features handed to each worker process at a time (memory/speed only) |
 | `n_workers` | `null` | parallel worker processes; `null` uses `os.cpu_count()` — lower on a shared machine or under memory pressure |
+| `ms2_enabled` | `true` | match MS2 spectra against the libraries (every setting above but `library_path`). Turn off, with `precursor_enabled` on, to annotate by precursor m/z only. |
+| `precursor_enabled` | `false` | also match **every** feature (with or without MS2) by its m/z alone against every library spectrum's precursor; all candidates within `precursor_ppm` are kept, one per compound and adduct, ranked by absolute ppm error ([ADR 65](../developer/adr/0065-precursor-mz-annotation.md)). The reference m/z is the library's stored precursor when it has at least 4 decimals, else formula + adduct. |
+| `precursor_ppm` | `5.0` | tolerance between a feature's m/z and a candidate's reference m/z |
 
 ### `consensus` — per-feature MS2 pick
 

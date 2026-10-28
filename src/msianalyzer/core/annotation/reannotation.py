@@ -27,6 +27,7 @@ from msianalyzer.core import analysis_db
 from msianalyzer.core.annotation.annotate import run_annotation
 from msianalyzer.core.annotation.consensus import run_consensus
 from msianalyzer.core.annotation.group_ms2 import run_grouper
+from msianalyzer.core.annotation.precursor_annotation import run_precursor_annotation
 from msianalyzer.core.annotation.precursor_purity import run_precursor_purity
 from msianalyzer.core.utils.logging_utils import log_call
 
@@ -44,10 +45,13 @@ MS2_TABLES = (
     "annotation_libraries",
     "ms2_annotations",
     "feature_annotation_outcome",
+    "precursor_annotations",
 )
 
 #: The stages, in order (also the pipeline's step names).
-MS2_STAGES = ("group_ms2", "precursor_purity", "annotate_ms2", "ms2_consensus")
+MS2_STAGES = (
+    "group_ms2", "precursor_purity", "annotate_ms2", "annotate_precursor", "ms2_consensus",
+)
 
 #: Config groups a re-annotation can change.
 MS2_GROUPS = ("ms2_cleaning", "group_ms2", "purity", "annotate", "consensus")
@@ -107,7 +111,7 @@ def run_ms2_stages(
     skip_done: bool = False,
     on_step: Callable[[str, str], None] = lambda step, status: None,
 ) -> None:
-    """Run the four MS2 stages in order, each logged as a `commands` row.
+    """Run the MS2 stages in order, each logged as a `commands` row.
 
     Args:
         skip_done: Skip a stage whose command already ran for `run_id` —
@@ -176,7 +180,7 @@ def run_ms2_stages(
         logger.info("Precursor purity disabled; skipping")
         on_step("precursor_purity", "skipped")
 
-    if annotate.library_path:
+    if annotate.library_path and getattr(annotate, "ms2_enabled", True):
         on_step("annotate_ms2", "started")
         if should_run("annotate_ms2"):
             command_id = analysis_db.log_command(
@@ -192,8 +196,20 @@ def run_ms2_stages(
             )
         on_step("annotate_ms2", "completed")
     else:
-        logger.info("No annotation library configured; skipping MS2 annotation")
+        logger.info("No annotation library, or MS2 matching off; skipping MS2 annotation")
         on_step("annotate_ms2", "skipped")
+
+    if annotate.library_path and getattr(annotate, "precursor_enabled", False):
+        on_step("annotate_precursor", "started")
+        if should_run("annotate_precursor"):
+            command_id = analysis_db.log_command(
+                adb_path, command_name="annotate_precursor",
+                arguments={**vars(annotate)}, run_id=run_id,
+            )
+            run_precursor_annotation(adb_path, annotate, command_id=command_id)
+        on_step("annotate_precursor", "completed")
+    else:
+        on_step("annotate_precursor", "skipped")
 
     if getattr(consensus, "enabled", True):
         on_step("ms2_consensus", "started")

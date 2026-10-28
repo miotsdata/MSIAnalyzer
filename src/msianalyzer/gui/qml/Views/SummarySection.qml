@@ -47,7 +47,8 @@ Item {
         { key: "n_features", label: "Features" },
         { key: "n_ms2_associated_features", label: "Features with MS2" },
         { key: "n_annotated_features", label: "Annotated features" },
-        { key: "n_distinct_compounds", label: "Distinct compounds" }
+        { key: "n_distinct_compounds", label: "Distinct compounds" },
+        { key: "n_precursor_matched_features", label: "Precursor-matched features" }
     ]
 
     // Where MS2 library annotation lost each feature (ADR 0062), in
@@ -67,6 +68,8 @@ Item {
                 && !stats.annotation_ran) {
             return "—"
         }
+        if (key === "n_precursor_matched_features" && !stats.precursor_ran)
+            return "—"
         var v = stats[key]
         return (v === undefined || v === null) ? "—" : String(v)
     }

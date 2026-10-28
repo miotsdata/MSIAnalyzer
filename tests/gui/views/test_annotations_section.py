@@ -684,3 +684,38 @@ def test_non_annotated_rows_say_why_ms2_annotation_found_nothing(
     stats = section.property("statsRows").toVariant()
     assert stats[stats.index("Library candidates:") + 1] == "4 within the m/z window"
     assert stats[stats.index("Scans scored:") + 1].startswith("2 of 3")
+
+
+def test_precursor_candidates_are_a_second_list_of_hits(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # ADR 0065: a feature with MS2 hits and precursor candidates gets an
+    # MS2 / Precursor switch; precursor rows carry their ppm error.
+    with sqlite3.connect(annotated_analysis_model.analysisDbPath) as con:
+        con.executemany(
+            "INSERT INTO precursor_annotations (feature_id, compound_name, compound_formula, "
+            "adduct, ref_mz, ref_source, ppm_error, rank) VALUES (7, ?, 'C8H10N4O2', "
+            "'[M+H]+', 123.4567, 'formula', ?, ?)",
+            [("Caffeine", 0.4, 1), ("Isomer", 0.4, 2)],
+        )
+        con.commit()
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _select_feature_7(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "annotationsSection")
+
+    def plain(name):
+        v = section.property(name)
+        return v.toVariant() if hasattr(v, "toVariant") else v
+
+    assert find_visual_child(root, "hitKindBar").property("visible") is True
+    assert section.property("shownKind") == "ms2"
+    assert {h["kind"] for h in plain("shownHits")} == {"ms2"}
+
+    section.setProperty("hitKind", "precursor")
+    qtbot.waitUntil(lambda: section.property("shownKind") == "precursor", timeout=2000)
+    hits = plain("shownHits")
+    assert [h["compound_name"] for h in hits] == ["Caffeine", "Isomer"]
+    assert plain("selectedHit")["id"] == hits[0]["id"]
+    stats = plain("statsRows")
+    assert stats[stats.index("Mass error:") + 1] == "0.40 ppm"

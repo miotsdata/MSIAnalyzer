@@ -975,6 +975,11 @@ class AnnotateConfig:
             other setting in this section is then unused, and
             `consensus` (Stage A″) still runs but has no library score to
             fold in.
+        ms2_enabled: Match MS2 spectra against the libraries (everything
+            in "MS2 spectral matching"). Default `True`.
+
+            **Interaction:** Turn it off and `precursor_enabled` on to
+            annotate by precursor m/z only.
         noise_threshold: Before scoring, both the empirical scan and each
             library candidate are scaled so their tallest peak is `1.0`,
             then any peak below this fraction of that is dropped as
@@ -1164,23 +1169,50 @@ class AnnotateConfig:
 
             **Interaction:** Lower this on a shared machine, or if
             you're running low on memory.
+        precursor_enabled: Also annotate every feature (with or without
+            MS2) by its m/z alone: every library spectrum whose precursor
+            is within `precursor_ppm` is a candidate, one per compound and
+            adduct, ranked by absolute ppm error. Default `False`.
+
+            The reference m/z is the library's stored precursor m/z when it
+            has at least 4 decimals, else the m/z computed from the
+            compound formula and the spectrum's adduct.
+
+            **Interaction:** Isomers have the same formula and so the same
+            ppm: a mass alone can't tell them apart. A feature with no
+            target-list or MS2 match is named by its best precursor hit, as
+            `formula + adduct (n candidates)`.
+        precursor_ppm: Tolerance, in ppm, between a feature's m/z and a
+            candidate's reference m/z.
+
+            Range: **0** and up. Default **5.0**. Lower: fewer, closer
+            candidates; real ones can be missed when the m/z calibration
+            drifts. Higher: more candidates, more of them wrong.
+
+            **Interaction:** Independent of `candidate_ppm` (the MS2
+            candidate window).
     """
 
-    library_path: str | list[str] | None = None
-    noise_threshold: float = 0.01
-    candidate_ppm: float = 10.0
-    fragment_ppm: float = 10.0
-    mz_power: float = 2.0
-    int_power: float = 0.5
-    score_weight_dot: float = 1.0
-    score_weight_lib_coverage: float = 0.5
-    score_weight_emp_coverage: float = 0.5
-    min_matched_peaks: int = 1
-    representative_score_tolerance: float = 0.05
-    min_purity_score: float | None = None
-    store_raw_spectra: bool = True
-    batch_size: int = 200
-    n_workers: int | None = None
+    library_path: str | list[str] | None = field(default=None, metadata={"section": "Libraries"})
+    ms2_enabled: bool = field(default=True, metadata={"section": "MS2 spectral matching"})
+    noise_threshold: float = field(default=0.01, metadata={"enabled_when": "ms2_enabled"})
+    candidate_ppm: float = field(default=10.0, metadata={"enabled_when": "ms2_enabled"})
+    fragment_ppm: float = field(default=10.0, metadata={"enabled_when": "ms2_enabled"})
+    mz_power: float = field(default=2.0, metadata={"enabled_when": "ms2_enabled"})
+    int_power: float = field(default=0.5, metadata={"enabled_when": "ms2_enabled"})
+    score_weight_dot: float = field(default=1.0, metadata={"enabled_when": "ms2_enabled"})
+    score_weight_lib_coverage: float = field(default=0.5, metadata={"enabled_when": "ms2_enabled"})
+    score_weight_emp_coverage: float = field(default=0.5, metadata={"enabled_when": "ms2_enabled"})
+    min_matched_peaks: int = field(default=1, metadata={"enabled_when": "ms2_enabled"})
+    representative_score_tolerance: float = field(default=0.05, metadata={"enabled_when": "ms2_enabled"})
+    min_purity_score: float | None = field(default=None, metadata={"enabled_when": "ms2_enabled"})
+    store_raw_spectra: bool = field(default=True, metadata={"enabled_when": "ms2_enabled"})
+    batch_size: int = field(default=200, metadata={"enabled_when": "ms2_enabled"})
+    n_workers: int | None = field(default=None, metadata={"enabled_when": "ms2_enabled"})
+    precursor_enabled: bool = field(
+        default=False, metadata={"section": "Precursor m/z matching"}
+    )
+    precursor_ppm: float = field(default=5.0, metadata={"enabled_when": "precursor_enabled"})
 
 
 @dataclass

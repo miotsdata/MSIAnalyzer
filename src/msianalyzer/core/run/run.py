@@ -77,6 +77,7 @@ RUN_STEPS: tuple[str, ...] = (
     "group_ms2",
     "precursor_purity",
     "annotate_ms2",
+    "annotate_precursor",
     "ms2_consensus",
     "normalize_tic",
     "spatial_correlation",

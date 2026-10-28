@@ -78,6 +78,17 @@ adata.layers["localMoranI"]  # per-pixel, per-feature local Moran's I, only when
 adata.var_names            # feature m/z
 adata.obs                  # pixel x / y coordinates, obs["tic"] is the per-pixel TIC used for normalization
 adata.uns["moranI"]        # per-feature global Moran's I (+ p-values), only when spatial_correlation.enabled: true
+adata.uns["precursor_candidates"]  # every precursor-m/z candidate, only when annotate.precursor_enabled: true
+```
+
+`.uns["precursor_candidates"]` is one table, one row per candidate:
+`feature` (the `.var_names` entry), `rank` (1 = smallest |ppm|), `name`,
+`formula`, `adduct`, `mz_ref`, `ppm`, `library`. All candidates of one
+feature:
+
+```python
+c = adata.uns["precursor_candidates"]
+c[c["feature"] == adata.var_names[0]]
 ```
 
 `layers["localMoranI"]` is the *full* per-pixel local Moran's I, same

@@ -120,6 +120,22 @@ Item {
     property int topN: 5
     property var topHits: []
     property var selectedHit: null
+    // MS2 library hits or precursor-m/z candidates (ADR 0065): one list at
+    // a time; the switch shows when the feature has both.
+    property string hitKind: "ms2"
+    readonly property bool hasPrecursorHits: topHits.some(function (h) { return h.kind === "precursor" })
+    readonly property bool hasOtherHits: topHits.some(function (h) { return h.kind !== "precursor" })
+    readonly property string shownKind: hasPrecursorHits && (!hasOtherHits || hitKind === "precursor")
+                                        ? "precursor" : "ms2"
+    function hitsOfKind(kind) {
+        return topHits.filter(function (h) { return (h.kind === "precursor") === (kind === "precursor") })
+    }
+    readonly property var shownHits: hitsOfKind(shownKind)
+    // Not `shownHits[0]`: that binding may not be updated yet here.
+    onShownKindChanged: {
+        var hits = hitsOfKind(shownKind)
+        selectedHit = hits.length > 0 ? hits[0] : null
+    }
     // Always the stored *filtered* spectra, rendered as a plain PNG. Raw
     // sources and the interactive mirror plot only exist in the "Details"
     // popup (mirrorPlotDetailWindow below); see
@@ -133,8 +149,8 @@ Item {
                                                 annotationsSection.selectedFeatureId,
                                                 annotationsSection.topN)
             : []
-        annotationsSection.selectedHit = annotationsSection.topHits.length > 0
-                                          ? annotationsSection.topHits[0] : null
+        var hits = annotationsSection.hitsOfKind(annotationsSection.shownKind)
+        annotationsSection.selectedHit = hits.length > 0 ? hits[0] : null
     }
 
     function refreshBasicPlot() {
@@ -167,6 +183,7 @@ Item {
         "mzQuery": annotationsSection.mzQuery,
         "topN": annotationsSection.topN,
         "showUnannotated": annotationsSection.showUnannotated,
+        "hitKind": annotationsSection.hitKind,
     })
     function restoreState(s) {
         if (!s) return
@@ -176,6 +193,7 @@ Item {
         annotationsSection.mzQuery = s.mzQuery
         annotationsSection.topN = s.topN
         annotationsSection.showUnannotated = s.showUnannotated
+        annotationsSection.hitKind = s.hitKind || "ms2"
         annotationsSection.selectedFeatureId = s.selectedFeatureId
         var hit = annotationsSection.topHits.find(function (h) { return h.id === s.selectedHitId })
         if (hit) annotationsSection.selectedHit = hit
@@ -255,7 +273,19 @@ Item {
         }
         if (!h)
             return []
-        var pairs = h.kind === "predicted"
+        var pairs = h.kind === "precursor"
+            ? [
+                ["Compound", (h.compound_name || h.inchikey || "?")
+                             + (h.compound_formula ? " (" + h.compound_formula + ")" : "")],
+                ["Adduct", h.adduct || "?"],
+                ["Mass error", Number(h.ppm_error).toFixed(2) + " ppm"],
+                ["Reference m/z", Number(h.ref_mz).toFixed(4)
+                                  + (h.ref_source === "formula" ? "  (from formula + adduct)"
+                                                                : "  (library precursor)")],
+                ["Library", h.library_name || "?"],
+                ["Candidates", h.n_feature_candidates + " within the precursor m/z window"],
+              ]
+            : h.kind === "predicted"
             ? [
                 ["Formula", h.formula || "?"],
                 ["Adduct", h.adduct || "?"],
@@ -625,6 +655,23 @@ Item {
                             font.bold: true
                             Layout.fillWidth: true
                         }
+                        TabBar {
+                            objectName: "hitKindBar"
+                            visible: annotationsSection.hasPrecursorHits && annotationsSection.hasOtherHits
+                            currentIndex: annotationsSection.shownKind === "precursor" ? 1 : 0
+                            TabButton {
+                                objectName: "hitKindMs2"
+                                text: "MS2"
+                                width: implicitWidth
+                                onClicked: annotationsSection.hitKind = "ms2"
+                            }
+                            TabButton {
+                                objectName: "hitKindPrecursor"
+                                text: "Precursor"
+                                width: implicitWidth
+                                onClicked: annotationsSection.hitKind = "precursor"
+                            }
+                        }
                         SpinBox {
                             id: topNSpin
                             objectName: "topNSpinBox"
@@ -645,7 +692,7 @@ Item {
 
                     Label {
                         objectName: "topHitsEmptyLabel"
-                        visible: annotationsSection.topHits.length === 0
+                        visible: annotationsSection.shownHits.length === 0
                         text: "No annotation hits for this feature."
                         color: Theme.mutedTextColor
                         wrapMode: Text.Wrap
@@ -656,16 +703,16 @@ Item {
                     Flickable {
                         id: topHitsFlickable
                         objectName: "topHitsFlickable"
-                        visible: annotationsSection.topHits.length > 0
+                        visible: annotationsSection.shownHits.length > 0
                         anchors.fill: parent
                         clip: true
                         contentWidth: width
                         // Computed directly, not topHitsColumn.implicitHeight
                         // — see tableFlickable's own contentHeight comment
                         // above for why (the same binding-cycle freeze).
-                        contentHeight: annotationsSection.topHits.length > 0
-                            ? annotationsSection.topHits.length * 30
-                              + (annotationsSection.topHits.length - 1) * topHitsColumn.spacing
+                        contentHeight: annotationsSection.shownHits.length > 0
+                            ? annotationsSection.shownHits.length * 30
+                              + (annotationsSection.shownHits.length - 1) * topHitsColumn.spacing
                             : 0
                         boundsBehavior: Flickable.StopAtBounds
 
@@ -679,7 +726,7 @@ Item {
                             Repeater {
                                 id: topHitsRepeater
                                 objectName: "topHitsRepeater"
-                                model: annotationsSection.topHits
+                                model: annotationsSection.shownHits
 
                                 delegate: Rectangle {
                                     objectName: "topHit_" + modelData.id
@@ -706,7 +753,13 @@ Item {
                                         color: annotationsSection.selectedHit
                                                && annotationsSection.selectedHit.id === modelData.id
                                                ? palette.highlightedText : palette.text
-                                        text: modelData.kind === "predicted"
+                                        text: modelData.kind === "precursor"
+                                              ? (index + 1) + ". " + (modelData.compound_name || "?")
+                                                + (modelData.compound_formula ? "  ·  " + modelData.compound_formula : "")
+                                                + "  ·  " + (modelData.adduct || "?")
+                                                + "  ·  <b>" + Number(modelData.ppm_error).toFixed(2) + " ppm</b>"
+                                                + (modelData.library_name ? "  ·  " + modelData.library_name : "")
+                                              : modelData.kind === "predicted"
                                               ? (index + 1) + ". <b>" + modelData.formula + "</b>"
                                                 + "  ·  " + modelData.adduct
                                                 + "  ·  " + Number(modelData.mass_error_ppm).toFixed(2) + " ppm"
@@ -849,12 +902,14 @@ Item {
                     Label {
                         objectName: "basicPlotEmptyLabel"
                         visible: (!annotationsSection.selectedHit
-                                  || annotationsSection.selectedHit.kind === "predicted")
+                                  || annotationsSection.selectedHit.kind !== "ms2")
                                  && !annotationsSection.showsBestScan
                         text: annotationsSection.selectedRow && annotationsSection.selectedRow.ms2_scan_id == null
                               ? "No MS2 spectrum for this feature."
                               : !annotationsSection.selectedHit
                               ? "No hit selected."
+                              : annotationsSection.selectedHit.kind === "precursor"
+                              ? "No MS2 spectrum — precursor m/z match only."
                               : "No MS2 spectrum — predicted formula only (ADR 27)."
                         color: Theme.mutedTextColor
                         anchors.centerIn: parent

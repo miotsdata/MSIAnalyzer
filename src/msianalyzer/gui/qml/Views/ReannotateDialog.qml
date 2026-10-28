@@ -94,10 +94,16 @@ Dialog {
         var a = s.annotate || {}, g = s.group_ms2 || {}
         var libs = a.library_path ? [].concat(a.library_path) : []
         var names = libs.map(function (p) { return String(p).split(/[\\/]/).pop() })
+        var c = s.ms2_cleaning || {}
+        var cleaning = [c.background_enabled ? "background ≥ " + c.background_min_percent + " %" : "",
+                        c.above_precursor_enabled ? "above precursor" : ""].filter(Boolean)
         return (names.length ? names.join(", ") : "no library")
-               + "  ·  candidate " + a.candidate_ppm + " ppm"
-               + "  ·  min shared fragments " + a.min_matched_peaks
-               + "  ·  flat CV ≤ " + g.flat_fragmentation_cv_threshold
+               + (a.ms2_enabled === false ? "  ·  MS2 off"
+                  : "  ·  candidate " + a.candidate_ppm + " ppm"
+                    + "  ·  min shared fragments " + a.min_matched_peaks
+                    + "  ·  flat CV ≤ " + g.flat_fragmentation_cv_threshold)
+               + (a.precursor_enabled ? "  ·  precursor " + a.precursor_ppm + " ppm" : "")
+               + (cleaning.length ? "  ·  cleaning: " + cleaning.join(", ") : "")
     }
 
     Connections {
@@ -132,7 +138,7 @@ Dialog {
         spacing: 8
 
         Label {
-            text: "Re-runs MS2 cleaning, grouping, precursor purity, library annotation and consensus "
+            text: "Re-runs MS2 cleaning, grouping, precursor purity, library annotation (MS2 and precursor m/z) and consensus "
                   + "with the settings below. Features, images and normalization stay as they are. "
                   + "The current annotation is kept in History and can be restored."
             color: Theme.mutedTextColor
@@ -286,7 +292,7 @@ Dialog {
             visible: reannotateDialog.running
             Layout.fillWidth: true
             from: 0
-            to: 4
+            to: 5
             value: reannotateDialog.progressDone
         }
         Label {

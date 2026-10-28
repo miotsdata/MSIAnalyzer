@@ -88,6 +88,8 @@ _EMPTY_SUMMARY = {
     "n_outcome_no_candidates": 0,
     "n_outcome_all_scans_skipped": 0,
     "ms2_background": [],
+    "precursor_ran": False,
+    "n_precursor_matched_features": 0,
 }
 
 _EMPTY_ANNOTATION_METADATA = {
@@ -1373,7 +1375,10 @@ class AnalysisBridge(QObject):
         Returns:
             Records from `analysis_db.load_ms2_annotations_for_feature`
             (`kind: "ms2"`, kept to the top-scoring row per `inchikey`,
-            capped at `top_n`), followed by records from
+            capped at `top_n`), then its precursor-m/z candidates
+            (`kind: "precursor"`, ADR 0065, best `top_n` by |ppm|, `id`
+            prefixed `"p"`, `n_feature_candidates` all of them), then
+            records from
             `analysis_db.load_top_predicted_formulas_for_feature`
             (`kind: "predicted"`, `id` negated so it can never collide
             with a real `ms2_annotations.id` — this project has no
@@ -1391,6 +1396,17 @@ class AnalysisBridge(QObject):
             best_per_compound = best_per_compound.head(max(top_n, 0)).copy()
             best_per_compound["kind"] = "ms2"
             hits.extend(_dataframe_to_records(best_per_compound))
+
+        precursor_df = analysis_db.load_precursor_annotations_for_feature(
+            analysis_db_path, feature_id
+        )
+        if not precursor_df.empty:
+            n_candidates = len(precursor_df)
+            precursor_df = precursor_df.head(max(top_n, 0)).copy()
+            precursor_df["n_feature_candidates"] = n_candidates
+            precursor_df["id"] = "p" + precursor_df["id"].astype(str)
+            precursor_df["kind"] = "precursor"
+            hits.extend(_dataframe_to_records(precursor_df))
 
         predicted_df = analysis_db.load_top_predicted_formulas_for_feature(
             analysis_db_path, feature_id, top_n

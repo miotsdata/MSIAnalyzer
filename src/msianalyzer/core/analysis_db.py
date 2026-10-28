@@ -559,6 +559,38 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         )
     """)
 
+    # --- annotation by precursor m/z alone (ADR 0065) -----------------------
+    # Written by core.annotation.precursor_annotation: every library
+    # candidate within `annotate.precursor_ppm` of each feature, one per
+    # (library, compound, adduct), `rank` 1 = smallest |ppm_error|.
+    # `ref_source` says whether `ref_mz` is the library's stored precursor
+    # ("library") or formula + adduct ("formula").
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS precursor_annotations (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            feature_id           INTEGER NOT NULL,
+            library_id           INTEGER,
+            library_spectrum_id  INTEGER,
+            compound_id          INTEGER,
+            compound_name        TEXT,
+            compound_formula     TEXT,
+            inchikey             TEXT,
+            adduct               TEXT,
+            ref_mz               REAL    NOT NULL,
+            ref_source           TEXT    NOT NULL,
+            ppm_error            REAL    NOT NULL,
+            rank                 INTEGER NOT NULL,
+            command_id           INTEGER,
+            FOREIGN KEY (feature_id) REFERENCES features(feature_id),
+            FOREIGN KEY (library_id) REFERENCES annotation_libraries(id),
+            FOREIGN KEY (command_id) REFERENCES commands(id)
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_precursor_annotations_feature "
+        "ON precursor_annotations(feature_id, rank)"
+    )
+
     # --- every MS2 annotation state of the analysis (ADR 0063) ------------
     # Written by core.annotation.reannotation: the pipeline's own state
     # (recorded at the first re-annotation), each re-annotation and each
@@ -1625,12 +1657,14 @@ def load_feature_representative_annotations(
     and/or a predicted formula — the representative compound it's labelled
     by everywhere in the GUI/report.
 
-    Three-tier precedence: a target-list match (see
+    Tier precedence: a target-list match (see
     ``core.annotation.target_list``) wins unconditionally; else the MS2
     ``rank_feature = 1`` pick (stamped at annotate time by
     ``annotate.assign_feature_ranks`` — see
     ``AnnotateConfig.representative_score_tolerance``) wins; else, only if
-    neither of those exists, the feature's best predicted formula (see
+    neither of those exists, its best precursor-m/z candidate (ADR 0065,
+    named ``"<formula> + <adduct> (<n> candidates)"``); else the feature's
+    best predicted formula (see
     ``core.annotation.formula_prediction`` — closest ``mass_error_ppm``
     across every adduct searched) is shown as ``"<formula> + <adduct>"``,
     e.g. ``"C6H12O6 + [M+H]+"``, with `compound_formula` set to the bare
@@ -1640,7 +1674,7 @@ def load_feature_representative_annotations(
     touches the underlying `ms2_annotations`/`target_list_matches`/
     `predicted_formulas` rows themselves, only which identity gets
     *displayed*. ``source`` says which tier supplied the name
-    (``"target_list"``/``"ms2"``/``"predicted"``). Unlike
+    (``"target_list"``/``"ms2"``/``"precursor"``/``"predicted"``). Unlike
     :func:`load_feature_compound_scores` (every distinct compound that
     scored anything), this is exactly one row per feature — the GUI
     Annotations table's backing reader. Empty when none of the three ever
@@ -1662,7 +1696,12 @@ def load_feature_representative_annotations(
         for a target-list-, predicted-, or unidentified row),
         ``n_matched_peaks``, ``n_lib_peaks``, ``best_sample_id``,
         ``best_scan_id``, ``best_library_id``, ``ms2_annotation_outcome``,
+        ``precursor_name``, ``precursor_ppm``, ``n_precursor_candidates``,
         ordered by ``feature_id``.
+        The last three are the precursor-m/z tier (ADR 0065) whichever
+        tier names the feature: its best candidate as
+        ``"<formula> + <adduct> (<n> candidates)"``, that candidate's
+        signed ppm error, and how many candidates it has (``0``: none).
         ``ms2_annotation_outcome`` is the feature's
         ``feature_annotation_outcome.outcome`` (ADR 0062), ``"no_ms2"`` for
         a feature without one, and ``None`` everywhere when annotation
@@ -1688,8 +1727,43 @@ def load_feature_representative_annotations(
         )
         if has_outcomes else ("NULL", "")
     )
+    with connect(db_path) as con:
+        has_precursor = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'precursor_annotations'"
+        ).fetchone() is not None
+    # A precursor-only hit (ADR 0065) is named by formula + adduct with how
+    # many candidates share them (isomers tie on m/z).
+    precursor_cte = (
+        """
+        precursor_rep AS (
+            SELECT p.feature_id, p.compound_formula, p.adduct, p.ppm_error,
+                   COALESCE(p.compound_formula, p.compound_name)
+                     || COALESCE(' + ' || p.adduct, '') || ' (' || p.n_same
+                     || CASE p.n_same WHEN 1 THEN ' candidate)' ELSE ' candidates)' END
+                     AS name,
+                   (SELECT COUNT(*) FROM precursor_annotations q
+                    WHERE q.feature_id = p.feature_id) AS n_candidates
+            FROM (
+                SELECT r.*,
+                       (SELECT COUNT(*) FROM precursor_annotations q
+                        WHERE q.feature_id = r.feature_id
+                          AND q.compound_formula IS r.compound_formula
+                          AND q.adduct IS r.adduct) AS n_same
+                FROM precursor_annotations r
+                WHERE r.rank = 1
+            ) p
+        ),"""
+        if has_precursor else
+        """
+        precursor_rep AS (
+            SELECT NULL AS feature_id, NULL AS compound_formula, NULL AS adduct,
+                   NULL AS ppm_error, NULL AS name, NULL AS n_candidates
+            WHERE 0
+        ),"""
+    )
     sql = f"""
         WITH {_TARGET_REP_CTE},
+        {precursor_cte}
         ms2_rep AS (
             SELECT a.feature_id, a.compound_name, a.compound_formula,
                    a.inchikey, a.adduct, a.cas, a.hmdb,
@@ -1705,30 +1779,37 @@ def load_feature_representative_annotations(
         SELECT
             f.feature_id, f.mz AS mz,
             COALESCE(
-                tr.compound_name, m.compound_name,
+                tr.compound_name, m.compound_name, pc.name,
                 pr.formula || ' + ' || pr.adduct
             ) AS compound_name,
-            COALESCE(tr.compound_formula, m.compound_formula, pr.formula) AS compound_formula,
+            COALESCE(
+                tr.compound_formula, m.compound_formula, pc.compound_formula, pr.formula
+            ) AS compound_formula,
             COALESCE(tr.inchikey, m.inchikey) AS inchikey,
-            COALESCE(tr.adduct, m.adduct, pr.adduct) AS adduct,
+            COALESCE(tr.adduct, m.adduct, pc.adduct, pr.adduct) AS adduct,
             m.cas, m.hmdb, m.library_name,
             CASE
                 WHEN tr.feature_id IS NOT NULL THEN 'target_list'
                 WHEN m.feature_id IS NOT NULL THEN 'ms2'
+                WHEN pc.feature_id IS NOT NULL THEN 'precursor'
                 WHEN pr.feature_id IS NOT NULL THEN 'predicted'
                 ELSE NULL
             END AS source,
             m.best_score, m.n_matched_peaks, m.n_lib_peaks,
             m.best_sample_id, m.best_scan_id, m.best_library_id,
-            {outcome_col} AS ms2_annotation_outcome
+            {outcome_col} AS ms2_annotation_outcome,
+            pc.name AS precursor_name, pc.ppm_error AS precursor_ppm,
+            COALESCE(pc.n_candidates, 0) AS n_precursor_candidates
         FROM features f
         LEFT JOIN target_rep tr ON tr.feature_id = f.feature_id
         LEFT JOIN ms2_rep m ON m.feature_id = f.feature_id
         LEFT JOIN predicted_rep pr ON pr.feature_id = f.feature_id
+        LEFT JOIN precursor_rep pc ON pc.feature_id = f.feature_id
         {outcome_join}
         {"" if include_unidentified else '''
         WHERE tr.feature_id IS NOT NULL
            OR m.feature_id IS NOT NULL
+           OR pc.feature_id IS NOT NULL
            OR pr.feature_id IS NOT NULL
         '''}
         ORDER BY f.feature_id
@@ -1771,6 +1852,25 @@ def load_ms2_annotations_for_feature(
         LEFT JOIN annotation_libraries lib ON lib.id = a.library_id
         WHERE a.feature_id = ?
         ORDER BY a.rank_feature, a.score DESC
+    """
+    with connect(db_path) as con:
+        try:
+            return pd.read_sql_query(sql, con, params=(int(feature_id),))
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def load_precursor_annotations_for_feature(db_path: Path | str, feature_id: int) -> pd.DataFrame:
+    """One feature's precursor-m/z candidates (ADR 0065), best first, with
+    the library name joined in. Empty without any (or before ADR 0065)."""
+    sql = """
+        SELECT p.id, p.compound_name, p.compound_formula, p.inchikey, p.adduct,
+               p.ref_mz, p.ref_source, p.ppm_error, p.rank, lib.name AS library_name
+        FROM precursor_annotations p
+        LEFT JOIN annotation_libraries lib ON lib.id = p.library_id
+        WHERE p.feature_id = ?
+        ORDER BY p.rank
     """
     with connect(db_path) as con:
         try:
@@ -1855,7 +1955,9 @@ def load_summary_counts(db_path: Path | str) -> dict:
         "annotation_ran", "n_annotated_features", "n_distinct_compounds",
         "outcomes_recorded", "n_outcome_<outcome>"}`` — one count per
         ADR 0062 outcome plus ``no_ms2``, and ``"ms2_background"``: the
-        ``ms2_background_fragments`` rows (ADR 0064), most shared first.
+        ``ms2_background_fragments`` rows (ADR 0064), most shared first;
+        ``"precursor_ran"``/``"n_precursor_matched_features"`` for the
+        precursor-m/z annotation (ADR 0065).
         ``n_annotated_features``/``n_distinct_compounds`` are ``0`` (not
         ``None``) when ``annotation_ran`` is ``False`` — the caller decides
         how to show "no library configured" vs. "library ran, 0 hits".
@@ -1880,6 +1982,13 @@ def load_summary_counts(db_path: Path | str) -> dict:
             ).fetchall())
         except sqlite3.OperationalError:
             pass
+        # annotation by precursor m/z (ADR 0065)
+        n_precursor_matched = _scalar_count(
+            con, "SELECT COUNT(DISTINCT feature_id) FROM precursor_annotations"
+        )
+        precursor_ran = _scalar_count(
+            con, "SELECT COUNT(*) FROM commands WHERE command_name = 'annotate_precursor'"
+        ) > 0
         try:  # MS2 cleaning (ADR 0064): the fragments shared by many precursors
             background = [
                 {"polarity": p, "mz": mz, "n_precursors": n, "percent": 100 * f,
@@ -1906,6 +2015,8 @@ def load_summary_counts(db_path: Path | str) -> dict:
         "n_outcome_no_ms2": n_features - sum(outcomes.values()) if recorded else 0,
         **{f"n_outcome_{o}": n for o, n in outcomes.items()},
         "ms2_background": background,
+        "precursor_ran": precursor_ran,
+        "n_precursor_matched_features": n_precursor_matched,
     }
 
 

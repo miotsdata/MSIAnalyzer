@@ -252,11 +252,13 @@ Page {
     // `enabledWhenField`/`enabledWhenEquals` (see config_schema.py's
     // `build_config_schema` docstring) — e.g. peak.filter_mad_log is only
     // enabled while peak.filter_mad is checked.
-    function isFieldEnabled(groupKey, field) {
+    // `scope` is the field's own tab: searching (and so depending on) the
+    // whole page re-ran every rule each time any control was created.
+    function isFieldEnabled(groupKey, field, scope) {
         if (!field.enabledWhenField)
             return true
         var control = findByObjectName(
-            newAnalysisPage, "field_" + groupKey + "_" + field.enabledWhenField)
+            scope || newAnalysisPage, "field_" + groupKey + "_" + field.enabledWhenField)
         if (!control)
             return true
         return control.checked === field.enabledWhenEquals
@@ -1163,7 +1165,7 @@ Page {
                                     // (true for every current use: the schema
                                     // only sets `enabledWhenField` pointing at
                                     // an earlier sibling — see config_schema.py).
-                                    enabled: newAnalysisPage.isFieldEnabled(groupTab.groupKey, modelData)
+                                    enabled: newAnalysisPage.isFieldEnabled(groupTab.groupKey, modelData, groupTab)
 
                                     Label {
                                         text: modelData.label

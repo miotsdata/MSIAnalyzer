@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import csv
 import logging
+import sqlite3
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from .analysis_db import (
+    connect,
     load_calibration_curve,
     load_calibration_points,
     load_calibration_unknowns,
@@ -64,12 +66,18 @@ _ANNOTATION_EXPORT_COLUMNS = [
     "source",
     "score",
     "ms2_annotation_outcome",
+    "precursor_name",
+    "precursor_ppm",
+    "n_precursor_candidates",
 ]
 
 #: Export column -> DataFrame column, where the two names differ.
 _ANNOTATION_EXPORT_SOURCE_COLUMNS = {"score": "best_score"}
 
-_NUMERIC_ANNOTATION_EXPORT_COLUMNS = {"feature_id", "mz"}
+_NUMERIC_ANNOTATION_EXPORT_COLUMNS = {"feature_id", "mz", "n_precursor_candidates"}
+
+#: Numeric but only set for some rows: a missing value is an empty cell.
+_OPTIONAL_NUMERIC_ANNOTATION_EXPORT_COLUMNS = {"score", "precursor_ppm"}
 
 
 def _csv_dialect_for(dest_path: Path) -> str:
@@ -134,20 +142,55 @@ def annotation_var_table(db_path: str | Path, var: pd.DataFrame) -> pd.DataFrame
         k: {c: _export_annotation_cell(c, r) for c in VAR_ANNOTATION_COLUMNS}
         for k, r in zip(_column_keys(df["mz"]), df.to_dict("records"))
     }
-    blank = {c: "" for c in VAR_ANNOTATION_COLUMNS} | {"feature_id": -1, "score": None}
+    blank = {c: "" for c in VAR_ANNOTATION_COLUMNS} | {
+        "feature_id": -1, "score": None, "precursor_ppm": None, "n_precursor_candidates": 0,
+    }
     out = pd.DataFrame(
         [records.get(k, blank) for k in _column_keys(var["mz"])],
         index=var.index,
         columns=VAR_ANNOTATION_COLUMNS,
     )
     out["feature_id"] = out["feature_id"].astype(np.int64)
+    out["n_precursor_candidates"] = out["n_precursor_candidates"].astype(np.int64)
     out["score"] = out["score"].astype(float)
+    out["precursor_ppm"] = out["precursor_ppm"].astype(float)
     return out
 
 
+#: `.uns` key of every precursor-m/z candidate (ADR 0065), one row each.
+PRECURSOR_UNS_KEY = "precursor_candidates"
+
+
+def precursor_uns_table(db_path: str | Path, var: pd.DataFrame) -> pd.DataFrame:
+    """Every precursor candidate of the features in `var`, with `feature`
+    the feature's `.var_names` entry: ``feature, rank, name, formula,
+    adduct, mz_ref, ppm, library``. Empty when there are none."""
+    from msianalyzer.core.spectra.isotopes import _column_keys
+
+    with connect(db_path) as con:
+        try:
+            df = pd.read_sql_query(
+                "SELECT f.mz, p.rank, p.compound_name AS name, p.compound_formula AS formula, "
+                "p.adduct, p.ref_mz AS mz_ref, p.ppm_error AS ppm, l.name AS library "
+                "FROM precursor_annotations p JOIN features f ON f.feature_id = p.feature_id "
+                "LEFT JOIN annotation_libraries l ON l.id = p.library_id "
+                "ORDER BY p.feature_id, p.rank",
+                con,
+            )
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+    names = dict(zip(_column_keys(var["mz"]), var.index.astype(str)))
+    df.insert(0, "feature", [names.get(k) for k in _column_keys(df["mz"])])
+    df = df[df["feature"].notna()].drop(columns="mz").reset_index(drop=True)
+    for col in ("feature", "name", "formula", "adduct", "library"):
+        df[col] = df[col].fillna("").astype(str)
+    return df
+
+
 def write_annotations_to_var(db_path: str | Path, h5ad_paths) -> None:
-    """Write the Annotation export into each `.h5ad`'s `.var`, in place
-    (only the `var` element is rewritten, ADR 50). Replaces any earlier
+    """Write the Annotation export into each `.h5ad`'s `.var`, and every
+    precursor-m/z candidate into `.uns["precursor_candidates"]` (ADR 0065),
+    in place (only those elements are rewritten, ADR 50). Replaces any earlier
     copy, so it's called again whenever an annotation changes after the
     run. Missing files are skipped."""
     import h5py
@@ -161,6 +204,12 @@ def write_annotations_to_var(db_path: str | Path, h5ad_paths) -> None:
             var = var.join(annotation_var_table(db_path, var))
             del f["var"]
             ad.io.write_elem(f, "var", var)
+            uns = f.require_group("uns")
+            if PRECURSOR_UNS_KEY in uns:
+                del uns[PRECURSOR_UNS_KEY]
+            candidates = precursor_uns_table(db_path, var)
+            if not candidates.empty:
+                ad.io.write_elem(uns, PRECURSOR_UNS_KEY, candidates)
         logger.debug("%s: wrote annotations into .var", path)
 
 
@@ -179,7 +228,7 @@ def _export_annotation_cell(col: str, record: dict):
     as an empty cell rather than `_numeric_or_blank`'s `0` — a `0` would
     read as a real (terrible) score."""
     value = record.get(_ANNOTATION_EXPORT_SOURCE_COLUMNS.get(col, col))
-    if col == "score":
+    if col in _OPTIONAL_NUMERIC_ANNOTATION_EXPORT_COLUMNS:
         if value is None or (isinstance(value, float) and value != value):  # NaN
             return None
         return float(value)

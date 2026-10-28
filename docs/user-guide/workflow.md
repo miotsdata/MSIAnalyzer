@@ -144,7 +144,28 @@ against each candidate with a coverage-aware reverse dot product, and writes
 `annotation_libraries` + `ms2_annotations` (one row per scored candidate,
 ranked). Each row also carries the scan's `precursor_frac`;
 `annotate.min_precursor_frac` skips known-low-purity scans. Full detail in
-[MS2 annotation](ms2-annotation.md).
+[MS2 annotation](ms2-annotation.md). `annotate.ms2_enabled: false` skips
+this stage while keeping the libraries for the next one.
+
+## Stage 9.5 — Annotate by precursor m/z (opt-in, → analysis DB)
+
+With `annotate.precursor_enabled`, every feature — with or without MS2 — is
+matched by its m/z alone against the precursors of every library spectrum,
+within `annotate.precursor_ppm`. Every candidate is kept in
+`precursor_annotations`, one per compound and adduct, ranked by absolute ppm
+error. The reference m/z is the library's stored precursor m/z when it has at
+least 4 decimals (public libraries often round it), else the m/z computed
+from the compound formula and the spectrum's adduct.
+
+A mass alone can't tell isomers apart: they share a formula and so tie on
+ppm. So a feature with no target-list or MS2 match is named by its best
+precursor hit as `formula + adduct (n candidates)`, e.g.
+`C42H82NO8P + [M+H]+ (12 candidates)`, ahead of a predicted formula. In
+Annotations, a feature with both kinds of hits gets an **MS2 / Precursor**
+switch above its top hits; precursor hits list their ppm error. The export
+and `.var` get `precursor_name`, `precursor_ppm` and
+`n_precursor_candidates`, and every candidate is in
+`.uns["precursor_candidates"]` (see [Outputs](outputs.md)). See ADR 65.
 
 ## Stage 10 — MS2 consensus (→ analysis DB)
 
@@ -252,7 +273,7 @@ HDF5 keeps the freed space.
 Want another library, a different tolerance or a different flat-spectrum
 threshold? **Analyses → Re-annotate…** re-runs only the MS2 part of a
 finished untargeted analysis: MS2 cleaning and grouping, precursor purity,
-library annotation and consensus. The features, images and normalization stay as
+library annotation (MS2 and precursor m/z) and consensus. The features, images and normalization stay as
 they are, so it takes minutes, not a full run.
 
 The dialog has one tab per settings group (the same fields as in New
