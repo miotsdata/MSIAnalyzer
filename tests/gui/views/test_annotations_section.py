@@ -1,3 +1,4 @@
+import re
 import sqlite3
 
 import numpy as np
@@ -373,8 +374,10 @@ def test_stats_panel_shows_match_details(
 
     section = find_visual_child(root, "annotationsSection")
     flat = section.property("statsRows").toVariant()
-    assert "Sample:" in flat
     assert "Matched peaks:" in flat
+    # The scored MS2 scan is named for a library hit too.
+    scan = flat[flat.index("Scan:") + 1]
+    assert re.fullmatch(r"\d+ in .+", scan), scan
 
 
 def test_three_row_split_default_is_30_30_40_percent(

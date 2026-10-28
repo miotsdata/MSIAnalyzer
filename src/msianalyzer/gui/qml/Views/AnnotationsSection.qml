@@ -265,7 +265,7 @@ Item {
                 ["Compound", (h.compound_name || h.inchikey || "?")
                              + (h.compound_formula ? " (" + h.compound_formula + ")" : "")],
                 ["InChIKey", h.inchikey || "?"],
-                ["Sample", h.sample_name || "?"],
+                ["Scan", h.scan_id + " in " + (h.sample_name || "?")],
                 ["Library", h.library_name || "?"],
                 ["Score", Number(h.score).toFixed(3)
                           + "  (dot product " + Number(h.dot_product_score).toFixed(3) + ")"],
