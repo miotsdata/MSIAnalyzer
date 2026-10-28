@@ -90,8 +90,13 @@ class Project:
         """Export to a .yml/.yaml or .toml file, format inferred from suffix."""
         data = self.to_dict()
 
-        with open(path, "w", encoding="utf-8") as f:
+        # Rewrite in place ("r+" then truncate) rather than "w": on SMB
+        # shares dotfiles carry the DOS Hidden attribute, and an O_TRUNC
+        # open of a hidden file is refused with EACCES by the server.
+        mode = "r+" if Path(path).exists() else "w"
+        with open(path, mode, encoding="utf-8") as f:
             yaml.safe_dump(data, f, sort_keys=False)
+            f.truncate()
 
     @classmethod
     @log_call

@@ -83,6 +83,20 @@ def test_project_export_and_load(tmp_path: Path):
     assert loaded_p.runs == p.runs
 
 
+def test_project_export_overwrite_truncates_old_content(tmp_path: Path):
+    """Re-export rewrites in place (SMB hidden-file workaround), so a
+    shorter document must not leave trailing bytes of the old one."""
+    target_file = tmp_path / ".msianalyzer.yml"
+    p = Project("alpha")
+    p.runs = {f"run-{i}": {"id": f"run-{i}", "status": "COMPLETED"} for i in range(5)}
+    p.export(target_file)
+
+    p.runs = {}
+    p.export(target_file)
+
+    assert Project.load_from_yaml(target_file).runs == {}
+
+
 def test_project_load_non_dict_yaml(tmp_path: Path):
     """Verify loading a YAML file that contains a scalar instead of a dict raises ValueError."""
     file_path = tmp_path / "bad.yml"
