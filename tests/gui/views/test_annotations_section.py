@@ -719,3 +719,47 @@ def test_precursor_candidates_are_a_second_list_of_hits(
     assert plain("selectedHit")["id"] == hits[0]["id"]
     stats = plain("statsRows")
     assert stats[stats.index("Mass error:") + 1] == "0.40 ppm"
+
+
+def test_name_search_finds_top_n_candidates(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # Feature 7 is named "Caffeine…"; "Theophylline" is only its third
+    # precursor candidate.
+    with sqlite3.connect(annotated_analysis_model.analysisDbPath) as con:
+        con.executemany(
+            "INSERT INTO precursor_annotations (feature_id, compound_name, compound_formula, "
+            "adduct, ref_mz, ref_source, ppm_error, rank) VALUES (7, ?, 'C8H10N4O2', "
+            "'[M+H]+', 123.4567, 'formula', ?, ?)",
+            [("Caffeine", 0.1, 1), ("Paraxanthine", 0.2, 2), ("Theophylline", 0.3, 3)],
+        )
+        con.commit()
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "annotationsSection")
+    qtbot.waitUntil(lambda: not section.property("rowsLoading"), timeout=3000)
+
+    def shown_ids():
+        v = section.property("filteredRows")
+        return [r["feature_id"] for r in (v.toVariant() if hasattr(v, "toVariant") else v)]
+
+    section.setProperty("nameQuery", "theophyl")
+    assert shown_ids() == [7]
+    label = find_visual_child(root, "annotationRowCompound_7")
+    qtbot.waitUntil(lambda: "matched: Theophylline (precursor #3)" in label.property("text"),
+                    timeout=2000)
+
+    section.setProperty("topN", 2)  # beyond the top hits shown: not searched
+    assert shown_ids() == []
+    section.setProperty("topN", 5)
+    section.setProperty("searchCandidates", False)  # only the shown name
+    assert shown_ids() == []
+    section.setProperty("searchCandidates", True)
+
+    # Selecting it opens the precursor list on that candidate.
+    _click(view, find_visual_child(root, "annotationRow_7"), qtbot)
+    qtbot.waitUntil(lambda: section.property("shownKind") == "precursor", timeout=2000)
+    hit = section.property("selectedHit")
+    hit = hit.toVariant() if hasattr(hit, "toVariant") else hit
+    assert hit["compound_name"] == "Theophylline"

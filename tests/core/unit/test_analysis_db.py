@@ -232,7 +232,8 @@ def test_ensure_column_retrofits_adduct_cas_hmdb_onto_an_old_table(tmp_path: Pat
         con.execute(
             "CREATE TABLE ms2_annotations ("
             "id INTEGER PRIMARY KEY, sample_id INTEGER, scan_id INTEGER, "
-            "feature_id INTEGER, score REAL, inchikey TEXT, rank_feature INTEGER"
+            "feature_id INTEGER, score REAL, inchikey TEXT, rank_feature INTEGER, "
+            "compound_name TEXT"
             ")"
         )
         con.commit()
@@ -282,7 +283,7 @@ def test_ensure_column_retrofits_fragmentation_factor_and_purity_score(tmp_path:
             "CREATE TABLE ms2_annotations ("
             "id INTEGER PRIMARY KEY, sample_id INTEGER, scan_id INTEGER, "
             "feature_id INTEGER, score REAL, inchikey TEXT, rank_feature INTEGER, "
-            "precursor_only INTEGER, precursor_frac REAL"
+            "precursor_only INTEGER, precursor_frac REAL, compound_name TEXT"
             ")"
         )
         con.commit()

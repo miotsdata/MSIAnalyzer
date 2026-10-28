@@ -90,8 +90,30 @@ Item {
     property string nameQuery: ""
     property string mzQuery: ""
 
+    // The name search also looks at each feature's top-N candidates (the
+    // top-hits panel's Top-N), MS2 then precursor, unless unticked.
+    property bool searchCandidates: true
+
+    // The first top-N candidate matching the name search, when the feature's
+    // own name doesn't: {kind, rank, name}, else null.
+    function candidateMatch(r) {
+        var q = annotationsSection.nameQuery
+        if (!r || !annotationsSection.searchCandidates || q.trim() === ""
+                || SearchQuery.matchesName(q, r.compound_name))
+            return null
+        var lists = [["ms2", r.ms2_candidates || []], ["precursor", r.precursor_candidates || []]]
+        for (var k = 0; k < lists.length; k++) {
+            var names = lists[k][1].slice(0, annotationsSection.topN)
+            for (var i = 0; i < names.length; i++)
+                if (SearchQuery.matchesName(q, names[i]))
+                    return { kind: lists[k][0], rank: i + 1, name: names[i] }
+        }
+        return null
+    }
+
     readonly property var filteredRows: annotationsSection.rows.filter(function (r) {
-        return SearchQuery.matchesName(annotationsSection.nameQuery, r.compound_name)
+        return (SearchQuery.matchesName(annotationsSection.nameQuery, r.compound_name)
+                || annotationsSection.candidateMatch(r) !== null)
             && SearchQuery.matchesMz(annotationsSection.mzQuery, r.mz)
     })
 
@@ -149,8 +171,18 @@ Item {
                                                 annotationsSection.selectedFeatureId,
                                                 annotationsSection.topN)
             : []
+        // Shown because of a candidate: open that list on that candidate.
+        // Looked up here: `selectedRow` may not follow selectedFeatureId yet.
+        var fid = annotationsSection.selectedFeatureId
+        var m = annotationsSection.candidateMatch(
+            annotationsSection.rows.find(function (r) { return r.feature_id === fid }))
+        if (m)
+            annotationsSection.hitKind = m.kind
         var hits = annotationsSection.hitsOfKind(annotationsSection.shownKind)
-        annotationsSection.selectedHit = hits.length > 0 ? hits[0] : null
+        var matched = m ? hits.find(function (h) {
+            return (h.compound_name || h.inchikey) === m.name
+        }) : null
+        annotationsSection.selectedHit = matched || (hits.length > 0 ? hits[0] : null)
     }
 
     function refreshBasicPlot() {
@@ -184,6 +216,7 @@ Item {
         "topN": annotationsSection.topN,
         "showUnannotated": annotationsSection.showUnannotated,
         "hitKind": annotationsSection.hitKind,
+        "searchCandidates": annotationsSection.searchCandidates,
     })
     function restoreState(s) {
         if (!s) return
@@ -194,6 +227,7 @@ Item {
         annotationsSection.topN = s.topN
         annotationsSection.showUnannotated = s.showUnannotated
         annotationsSection.hitKind = s.hitKind || "ms2"
+        annotationsSection.searchCandidates = s.searchCandidates !== false
         annotationsSection.selectedFeatureId = s.selectedFeatureId
         var hit = annotationsSection.topHits.find(function (h) { return h.id === s.selectedHitId })
         if (hit) annotationsSection.selectedHit = hit
@@ -397,6 +431,15 @@ Item {
                     text: annotationsSection.nameQuery
                     onTextChanged: annotationsSection.nameQuery = text
                 }
+                AppCheckBox {
+                    objectName: "annotationsSearchCandidates"
+                    text: "Search in candidates"
+                    checked: annotationsSection.searchCandidates
+                    onToggled: annotationsSection.searchCandidates = checked
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Also match the top-N MS2 and precursor candidates "
+                                  + "(Top-N as in the top hits panel), not only the shown name."
+                }
                 TextField {
                     id: annotationsMzSearchField
                     objectName: "annotationsMzSearchField"
@@ -557,9 +600,13 @@ Item {
                                 Label {
                                     objectName: "annotationRowCompound_" + modelData.feature_id
                                     readonly property bool unannotated: !modelData.source
-                                    text: unannotated
-                                          ? annotationsSection.unannotatedLabel(modelData)
-                                          : (modelData.compound_name || modelData.inchikey || "?")
+                                    readonly property var match: annotationsSection.candidateMatch(modelData)
+                                    text: (unannotated
+                                           ? annotationsSection.unannotatedLabel(modelData)
+                                           : (modelData.compound_name || modelData.inchikey || "?"))
+                                          + (match ? "  ·  matched: " + match.name + " ("
+                                                     + (match.kind === "ms2" ? "MS2" : "precursor")
+                                                     + " #" + match.rank + ")" : "")
                                     font.italic: unannotated
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true

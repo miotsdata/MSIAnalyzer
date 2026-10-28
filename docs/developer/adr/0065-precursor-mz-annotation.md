@@ -41,6 +41,14 @@ the only identity a feature without MS2 can get from a library.
   an MS2 / Precursor switch in the Annotations top hits; a
   "Precursor-matched features" tile on the Summary page.
 
+- **Name search over candidates** (follow-up): the Annotations name box
+  also matches a feature's top-N MS2 candidates (one per compound, by best
+  `rank_feature`) and top-N precursor candidates, N being the top-hits
+  panel's Top-N, unless "Search in candidates" is unticked. The names come
+  with the table rows (`load_feature_candidate_names`, at most 20 per kind),
+  cached per database version since grouping every MS2 row takes seconds on
+  millions; a covering index `idx_ann_feature_compound` makes it ~3x faster.
+
 ## Consequences
 
 - Only compounds that have spectra in the libraries, with the adducts those

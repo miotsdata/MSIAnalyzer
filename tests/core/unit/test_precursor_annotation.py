@@ -141,3 +141,28 @@ def test_candidates_go_to_uns_with_var_names(analysis, library, tmp_path):
     assert list(table["rank"]) == [1, 2]
     assert adata.var.loc["mz_760.5851", "n_precursor_candidates"] == 2
     assert adata.var.loc["mz_500.0000", "n_precursor_candidates"] == 0
+
+
+def test_candidate_names_best_first_per_kind(analysis, library):
+    from msianalyzer.core.analysis_db import load_feature_candidate_names
+
+    run_precursor_annotation(
+        analysis, SimpleNamespace(library_path=str(library), precursor_ppm=5.0)
+    )
+    with sqlite3.connect(analysis) as con:
+        con.executemany(
+            "INSERT INTO ms2_annotations (sample_id, scan_id, feature_id, library_id, "
+            "library_spectrum_id, compound_name, inchikey, score, dot_product_score, "
+            "lib_coverage, emp_coverage, coverage_score, n_matched_peaks, n_lib_peaks, "
+            "n_emp_peaks_raw, n_emp_peaks_filtered, rank_ms2, rank_feature) "
+            "VALUES (1, ?, 2, 1, 1, ?, ?, 0.5, 0.5, 1, 1, 1, 3, 3, 3, 3, 1, ?)",
+            # Two scans of B (ranks 2 and 4) and one of A (rank 1).
+            [(1, "B", "KB", 2), (2, "B", "KB", 4), (3, "A", "KA", 1)],
+        )
+    names = load_feature_candidate_names(analysis, limit=1).set_index("feature_id")
+    assert names.loc[2, "ms2_candidates"] == ["A"]
+    assert names.loc[2, "precursor_candidates"] == []
+    assert names.loc[1, "precursor_candidates"] == ["PC 16:0/18:1"]  # limit 1
+    full = load_feature_candidate_names(analysis).set_index("feature_id")
+    assert full.loc[2, "ms2_candidates"] == ["A", "B"]
+    assert full.loc[1, "precursor_candidates"] == ["PC 16:0/18:1", "PC 18:1/16:0"]

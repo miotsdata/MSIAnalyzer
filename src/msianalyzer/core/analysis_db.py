@@ -462,6 +462,12 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_ann_inchikey ON ms2_annotations(inchikey)"
     )
+    # Covers the per-feature, per-compound grouping of the Annotations name
+    # search (load_feature_candidate_names): ~3x faster on 3 M rows.
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ann_feature_compound "
+        "ON ms2_annotations(feature_id, inchikey, rank_feature, compound_name)"
+    )
     # Partial index on exactly the predicate `load_feature_representative_annotations`'s
     # `ms2_rep` CTE and `load_feature_list`'s join both filter on — one row
     # per feature that has an MS2 representative, not the full (much
@@ -1858,6 +1864,52 @@ def load_ms2_annotations_for_feature(
             return pd.read_sql_query(sql, con, params=(int(feature_id),))
         except (pd.errors.DatabaseError, sqlite3.OperationalError):
             return pd.DataFrame()
+
+
+@log_call(source="db_path")
+def load_feature_candidate_names(db_path: Path | str, limit: int = 20) -> pd.DataFrame:
+    """Each feature's candidate names, best first, at most `limit` per kind:
+    ``feature_id``, ``ms2_candidates`` (one per compound, in the Annotations
+    top-hits order: best ``rank_feature``) and ``precursor_candidates``
+    (by ``rank``, ADR 0065). For the Annotations name search. Empty when
+    neither table has rows."""
+    frames = []
+    with connect(db_path) as con:
+        try:
+            ms2 = pd.read_sql_query(
+                "SELECT feature_id, COALESCE(MIN(compound_name), inchikey) AS name, "
+                "MIN(rank_feature) AS r FROM ms2_annotations "
+                "WHERE inchikey IS NOT NULL AND rank_feature IS NOT NULL "
+                "GROUP BY feature_id, inchikey",
+                con,
+            )
+            frames.append(("ms2_candidates", ms2))
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            pass
+        try:
+            prec = pd.read_sql_query(
+                "SELECT feature_id, compound_name AS name, rank AS r "
+                "FROM precursor_annotations WHERE rank <= ?",
+                con, params=(int(limit),),
+            )
+            frames.append(("precursor_candidates", prec))
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            pass
+    out = None
+    for column, df in frames:
+        if df.empty:
+            continue
+        df = df.dropna(subset=["name"]).sort_values(["feature_id", "r"], kind="stable")
+        df = df[df.groupby("feature_id").cumcount() < int(limit)]
+        names = df.groupby("feature_id")["name"].agg(list).rename(column)
+        out = names.to_frame() if out is None else out.join(names, how="outer")
+    if out is None:
+        return pd.DataFrame()
+    for column in ("ms2_candidates", "precursor_candidates"):
+        if column not in out:
+            out[column] = None
+        out[column] = out[column].apply(lambda v: v if isinstance(v, list) else [])
+    return out.reset_index()
 
 
 @log_call(source="db_path")

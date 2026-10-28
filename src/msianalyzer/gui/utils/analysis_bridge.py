@@ -4,6 +4,7 @@ import base64
 import functools
 import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -132,9 +133,29 @@ def _dataframe_to_records(df: pd.DataFrame) -> list:
     return records
 
 
+#: The Annotations top-hits panel's Top-N maximum (its SpinBox `to`).
+_MAX_TOP_N = 20
+
+
+def _db_version(path: str) -> tuple:
+    """Changes whenever the database is written (WAL writes land in -wal)."""
+    return tuple(
+        os.stat(p).st_mtime_ns if os.path.exists(p) else 0 for p in (path, path + "-wal")
+    )
+
+
+@functools.lru_cache(maxsize=4)
+def _candidate_names(path: str, version: tuple) -> pd.DataFrame:
+    """`load_feature_candidate_names`, cached per database version: it groups
+    every MS2 annotation row (seconds on millions) and the Annotations
+    table reloads on every visit."""
+    return analysis_db.load_feature_candidate_names(path, limit=_MAX_TOP_N)
+
+
 def _load_annotation_rows(analysis_db_path: str, include_unannotated: bool) -> pd.DataFrame:
-    """The Annotations table's rows, each with its feature's best MS2 scan
-    and annotation-outcome counts (ADR 0062)."""
+    """The Annotations table's rows, each with its feature's best MS2 scan,
+    annotation-outcome counts (ADR 0062) and candidate names, best first
+    (`ms2_candidates`, `precursor_candidates`; `[]` without any)."""
     df = analysis_db.load_feature_representative_annotations(
         analysis_db_path, include_unidentified=include_unannotated
     )
@@ -143,9 +164,14 @@ def _load_annotation_rows(analysis_db_path: str, include_unannotated: bool) -> p
     for extra in (
         analysis_db.load_feature_best_ms2_scans(analysis_db_path),
         analysis_db.load_feature_annotation_outcomes(analysis_db_path),
+        # Searched by name too, up to the top-hits panel's Top-N.
+        _candidate_names(analysis_db_path, _db_version(analysis_db_path)),
     ):
         if not extra.empty:
             df = df.merge(extra, on="feature_id", how="left")
+    for column in ("ms2_candidates", "precursor_candidates"):
+        df[column] = df[column].apply(lambda v: v if isinstance(v, list) else []) \
+            if column in df else [[] for _ in range(len(df))]
     return df
 
 

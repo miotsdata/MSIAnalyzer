@@ -167,6 +167,12 @@ and `.var` get `precursor_name`, `precursor_ppm` and
 `n_precursor_candidates`, and every candidate is in
 `.uns["precursor_candidates"]` (see [Outputs](outputs.md)). See ADR 65.
 
+The Annotations name search also looks through each feature's candidates,
+MS2 and precursor, up to the **Top-N** set in the top-hits panel: a feature
+shown because of a candidate says which one (`matched: Theophylline
+(precursor #3)`), and selecting it opens that list on that candidate.
+Untick **Search in candidates** to search only the names in the table.
+
 ## Stage 10 — MS2 consensus (→ analysis DB)
 
 `run_consensus()` picks one representative MS2 scan per feature —
