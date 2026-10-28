@@ -18,6 +18,7 @@ from msianalyzer.gui.utils import single_instance
 
 from msianalyzer.core.utils import configure_logging
 from msianalyzer.core.utils.logging_utils import default_debug_log_dir
+from msianalyzer.gui.utils.crash_diagnostics import CrashDiagnostics
 from msianalyzer.gui.utils.freeze_watchdog import FreezeWatchdog
 
 
@@ -104,6 +105,11 @@ def main() -> int:
     # never returns, instead of opening another GUI. No-op otherwise.
     multiprocessing.freeze_support()
     configure_logging(level=logging.DEBUG)
+    # A hard crash (e.g. an access violation inside Qt) writes every
+    # thread's stack to crash_<stamp>.txt next to the debug log, and Qt's
+    # own messages go into the debug log. Before any QML loads.
+    crash_diagnostics = CrashDiagnostics(default_debug_log_dir())
+    crash_diagnostics.start()
     # Must run before any QtQuick.Controls-importing QML loads — the
     # platform default style pulled in a dark theme on at least one real
     # session (GNOME/GTK integration), with some text unreadable against
@@ -122,6 +128,7 @@ def main() -> int:
     # discarded.
     server = single_instance.acquire()
     if server is None:
+        crash_diagnostics.stop()
         return 0
 
     apply_font_scale()
@@ -148,6 +155,7 @@ def main() -> int:
 
     exit_code = app.exec()
     watchdog.stop()
+    crash_diagnostics.stop()
 
     # `app.exec()` returning means every window closed (or the user
     # confirmed quitting mid-run, see Main.qml's quitDuringRunDialog) —
