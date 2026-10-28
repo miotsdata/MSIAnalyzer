@@ -568,3 +568,85 @@ def test_detail_window_resets_to_filtered_on_reopen(
 
     assert detail_window.property("empSource") == "filtered"
     assert detail_window.property("libSource") == "filtered"
+
+
+def _seed_unannotated(db_path, raw_db_path):
+    """Feature 8: no library match, best MS2 scan 5 in a real raw db.
+    Feature 10: no MS2 at all."""
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (2, 's2', ?, 'positive')",
+            (str(raw_db_path),),
+        )
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(8, 200.0), (10, 250.0)],
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_consensus (feature_id, feature_mz, best_sample_id, "
+            "best_scan_id, n_ms2, n_ms2_considered, n_ms2_scored, consensus_score, "
+            "purity_score, n_peaks) VALUES (8, 200.0, 2, 5, 3, 3, 0, 0.5, 0.9, 2)"
+        )
+        con.commit()
+    with sqlite3.connect(raw_db_path) as con:
+        con.execute("CREATE TABLE ms2_scans (scan_id INTEGER, mz_array BLOB, intensity_array BLOB)")
+        con.execute(
+            "INSERT INTO ms2_scans VALUES (5, ?, ?)",
+            (array_to_blob(np.array([80.0, 120.0])), array_to_blob(np.array([10.0, 40.0]))),
+        )
+        con.commit()
+
+
+def test_show_non_annotated_lists_them_and_plots_the_best_scan(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot, tmp_path
+):
+    _seed_unannotated(annotated_analysis_model.analysisDbPath, tmp_path / "raw_s2.db")
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "annotationsSection")
+    assert find_visual_child(root, "annotationRow_8") is None
+
+    _click(view, find_visual_child(root, "showUnannotatedCheckBox"), qtbot)
+    qtbot.waitUntil(lambda: not section.property("rowsLoading"), timeout=2000)
+
+    assert find_visual_child(root, "annotationRowCompound_8").property("text") == "Unannotated"
+    assert (find_visual_child(root, "annotationRowCompound_10").property("text")
+            == "Unannotated · no MS2")
+    assert find_visual_child(root, "annotationRowScore_8").property("text") == ""
+
+    _click(view, find_visual_child(root, "annotationRow_8"), qtbot)
+    assert section.property("showsBestScan") is True
+    qtbot.waitUntil(
+        lambda: section.property("bestScanPlotImage").startswith("data:image/png"), timeout=5000
+    )
+    assert find_visual_child(root, "basicPlotImage").property("visible") is True
+    assert "Annotation:" in section.property("statsRows").toVariant()
+
+    _click(view, find_visual_child(root, "annotationRow_10"), qtbot)
+    assert section.property("showsBestScan") is False
+    label = find_visual_child(root, "basicPlotEmptyLabel")
+    assert label.property("visible") is True
+    assert label.property("text") == "No MS2 spectrum for this feature."
+
+
+def test_annotations_tab_remembers_its_state_across_tab_switches(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _select_feature_7(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "annotationsSection")
+    section.setProperty("mzQuery", "123")
+    section.setProperty("sortAscending", False)
+
+    _click(view, find_visual_child(root, "navButton_0"), qtbot)
+    assert find_visual_child(root, "annotationsSection") is None
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "annotationsSection")
+    assert section.property("selectedFeatureId") == 7
+    assert section.property("mzQuery") == "123"
+    assert section.property("sortAscending") is False
+    assert section.property("selectedHit")["compound_name"] == "Caffeine"

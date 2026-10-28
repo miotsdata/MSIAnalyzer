@@ -219,6 +219,10 @@ Flickable {
         return c.numeric ? c.name : (c.name + " (categories)")
     })
     property int selectedObsIndex: 0
+    // Keeps the combo showing a programmatic pick too (e.g. a restored
+    // one, VisualInspectionSection.restoreState) — see
+    // onInspectionModeChanged for why its own binding isn't enough.
+    onSelectedObsIndexChanged: obsColumnCombo.currentIndex = controlsFlickable.selectedObsIndex
     // A fresh obsColumns list (new analysis) defaults the selection to
     // "tic" rather than whatever happens to sort first, falling back to
     // the first column if "tic" isn't present.

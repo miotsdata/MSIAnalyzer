@@ -138,6 +138,9 @@ Item {
         if (visualSection.pendingInspectLayer !== "") {
             controls.dataLayer = visualSection.pendingInspectLayer
         }
+        // A restore still waiting on the obs list must not undo this pick.
+        if (visualSection.pendingRestore)
+            visualSection.pendingRestore = {"obsColumn": visualSection.pendingRestore.obsColumn}
         visualSection.pendingInspectHandled()
     }
 
@@ -146,8 +149,75 @@ Item {
     Connections {
         target: controls
         function onFeaturesLoadingChanged() {
-            if (!controls.featuresLoading) visualSection.applyPendingInspect()
+            if (!controls.featuresLoading) {
+                visualSection.applyPendingRestore()
+                visualSection.applyPendingInspect()
+            }
         }
+        function onObsColumnsLoadingChanged() {
+            if (!controls.obsColumnsLoading) visualSection.applyPendingRestore()
+        }
+    }
+
+    // Remembered across tab switches: AnalysisPage keeps what stateSaved
+    // hands it and passes it back to restoreState on the next visit. The
+    // feature is kept by m/z, not list index, so a changed sort/search
+    // can't land on a different one.
+    signal stateSaved(var state)
+    Component.onDestruction: visualSection.stateSaved(Object.assign({
+        "datasetId": AnalysisBridge.activeDatasetId,
+        "inspectionMode": controls.inspectionMode,
+        "dataLayer": controls.dataLayer,
+        "colormap": controls.colormap,
+        "sortMode": controls.sortMode,
+        "nameQuery": controls.nameQuery,
+        "mzQuery": controls.mzQuery,
+        "hiddenSamples": controls.hiddenSamples,
+        "showRois": visualSection.showRois,
+        "featureMz": controls.selectedFeature ? controls.selectedFeature.mz : NaN,
+        "obsColumn": controls.selectedObsColumn,
+        "autoScale": controls.autoScale,
+        "vmin": controls.vmin,
+        "vmax": controls.vmax,
+    }, visualSection.pendingRestore || {}))  // left before the lists loaded: keep the old pick
+
+    // The part of a restore that waits for the async feature/obs lists.
+    property var pendingRestore: null
+
+    function restoreState(s) {
+        // Another dataset has other features/layers: start fresh there.
+        if (!s || s.datasetId !== AnalysisBridge.activeDatasetId) return
+        controls.sortMode = s.sortMode
+        controls.nameQuery = controls.draftNameQuery = s.nameQuery
+        controls.mzQuery = controls.draftMzQuery = s.mzQuery
+        controls.dataLayer = s.dataLayer
+        controls.colormap = s.colormap  // after dataLayer: localMoran forces coolwarm
+        controls.hiddenSamples = s.hiddenSamples
+        controls.inspectionMode = s.inspectionMode
+        visualSection.showRois = s.showRois
+        visualSection.pendingRestore = {
+            "featureMz": s.featureMz, "obsColumn": s.obsColumn,
+            "autoScale": s.autoScale, "vmin": s.vmin, "vmax": s.vmax,
+        }
+        visualSection.applyPendingRestore()
+    }
+
+    // Once both lists are in. The color range goes last: picking an obs
+    // column or layer turns autoscale back on. An "Inspect visually"
+    // request picks its own feature, so the old one and its range are
+    // dropped.
+    function applyPendingRestore() {
+        var r = visualSection.pendingRestore
+        if (!r || controls.featuresLoading || controls.obsColumnsLoading) return
+        visualSection.pendingRestore = null
+        var obsIdx = controls.obsColumns.findIndex(function (c) { return c.name === r.obsColumn })
+        if (obsIdx >= 0) controls.selectedObsIndex = obsIdx
+        if (!isNaN(visualSection.pendingInspectMz) || r.featureMz === undefined) return
+        var idx = controls.sortedFeatures.findIndex(function (f) { return f.mz === r.featureMz })
+        if (idx >= 0) controls.selectedFeatureIndex = idx
+        controls.vmin = controls.draftVmin = r.vmin
+        controls.vmax = controls.draftVmax = r.vmax
+        controls.autoScale = r.autoScale
     }
 
     Label {

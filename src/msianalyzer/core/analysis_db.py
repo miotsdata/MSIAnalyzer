@@ -1698,6 +1698,38 @@ def load_ms2_annotations_for_feature(
             return pd.DataFrame()
 
 
+@log_call(source="db_path")
+def load_feature_best_ms2_scans(db_path: Path | str) -> pd.DataFrame:
+    """Each feature's best MS2 scan (`feature_ms2_consensus`), with where
+    to read its peaks — so the GUI Annotations table can show the
+    spectrum of a feature no library matched.
+
+    Returns:
+        A DataFrame with ``feature_id``, ``ms2_sample_name``,
+        ``ms2_raw_db_path`` (located like `get_sample_raw_db_path`),
+        ``ms2_scan_id``, ``ms2_n_scans``, ``ms2_purity_score``,
+        ``ms2_n_peaks``. Only features with a consensus row; empty when
+        the consensus step never ran.
+    """
+    sql = """
+        SELECT c.feature_id, s.name AS ms2_sample_name,
+               s.raw_db_path AS ms2_raw_db_path, c.best_scan_id AS ms2_scan_id,
+               c.n_ms2 AS ms2_n_scans, c.purity_score AS ms2_purity_score,
+               c.n_peaks AS ms2_n_peaks
+        FROM feature_ms2_consensus c
+        LEFT JOIN samples s ON s.sample_id = c.best_sample_id
+    """
+    with connect(db_path) as con:
+        try:
+            df = pd.read_sql_query(sql, con)
+        except (pd.errors.DatabaseError, sqlite3.OperationalError):
+            return pd.DataFrame()
+    df["ms2_raw_db_path"] = [
+        _stored_path_here(db_path, p) if p else None for p in df["ms2_raw_db_path"]
+    ]
+    return df
+
+
 def _scalar_count(con: sqlite3.Connection, sql: str) -> int:
     try:
         row = con.execute(sql).fetchone()

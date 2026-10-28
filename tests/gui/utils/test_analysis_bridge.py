@@ -2524,3 +2524,78 @@ def test_request_summary_missing_db_emits_zero_summary(tmp_path, qtbot):
     with qtbot.waitSignal(bridge.summaryReady, timeout=1000) as spy:
         bridge.requestSummary(str(tmp_path / "nope.db"))
     assert spy.args[1] == _ZERO_SUMMARY
+
+
+def _seed_unannotated_features(db_path, raw_db_path):
+    """Feature 8: no library match, best MS2 scan 5 in sample s2's raw db
+    (seeded too). Feature 9: no MS2 at all."""
+    from msianalyzer.core.parser.mzml_parser import array_to_blob
+
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT INTO samples (sample_id, name, raw_db_path, polarity) "
+            "VALUES (2, 's2', ?, 'positive')",
+            (str(raw_db_path),),
+        )
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(8, 200.0), (9, 250.0)],
+        )
+        con.execute(
+            "INSERT INTO feature_ms2_consensus (feature_id, feature_mz, best_sample_id, "
+            "best_scan_id, n_ms2, n_ms2_considered, n_ms2_scored, consensus_score, "
+            "purity_score, n_peaks) VALUES (8, 200.0, 2, 5, 3, 3, 0, 0.5, 0.9, 2)"
+        )
+        con.commit()
+    with sqlite3.connect(raw_db_path) as con:
+        con.execute("CREATE TABLE ms2_scans (scan_id INTEGER, mz_array BLOB, intensity_array BLOB)")
+        con.execute(
+            "INSERT INTO ms2_scans VALUES (5, ?, ?)",
+            (array_to_blob(np.array([80.0, 120.0])), array_to_blob(np.array([10.0, 40.0]))),
+        )
+        con.commit()
+
+
+def test_annotation_table_with_unannotated_lists_every_feature_with_its_best_scan(
+    tmp_path, qtbot
+):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_annotated_feature(db_path)
+    with sqlite3.connect(db_path) as con:
+        con.execute("INSERT INTO features (feature_id, mz, members_json) VALUES (7, 300.5, '{}')")
+        con.commit()
+    _seed_unannotated_features(db_path, tmp_path / "raw_s2.db")
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.annotationTableReady, timeout=2000) as spy:
+        bridge.requestAnnotationTable(str(db_path), True)
+    rows = {r["feature_id"]: r for r in spy.args[0]}
+
+    assert sorted(rows) == [7, 8, 9]
+    assert rows[8]["source"] is None
+    assert rows[8]["ms2_scan_id"] == 5
+    assert rows[8]["ms2_sample_name"] == "s2"
+    assert rows[8]["ms2_raw_db_path"] == str(tmp_path / "raw_s2.db")
+    assert rows[9]["ms2_scan_id"] is None
+
+    # Default stays annotated-only.
+    with qtbot.waitSignal(bridge.annotationTableReady, timeout=2000) as spy:
+        bridge.requestAnnotationTable(str(db_path))
+    assert [r["feature_id"] for r in spy.args[0]] == [7]
+
+
+def test_request_best_scan_plot_renders_the_raw_scan(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    raw_db = tmp_path / "raw_s2.db"
+    _seed_unannotated_features(db_path, raw_db)
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.bestScanPlotReady, timeout=5000) as spy:
+        bridge.requestBestScanPlot(str(raw_db), 5)
+    assert spy.args[0].startswith("data:image/png;base64,")
+
+    with qtbot.waitSignal(bridge.bestScanPlotReady, timeout=5000) as spy:
+        bridge.requestBestScanPlot(str(raw_db), 999)
+    assert spy.args[0] == ""

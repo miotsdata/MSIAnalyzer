@@ -34,11 +34,15 @@ Item {
     // MS1's plotLoading already uses.
     property var rows: []
     property bool rowsLoading: false
+    // Also list features with no identity at all, to look at their MS2.
+    property bool showUnannotated: false
+    onShowUnannotatedChanged: annotationsSection.refreshRows()
 
     function refreshRows() {
         if (analysis && analysis.analysisDbPath) {
             annotationsSection.rowsLoading = true
-            AnalysisBridge.requestAnnotationTable(analysis.analysisDbPath)
+            AnalysisBridge.requestAnnotationTable(analysis.analysisDbPath,
+                                                  annotationsSection.showUnannotated)
         } else {
             annotationsSection.rows = []
             annotationsSection.rowsLoading = false
@@ -151,6 +155,60 @@ Item {
     onSelectedFeatureIdChanged: refreshTopHits()
     onSelectedHitChanged: refreshBasicPlot()
 
+    // Remembered across tab switches: AnalysisPage keeps what stateSaved
+    // hands it and passes it back to restoreState on the next visit.
+    signal stateSaved(var state)
+    Component.onDestruction: annotationsSection.stateSaved({
+        "selectedFeatureId": annotationsSection.selectedFeatureId,
+        "selectedHitId": annotationsSection.selectedHit ? annotationsSection.selectedHit.id : null,
+        "sortColumn": annotationsSection.sortColumn,
+        "sortAscending": annotationsSection.sortAscending,
+        "nameQuery": annotationsSection.nameQuery,
+        "mzQuery": annotationsSection.mzQuery,
+        "topN": annotationsSection.topN,
+        "showUnannotated": annotationsSection.showUnannotated,
+    })
+    function restoreState(s) {
+        if (!s) return
+        annotationsSection.sortColumn = s.sortColumn
+        annotationsSection.sortAscending = s.sortAscending
+        annotationsSection.nameQuery = s.nameQuery
+        annotationsSection.mzQuery = s.mzQuery
+        annotationsSection.topN = s.topN
+        annotationsSection.showUnannotated = s.showUnannotated
+        annotationsSection.selectedFeatureId = s.selectedFeatureId
+        var hit = annotationsSection.topHits.find(function (h) { return h.id === s.selectedHitId })
+        if (hit) annotationsSection.selectedHit = hit
+    }
+
+    // The selected feature's table row — its `ms2_*` columns name its
+    // best MS2 scan (null without MS2).
+    readonly property var selectedRow: annotationsSection.rows.find(function (r) {
+        return r.feature_id === annotationsSection.selectedFeatureId
+    }) || null
+    // No library hit to plot, but the feature has MS2: show that scan
+    // alone, library side empty.
+    readonly property bool showsBestScan: !(annotationsSection.selectedHit
+                                            && annotationsSection.selectedHit.kind === "ms2")
+                                          && !!annotationsSection.selectedRow
+                                          && annotationsSection.selectedRow.ms2_scan_id !== null
+                                          && annotationsSection.selectedRow.ms2_scan_id !== undefined
+    property string bestScanPlotImage: ""
+    function refreshBestScanPlot() {
+        annotationsSection.bestScanPlotImage = ""
+        if (annotationsSection.showsBestScan)
+            AnalysisBridge.requestBestScanPlot(annotationsSection.selectedRow.ms2_raw_db_path || "",
+                                               annotationsSection.selectedRow.ms2_scan_id)
+    }
+    onShowsBestScanChanged: refreshBestScanPlot()
+    onSelectedRowChanged: refreshBestScanPlot()
+    Connections {
+        target: AnalysisBridge
+        function onBestScanPlotReady(uri) {
+            if (annotationsSection.showsBestScan) annotationsSection.bestScanPlotImage = uri
+        }
+    }
+
     // "all the stats are written better (list, clear)" — a flat
     // label/value pair list (statsRepeater below lays it out as a
     // 2-column grid), built straight from the already-fetched
@@ -160,6 +218,17 @@ Item {
     // so it gets its own, much shorter, set of rows instead.
     readonly property var statsRows: {
         var h = annotationsSection.selectedHit
+        var r = annotationsSection.selectedRow
+        if (!h && annotationsSection.showsBestScan) {
+            var scanPairs = [
+                ["Annotation", "none (no library match)"],
+                ["Best MS2 scan", r.ms2_scan_id + " in " + (r.ms2_sample_name || "?")],
+                ["MS2 scans", r.ms2_n_scans],
+                ["Peaks", r.ms2_n_peaks !== null ? r.ms2_n_peaks : "?"],
+                ["Purity", r.ms2_purity_score !== null ? Number(r.ms2_purity_score).toFixed(2) : "?"],
+            ]
+            return [].concat.apply([], scanPairs.map(function (p) { return [p[0] + ":", String(p[1])] }))
+        }
         if (!h)
             return []
         var pairs = h.kind === "predicted"
@@ -191,7 +260,7 @@ Item {
     Label {
         id: emptyStateLabel
         objectName: "annotationsEmptyStateLabel"
-        visible: rows.length === 0
+        visible: rows.length === 0 && !annotationsSection.showUnannotated && !annotationsSection.rowsLoading
         anchors.centerIn: parent
         text: "No annotated features."
         color: Theme.mutedTextColor
@@ -206,7 +275,7 @@ Item {
         objectName: "annotationsSplit"
         anchors.fill: parent
         anchors.margins: 16
-        visible: rows.length > 0
+        visible: rows.length > 0 || annotationsSection.showUnannotated
         orientation: Qt.Horizontal
 
         ColumnLayout {
@@ -231,10 +300,18 @@ Item {
                 Layout.fillWidth: true
 
                 Label {
-                    text: "Annotated features (" + annotationsSection.rows.length + ")"
+                    text: (annotationsSection.showUnannotated ? "Features (" : "Annotated features (")
+                          + annotationsSection.rows.length + ")"
                     font.bold: true
                     font.pixelSize: 14
                     Layout.fillWidth: true
+                }
+                AppCheckBox {
+                    objectName: "showUnannotatedCheckBox"
+                    text: "Show non-annotated"
+                    checked: annotationsSection.showUnannotated
+                    onToggled: annotationsSection.showUnannotated = checked
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
                 }
                 Button {
                     objectName: "openPredictFormulaButton"
@@ -425,11 +502,17 @@ Item {
                                 }
                                 Label {
                                     objectName: "annotationRowCompound_" + modelData.feature_id
-                                    text: modelData.compound_name || modelData.inchikey || "?"
+                                    readonly property bool unannotated: !modelData.source
+                                    text: unannotated
+                                          ? (modelData.ms2_scan_id !== null && modelData.ms2_scan_id !== undefined
+                                             ? "Unannotated" : "Unannotated · no MS2")
+                                          : (modelData.compound_name || modelData.inchikey || "?")
+                                    font.italic: unannotated
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                     color: annotationsSection.selectedFeatureId === modelData.feature_id
-                                           ? palette.highlightedText : palette.text
+                                           ? palette.highlightedText
+                                           : (unannotated ? Theme.mutedTextColor : palette.text)
                                 }
                                 Label {
                                     objectName: "annotationRowMz_" + modelData.feature_id
@@ -441,7 +524,8 @@ Item {
                                 }
                                 Label {
                                     objectName: "annotationRowScore_" + modelData.feature_id
-                                    text: Number(modelData.best_score).toFixed(3)
+                                    text: modelData.best_score !== null && modelData.best_score !== undefined
+                                          ? Number(modelData.best_score).toFixed(3) : ""
                                     Layout.preferredWidth: 70
                                     color: annotationsSection.selectedFeatureId === modelData.feature_id
                                            ? palette.highlightedText : palette.text
@@ -642,7 +726,7 @@ Item {
 
                     Label {
                         objectName: "statsEmptyLabel"
-                        visible: !annotationsSection.selectedHit
+                        visible: annotationsSection.statsRows.length === 0
                         text: "No hit selected."
                         color: Theme.mutedTextColor
                         anchors.top: parent.top
@@ -650,7 +734,7 @@ Item {
 
                     Flickable {
                         objectName: "statsFlickable"
-                        visible: !!annotationsSection.selectedHit
+                        visible: annotationsSection.statsRows.length > 0
                         anchors.fill: parent
                         clip: true
                         contentWidth: width
@@ -741,9 +825,12 @@ Item {
 
                     Label {
                         objectName: "basicPlotEmptyLabel"
-                        visible: !annotationsSection.selectedHit
-                                 || annotationsSection.selectedHit.kind === "predicted"
-                        text: !annotationsSection.selectedHit
+                        visible: (!annotationsSection.selectedHit
+                                  || annotationsSection.selectedHit.kind === "predicted")
+                                 && !annotationsSection.showsBestScan
+                        text: annotationsSection.selectedRow && annotationsSection.selectedRow.ms2_scan_id == null
+                              ? "No MS2 spectrum for this feature."
+                              : !annotationsSection.selectedHit
                               ? "No hit selected."
                               : "No MS2 spectrum — predicted formula only (ADR 27)."
                         color: Theme.mutedTextColor
@@ -755,12 +842,15 @@ Item {
 
                     Image {
                         objectName: "basicPlotImage"
-                        visible: !!annotationsSection.selectedHit
-                                 && annotationsSection.selectedHit.kind === "ms2"
+                        visible: (!!annotationsSection.selectedHit
+                                  && annotationsSection.selectedHit.kind === "ms2")
+                                 || annotationsSection.showsBestScan
                         anchors.fill: parent
                         fillMode: Image.PreserveAspectFit
                         cache: false
-                        source: annotationsSection.basicPlotImage
+                        source: annotationsSection.showsBestScan
+                                ? annotationsSection.bestScanPlotImage
+                                : annotationsSection.basicPlotImage
                     }
                     }
                 }

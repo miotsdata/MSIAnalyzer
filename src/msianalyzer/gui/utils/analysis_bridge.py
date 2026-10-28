@@ -41,6 +41,7 @@ from msianalyzer.core.plotting.heatmap import _RENDER_MZ_TOLERANCE_PPM, category
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
 from msianalyzer.core.plotting.plotter import (
     Plotter,
+    _read_raw_ms2_scan,
     calibration_line_range,
     calibration_title,
     spectrum_groups,
@@ -118,6 +119,28 @@ def _dataframe_to_records(df: pd.DataFrame) -> list:
                 clean[key] = value
         records.append(clean)
     return records
+
+
+def _load_annotation_rows(analysis_db_path: str, include_unannotated: bool) -> pd.DataFrame:
+    """The Annotations table's rows, each with its feature's best MS2 scan."""
+    df = analysis_db.load_feature_representative_annotations(
+        analysis_db_path, include_unidentified=include_unannotated
+    )
+    scans = analysis_db.load_feature_best_ms2_scans(analysis_db_path)
+    if df.empty or scans.empty:
+        return df
+    return df.merge(scans, on="feature_id", how="left")
+
+
+def _render_best_scan_png(raw_db_path: str, scan_id: int) -> str:
+    """One raw MS2 scan as the Annotations mirror plot with an empty
+    library side, as a `data:` URI — a feature no library matched."""
+    mz, intensity = _read_raw_ms2_scan(raw_db_path, scan_id)
+    if mz is None:
+        raise ValueError(f"MS2 scan {scan_id} not found in {raw_db_path!r}")
+    empty = np.array([], dtype=float)
+    png = render_mirror_plot_png(mz, intensity, empty, empty, 0.0)
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
 
 _COMPOUND_NAME_MATCH_PPM = 10.0
@@ -566,6 +589,7 @@ class AnalysisBridge(QObject):
     formulaPredictionFinished = Signal(str)  # analysis_db_path
     formulaPredictionFailed = Signal(str, str)  # analysis_db_path, message
     annotationTableReady = Signal(list)
+    bestScanPlotReady = Signal(str)  # data: URI, "" on failure
     featureListReady = Signal(list)
     exportFinished = Signal(str)  # human-readable "done" message
     exportFailed = Signal(str)  # human-readable error message
@@ -635,6 +659,7 @@ class AnalysisBridge(QObject):
         # the user reopening a tab) discards whatever the previous one
         # was still fetching.
         self._annotation_table_worker: TableQueryWorker | None = None
+        self._best_scan_plot_worker: TableQueryWorker | None = None
         self._feature_list_worker: TableQueryWorker | None = None
         # One slot each for HeatmapControlsPanel.qml's four .h5ad-backed
         # fetches — see requestObsColumns/requestFeatureValueRange/
@@ -994,7 +1019,10 @@ class AnalysisBridge(QObject):
         self.summaryReady.emit(self._summary_worker_path, dict(_EMPTY_SUMMARY))
 
     @Slot(str)
-    def requestAnnotationTable(self, analysis_db_path: str) -> None:
+    @Slot(str, bool)
+    def requestAnnotationTable(
+        self, analysis_db_path: str, include_unannotated: bool = False
+    ) -> None:
         """Start fetching one row per feature (its representative compound
         hit) on a background thread; the result arrives via
         `annotationTableReady(rows)`.
@@ -1012,12 +1040,16 @@ class AnalysisBridge(QObject):
         necessarily the single highest-`score` compound, see
         `AnnotateConfig.representative_score_tolerance`. Empty when
         annotation never ran (or the db path doesn't exist).
+        `include_unannotated` also lists every feature with no identity.
+        Every row carries its best MS2 scan's `ms2_*` columns (see
+        `analysis_db.load_feature_best_ms2_scans`), `None` without MS2.
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             self.annotationTableReady.emit([])
             return
         worker = TableQueryWorker(
-            analysis_db.load_feature_representative_annotations, analysis_db_path, self
+            functools.partial(_load_annotation_rows, include_unannotated=include_unannotated),
+            analysis_db_path, self,
         )
         worker.succeeded.connect(self._onAnnotationTableSucceeded)
         worker.failed.connect(self._onAnnotationTableFailed)
@@ -1353,6 +1385,36 @@ class AnalysisBridge(QObject):
             hits.extend(_dataframe_to_records(predicted_df))
 
         return hits
+
+    @Slot(str, int)
+    def requestBestScanPlot(self, raw_db_path: str, scan_id: int) -> None:
+        """Start rendering one raw MS2 scan (a feature's best scan, from
+        `requestAnnotationTable`'s `ms2_*` columns) on a background thread;
+        the `data:` URI arrives via `bestScanPlotReady(uri)`, "" on failure.
+
+        Background, unlike `getBasicMirrorPlotImage`: this reads the
+        sample's raw database, which can sit on a slow network share.
+        """
+        worker = TableQueryWorker(
+            functools.partial(_render_best_scan_png, scan_id=scan_id), raw_db_path, self
+        )
+        worker.succeeded.connect(self._onBestScanPlotSucceeded)
+        worker.failed.connect(self._onBestScanPlotFailed)
+        self._best_scan_plot_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _onBestScanPlotSucceeded(self, uri: str) -> None:
+        if self.sender() is not self._best_scan_plot_worker:
+            return  # superseded by a newer request — discard
+        self.bestScanPlotReady.emit(uri)
+
+    @Slot(str)
+    def _onBestScanPlotFailed(self, message: str) -> None:
+        if self.sender() is not self._best_scan_plot_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("best-scan plot failed: %s", message)
+        self.bestScanPlotReady.emit("")
 
     @Slot(str, int, result=str)
     def getBasicMirrorPlotImage(self, analysis_db_path: str, annotation_id: int) -> str:

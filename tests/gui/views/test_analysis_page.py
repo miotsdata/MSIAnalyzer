@@ -1,6 +1,6 @@
 import sqlite3
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Q_ARG, QMetaObject, Qt
 from PySide6.QtQuick import QQuickItem
 
 
@@ -397,3 +397,93 @@ def test_missing_output_folder_shows_message_not_sections(
     assert "/data/Projects/P/output/gone" in label.property("text")
     assert not find_visual_child(root, "sectionStack").property("visible")
     assert root.findChild(QQuickItem, "summarySectionLoader").property("active") is False
+
+
+def test_visual_inspection_remembers_feature_and_settings_across_tab_switches(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    with sqlite3.connect(visual_analysis_model.analysisDbPath) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(2, 200.0), (3, 250.0)],
+        )
+        con.commit()
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    stack = root.findChild(QQuickItem, "sectionStack")
+
+    def go_to(index):
+        button = find_visual_child(root, "navButton_" + str(index))
+        center = button.mapToScene(button.boundingRect().center()).toPoint()
+        qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+        qtbot.waitUntil(lambda: stack.property("currentIndex") == index, timeout=3000)
+        qtbot.waitUntil(lambda: root.property("currentSectionReady"), timeout=3000)
+
+    go_to(3)
+    controls = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)
+    controls.setProperty("selectedFeatureIndex", 2)
+    controls.setProperty("dataLayer", "raw")
+    controls.setProperty("colormap", "magma")
+    controls.setProperty("autoScale", False)
+    controls.setProperty("vmax", 5.0)
+
+    go_to(2)
+    go_to(3)
+    controls = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(
+        lambda: not controls.property("featuresLoading")
+        and not controls.property("obsColumnsLoading"),
+        timeout=2000,
+    )
+    qtbot.waitUntil(lambda: controls.property("selectedFeature")["mz"] == 250.0, timeout=2000)
+    assert controls.property("dataLayer") == "raw"
+    assert controls.property("colormap") == "magma"
+    assert controls.property("autoScale") is False
+    assert controls.property("vmax") == 5.0
+
+
+def test_inspect_visually_wins_over_the_remembered_feature(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    with sqlite3.connect(annotated_analysis_model.analysisDbPath) as con:
+        con.execute(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (8, 300.0, '{\"s1\": 0}')"
+        )
+        con.commit()
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    stack = root.findChild(QQuickItem, "sectionStack")
+
+    def go_to(index):
+        button = find_visual_child(root, "navButton_" + str(index))
+        center = button.mapToScene(button.boundingRect().center()).toPoint()
+        qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+        qtbot.waitUntil(lambda: stack.property("currentIndex") == index, timeout=3000)
+        qtbot.waitUntil(lambda: root.property("currentSectionReady"), timeout=3000)
+
+    go_to(3)
+    controls = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)
+    controls.setProperty("selectedFeatureIndex", 1)  # mz 300
+    assert controls.property("selectedFeature")["mz"] == 300.0
+
+    go_to(2)
+    annotations = find_visual_child(root, "annotationsSection")
+    qtbot.waitUntil(lambda: not annotations.property("rowsLoading"), timeout=2000)
+    # The row's own menu item isn't used here: after the Visual Inspection
+    # section is destroyed, shiboken can hand back a stale wrapper for a new
+    # object at a reused address. Emitting the signal it triggers is the
+    # same handoff.
+    QMetaObject.invokeMethod(
+        annotations, "inspectVisuallyRequested", Q_ARG("double", 123.4567)
+    )
+    qtbot.waitUntil(lambda: stack.property("currentIndex") == 3, timeout=3000)
+    controls = find_visual_child(root, "controlsFlickable")
+    qtbot.waitUntil(
+        lambda: not controls.property("featuresLoading")
+        and not controls.property("obsColumnsLoading"),
+        timeout=2000,
+    )
+    qtbot.wait(50)
+    assert controls.property("selectedFeature")["mz"] == 123.4567

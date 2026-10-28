@@ -29,7 +29,15 @@ Page {
     // index) up to date the moment its workspace is opened, without
     // needing a full re-run; safe/idempotent, see
     // AnalysisBridge.ensureSchemaCurrent's own docstring.
+    // What Annotations/Visual Inspection were showing when last left
+    // (their stateSaved), handed back when the tab is rebuilt — each
+    // section is a lazy Loader, destroyed on every tab switch.
+    property var annotationsState: null
+    property var visualState: null
+
     onAnalysisChanged: {
+        analysisPage.annotationsState = null
+        analysisPage.visualState = null
         if (analysisPage.analysis && analysisPage.analysis.analysisDbPath
                 && !analysisPage.outputMissing) {
             AnalysisBridge.ensureSchemaCurrent(analysisPage.analysis.analysisDbPath)
@@ -401,6 +409,8 @@ Page {
                         item.inspectVisuallyRequested.connect(function (mz) {
                             analysisPage.goToVisualInspection(mz)
                         })
+                        item.stateSaved.connect(function (s) { analysisPage.annotationsState = s })
+                        item.restoreState(analysisPage.annotationsState)
                     }
                 }
                 Loader {
@@ -423,6 +433,10 @@ Page {
                             analysisPage.pendingInspectMz = NaN
                             analysisPage.pendingInspectLayer = ""
                         })
+                        // Before the pending-inspect bindings below, so a
+                        // jump from "Inspect visually" wins over it.
+                        item.stateSaved.connect(function (s) { analysisPage.visualState = s })
+                        item.restoreState(analysisPage.visualState)
                         // Layer *before* mz: assigning pendingInspectMz's
                         // binding below fires applyPendingInspect()
                         // synchronously (see the comment above) — if
