@@ -17,7 +17,7 @@ from msianalyzer.core import analysis_db
 from msianalyzer.core import export as core_export
 from msianalyzer.core import imported_dataset
 from msianalyzer.core.parser import load_raw_metadata_value
-from msianalyzer.core.annotation import target_list
+from msianalyzer.core.annotation import reannotation, target_list
 from msianalyzer.core.annotation.formula_prediction import FormulaPredictionSettings
 from msianalyzer.core.calibration.curve_fit import (
     fit_calibration_curve,
@@ -65,6 +65,7 @@ from msianalyzer.gui.utils.heatmap_query_worker import HeatmapQueryWorker
 from msianalyzer.gui.utils.local_moran_summary_model import LocalMoranSummaryModel
 from msianalyzer.gui.utils.mirror_plot_worker import MirrorPlotWorker
 from msianalyzer.gui.utils.spatial_correlation_model import SpatialCorrelationModel
+from msianalyzer.gui.utils.config_schema import coerce_config_values
 from msianalyzer.gui.utils.table_query_worker import TableQueryWorker
 from msianalyzer.core.utils.lazy_import import lazy_module
 
@@ -626,6 +627,8 @@ class AnalysisBridge(QObject):
     targetListMatchesChanged = Signal(str)  # analysis_db_path (ADR 60)
     featureNormalizationFinished = Signal(str, str)  # layer name, message (ADR 61)
     featureNormalizationFailed = Signal(str)
+    annotationTaskFinished = Signal(str)  # message (re-annotate / restore, ADR 63)
+    annotationTaskFailed = Signal(str)
     featureLayersChanged = Signal(str)  # analysis_db_path
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -698,6 +701,7 @@ class AnalysisBridge(QObject):
         self._dataset_task_worker: DatasetTaskWorker | None = None
         self._import_db_path: str | None = None
         self._normalization_db_path: str | None = None
+        self._annotation_task_db: str | None = None
         self._summary_worker: TableQueryWorker | None = None
         self._summary_worker_path: str | None = None
         self._summary_cache_path: str | None = None
@@ -1985,6 +1989,104 @@ class AnalysisBridge(QObject):
         self._drop_spatial_correlation_caches()
         self._refresh_var_annotations(analysis_db_path)
         self.targetListMatchesChanged.emit(analysis_db_path)
+
+    # -----------------------------------------------------------------
+    # Re-annotate a finished analysis, with history (ADR 63)
+    # -----------------------------------------------------------------
+
+    @Slot(str, "QVariantMap", result="QVariantMap")
+    def getAnnotationSettings(self, analysis_db_path: str, run_config: dict) -> dict:
+        """The MS2 settings now in effect, `{group: {field: value}}` for
+        `reannotation.MS2_GROUPS`: the newest history entry's, else the
+        run config's (with today's defaults for fields it predates)."""
+        history = reannotation.load_history(analysis_db_path) if analysis_db_path else []
+        if history:
+            return history[-1]["settings"]
+        return reannotation.Ms2Settings.from_sections(dict(run_config)).to_dict()
+
+    @Slot(str, result=list)
+    def getAnnotationHistory(self, analysis_db_path: str) -> list:
+        return reannotation.load_history(analysis_db_path) if analysis_db_path else []
+
+    @Slot(str, str, "QVariantMap", "QVariantMap", str)
+    def reannotate(
+        self, analysis_db_path: str, run_id: str, settings: dict, run_config: dict,
+        start_date: str,
+    ) -> None:
+        """Re-run the MS2 stages with `settings` on a background thread.
+        Progress (one step per stage) arrives via `datasetTaskProgress`, the
+        result via `annotationTaskFinished(message)` / `annotationTaskFailed`."""
+        self._annotation_task_db = analysis_db_path
+        task = functools.partial(
+            self._run_reannotation, analysis_db_path, run_id,
+            coerce_config_values(dict(settings)), dict(run_config), start_date,
+        )
+        self._start_dataset_task(
+            task, self._onAnnotationTaskSucceeded, self.annotationTaskFailed.emit
+        )
+
+    @Slot(str, int, "QVariantMap", str)
+    def restoreAnnotation(
+        self, analysis_db_path: str, entry_id: int, run_config: dict, start_date: str
+    ) -> None:
+        """Make history entry `entry_id` current again, on a background
+        thread; same result signals as `reannotate`."""
+        self._annotation_task_db = analysis_db_path
+        task = functools.partial(
+            self._run_annotation_restore, analysis_db_path, int(entry_id),
+            dict(run_config), start_date,
+        )
+        self._start_dataset_task(
+            task, self._onAnnotationTaskSucceeded, self.annotationTaskFailed.emit
+        )
+
+    @Slot(str, int, result=str)
+    def deleteAnnotationHistoryEntry(self, analysis_db_path: str, entry_id: int) -> str:
+        """`""` on success, else an error message."""
+        try:
+            reannotation.delete_history_entry(analysis_db_path, int(entry_id))
+        except (ValueError, OSError, sqlite3.Error) as e:
+            return str(e)
+        return ""
+
+    @staticmethod
+    def _pipeline_annotation(run_config: dict) -> dict:
+        return reannotation.Ms2Settings.from_sections(run_config).to_dict()
+
+    @staticmethod
+    def _run_reannotation(db, run_id, settings, run_config, start_date, progress):
+        steps = list(reannotation.MS2_STAGES)
+
+        def on_step(step, status):
+            if status != "started":
+                progress(steps.index(step) + 1, len(steps), step)
+
+        align_ppm = (run_config.get("align") or {}).get("align_ppm")
+        entry_id = reannotation.reannotate(
+            db, reannotation.Ms2Settings.from_sections(settings, align_ppm), run_id,
+            pipeline_settings=AnalysisBridge._pipeline_annotation(run_config),
+            pipeline_date=start_date or None, report=run_config.get("report"),
+            on_step=on_step,
+        )
+        n = reannotation.load_history(db)[-1]["n_annotated_features"]
+        return f"Re-annotated (annotation #{entry_id}): {n} feature(s) with a library match."
+
+    @staticmethod
+    def _run_annotation_restore(db, entry_id, run_config, start_date, progress):
+        new_id = reannotation.restore_annotation(
+            db, entry_id, pipeline_settings=AnalysisBridge._pipeline_annotation(run_config),
+            pipeline_date=start_date or None, report=run_config.get("report"),
+        )
+        return f"Annotation #{entry_id} restored (now annotation #{new_id})."
+
+    @Slot(object)
+    def _onAnnotationTaskSucceeded(self, message: str) -> None:
+        if self.sender() is not self._dataset_task_worker:
+            return
+        # Names, outcomes and .var all changed — same refresh as a
+        # post-run target list.
+        self._on_target_list_matches_changed(self._annotation_task_db)
+        self.annotationTaskFinished.emit(message)
 
     # -----------------------------------------------------------------
     # Normalize to a feature after the run (ADR 61)

@@ -222,6 +222,14 @@ ApplicationWindow {
                          && window.currentAnalysis.analysisType !== "targeted"
                 onTriggered: normalizeFeatureDialog.openFor(window.currentAnalysis)
             }
+            // Re-run MS2 annotation with new settings, with history (ADR 63).
+            AppMenuItem {
+                objectName: "reannotateMenuItem"
+                text: "Re-annotate…"
+                enabled: window.currentAnalysis !== null
+                         && window.currentAnalysis.analysisType !== "targeted"
+                onTriggered: reannotateDialog.openFor(window.currentAnalysis)
+            }
             Menu {
                 objectName: "openAnalysisMenu"
                 title: "Open"
@@ -436,6 +444,9 @@ ApplicationWindow {
         id: targetListMatchDialog
     }
 
+    ReannotateDialog {
+        id: reannotateDialog
+    }
     NormalizeFeatureDialog {
         id: normalizeFeatureDialog
     }

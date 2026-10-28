@@ -101,6 +101,24 @@ class ProjectModel(QObject):
         entries.sort(key=lambda e: e["start_date"], reverse=True)
         return entries
 
+    @Slot(str, "QVariantMap", result=str)
+    def updateRunConfigSections(self, run_id: str, sections: dict) -> str:
+        """Replace whole groups of one run's saved config (e.g. its MS2
+        settings after a re-annotation, ADR 63) and save the project file.
+        `""` on success, else an error message."""
+        run = self._project.runs.get(run_id)
+        if run is None:
+            return f"Unknown analysis {run_id}."
+        config = run.setdefault("config", {})
+        for group, values in dict(sections).items():
+            config[group] = dict(values)
+        try:
+            if self._folder:
+                self._project.export(project_file(self._folder))
+        except OSError as e:
+            return str(e)
+        return ""
+
     @Slot(str, result=str)
     def deleteRun(self, run_id: str) -> str:
         """Delete one analysis — its output folder, its config file, and its

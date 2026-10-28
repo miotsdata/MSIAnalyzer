@@ -36,8 +36,11 @@
         <file>Views/ImportH5adDialog.qml</file>
         <file>Views/TargetListMatchDialog.qml</file>
         <file>Views/NormalizeFeatureDialog.qml</file>
+        <file>Views/ReannotateDialog.qml</file>
+        <file>Views/ConfigGroupForm.qml</file>
         <file>Views/ScaleBarDialog.qml</file>
         <file>Utils/SearchQuery.js</file>
+        <file>Utils/ConfigFields.js</file>
         <file>Utils/AffineTransform.js</file>
         <file>Utils/ScaleBar.js</file>
     </qresource>

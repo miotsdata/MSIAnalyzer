@@ -221,6 +221,35 @@ The dialog lists the layers already added. Click ✕ next to one, then
 **Remove**, to delete it from every file. The files don't get smaller:
 HDF5 keeps the freed space.
 
+## After the run — re-annotate
+
+Want another library, a different tolerance or a different flat-spectrum
+threshold? **Analyses → Re-annotate…** re-runs only the MS2 part of a
+finished untargeted analysis: MS2 grouping, precursor purity, library
+annotation and consensus. The features, images and normalization stay as
+they are, so it takes minutes, not a full run.
+
+The dialog has one tab per settings group (the same fields as in New
+Analysis), pre-filled with the settings now in effect. **Re-annotate** runs
+in the background. The Annotations tab, Visual Inspection names, the
+Summary page, the exports, `.var` and `summary_report.html` all follow the
+new annotation, and the analysis' saved config is updated to the new
+settings.
+
+Nothing is lost. The **History** tab lists every annotation of the
+analysis: the run's own, each re-annotation and each restore, with its date,
+how many features got a library match and its main settings.
+
+- **Restore** makes an earlier annotation current again, as a new entry.
+- **Load settings** copies an entry's settings into the tabs, to tweak and
+  re-annotate.
+- **Delete** forgets an entry you no longer need. The current one can't be
+  deleted.
+
+Each entry keeps a copy of the MS2 tables in the analysis folder, under
+`annotation_history/`. Delete entries you won't need again to free the
+space. If a re-annotation fails, the previous annotation is put back.
+
 ## Stage 12 — Summary report (→ out_dir)
 
 `build_summary_report()` writes `summary_report.html` + `summary.json`:

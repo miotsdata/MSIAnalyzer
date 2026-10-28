@@ -17,13 +17,8 @@ import numpy as np
 import pandas as pd
 
 from msianalyzer.core import analysis_db
-from msianalyzer.core.annotation.annotate import (
-    normalize_library_paths,
-    run_annotation,
-)
-from msianalyzer.core.annotation.consensus import run_consensus
-from msianalyzer.core.annotation.group_ms2 import run_grouper
-from msianalyzer.core.annotation.precursor_purity import run_precursor_purity
+from msianalyzer.core.annotation.annotate import normalize_library_paths
+from msianalyzer.core.annotation.reannotation import Ms2Settings, run_ms2_stages
 from msianalyzer.core.annotation.target_list import (
     normalize_target_list_paths,
     run_target_list_matching,
@@ -1267,142 +1262,18 @@ class Run:
             logger.info("Isotope detection disabled; skipping")
             self._emit_step("detect_isotopes", "skipped")
 
-        # --- ASSOCIATE MS2 SCANS WITH FEATURES (analysis DB) ---
-        self._emit_step("group_ms2", "started")
-        if not analysis_db.is_command_already_run(
-            "group_ms2", analysis_id, adb_path
-        ):
-            command_id = analysis_db.log_command(
-                adb_path,
-                command_name="group_ms2",
-                arguments={
-                    **vars(config.group_ms2),
-                    "align_ppm": config.align.align_ppm,
-                    "fragmentation_factor_mz_tol_da": (
-                        config.purity.fragmentation_factor_mz_tol_da
-                    ),
-                },
-                run_id=analysis_id,
-            )
-            grouping = run_grouper(
-                adb_path,
-                assoc_ppm=config.group_ms2.assoc_ppm,
-                align_ppm=config.align.align_ppm,
-                include_unmatched=config.group_ms2.include_unmatched,
-                command_id=command_id,
-                default_isolation_half_width=(
-                    config.group_ms2.default_isolation_half_width
-                ),
-                fragmentation_factor_mz_tol_da=(
-                    config.purity.fragmentation_factor_mz_tol_da
-                ),
-                flat_fragmentation_min_peaks=(
-                    config.group_ms2.flat_fragmentation_min_peaks
-                ),
-                flat_fragmentation_cv_threshold=(
-                    config.group_ms2.flat_fragmentation_cv_threshold
-                ),
-                flat_fragmentation_min_rel_intensity=(
-                    config.group_ms2.flat_fragmentation_min_rel_intensity
-                ),
-            )
-            logger.info(
-                "Associated %d MS2 scans across %d features with MS2 coverage",
-                len(grouping.associations),
-                len(grouping.feature_summary),
-            )
-        else:
-            logger.debug("Already run group_ms2")
-        self._emit_step("group_ms2", "completed")
-
-        # --- PRECURSOR ION PURITY (analysis DB) ---
-        purity_cfg = getattr(config, "purity", None)
-        if purity_cfg is not None and getattr(purity_cfg, "enabled", True):
-            self._emit_step("precursor_purity", "started")
-            if not analysis_db.is_command_already_run(
-                "precursor_purity", analysis_id, adb_path
-            ):
-                command_id = analysis_db.log_command(
-                    adb_path,
-                    command_name="precursor_purity",
-                    arguments={**vars(purity_cfg)},
-                    run_id=analysis_id,
-                )
-                purity_result = run_precursor_purity(
-                    adb_path, purity_cfg, command_id=command_id
-                )
-                logger.info(
-                    "Precursor purity: scored %d MS2 scans (%d precursor-confirmed, "
-                    "%d snapped)",
-                    purity_result.n_scans,
-                    purity_result.n_confirmed,
-                    purity_result.n_snapped,
-                )
-            else:
-                logger.debug("Already run precursor_purity")
-            self._emit_step("precursor_purity", "completed")
-        else:
-            logger.info("Precursor purity disabled; skipping")
-            self._emit_step("precursor_purity", "skipped")
-
-        # --- ANNOTATE MS2 AGAINST SPECTRAL LIBRARY (analysis DB) ---
-        if config.annotate.library_path:
-            self._emit_step("annotate_ms2", "started")
-            if not analysis_db.is_command_already_run(
-                "annotate_ms2", analysis_id, adb_path
-            ):
-                command_id = analysis_db.log_command(
-                    adb_path,
-                    command_name="annotate_ms2",
-                    arguments={**vars(config.annotate)},
-                    run_id=analysis_id,
-                )
-                annotation = run_annotation(
-                    adb_path, config.annotate, command_id=command_id
-                )
-                logger.info(
-                    "Annotated %d MS2 scans over %d features (%d candidate rows)",
-                    annotation.n_scans_annotated,
-                    annotation.n_features_annotated,
-                    len(annotation.rows),
-                )
-            else:
-                logger.debug("Already run annotate_ms2")
-            self._emit_step("annotate_ms2", "completed")
-        else:
-            logger.info(
-                "No annotation library configured; skipping MS2 annotation"
-            )
-            self._emit_step("annotate_ms2", "skipped")
-
-        # --- PER-FEATURE MS2 CONSENSUS (analysis DB) ---
-        consensus_cfg = getattr(config, "consensus", None)
-        if consensus_cfg is not None and getattr(consensus_cfg, "enabled", True):
-            self._emit_step("ms2_consensus", "started")
-            if not analysis_db.is_command_already_run(
-                "ms2_consensus", analysis_id, adb_path
-            ):
-                command_id = analysis_db.log_command(
-                    adb_path,
-                    command_name="ms2_consensus",
-                    arguments={**vars(consensus_cfg)},
-                    run_id=analysis_id,
-                )
-                consensus = run_consensus(
-                    adb_path, consensus_cfg, command_id=command_id
-                )
-                logger.info(
-                    "MS2 consensus: picked a scan for %d feature(s) "
-                    "(%d backed by a library hit)",
-                    consensus.n_features,
-                    consensus.n_features_scored,
-                )
-            else:
-                logger.debug("Already run ms2_consensus")
-            self._emit_step("ms2_consensus", "completed")
-        else:
-            logger.info("MS2 consensus disabled; skipping")
-            self._emit_step("ms2_consensus", "skipped")
+        # --- MS2: group -> purity -> annotate -> consensus (analysis DB) ---
+        # Shared with re-annotating a finished analysis (ADR 63).
+        run_ms2_stages(
+            adb_path,
+            Ms2Settings(
+                config.group_ms2, config.purity, config.annotate,
+                config.consensus, align_ppm=config.align.align_ppm,
+            ),
+            analysis_id,
+            skip_done=True,
+            on_step=self._emit_step,
+        )
 
         self._write_var_annotations(head)
         self._run_normalization_stage(head)

@@ -535,6 +535,23 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         )
     """)
 
+    # --- every MS2 annotation state of the analysis (ADR 0063) ------------
+    # Written by core.annotation.reannotation: the pipeline's own state
+    # (recorded at the first re-annotation), each re-annotation and each
+    # restore. `snapshot` is a file under <analysis folder>/annotation_history/
+    # holding that state's MS2 tables. The newest row is the current state.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS annotation_history (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at            TEXT    NOT NULL,
+            kind                  TEXT    NOT NULL,
+            settings_json         TEXT    NOT NULL,
+            snapshot              TEXT,
+            restored_from         INTEGER,
+            n_annotated_features  INTEGER
+        )
+    """)
+
     # --- target-list compound matching -------------------------------------
     # Written by core.annotation.target_list.run_target_list_matching. A
     # target compound (name/formula/InChIKey, no m/z of its own) is matched

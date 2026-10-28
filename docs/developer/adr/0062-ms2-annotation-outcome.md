@@ -45,9 +45,9 @@ stored with score 0), so the hit table can't answer it afterwards either.
 ## Consequences
 
 - No config change, so no config version bump. The schema refresh on
-  opening an analysis adds the empty table; outcomes only appear in a new
-  run (which reuses the parsed raw databases, not the later steps). Older
-  analyses keep today's labels.
+  opening an analysis adds the empty table; outcomes appear after a new
+  run or a re-annotation (ADR 63). Until then an older analysis keeps
+  today's labels.
 - `_annotate_feature_batch` returns `(rows, outcomes)`;
   `persist_annotations` takes `outcomes=` and leaves the table alone when
   it isn't passed.

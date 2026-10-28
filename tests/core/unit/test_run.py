@@ -805,14 +805,15 @@ def test_run_core_executes_successfully(mocker, tmp_path):
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     mocker.patch("msianalyzer.core.run.run.run_detect_isotopes")
     mock_run_grouper = mocker.patch(
-        "msianalyzer.core.run.run.run_grouper",
+        "msianalyzer.core.annotation.reannotation.run_grouper",
         return_value=mocker.MagicMock(associations=[], feature_summary=[]),
     )
     mock_run_purity = mocker.patch(
-        "msianalyzer.core.run.run.run_precursor_purity",
+        "msianalyzer.core.annotation.reannotation.run_precursor_purity",
         return_value=mocker.MagicMock(
             n_scans=0, n_multi_peak=0, n_precursor_missing=0, n_interpolated=0
         ),
@@ -820,13 +821,13 @@ def test_run_core_executes_successfully(mocker, tmp_path):
 
     config.annotate.library_path = str(tmp_path / "lib.db")
     mock_run_annotation = mocker.patch(
-        "msianalyzer.core.run.run.run_annotation",
+        "msianalyzer.core.annotation.reannotation.run_annotation",
         return_value=mocker.MagicMock(
             rows=[], n_scans_annotated=0, n_features_annotated=0
         ),
     )
     mock_run_consensus = mocker.patch(
-        "msianalyzer.core.run.run.run_consensus",
+        "msianalyzer.core.annotation.reannotation.run_consensus",
         return_value=mocker.MagicMock(n_features=0, n_features_scored=0),
     )
     mock_build_report = mocker.patch(
@@ -922,18 +923,19 @@ def test_run_core_registers_already_parsed_sample_by_its_own_db_stem(mocker, tmp
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     mocker.patch("msianalyzer.core.run.run.run_detect_isotopes")
     mocker.patch(
-        "msianalyzer.core.run.run.run_grouper",
+        "msianalyzer.core.annotation.reannotation.run_grouper",
         return_value=mocker.MagicMock(associations=[], feature_summary=[]),
     )
     mocker.patch(
-        "msianalyzer.core.run.run.run_precursor_purity",
+        "msianalyzer.core.annotation.reannotation.run_precursor_purity",
         return_value=mocker.MagicMock(n_scans=0, n_confirmed=0, n_snapped=0),
     )
     mocker.patch(
-        "msianalyzer.core.run.run.run_consensus",
+        "msianalyzer.core.annotation.reannotation.run_consensus",
         return_value=mocker.MagicMock(n_features=0, n_features_scored=0),
     )
     mocker.patch("msianalyzer.core.run.run.build_summary_report")
@@ -994,13 +996,14 @@ def test_run_core_skips_existing_outputs(mocker, tmp_path):
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = True
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     config.annotate.library_path = str(tmp_path / "lib.db")
     mock_align = mocker.patch("msianalyzer.core.run.run.align_mz_across_samples")
-    mock_run_grouper = mocker.patch("msianalyzer.core.run.run.run_grouper")
-    mock_run_purity = mocker.patch("msianalyzer.core.run.run.run_precursor_purity")
-    mock_run_annotation = mocker.patch("msianalyzer.core.run.run.run_annotation")
-    mock_run_consensus = mocker.patch("msianalyzer.core.run.run.run_consensus")
+    mock_run_grouper = mocker.patch("msianalyzer.core.annotation.reannotation.run_grouper")
+    mock_run_purity = mocker.patch("msianalyzer.core.annotation.reannotation.run_precursor_purity")
+    mock_run_annotation = mocker.patch("msianalyzer.core.annotation.reannotation.run_annotation")
+    mock_run_consensus = mocker.patch("msianalyzer.core.annotation.reannotation.run_consensus")
     mock_build_report = mocker.patch(
         "msianalyzer.core.run.run.build_summary_report"
     )
@@ -1227,27 +1230,30 @@ _FULL_RUN_STAGES_SUCCESS = [
 
 def _patch_run_core_collaborators(mocker, mzs_index=(100.0, 200.0, 300.0)):
     mocker.patch(
+        "msianalyzer.core.annotation.reannotation.analysis_db"
+    ).is_command_already_run.return_value = False
+    mocker.patch(
         "msianalyzer.core.run.run.run_detect_isotopes",
         return_value=mocker.MagicMock(n_features_before=0, n_candidates=0, n_isotopes=0),
     )
     mocker.patch(
-        "msianalyzer.core.run.run.run_grouper",
+        "msianalyzer.core.annotation.reannotation.run_grouper",
         return_value=mocker.MagicMock(associations=[], feature_summary=[]),
     )
     mocker.patch(
-        "msianalyzer.core.run.run.run_precursor_purity",
+        "msianalyzer.core.annotation.reannotation.run_precursor_purity",
         return_value=mocker.MagicMock(
             n_scans=0, n_multi_peak=0, n_precursor_missing=0, n_interpolated=0
         ),
     )
     mocker.patch(
-        "msianalyzer.core.run.run.run_annotation",
+        "msianalyzer.core.annotation.reannotation.run_annotation",
         return_value=mocker.MagicMock(
             rows=[], n_scans_annotated=0, n_features_annotated=0
         ),
     )
     mocker.patch(
-        "msianalyzer.core.run.run.run_consensus",
+        "msianalyzer.core.annotation.reannotation.run_consensus",
         return_value=mocker.MagicMock(n_features=0, n_features_scored=0),
     )
     mocker.patch("msianalyzer.core.run.run.build_summary_report")
@@ -1287,6 +1293,7 @@ def test_run_core_emits_on_step_progress_for_every_stage(mocker, tmp_path):
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     _patch_run_core_collaborators(mocker)
 
@@ -1322,6 +1329,7 @@ def _run_core_with_spatial_correlation(mocker, tmp_path, *, enabled, local_enabl
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     _patch_run_core_collaborators(mocker)
     mock_global = mocker.patch("msianalyzer.core.run.run.compute_spatial_autocorr")
@@ -1394,6 +1402,7 @@ def test_run_core_emits_sample_progress_as_each_sample_completes(mocker, tmp_pat
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     _patch_run_core_collaborators(mocker)
     _mock_pool_executor(mocker, [res1, res2])
@@ -1434,6 +1443,7 @@ def test_run_core_orders_sample_results_by_submission_index_not_completion_order
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     _patch_run_core_collaborators(mocker)
     mock_align = mocker.patch(
@@ -1490,9 +1500,10 @@ def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     mocker.patch(
-        "msianalyzer.core.run.run.run_grouper",
+        "msianalyzer.core.annotation.reannotation.run_grouper",
         return_value=mocker.MagicMock(associations=[], feature_summary=[]),
     )
     mocker.patch(
@@ -1580,6 +1591,7 @@ def test_run_core_folds_injected_feature_mz_into_target_mz_set_passed_to_create_
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
     mock_adb.load_injected_feature_mzs.return_value = [999.0]
 
     mocker.patch(
@@ -1624,6 +1636,7 @@ def test_run_core_skips_match_target_list_when_paths_not_configured(mocker, tmp_
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     mock_matching = mocker.patch("msianalyzer.core.run.run.run_target_list_matching")
     _patch_run_core_collaborators(mocker)
@@ -1766,12 +1779,13 @@ def test_run_core_targeted_dispatches_to_targeted_pipeline(mocker, tmp_path):
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     mock_align = mocker.patch("msianalyzer.core.run.run.align_mz_across_samples")
-    mock_run_grouper = mocker.patch("msianalyzer.core.run.run.run_grouper")
-    mock_run_purity = mocker.patch("msianalyzer.core.run.run.run_precursor_purity")
-    mock_run_annotation = mocker.patch("msianalyzer.core.run.run.run_annotation")
-    mock_run_consensus = mocker.patch("msianalyzer.core.run.run.run_consensus")
+    mock_run_grouper = mocker.patch("msianalyzer.core.annotation.reannotation.run_grouper")
+    mock_run_purity = mocker.patch("msianalyzer.core.annotation.reannotation.run_precursor_purity")
+    mock_run_annotation = mocker.patch("msianalyzer.core.annotation.reannotation.run_annotation")
+    mock_run_consensus = mocker.patch("msianalyzer.core.annotation.reannotation.run_consensus")
     mock_build_report = mocker.patch("msianalyzer.core.run.run.build_summary_report")
     mock_matching = mocker.patch("msianalyzer.core.run.run.run_target_list_matching")
 
@@ -1846,6 +1860,7 @@ def test_run_core_targeted_emits_targeted_run_steps(mocker, tmp_path):
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     mocker.patch(
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
@@ -1890,6 +1905,7 @@ def test_run_core_targeted_passes_targeted_flag_to_sample_worker(mocker, tmp_pat
     mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
     mock_adb.register_sample.side_effect = [1, 2]
     mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
 
     mocker.patch(
         "msianalyzer.core.run.run.create_spatial_adata", return_value=mocker.MagicMock()
@@ -1953,7 +1969,7 @@ def _isotope_run(mocker, tmp_path, *, already_run=False, enabled=True, reference
     order = mocker.Mock()
     mocker.patch("msianalyzer.core.run.run.create_spatial_adata", order.create_spatial_adata)
     mocker.patch("msianalyzer.core.run.run.run_detect_isotopes", order.run_detect_isotopes)
-    mocker.patch("msianalyzer.core.run.run.run_grouper", order.run_grouper)
+    mocker.patch("msianalyzer.core.annotation.reannotation.run_grouper", order.run_grouper)
     order.run_grouper.return_value = mocker.MagicMock(associations=[], feature_summary=[])
     _mock_pool_executor(mocker, [res1, res2])
     run.run_core()
