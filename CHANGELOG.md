@@ -3,6 +3,61 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
+## 0.7.0 — 2026-10-29
+
+### Added
+- **MS2 cleaning** (ADR 64), a new optional config page.
+  - **Background fragments:** fragments found in the MS2 spectra of more
+    than a set % of precursors are removed (ppm tolerance and % are
+    configurable). The list of shared fragments (in at least 5 % of
+    precursors) is always computed, and shown as a table on the Summary
+    page and in the Re-annotate dialog's MS2 cleaning tab.
+  - **Fragments above the precursor:** peaks above the precursor m/z +
+    ppm are removed.
+  - Raw data is untouched: spectra are cleaned when they are read.
+- **Precursor m/z annotation** (ADR 65). Features can be annotated by
+  precursor m/z alone, as well as or instead of MS2 matching, within a ppm
+  tolerance.
+  - All candidates from all libraries are stored, ranked by |ppm|. The
+    reference m/z is the library's stored precursor m/z if it has at least
+    4 decimals, otherwise formula + adduct.
+  - A feature with only precursor hits is named `formula + adduct (n
+    candidates)`; MS2 hits and target-list names win over it.
+  - Annotations shows MS2 or Precursor top hits, with the ppm error.
+  - Exports and `.var` gain `precursor_name`, `precursor_ppm` and
+    `n_precursor_candidates`; every candidate goes into
+    `.uns["precursor_candidates"]`.
+- **Re-annotate a finished analysis, with history** (ADR 63). **Analyses →
+  Re-annotate…** re-runs only the MS2 stages with edited settings, in the
+  background. Every annotation state is kept and can be restored or
+  deleted.
+- **Why an MS2 feature got no hit** (ADR 62): the annotation outcome is
+  stored per feature, shown in Annotations, the Summary funnel, the
+  Annotation export and `.var`.
+- **Annotations in `.h5ad` `.var`.** Every sample `.h5ad` and
+  `merged.h5ad` carry the Annotation export columns, refreshed after
+  post-run changes and backfilled when an older analysis is opened.
+- **Annotations page:**
+  - The name search also matches the top-N MS2 and precursor candidates
+    (**Search in candidates**), and says which candidate matched.
+  - **Show non-annotated** lists every feature, and shows the MS2 of those
+    that have one.
+  - MS2 hits name the scored scan.
+  - The Annotations and Visual Inspection tabs remember their state.
+- **Crash trace:** a hard crash writes every thread's stack to
+  `crash_<stamp>.txt` in the log folder, and Qt's messages go to the log.
+
+### Changed
+- The project file is now `msianalyzer.yml` (no leading dot); an old
+  project's `.msianalyzer.yml` is migrated on first open.
+- The Summary page is centred and scrolls; Annotations panels are padded
+  away from the divider.
+- Config version 23. Older configs still load.
+
+### Fixed
+- Windows crash opening the MS1 and mirror plots.
+- Runs failing on SMB shares when rewriting the project file.
+
 ## 0.6.0 — 2026-10-27
 
 ### Added
