@@ -201,14 +201,14 @@ def update_feature_mz_precision(con: sqlite3.Connection) -> None:
             (sample_id,),
         ).fetchone()
         peaks.append((blob_to_array(row[0]), blob_to_array(row[1])) if row else None)
-    names = [name for _, name in samples]
+    position = {name: i for i, (_, name) in enumerate(samples)}
     updates = []
     for feature_id, members_json in con.execute("SELECT feature_id, members_json FROM features"):
         mzs, ints = [], []
         # Keyed by sample name; by position when the run renamed them
         # (`align.sample_names`) — both follow the samples' order.
         for pos, (key, idx) in enumerate(json.loads(members_json or "{}").items()):
-            s = names.index(key) if key in names else pos
+            s = position.get(key, pos)
             if idx is None or s >= len(peaks) or peaks[s] is None or idx >= len(peaks[s][0]):
                 continue
             mzs.append(peaks[s][0][idx])
