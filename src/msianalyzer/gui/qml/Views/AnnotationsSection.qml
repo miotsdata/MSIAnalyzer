@@ -839,12 +839,14 @@ Item {
                     Label {
                         text: "Match details:"
                         font.bold: true
+                        Layout.leftMargin: 8
                     }
 
                     // Same always-reserve-the-space wrapper as tablePanel's
                     // own Item above.
                     Item {
                         Layout.fillWidth: true
+                        Layout.leftMargin: 8
                         Layout.fillHeight: true
 
                     Label {

@@ -130,7 +130,7 @@ Item {
 
         ColumnLayout {
             id: summaryColumn
-            x: 24
+            x: Math.max(24, (parent.width - width) / 2)
             y: 24
             spacing: 16
 
