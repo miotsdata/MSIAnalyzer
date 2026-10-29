@@ -363,7 +363,9 @@ def test_write_metadata_upserts(tmp_path: Path):
     write_metadata(db, {"n_samples": 3})
 
     with sqlite3.connect(db) as con:
-        meta = dict(con.execute("SELECT key, value FROM metadata").fetchall())
+        meta = dict(con.execute(
+            "SELECT key, value FROM metadata WHERE key != 'schema_fingerprint'"
+        ).fetchall())
     assert meta == {"analysis_id": "abc", "n_samples": "3"}
 
 
@@ -2123,3 +2125,21 @@ def test_best_ms2_scans_locates_each_sample_path_once(tmp_path: Path, monkeypatc
 
     assert calls == ["raw1.db"]
     assert len(df) == 50 and df["ms2_raw_db_path"].nunique() == 1
+
+
+def test_init_skips_the_schema_when_its_fingerprint_is_current(tmp_path: Path, monkeypatch):
+    # ~300 DDL statements per open were slow over a network share; a
+    # current database only reads its fingerprint.
+    import msianalyzer.core.analysis_db as adb
+
+    db = tmp_path / "a.db"
+    init_analysis_db(db).close()
+    calls = []
+    monkeypatch.setattr(adb, "create_analysis_schema", lambda con: calls.append(con))
+    init_analysis_db(db).close()
+    assert calls == []
+
+    with sqlite3.connect(db) as con:  # an analysis from an older version
+        con.execute("UPDATE metadata SET value = 'old' WHERE key = 'schema_fingerprint'")
+    init_analysis_db(db).close()
+    assert len(calls) == 1

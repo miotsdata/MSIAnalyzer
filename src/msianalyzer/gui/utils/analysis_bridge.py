@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from msianalyzer.core import analysis_db
 from msianalyzer.core import export as core_export
@@ -174,6 +174,14 @@ def _load_annotation_rows(analysis_db_path: str, include_unannotated: bool) -> p
         df[column] = df[column].apply(lambda v: v if isinstance(v, list) else []) \
             if column in df else [[] for _ in range(len(df))]
     return df
+
+
+def _update_schema(analysis_db_path: str) -> str:
+    """`AnalysisBridge.requestSchemaUpdate`'s background job, including the
+    one-off `.var` backfill: the page reads those files once it's done."""
+    analysis_db.init_analysis_db(analysis_db_path).close()
+    AnalysisBridge._write_var_annotations(analysis_db_path, only_if_missing=True)
+    return analysis_db_path
 
 
 def _render_best_scan_png(raw_db_path: str, scan_id: int) -> str:
@@ -636,6 +644,7 @@ class AnalysisBridge(QObject):
     bestScanPlotReady = Signal(str)  # data: URI, "" on failure
     featureListReady = Signal(list)
     featuresForPredictionReady = Signal(str, list)  # analysis_db_path, rows
+    schemaReady = Signal(str)  # analysis_db_path
     exportFinished = Signal(str)  # human-readable "done" message
     exportFailed = Signal(str)  # human-readable error message
     heatmapPrefetchReady = Signal()
@@ -711,6 +720,7 @@ class AnalysisBridge(QObject):
         self._prediction_features_worker: TableQueryWorker | None = None
         # `.var` rewrites, queued and run one at a time off the GUI thread.
         self._var_writes = ThreadPoolExecutor(max_workers=1, thread_name_prefix="var-writer")
+        self._schema_workers: set[TableQueryWorker] = set()
         self._prediction_features_path = ""
         # One slot each for HeatmapControlsPanel.qml's four .h5ad-backed
         # fetches — see requestObsColumns/requestFeatureValueRange/
@@ -999,6 +1009,32 @@ class AnalysisBridge(QObject):
         analysis_db.init_analysis_db(analysis_db_path).close()
         # Backfill: an analysis run before annotations went into `.var`.
         self._refresh_var_annotations(analysis_db_path, only_if_missing=True)
+
+    @Slot(str)
+    def requestSchemaUpdate(self, analysis_db_path: str) -> None:
+        """`ensureSchemaCurrent` on a background thread, for opening an
+        analysis: adding an index to a big table after an update took
+        seconds on the GUI thread. `schemaReady(analysis_db_path)` follows,
+        also on failure (logged), so the page never waits forever."""
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            # Queued, not emitted now: the page may still be connecting.
+            QTimer.singleShot(0, lambda p=analysis_db_path: self.schemaReady.emit(p))
+            return
+        worker = TableQueryWorker(_update_schema, analysis_db_path, self)
+        worker.succeeded.connect(self._onSchemaUpdated)
+        worker.failed.connect(self._onSchemaUpdateFailed)
+        self._schema_workers.add(worker)
+        worker.finished.connect(lambda w=worker: self._schema_workers.discard(w))
+        worker.start()
+
+    @Slot(object)
+    def _onSchemaUpdated(self, analysis_db_path: str) -> None:
+        self.schemaReady.emit(analysis_db_path)
+
+    @Slot(str)
+    def _onSchemaUpdateFailed(self, message: str) -> None:
+        logger.warning("schema update failed: %s", message)
+        self.schemaReady.emit(self.sender()._analysis_db_path)
 
     def _refresh_var_annotations(
         self, analysis_db_path: str, *, only_if_missing: bool = False

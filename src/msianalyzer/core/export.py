@@ -204,8 +204,13 @@ def write_annotations_to_var(db_path: str | Path, h5ad_paths) -> None:
             var = ad.io.read_elem(f["var"])
             var = var.drop(columns=[c for c in VAR_ANNOTATION_COLUMNS if c in var])
             var = var.join(annotation_var_table(db_path, var))
+            # Written aside, then swapped in: a reader on another thread
+            # sees the old or the new `var`, never none.
+            if "_var_new" in f:
+                del f["_var_new"]
+            ad.io.write_elem(f, "_var_new", var)
             del f["var"]
-            ad.io.write_elem(f, "var", var)
+            f.move("_var_new", "var")
             uns = f.require_group("uns")
             if PRECURSOR_UNS_KEY in uns:
                 del uns[PRECURSOR_UNS_KEY]

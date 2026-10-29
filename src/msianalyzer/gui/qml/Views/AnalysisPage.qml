@@ -28,43 +28,57 @@ Page {
     // there. Brings an analysis run before a schema change (e.g. ADR 33's
     // index) up to date the moment its workspace is opened, without
     // needing a full re-run; safe/idempotent, see
-    // AnalysisBridge.ensureSchemaCurrent's own docstring.
+    // AnalysisBridge.ensureSchemaCurrent's own docstring
+    // (requestSchemaUpdate runs it on a background thread).
     // What Annotations/Visual Inspection were showing when last left
     // (their stateSaved), handed back when the tab is rebuilt — each
     // section is a lazy Loader, destroyed on every tab switch.
     property var annotationsState: null
     property var visualState: null
 
+    // False until the analysis database's schema is brought up to date on
+    // a background thread (adding an index to a big table took seconds
+    // and froze the window); no section reads the database before then.
+    property bool schemaReady: false
+    readonly property bool sectionsEnabled: analysisPage.schemaReady && !analysisPage.outputMissing
+
     onAnalysisChanged: {
         analysisPage.annotationsState = null
         analysisPage.visualState = null
+        analysisPage.schemaReady = false
         if (analysisPage.analysis && analysisPage.analysis.analysisDbPath
-                && !analysisPage.outputMissing) {
-            AnalysisBridge.ensureSchemaCurrent(analysisPage.analysis.analysisDbPath)
-            // Every workspace opens on the pipeline output, never on an
-            // imported dataset (ADR 49) left active from a previous visit.
-            AnalysisBridge.setActiveDataset(analysisPage.analysis.analysisDbPath, -1)
-            analysisPage.refreshImportedDatasets()
-            // Warm up background-thread fetches other tabs will almost
-            // certainly need, right now while the user is already looking
-            // at a "loading" state (opening the analysis), instead of
-            // paying that cost again the moment they switch tabs (each
-            // section is a lazy Loader, destroyed/rebuilt every tab switch
-            // — see AnalysisBridge.requestFeatureList's and
-            // getSpatialCorrelationModel's own docstrings). Both cache by
-            // analysis_db_path on the bridge itself, so calling them again
-            // later from those sections' own onAnalysisChanged is a cache
-            // hit, not a duplicate fetch. Fire-and-forget: no listener
-            // needed here, the cache population is a side effect of the
-            // bridge methods themselves.
-            //
-            // requestFeatureList matters for a targeted analysis too now
-            // (it's the Calibration workspace's analyte picker); Spatial
-            // Correlation never runs for one, so its own model is skipped.
-            AnalysisBridge.requestFeatureList(analysisPage.analysis.analysisDbPath)
-            if (!analysisPage.isTargeted) {
-                AnalysisBridge.getSpatialCorrelationModel(analysisPage.analysis.analysisDbPath)
-            }
+                && !analysisPage.outputMissing)
+            AnalysisBridge.requestSchemaUpdate(analysisPage.analysis.analysisDbPath)
+        else
+            analysisPage.schemaReady = true  // no database: nothing to update
+    }
+
+    // The rest of opening an analysis, once its schema is up to date.
+    function finishOpening() {
+        analysisPage.schemaReady = true
+        // Every workspace opens on the pipeline output, never on an
+        // imported dataset (ADR 49) left active from a previous visit.
+        AnalysisBridge.setActiveDataset(analysisPage.analysis.analysisDbPath, -1)
+        analysisPage.refreshImportedDatasets()
+        // Warm up background-thread fetches other tabs will almost
+        // certainly need, right now while the user is already looking
+        // at a "loading" state (opening the analysis), instead of
+        // paying that cost again the moment they switch tabs (each
+        // section is a lazy Loader, destroyed/rebuilt every tab switch
+        // — see AnalysisBridge.requestFeatureList's and
+        // getSpatialCorrelationModel's own docstrings). Both cache by
+        // analysis_db_path on the bridge itself, so calling them again
+        // later from those sections' own onAnalysisChanged is a cache
+        // hit, not a duplicate fetch. Fire-and-forget: no listener
+        // needed here, the cache population is a side effect of the
+        // bridge methods themselves.
+        //
+        // requestFeatureList matters for a targeted analysis too now
+        // (it's the Calibration workspace's analyte picker); Spatial
+        // Correlation never runs for one, so its own model is skipped.
+        AnalysisBridge.requestFeatureList(analysisPage.analysis.analysisDbPath)
+        if (!analysisPage.isTargeted) {
+            AnalysisBridge.getSpatialCorrelationModel(analysisPage.analysis.analysisDbPath)
         }
     }
     // Imported analyzed .h5ad datasets of this analysis (ADR 49) — the
@@ -78,6 +92,11 @@ Page {
 
     Connections {
         target: AnalysisBridge
+        function onSchemaReady(dbPath) {
+            if (analysisPage.analysis && dbPath === analysisPage.analysis.analysisDbPath
+                    && !analysisPage.schemaReady)
+                analysisPage.finishOpening()
+        }
         function onImportedDatasetsChanged(dbPath) {
             if (analysisPage.analysis && dbPath === analysisPage.analysis.analysisDbPath)
                 analysisPage.refreshImportedDatasets()
@@ -372,7 +391,7 @@ Page {
                     // used to be eager regardless of analysis type, which
                     // would build SummarySection.qml — untargeted-shaped
                     // data throughout — for no reason on every targeted run).
-                    active: !analysisPage.isTargeted && !analysisPage.outputMissing
+                    active: !analysisPage.isTargeted && analysisPage.sectionsEnabled
                     source: "qrc:/Views/SummarySection.qml"
                     // Qt.binding, not a one-time assignment: a plain
                     // `item.analysis = analysisPage.analysis` only runs once,
@@ -391,14 +410,14 @@ Page {
                     // as a permanent sibling rather than destroying hidden
                     // ones, so an eager section would be built (and its
                     // spectrum fetched) on every workspace open.
-                    active: sectionStack.currentIndex === 1 && !analysisPage.outputMissing
+                    active: sectionStack.currentIndex === 1 && analysisPage.sectionsEnabled
                     source: "qrc:/Views/MS1SpectraSection.qml"
                     onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
                 }
                 Loader {
                     id: annotationsLoader
                     objectName: "annotationsSectionLoader"
-                    active: sectionStack.currentIndex === 2 && !analysisPage.outputMissing
+                    active: sectionStack.currentIndex === 2 && analysisPage.sectionsEnabled
                     source: "qrc:/Views/AnnotationsSection.qml"
                     onLoaded: {
                         item.analysis = Qt.binding(function () { return analysisPage.analysis })
@@ -416,7 +435,7 @@ Page {
                 Loader {
                     id: visualLoader
                     objectName: "visualSectionLoader"
-                    active: sectionStack.currentIndex === 3 && !analysisPage.outputMissing
+                    active: sectionStack.currentIndex === 3 && analysisPage.sectionsEnabled
                     source: "qrc:/Views/VisualInspectionSection.qml"
                     onLoaded: {
                         item.analysis = Qt.binding(function () { return analysisPage.analysis })
@@ -453,7 +472,7 @@ Page {
                 Loader {
                     id: spatialCorrLoader
                     objectName: "spatialCorrelationSectionLoader"
-                    active: sectionStack.currentIndex === 4 && !analysisPage.outputMissing
+                    active: sectionStack.currentIndex === 4 && analysisPage.sectionsEnabled
                     source: "qrc:/Views/SpatialCorrelationSection.qml"
                     onLoaded: {
                         item.analysis = Qt.binding(function () { return analysisPage.analysis })
@@ -479,7 +498,7 @@ Page {
             Loader {
                 id: calibrationLoader
                 objectName: "calibrationSectionLoader"
-                active: analysisPage.isTargeted && !analysisPage.outputMissing
+                active: analysisPage.isTargeted && analysisPage.sectionsEnabled
                 anchors.fill: parent
                 source: "qrc:/Views/CalibrationSection.qml"
                 onLoaded: item.analysis = Qt.binding(function () { return analysisPage.analysis })
@@ -515,6 +534,7 @@ Page {
     }
 
     readonly property bool currentSectionReady: {
+        if (!analysisPage.schemaReady) return false
         if (analysisPage.isTargeted) {
             return calibrationLoader.status === Loader.Ready
                    && calibrationLoader.item && !calibrationLoader.item.rowsLoading

@@ -832,14 +832,51 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
 
 
 @log_call(source="db_path")
+def _schema_fingerprint() -> str:
+    """Changes whenever `create_analysis_schema`'s statements do: a hash of
+    its bytecode and constants (its SQL), which a frozen build keeps too."""
+    import hashlib
+    import types
+
+    digest = hashlib.sha1()
+
+    def walk(code: types.CodeType) -> None:
+        digest.update(code.co_code)
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                walk(const)
+            else:
+                digest.update(repr(const).encode())
+
+    walk(create_analysis_schema.__code__)
+    walk(_ensure_column.__code__)
+    return digest.hexdigest()
+
+
+_SCHEMA_FINGERPRINT = _schema_fingerprint()
+
+
 def init_analysis_db(db_path: Path | str) -> sqlite3.Connection:
     """Open (creating if needed) the analysis database and apply its schema.
+
+    Skipped when the database records this schema's fingerprint: running
+    every statement costs ~300 round trips, slow over a network share and
+    on a busy thread.
 
     Returns:
         An open connection with WAL journalling and foreign keys enabled.
     """
     con = connect(db_path)
-    create_analysis_schema(con)
+    try:
+        row = con.execute("SELECT value FROM metadata WHERE key = 'schema_fingerprint'").fetchone()
+    except sqlite3.OperationalError:  # a new database: no metadata table yet
+        row = None
+    if row is None or row[0] != _SCHEMA_FINGERPRINT:
+        create_analysis_schema(con)
+        con.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_fingerprint', ?)",
+            (_SCHEMA_FINGERPRINT,),
+        )
     con.commit()
     return con
 

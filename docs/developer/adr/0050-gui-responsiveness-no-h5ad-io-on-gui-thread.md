@@ -94,3 +94,32 @@ background threads are enough; this doesn't need separate processes.
 - Running the import in a separate process (spawn) is **deferred**. The
   import freeze turned out to be the post-import dataset switch. It will
   be revisited if the watchdog catches a freeze during an import itself.
+
+## Addendum (2026-10-29): network-share audit
+
+Found on a Windows client opening an analysis on the lab SMB share, where
+every file stat and SQLite round trip costs milliseconds:
+
+- **Per-row filesystem lookups.** `load_feature_best_ms2_scans` located the
+  sample's raw DB once per feature (15-20 s). Locate once per distinct path.
+- **Lists build only visible rows.** The Annotations table and the Predict
+  formula picker were `Repeater`s (one item per feature, seconds for
+  thousands); now `ListView`s. The picker's list also loads in the
+  background (`requestFeaturesForPrediction`) and its selection checks use
+  a set, not `indexOf`.
+- **`.var` rewrites run on one background thread** (`_refresh_var_annotations`,
+  a single-worker executor: queued, never concurrent). Every in-app `.h5ad`
+  write (ROIs, normalization layers, imported-dataset ROIs, Moran's I,
+  `.var`) holds `h5ad_io.write_lock` / `open_for_write`, so two threads
+  never write one HDF5 file at once. `.var` is written aside and swapped in,
+  so a reader never finds it missing.
+- **Opening an analysis updates the schema in the background**
+  (`requestSchemaUpdate` -> `schemaReady`, including the one-off `.var`
+  backfill); `AnalysisPage.schemaReady` gates every section. The schema
+  step itself is skipped when the database's `metadata.schema_fingerprint`
+  matches a hash of `create_analysis_schema`'s bytecode and constants
+  (kept in the frozen build), so an up-to-date analysis costs one query
+  instead of ~300 DDL round trips.
+
+Rule 5: no per-row filesystem or database call in a loop over features;
+resolve per distinct value.

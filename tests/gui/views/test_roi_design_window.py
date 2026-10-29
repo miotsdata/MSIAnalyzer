@@ -428,6 +428,7 @@ def test_saving_against_analysis_db_predating_rois_table_creates_it(
 
     with sqlite3.connect(visual_analysis_model.analysisDbPath) as con:
         con.execute("DROP TABLE IF EXISTS rois")
+        con.execute("DELETE FROM metadata WHERE key = 'schema_fingerprint'")  # an older analysis
         con.commit()
 
     view = analysis_view(visual_analysis_model)

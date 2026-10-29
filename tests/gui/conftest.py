@@ -391,7 +391,7 @@ def visual_analysis_model(analysis_model):
 
 
 @pytest.fixture
-def analysis_view(application):
+def analysis_view(application, qtbot):
     """Factory: build a standalone AnalysisPage view for a given AnalysisModel."""
     views = []
     # Held here (not inline in setContextProperty) so it outlives each
@@ -435,6 +435,15 @@ def analysis_view(application):
         # loading overlay until they land. Wait for that, like a user
         # would, before handing the view to the test.
         root = view.rootObject()
+        # The schema update runs on a background thread first. Wait on its
+        # signal: a QTest.qWait loop keeps the GIL and starves the thread
+        # (40 ms of work took 16 s). Its queued delivery can't slip in
+        # before this wait starts, the event loop only runs inside it.
+        if root is not None and not root.property("schemaReady"):
+            with qtbot.waitSignal(
+                application.analysis_bridge.schemaReady, timeout=15000, raising=False
+            ):
+                pass
         if root is not None and not root.property("isTargeted"):
             deadline = 3000
             while not root.property("currentSectionReady") and deadline > 0:

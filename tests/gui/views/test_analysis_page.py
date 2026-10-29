@@ -3,20 +3,24 @@ import sqlite3
 from PySide6.QtCore import Q_ARG, QMetaObject, Qt
 from PySide6.QtQuick import QQuickItem
 
+from tests.gui.conftest import wait_renders_idle
+
 
 def test_opening_analysis_page_retroactively_adds_a_missing_index(
     analysis_view, analysis_model, qtbot
 ):
     # Simulates an analysis run before ADR 33's index existed — dropping
     # it by hand stands in for that older schema. AnalysisPage.qml's own
-    # onAnalysisChanged calls AnalysisBridge.ensureSchemaCurrent the
-    # moment the workspace opens, no re-run needed.
+    # onAnalysisChanged updates the schema on a background thread
+    # (AnalysisBridge.requestSchemaUpdate) the moment the workspace opens,
+    # no re-run needed.
     with sqlite3.connect(analysis_model.analysisDbPath) as con:
         con.execute("DROP INDEX idx_ann_rank_feature_1")
+        con.execute("DELETE FROM metadata WHERE key = 'schema_fingerprint'")  # an older analysis
         con.commit()
 
-    analysis_view(analysis_model)
-    qtbot.wait(50)
+    root = analysis_view(analysis_model).rootObject()
+    qtbot.waitUntil(lambda: root.property("schemaReady") is True, timeout=5000)
 
     with sqlite3.connect(analysis_model.analysisDbPath) as con:
         indexes = {
@@ -422,7 +426,11 @@ def test_visual_inspection_remembers_feature_and_settings_across_tab_switches(
     go_to(3)
     controls = find_visual_child(root, "controlsFlickable")
     qtbot.waitUntil(lambda: not controls.property("featuresLoading"), timeout=2000)
+    # Setting properties from Python while a tile renders deadlocks the
+    # offscreen harness (see wait_renders_idle); clicks wait on their own.
+    wait_renders_idle(qtbot)
     controls.setProperty("selectedFeatureIndex", 2)
+    wait_renders_idle(qtbot)
     controls.setProperty("dataLayer", "raw")
     controls.setProperty("colormap", "magma")
     controls.setProperty("autoScale", False)

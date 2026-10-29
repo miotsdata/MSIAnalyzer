@@ -50,6 +50,7 @@ def test_ensure_schema_current_adds_a_missing_index_to_an_old_db(tmp_path):
     init_analysis_db(db_path).close()
     with sqlite3.connect(db_path) as con:
         con.execute("DROP INDEX idx_ann_rank_feature_1")
+        con.execute("DELETE FROM metadata WHERE key = 'schema_fingerprint'")  # an older analysis
         con.commit()
         indexes_before = {
             r[0]
@@ -108,6 +109,32 @@ def test_ensure_schema_current_backfills_annotations_into_var(tmp_path):
     var = ad.read_h5ad(tmp_path / "sampleA.h5ad").var
     assert list(var.index) == ["mz_100.0000"]
     assert list(var["feature_id"]) == [7]
+
+
+def test_request_schema_update_runs_in_the_background_then_signals(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    with sqlite3.connect(db_path) as con:
+        con.execute("DROP INDEX idx_ann_rank_feature_1")
+        con.execute("DELETE FROM metadata WHERE key = 'schema_fingerprint'")  # an older analysis
+        con.commit()
+    bridge = AnalysisBridge()
+
+    with qtbot.waitSignal(bridge.schemaReady, timeout=5000) as blocker:
+        bridge.requestSchemaUpdate(str(db_path))
+
+    assert blocker.args == [str(db_path)]
+    with sqlite3.connect(db_path) as con:
+        names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "idx_ann_rank_feature_1" in names
+
+
+def test_request_schema_update_signals_even_without_a_db(tmp_path, qtbot):
+    bridge = AnalysisBridge()
+    missing = str(tmp_path / "nope.db")
+    with qtbot.waitSignal(bridge.schemaReady, timeout=2000) as blocker:
+        bridge.requestSchemaUpdate(missing)
+    assert blocker.args == [missing]
 
 
 def test_var_refresh_runs_off_the_gui_thread(tmp_path, monkeypatch):
