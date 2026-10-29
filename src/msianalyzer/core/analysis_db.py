@@ -1957,9 +1957,12 @@ def load_feature_best_ms2_scans(db_path: Path | str) -> pd.DataFrame:
             df = pd.read_sql_query(sql, con)
         except (pd.errors.DatabaseError, sqlite3.OperationalError):
             return pd.DataFrame()
-    df["ms2_raw_db_path"] = [
-        _stored_path_here(db_path, p) if p else None for p in df["ms2_raw_db_path"]
-    ]
+    # Once per sample, not per row: locating a path stats the filesystem,
+    # which on an SMB share from Windows costs ~5 ms a call.
+    located = {
+        p: _stored_path_here(db_path, p) for p in df["ms2_raw_db_path"].dropna().unique() if p
+    }
+    df["ms2_raw_db_path"] = [located.get(p) for p in df["ms2_raw_db_path"]]
     return df
 
 

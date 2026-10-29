@@ -31,6 +31,7 @@ from msianalyzer.core.analysis_db import (
     load_feature_ms2_count,
     load_all_features_for_prediction,
     load_feature_representative_annotations,
+    load_feature_best_ms2_scans,
     load_features,
     load_injected_feature_mzs,
     load_metadata_value,
@@ -2097,3 +2098,28 @@ def test_representative_annotations_work_on_a_db_without_the_outcome_table(tmp_p
 
     df = load_feature_representative_annotations(db, include_unidentified=True)
     assert len(df) == 1 and df["ms2_annotation_outcome"].isna().all()
+
+
+def test_best_ms2_scans_locates_each_sample_path_once(tmp_path: Path, monkeypatch):
+    # Locating a path stats the filesystem (slow on a Windows SMB share),
+    # so it runs once per sample, not once per feature.
+    import msianalyzer.core.analysis_db as adb
+
+    db = tmp_path / "a.db"
+    init_analysis_db(db).close()
+    with sqlite3.connect(db) as con:
+        con.execute("INSERT INTO samples (sample_id, name, raw_db_path) VALUES (1, 's1', 'raw1.db')")
+        con.executemany(
+            "INSERT INTO feature_ms2_consensus (feature_id, feature_mz, best_sample_id, "
+            "best_scan_id, n_ms2, n_ms2_considered, n_ms2_scored, consensus_score) "
+            "VALUES (?, 100.0, 1, ?, 1, 1, 1, 0.5)",
+            [(i, i) for i in range(50)],
+        )
+    calls = []
+    real = adb._stored_path_here
+    monkeypatch.setattr(adb, "_stored_path_here", lambda d, p: calls.append(p) or real(d, p))
+
+    df = load_feature_best_ms2_scans(db)
+
+    assert calls == ["raw1.db"]
+    assert len(df) == 50 and df["ms2_raw_db_path"].nunique() == 1
