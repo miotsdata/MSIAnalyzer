@@ -634,6 +634,7 @@ class AnalysisBridge(QObject):
     annotationTableReady = Signal(list)
     bestScanPlotReady = Signal(str)  # data: URI, "" on failure
     featureListReady = Signal(list)
+    featuresForPredictionReady = Signal(str, list)  # analysis_db_path, rows
     exportFinished = Signal(str)  # human-readable "done" message
     exportFailed = Signal(str)  # human-readable error message
     heatmapPrefetchReady = Signal()
@@ -706,6 +707,8 @@ class AnalysisBridge(QObject):
         self._annotation_table_worker: TableQueryWorker | None = None
         self._best_scan_plot_worker: TableQueryWorker | None = None
         self._feature_list_worker: TableQueryWorker | None = None
+        self._prediction_features_worker: TableQueryWorker | None = None
+        self._prediction_features_path = ""
         # One slot each for HeatmapControlsPanel.qml's four .h5ad-backed
         # fetches — see requestObsColumns/requestFeatureValueRange/
         # requestObsValueRange/requestObsCategories. Four separate
@@ -1327,6 +1330,37 @@ class AnalysisBridge(QObject):
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return []
         return _dataframe_to_records(analysis_db.load_all_features_for_prediction(analysis_db_path))
+
+    @Slot(str)
+    def requestFeaturesForPrediction(self, analysis_db_path: str) -> None:
+        """`getFeaturesForPrediction` on a background thread: the rows arrive
+        via `featuresForPredictionReady(analysis_db_path, rows)` (over the
+        lab share, the blocking call froze the window)."""
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            self.featuresForPredictionReady.emit(analysis_db_path, [])
+            return
+        worker = TableQueryWorker(
+            analysis_db.load_all_features_for_prediction, analysis_db_path, self
+        )
+        worker.succeeded.connect(self._onFeaturesForPredictionSucceeded)
+        worker.failed.connect(self._onFeaturesForPredictionFailed)
+        self._prediction_features_worker = worker
+        self._prediction_features_path = analysis_db_path
+        worker.start()
+
+    @Slot(object)
+    def _onFeaturesForPredictionSucceeded(self, df: pd.DataFrame) -> None:
+        if self.sender() is not self._prediction_features_worker:
+            return  # superseded by a newer request — discard
+        rows = [] if df.empty else _dataframe_to_records(df)
+        self.featuresForPredictionReady.emit(self._prediction_features_path, rows)
+
+    @Slot(str)
+    def _onFeaturesForPredictionFailed(self, message: str) -> None:
+        if self.sender() is not self._prediction_features_worker:
+            return  # superseded by a newer request — discard
+        logger.warning("prediction feature list load failed: %s", message)
+        self.featuresForPredictionReady.emit(self._prediction_features_path, [])
 
     @Slot(str, list, dict)
     def predictFormulas(

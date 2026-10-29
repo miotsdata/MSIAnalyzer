@@ -16,6 +16,11 @@ def _click(window_or_view, item, qtbot):
 def _open_annotations_tab(view, root, find_visual_child, qtbot):
     nav_button = find_visual_child(root, "navButton_2")
     _click(view, nav_button, qtbot)
+    # Its table loads on a background thread; clicking before it settles
+    # occasionally missed the Predict formula button.
+    qtbot.waitUntil(lambda: find_visual_child(root, "annotationsSection") is not None, timeout=5000)
+    section = find_visual_child(root, "annotationsSection")
+    qtbot.waitUntil(lambda: not section.property("rowsLoading"), timeout=5000)
 
 
 def _open_predict_formula_window(view, root, find_visual_child, qtbot):
@@ -25,6 +30,8 @@ def _open_predict_formula_window(view, root, find_visual_child, qtbot):
     window = root.findChild(QObject, "predictFormulaWindow")
     assert window is not None
     qtbot.waitUntil(lambda: window.property("visible") is True, timeout=2000)
+    # The feature list loads on a background thread.
+    qtbot.waitUntil(lambda: window.property("featuresLoading") is False, timeout=5000)
     return window
 
 
@@ -38,7 +45,7 @@ def _seed_unannotated_feature(db_path, feature_id=2, mz=50.0):
 
 
 # Every feature row / feature checkbox / adduct checkbox below is created by
-# a Repeater — QObject.findChild doesn't reliably reach those (their QObject
+# a ListView or Repeater — QObject.findChild doesn't reliably reach those (their QObject
 # parent is the QQmlDelegateModel machinery, not the visual parent), so
 # these all go through find_visual_child(window.contentItem(), ...) instead,
 # same as test_roi_design_window.py's identical pattern for RoiDesignWindow.
@@ -258,10 +265,11 @@ def test_finished_signal_refreshes_the_windows_own_feature_list(
     application.analysis_bridge.formulaPredictionFinished.emit(
         annotated_analysis_model.analysisDbPath
     )
-    qtbot.wait(50)
 
-    after = {f["feature_id"]: f["compound_name"] for f in window.property("features")}
-    assert after[2] == "C6H12O6 + [M+H]+"
+    def names():
+        return {f["feature_id"]: f["compound_name"] for f in window.property("features")}
+
+    qtbot.waitUntil(lambda: names()[2] == "C6H12O6 + [M+H]+", timeout=5000)
 
 
 def test_failed_signal_shows_error_and_clears_predicting(
@@ -303,3 +311,22 @@ def test_finished_signal_bumps_annotations_refresh_token(
     qtbot.wait(50)
 
     assert section.property("refreshToken") == before + 1
+
+
+def test_feature_list_builds_only_visible_rows(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # Thousands of features froze the window when every row was built.
+    with sqlite3.connect(annotated_analysis_model.analysisDbPath) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(100 + i, 200.0 + i) for i in range(300)],
+        )
+        con.commit()
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    window = _open_predict_formula_window(view, root, find_visual_child, qtbot)
+
+    assert len(window.property("features")) == 301
+    assert find_visual_child(window.contentItem(), "predictFeatureRow_7") is not None
+    assert find_visual_child(window.contentItem(), "predictFeatureRow_399") is None

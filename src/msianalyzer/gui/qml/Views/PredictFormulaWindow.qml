@@ -53,7 +53,16 @@ Window {
 
     property string analysisDbPath: ""
     property var features: []  // [{feature_id, mz, compound_name, best_score}]
+    property bool featuresLoading: false
     property var selectedFeatureIds: []
+    // feature_id -> true: membership checks without scanning the array
+    // (thousands of features made "select all unannotated" quadratic).
+    readonly property var selectedSet: {
+        var set = {}
+        for (var i = 0; i < predictWindow.selectedFeatureIds.length; i++)
+            set[predictWindow.selectedFeatureIds[i]] = true
+        return set
+    }
     property bool predicting: false
 
     // Polarity is local to this window — unlike the New Analysis target-
@@ -104,7 +113,7 @@ Window {
     readonly property bool allUnannotatedSelected:
         predictWindow.unannotatedFeatureIds.length > 0
         && predictWindow.unannotatedFeatureIds.every(function (id) {
-            return predictWindow.selectedFeatureIds.indexOf(id) !== -1
+            return predictWindow.selectedSet[id] === true
         })
 
     // A toggle, not a one-way action — a mis-click used to have no way
@@ -115,12 +124,16 @@ Window {
     function toggleSelectAllUnannotated() {
         var targetIds = predictWindow.unannotatedFeatureIds
         if (predictWindow.allUnannotatedSelected) {
+            var targets = {}
+            for (var t = 0; t < targetIds.length; t++)
+                targets[targetIds[t]] = true
             predictWindow.selectedFeatureIds = predictWindow.selectedFeatureIds.filter(
-                function (id) { return targetIds.indexOf(id) === -1 })
+                function (id) { return targets[id] !== true })
         } else {
+            var selected = predictWindow.selectedSet
             var merged = predictWindow.selectedFeatureIds.slice()
             for (var i = 0; i < targetIds.length; i++) {
-                if (merged.indexOf(targetIds[i]) === -1)
+                if (selected[targetIds[i]] !== true)
                     merged.push(targetIds[i])
             }
             predictWindow.selectedFeatureIds = merged
@@ -133,7 +146,10 @@ Window {
         predictWindow.analysisDbPath = dbPath
         predictWindow.selectedFeatureIds = []
         predictWindow.errorLabelText = ""
-        predictWindow.features = dbPath ? AnalysisBridge.getFeaturesForPrediction(dbPath) : []
+        predictWindow.features = []
+        predictWindow.featuresLoading = !!dbPath
+        if (dbPath)
+            AnalysisBridge.requestFeaturesForPrediction(dbPath)
         predictWindow.visible = true
         predictWindow.raise()
         predictWindow.requestActivate()
@@ -150,8 +166,14 @@ Window {
                 // AnnotationsSection's — otherwise a feature just
                 // predicted for still shows "(unannotated)" here until
                 // the window is closed and reopened.
-                predictWindow.features = AnalysisBridge.getFeaturesForPrediction(dbPath)
+                AnalysisBridge.requestFeaturesForPrediction(dbPath)
                 predictWindow.predictionFinished()
+            }
+        }
+        function onFeaturesForPredictionReady(dbPath, rows) {
+            if (dbPath === predictWindow.analysisDbPath) {
+                predictWindow.features = rows
+                predictWindow.featuresLoading = false
             }
         }
         function onFormulaPredictionFailed(dbPath, message) {
@@ -272,25 +294,33 @@ Window {
             }
         }
 
-        ScrollView {
+        Label {
+            objectName: "predictFeaturesLoadingLabel"
+            visible: predictWindow.featuresLoading
+            text: "Loading features…"
+            color: Theme.mutedTextColor
+        }
+
+        // A ListView builds only the rows on screen: a Repeater built one
+        // per feature, seconds for thousands.
+        ListView {
+            id: predictFeatureList
             objectName: "predictFeatureScrollView"
+            visible: !predictWindow.featuresLoading
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            model: predictWindow.features
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            ColumnLayout {
-                width: predictWindow.width - 40
-                spacing: 0
-
-                Repeater {
-                    model: predictWindow.features
                     delegate: RowLayout {
                         objectName: "predictFeatureRow_" + modelData.feature_id
-                        Layout.fillWidth: true
+                        width: predictFeatureList.width - 16
 
                         AppCheckBox {
                             objectName: "predictFeatureCheck_" + modelData.feature_id
-                            checked: predictWindow.selectedFeatureIds.indexOf(modelData.feature_id) !== -1
+                            checked: predictWindow.selectedSet[modelData.feature_id] === true
                             onToggled: predictWindow.toggleFeature(modelData.feature_id, checked)
 
                             HoverHandler {
@@ -313,8 +343,6 @@ Window {
                             Layout.preferredWidth: 70
                         }
                     }
-                }
-            }
         }
 
         Label {
