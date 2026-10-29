@@ -3,6 +3,29 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
+## 0.7.1 — 2026-10-29
+
+### Changed
+- **Precursor ppm against the feature's weighted m/z** (ADR 65 addendum).
+  The ppm error uses the intensity-weighted m/z across samples instead of
+  the rounded one. Annotations shows the spread across samples (±ppm), and
+  candidates within that spread share a rank ("Tied with").
+
+### Fixed
+- **Faster Annotations and analysis opening, especially on network shares**
+  (ADR 50 addendum).
+  - The Annotations table and the Predict formula feature list build only
+    the rows on screen.
+  - Each sample's raw-data path is resolved once, not once per feature.
+  - The database schema update runs in the background, and is skipped when
+    the analysis is already up to date.
+  - The Predict formula window loads its features in the background.
+  - `.var` annotations are rewritten in the background after formula
+    prediction or a post-run target list.
+- **No concurrent `.h5ad` writes:** all in-app writes to the same file now
+  take turns, and `.var` is replaced in one step, so a reader never finds it
+  missing.
+
 ## 0.7.0 — 2026-10-29
 
 ### Added
