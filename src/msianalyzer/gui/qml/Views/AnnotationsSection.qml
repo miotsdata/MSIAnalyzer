@@ -385,6 +385,7 @@ Item {
             spacing: 8
 
             RowLayout {
+                Layout.rightMargin: 8
                 Layout.fillWidth: true
 
                 Label {
@@ -420,6 +421,7 @@ Item {
             }
 
             RowLayout {
+                Layout.rightMargin: 8
                 Layout.fillWidth: true
                 spacing: 4
 
@@ -451,6 +453,7 @@ Item {
             }
 
             RowLayout {
+                Layout.rightMargin: 8
                 objectName: "annotationsTableHeader"
                 Layout.fillWidth: true
                 spacing: 4
@@ -496,6 +499,7 @@ Item {
             // means this panel's own size never changes when its content
             // does — only what's drawn *inside* that fixed space toggles.
             Item {
+                Layout.rightMargin: 8
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
@@ -653,6 +657,7 @@ Item {
                 color: Theme.mutedTextColor
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
+                Layout.leftMargin: 8
             }
 
             // A vertical SplitView, not a plain ColumnLayout — a
@@ -678,6 +683,7 @@ Item {
                 orientation: Qt.Vertical
                 visible: annotationsSection.selectedFeatureId >= 0
                 Layout.fillWidth: true
+                Layout.leftMargin: 8
                 Layout.fillHeight: true
                 // Explicit, not relying on Layout.fillHeight alone — see
                 // tablePanel/detailPanel's own `height: annotationsSplit.height`
@@ -839,14 +845,12 @@ Item {
                     Label {
                         text: "Match details:"
                         font.bold: true
-                        Layout.leftMargin: 8
                     }
 
                     // Same always-reserve-the-space wrapper as tablePanel's
                     // own Item above.
                     Item {
                         Layout.fillWidth: true
-                        Layout.leftMargin: 8
                         Layout.fillHeight: true
 
                     Label {
