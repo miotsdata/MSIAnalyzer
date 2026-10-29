@@ -1,6 +1,6 @@
 [project]
 name = "MSIAnalyzer"
-version = "0.7.0"
+version = "0.7.1"
 description = "App to analyze MSI data"
 authors = [
     {name = "Matteo Miotto", email = "miotsdata@gmail.com"},
