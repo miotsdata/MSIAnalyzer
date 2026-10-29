@@ -47,7 +47,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-import h5py
 import numpy as np
 import pandas as pd
 
@@ -545,7 +544,7 @@ def write_roi_to_source(
     names = pd.Index(np.asarray(source_obs_names, dtype=str))
     values = np.asarray(mask, dtype=bool)
 
-    with h5py.File(source_path, "r+") as f:
+    with h5ad_io.open_for_write(source_path) as f:
         index = h5ad_io.read_obs_index(f).astype(str)
         rows = index.get_indexer(names)
         found = rows >= 0
@@ -583,7 +582,7 @@ def remove_roi_from_source(
         raise FileNotFoundError(source_path)
     names = pd.Index(np.asarray(source_obs_names, dtype=str))
 
-    with h5py.File(source_path, "r+") as f:
+    with h5ad_io.open_for_write(source_path) as f:
         if not h5ad_io.has_obs_column(f, column):
             return False
         index = h5ad_io.read_obs_index(f).astype(str)

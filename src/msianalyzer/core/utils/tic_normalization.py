@@ -276,7 +276,7 @@ def _write_feature_layer(
 ) -> str:
     """One sample: write `layers[layer_name]` and `obs["norm_scale_<layer>"]`
     in place, without rewriting the rest of the file (ADR 50)."""
-    with h5py.File(path, "r+") as f:
+    with h5ad_io.open_for_write(path) as f:
         raw = csr_matrix(ad.io.read_elem(f["X"]), dtype=np.float32)
         normalized, inv_factor = _normalize(raw, reference_values, reference_median)
         layers = f.require_group("layers")
@@ -299,7 +299,7 @@ def _write_merged_layer(
             scales[name] = np.asarray(
                 h5ad_io.read_obs_column(f, f"norm_scale_{layer_name}"), dtype=np.float32
             )
-    with h5py.File(merged_path, "r+") as f:
+    with h5ad_io.open_for_write(merged_path) as f:
         sample_col = np.asarray(h5ad_io.read_obs_column(f, "sample")).astype(str)
         rows = [np.flatnonzero(sample_col == name) for name in blocks]
         for name, idx in zip(blocks, rows):
@@ -413,7 +413,7 @@ def remove_feature_layer(
         paths.append(Path(merged_path))
     removed = 0
     for path in paths:
-        with h5py.File(path, "r+") as f:
+        with h5ad_io.open_for_write(path) as f:
             had_layer = "layers" in f and layer_name in f["layers"]
             if had_layer:
                 del f["layers"][layer_name]

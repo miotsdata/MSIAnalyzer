@@ -101,11 +101,37 @@ def test_ensure_schema_current_backfills_annotations_into_var(tmp_path):
         con.commit()
     _seed_sample_with_h5ad(db_path, "sampleA")
 
-    AnalysisBridge().ensureSchemaCurrent(str(db_path))
+    bridge = AnalysisBridge()
+    bridge.ensureSchemaCurrent(str(db_path))
+    bridge.wait_for_var_writes()
 
     var = ad.read_h5ad(tmp_path / "sampleA.h5ad").var
     assert list(var.index) == ["mz_100.0000"]
     assert list(var["feature_id"]) == [7]
+
+
+def test_var_refresh_runs_off_the_gui_thread(tmp_path, monkeypatch):
+    # Rewriting .var in every .h5ad over a network share froze the window.
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    threads = []
+
+    def slow_write(db, paths):
+        threads.append(threading.current_thread())
+        started.set()
+        release.wait(5)
+
+    monkeypatch.setattr("msianalyzer.core.export.write_annotations_to_var", slow_write)
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    bridge = AnalysisBridge()
+    bridge._refresh_var_annotations(str(db_path))  # returns at once
+    assert started.wait(5)
+    release.set()
+    bridge.wait_for_var_writes()
+
+    assert threads and threads[0] is not threading.main_thread()
 
 
 def test_ensure_schema_current_missing_db_is_a_no_op(tmp_path):

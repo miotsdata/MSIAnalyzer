@@ -195,12 +195,12 @@ def write_annotations_to_var(db_path: str | Path, h5ad_paths) -> None:
     in place (only those elements are rewritten, ADR 50). Replaces any earlier
     copy, so it's called again whenever an annotation changes after the
     run. Missing files are skipped."""
-    import h5py
+    from msianalyzer.core.utils import h5ad_io
 
     for path in h5ad_paths:
         if not Path(path).exists():
             continue
-        with h5py.File(path, "r+") as f:
+        with h5ad_io.open_for_write(path) as f:
             var = ad.io.read_elem(f["var"])
             var = var.drop(columns=[c for c in VAR_ANNOTATION_COLUMNS if c in var])
             var = var.join(annotation_var_table(db_path, var))

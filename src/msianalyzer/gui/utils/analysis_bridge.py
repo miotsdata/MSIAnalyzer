@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -708,6 +709,8 @@ class AnalysisBridge(QObject):
         self._best_scan_plot_worker: TableQueryWorker | None = None
         self._feature_list_worker: TableQueryWorker | None = None
         self._prediction_features_worker: TableQueryWorker | None = None
+        # `.var` rewrites, queued and run one at a time off the GUI thread.
+        self._var_writes = ThreadPoolExecutor(max_workers=1, thread_name_prefix="var-writer")
         self._prediction_features_path = ""
         # One slot each for HeatmapControlsPanel.qml's four .h5ad-backed
         # fetches — see requestObsColumns/requestFeatureValueRange/
@@ -995,16 +998,30 @@ class AnalysisBridge(QObject):
             return
         analysis_db.init_analysis_db(analysis_db_path).close()
         # Backfill: an analysis run before annotations went into `.var`.
-        paths = list(self._pipeline_sample_paths(analysis_db_path).values())
-        if paths and not core_export.var_has_annotations(paths[0]):
-            self._refresh_var_annotations(analysis_db_path)
+        self._refresh_var_annotations(analysis_db_path, only_if_missing=True)
 
-    def _refresh_var_annotations(self, analysis_db_path: str) -> None:
+    def _refresh_var_annotations(
+        self, analysis_db_path: str, *, only_if_missing: bool = False
+    ) -> None:
         """Rewrite `.var`'s annotation columns in every sample `.h5ad` and
-        `merged.h5ad` after an annotation changed. Best effort: a failure
-        leaves the files as they were and never blocks the GUI action."""
-        paths = list(self._pipeline_sample_paths(analysis_db_path).values())
+        `merged.h5ad` after an annotation changed, on a background thread:
+        over a network share, writing every file froze the window. One
+        write at a time, so two refreshes never touch the same file at
+        once. `only_if_missing`: only for an analysis run before `.var`
+        held annotations."""
+        self._var_writes.submit(self._write_var_annotations, analysis_db_path, only_if_missing)
+
+    def wait_for_var_writes(self) -> None:
+        """Block until every queued `.var` write has finished (tests)."""
+        self._var_writes.submit(lambda: None).result()
+
+    @classmethod
+    def _write_var_annotations(cls, analysis_db_path: str, only_if_missing: bool) -> None:
+        """Best effort: a failure leaves the files as they were."""
         try:
+            paths = list(cls._pipeline_sample_paths(analysis_db_path).values())
+            if only_if_missing and (not paths or core_export.var_has_annotations(paths[0])):
+                return
             core_export.write_annotations_to_var(
                 analysis_db_path, paths + [Path(analysis_db_path).parent / "merged.h5ad"]
             )

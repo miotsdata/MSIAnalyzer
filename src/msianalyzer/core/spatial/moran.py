@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 
+from msianalyzer.core.utils import h5ad_io
 from msianalyzer.core.utils.logging_utils import log_call
 from msianalyzer.core.utils.lazy_import import lazy_module
 
@@ -66,4 +67,5 @@ def compute_spatial_autocorr(
         show_progress_bar=False,
     )
 
-    adata.write_h5ad(h5ad_path)
+    with h5ad_io.write_lock:
+        adata.write_h5ad(h5ad_path)

@@ -142,7 +142,7 @@ def save_roi_to_sample(
         raise ValueError(f"ROI {name!r} needs at least 3 vertices, got {len(vertices)}")
 
     mask = sample_polygon_mask(h5ad_path, vertices)
-    with h5py.File(h5ad_path, "r+") as f:
+    with h5ad_io.open_for_write(h5ad_path) as f:
         h5ad_io.set_obs_column(f, roi_obs_column(name), mask)
         rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
         rois[name] = {
@@ -164,7 +164,7 @@ def delete_roi_from_sample(h5ad_path: Path | str, name: str) -> bool:
     Returns:
         True if anything was actually removed.
     """
-    with h5py.File(h5ad_path, "r+") as f:
+    with h5ad_io.open_for_write(h5ad_path) as f:
         had_column = h5ad_io.drop_obs_column(f, roi_obs_column(name))
         rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
         had_uns = rois.pop(name, None) is not None
@@ -251,7 +251,7 @@ def sync_roi_to_merged(
         return False
 
     column = roi_obs_column(name)
-    with h5py.File(merged_path, "r+") as f:
+    with h5ad_io.open_for_write(merged_path) as f:
         row_mask = _sample_rows(f, sample_name)
         values = (
             np.asarray(h5ad_io.read_obs_column(f, column), dtype=bool)
@@ -298,7 +298,7 @@ def sync_roi_deletion_to_merged(
         return False
 
     column = roi_obs_column(name)
-    with h5py.File(merged_path, "r+") as f:
+    with h5ad_io.open_for_write(merged_path) as f:
         rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
         entry = rois.get(name)
         has_column = h5ad_io.has_obs_column(f, column)

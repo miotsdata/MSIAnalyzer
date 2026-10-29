@@ -16,6 +16,8 @@ batch several edits into one open.
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from typing import Any
 
 import h5py
@@ -25,6 +27,18 @@ import pandas as pd
 from msianalyzer.core.utils.lazy_import import lazy_module
 
 ad = lazy_module("anndata")
+
+#: Held by every in-app `.h5ad` write. Two handles writing one HDF5 file at
+#: once can corrupt it, and writes now run on several threads (the GUI
+#: thread, `.var` refreshes, normalization, Moran's I).
+write_lock = threading.RLock()
+
+
+@contextmanager
+def open_for_write(path):
+    """`h5py.File(path, "r+")`, one writer at a time across threads."""
+    with write_lock, h5py.File(path, "r+") as f:
+        yield f
 
 
 def _column_order(obs: h5py.Group) -> list[str]:
