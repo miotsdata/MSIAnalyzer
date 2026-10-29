@@ -166,3 +166,36 @@ def test_candidate_names_best_first_per_kind(analysis, library):
     full = load_feature_candidate_names(analysis).set_index("feature_id")
     assert full.loc[2, "ms2_candidates"] == ["A", "B"]
     assert full.loc[1, "precursor_candidates"] == ["PC 16:0/18:1", "PC 18:1/16:0"]
+
+
+def test_ppm_from_the_weighted_mz_and_ties_within_the_sample_spread(analysis, library, tmp_path):
+    # Two samples 1 ppm apart, the stronger one higher: the m/z leans to it,
+    # and the two PC isomers (0.15 ppm apart) can't be told apart.
+    from msianalyzer.core.analysis_db import log_command
+    from msianalyzer.core.spectra.average_spectra import save_aggregated_spectra
+
+    s1 = register_sample(analysis, "s1", str(tmp_path / "s1.db"), "+")
+    for sid, mz, intensity in ((1, 760.5847, 1.0), (s1, 760.5855, 3.0)):
+        cid = log_command(analysis, "filter_spectra", {}, run_id="r", sample_id=sid)
+        save_aggregated_spectra(
+            np.array([mz]), np.array([intensity]),
+            analysis_db_path=analysis, run_id="r", sample_id=sid, command_id=cid,
+        )
+    with sqlite3.connect(analysis) as con:
+        con.execute("UPDATE features SET members_json = '{\"s0\": 0, \"s1\": 0}' WHERE feature_id = 1")
+
+    run_precursor_annotation(
+        analysis, SimpleNamespace(library_path=str(library), precursor_ppm=5.0)
+    )
+    with sqlite3.connect(analysis) as con:
+        mz_w, spread = con.execute(
+            "SELECT mz_weighted, mz_spread_ppm FROM features WHERE feature_id = 1"
+        ).fetchone()
+        rows = con.execute(
+            "SELECT rank, tie_rank, ppm_error, ref_mz FROM precursor_annotations "
+            "WHERE feature_id = 1 ORDER BY rank"
+        ).fetchall()
+    assert 760.5851 < mz_w < 760.5855
+    assert spread == pytest.approx(0.53, abs=0.05)
+    assert [(r[0], r[1]) for r in rows] == [(1, 1), (2, 1)]
+    assert rows[0][2] == pytest.approx((mz_w - rows[0][3]) / rows[0][3] * 1e6)

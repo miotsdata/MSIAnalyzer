@@ -163,14 +163,16 @@ PRECURSOR_UNS_KEY = "precursor_candidates"
 
 def precursor_uns_table(db_path: str | Path, var: pd.DataFrame) -> pd.DataFrame:
     """Every precursor candidate of the features in `var`, with `feature`
-    the feature's `.var_names` entry: ``feature, rank, name, formula,
-    adduct, mz_ref, ppm, library``. Empty when there are none."""
+    the feature's `.var_names` entry: ``feature, rank, tie_rank, name,
+    formula, adduct, mz_ref, ppm, library`` (`tie_rank`: candidates within
+    the feature's m/z spread across samples share it). Empty when there
+    are none."""
     from msianalyzer.core.spectra.isotopes import _column_keys
 
     with connect(db_path) as con:
         try:
             df = pd.read_sql_query(
-                "SELECT f.mz, p.rank, p.compound_name AS name, p.compound_formula AS formula, "
+                "SELECT f.mz, p.rank, COALESCE(p.tie_rank, p.rank) AS tie_rank, p.compound_name AS name, p.compound_formula AS formula, "
                 "p.adduct, p.ref_mz AS mz_ref, p.ppm_error AS ppm, l.name AS library "
                 "FROM precursor_annotations p JOIN features f ON f.feature_id = p.feature_id "
                 "LEFT JOIN annotation_libraries l ON l.id = p.library_id "

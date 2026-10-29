@@ -259,3 +259,11 @@ def test_complex_multi_sample_alignment():
     assert row_500["A"] == 2
     assert row_500["B"] == 2
     assert pd.isna(row_500["C"])
+
+def test_weighted_mz_leans_to_the_stronger_peak_and_reports_the_spread():
+    from msianalyzer.core.spectra.mz_tools import weighted_mz_and_spread
+
+    mz, spread = weighted_mz_and_spread([100.0000, 100.0001], [3.0, 1.0])
+    assert mz == pytest.approx(100.000025)
+    assert spread == pytest.approx(0.5, abs=1e-3)  # +-0.00005 Da at m/z 100
+    assert weighted_mz_and_spread([100.0], [5.0]) == (100.0, None)

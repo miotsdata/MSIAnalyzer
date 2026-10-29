@@ -167,6 +167,19 @@ and `.var` get `precursor_name`, `precursor_ppm` and
 `n_precursor_candidates`, and every candidate is in
 `.uns["precursor_candidates"]` (see [Outputs](outputs.md)). See ADR 65.
 
+**Which m/z is matched.** A feature's listed m/z is the plain mean of its
+samples' centroids, rounded to `align.mz_decimals`, and stays its name
+everywhere (`.var`, exports). Precursor matching instead uses the
+*intensity-weighted* mean of those centroids, unrounded (a stronger peak has
+a more precise centroid), and records how far the samples disagree, as a
+standard deviation in ppm. Annotations shows it next to each ppm error
+(`-1.80 ppm (±0.50 ppm)`). Candidates whose |ppm| differ by less than that
+spread can't be told apart by mass, so they share a rank (`1. A`, `1. B`,
+`3. C`); the details panel says how many a hit is tied with. Centroids are
+already on the 0.0001 Da bin grid, so at low m/z (~0.7 ppm at m/z 70) that
+grid, not the averaging, limits precision. Older analyses get this on their
+next Re-annotate.
+
 The Annotations name search also looks through each feature's candidates,
 MS2 and precursor, up to the **Top-N** set in the top-hits panel: a feature
 shown because of a candidate says which one (`matched: Theophylline

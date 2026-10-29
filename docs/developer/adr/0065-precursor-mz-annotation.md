@@ -49,6 +49,23 @@ the only identity a feature without MS2 can get from a library.
   cached per database version since grouping every MS2 row takes seconds on
   millions; a covering index `idx_ann_feature_compound` makes it ~3x faster.
 
+- **Feature m/z and ties** (follow-up): samples disagree on a feature's
+  m/z by ~1 ppm, as much as the ppm differences between candidates.
+  `features.mz` stays the rounded plain mean (the identity every join,
+  `aligned_mzs.csv` and `.var` use); precursor matching computes
+  `features.mz_weighted`, the intensity-weighted mean of the member
+  centroids (from each sample's stored `filter_spectra` peaks, via
+  `members_json`), unrounded, and `features.mz_spread_ppm`, their standard
+  deviation in ppm (NULL with one sample). ppm errors are against
+  `mz_weighted`. Candidates whose |ppm| is within `mz_spread_ppm` of their
+  tie group's first share its `precursor_annotations.tie_rank` (`rank`
+  stays unique: the representative pick still takes `rank = 1`). Computed
+  at precursor annotation, so the pipeline and Re-annotate both refresh
+  it. Limit: centroids are rounded to the 0.0001 Da bin grid at detection
+  and stored as float32, which dominates below ~m/z 200; keeping full
+  precision there is a separate change. Recalibration against known peaks
+  (the fix for a systematic per-sample offset) is deferred.
+
 ## Consequences
 
 - Only compounds that have spectra in the libraries, with the adducts those

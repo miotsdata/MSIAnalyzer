@@ -17,6 +17,7 @@ adduct with a candidate count, not one compound name.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from pyteomics import mass as pt_mass
 from pyteomics.auxiliary.structures import PyteomicsError
 
 from ..analysis_db import create_analysis_schema
+from ..parser.mzml_parser import blob_to_array
+from ..spectra.mz_tools import weighted_mz_and_spread
 from ..utils.logging_utils import log_call
 from .ms2_cleaning import normalize_polarity
 from .target_list import Adduct, TargetListError, adduct_by_label, adduct_mz
@@ -132,20 +135,25 @@ class PrecursorCandidate:
     ref_source: str
     ppm_error: float
     rank: int = 0
+    tie_rank: int = 0
 
 
 def match_features(
-    features: list[tuple[int, float]],
+    features: list[tuple],
     libraries: list[_LibraryEntries],
     ppm: float,
     polarities: set[str] | None = None,
 ) -> list[PrecursorCandidate]:
     """Every candidate within `ppm` of each feature, the closest spectrum
     per (library, compound, adduct), ranked per feature by |ppm|.
-    `polarities` keeps spectra of those polarities (or unknown); `None`
-    keeps all."""
+
+    `features` holds ``(feature_id, mz)`` or ``(feature_id, mz, spread_ppm)``:
+    candidates whose |ppm| is within `spread_ppm` of their tie group's
+    first share its ``tie_rank``. `polarities` keeps spectra of those
+    polarities (or unknown); `None` keeps all."""
     out: list[PrecursorCandidate] = []
-    for feature_id, mz in features:
+    for feature_id, mz, *rest in features:
+        spread = (rest[0] if rest else None) or 0.0
         best: dict[tuple, PrecursorCandidate] = {}
         for lib in libraries:
             lo = np.searchsorted(lib.ref_mz, mz * (1 - ppm * 1e-6), side="left")
@@ -164,16 +172,59 @@ def match_features(
                 if key not in best or abs(cand.ppm_error) < abs(best[key].ppm_error):
                     best[key] = cand
         ranked = sorted(best.values(), key=lambda c: (abs(c.ppm_error), c.compound_name or ""))
+        group_start = None
         for rank, cand in enumerate(ranked, start=1):
             cand.rank = rank
+            if group_start is None or abs(cand.ppm_error) - abs(group_start.ppm_error) > spread:
+                group_start = cand
+            cand.tie_rank = group_start.rank
         out.extend(ranked)
     return out
+
+
+def update_feature_mz_precision(con: sqlite3.Connection) -> None:
+    """Fill ``features.mz_weighted`` / ``mz_spread_ppm`` from each sample's
+    filtered MS1 peaks, the alignment's input (`members_json` indexes
+    them). A feature with no member peak (injected) keeps NULL.
+
+    The stored peaks are already on the 0.0001 Da centroid grid, so this
+    gains weighting and the spread, not sub-grid precision.
+    """
+    samples = con.execute("SELECT sample_id, name FROM samples ORDER BY sample_id").fetchall()
+    peaks = []
+    for sample_id, _ in samples:
+        row = con.execute(
+            "SELECT a.mz_array, a.intensity_array FROM aggregated_spectra a "
+            "JOIN commands c ON c.id = a.command_id "
+            "WHERE c.command_name = 'filter_spectra' AND a.sample_id = ? "
+            "ORDER BY a.id DESC LIMIT 1",
+            (sample_id,),
+        ).fetchone()
+        peaks.append((blob_to_array(row[0]), blob_to_array(row[1])) if row else None)
+    names = [name for _, name in samples]
+    updates = []
+    for feature_id, members_json in con.execute("SELECT feature_id, members_json FROM features"):
+        mzs, ints = [], []
+        # Keyed by sample name; by position when the run renamed them
+        # (`align.sample_names`) — both follow the samples' order.
+        for pos, (key, idx) in enumerate(json.loads(members_json or "{}").items()):
+            s = names.index(key) if key in names else pos
+            if idx is None or s >= len(peaks) or peaks[s] is None or idx >= len(peaks[s][0]):
+                continue
+            mzs.append(peaks[s][0][idx])
+            ints.append(peaks[s][1][idx])
+        mz, spread = weighted_mz_and_spread(mzs, ints) if mzs else (None, None)
+        updates.append((mz, spread, feature_id))
+    con.executemany(
+        "UPDATE features SET mz_weighted = ?, mz_spread_ppm = ? WHERE feature_id = ?", updates
+    )
+    con.commit()
 
 
 _COLS = (
     "feature_id", "library_id", "library_spectrum_id", "compound_id", "compound_name",
     "compound_formula", "inchikey", "adduct", "ref_mz", "ref_source", "ppm_error",
-    "rank", "command_id",
+    "rank", "tie_rank", "command_id",
 )
 
 
@@ -189,7 +240,10 @@ def run_precursor_annotation(
     paths = normalize_library_paths(config.library_path)
     with sqlite3.connect(analysis_db_path) as con:
         create_analysis_schema(con)
-        features = con.execute("SELECT feature_id, mz FROM features").fetchall()
+        update_feature_mz_precision(con)
+        features = con.execute(
+            "SELECT feature_id, COALESCE(mz_weighted, mz), mz_spread_ppm FROM features"
+        ).fetchall()
         polarities = {
             p for (raw,) in con.execute("SELECT polarity FROM samples")
             if (p := normalize_polarity(raw)) is not None
@@ -209,7 +263,7 @@ def run_precursor_annotation(
             [
                 (c.feature_id, c.library_id, c.library_spectrum_id, c.compound_id,
                  c.compound_name, c.compound_formula, c.inchikey, c.adduct, c.ref_mz,
-                 c.ref_source, c.ppm_error, c.rank, command_id)
+                 c.ref_source, c.ppm_error, c.rank, c.tie_rank, command_id)
                 for c in candidates
             ],
         )

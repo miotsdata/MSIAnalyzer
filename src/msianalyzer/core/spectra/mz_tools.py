@@ -95,3 +95,19 @@ def align_mz_across_samples(
         df_aligned[col] = df_aligned[col].astype("Int64")
 
     return df_aligned
+
+
+def weighted_mz_and_spread(
+    mzs: np.ndarray, intensities: np.ndarray
+) -> tuple[float, float | None]:
+    """A feature's m/z from its per-sample centroids.
+
+    The intensity-weighted mean (a stronger peak has a more precise
+    centroid), and the samples' standard deviation around the plain mean,
+    in ppm (``None`` with a single sample: no spread to measure).
+    """
+    mzs = np.asarray(mzs, dtype=float)
+    weights = np.clip(np.asarray(intensities, dtype=float), 0, None)
+    mz = float(np.average(mzs, weights=weights)) if weights.sum() > 0 else float(mzs.mean())
+    spread = float(mzs.std() / mz * 1e6) if len(mzs) > 1 else None
+    return mz, spread

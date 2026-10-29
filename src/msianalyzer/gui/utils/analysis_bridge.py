@@ -1429,6 +1429,10 @@ class AnalysisBridge(QObject):
         )
         if not precursor_df.empty:
             n_candidates = len(precursor_df)
+            # How many candidates share each tie group, before the Top-N cut.
+            precursor_df["n_tied"] = precursor_df.groupby(
+                precursor_df["tie_rank"].fillna(precursor_df["rank"])
+            )["id"].transform("size")
             precursor_df = precursor_df.head(max(top_n, 0)).copy()
             precursor_df["n_feature_candidates"] = n_candidates
             precursor_df["id"] = "p" + precursor_df["id"].astype(str)

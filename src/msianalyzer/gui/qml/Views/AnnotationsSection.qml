@@ -96,6 +96,14 @@ Item {
 
     // The first top-N candidate matching the name search, when the feature's
     // own name doesn't: {kind, rank, name}, else null.
+    // "±0.50 ppm" — a precursor hit's feature m/z spread across samples,
+    // wrapped in `before`/`after`; "" when unknown (single sample, old run).
+    function spreadText(h, before, after) {
+        if (!h || h.mz_spread_ppm === null || h.mz_spread_ppm === undefined)
+            return ""
+        return before + "±" + Number(h.mz_spread_ppm).toFixed(2) + " ppm" + after
+    }
+
     function candidateMatch(r) {
         var q = annotationsSection.nameQuery
         if (!r || !annotationsSection.searchCandidates || q.trim() === ""
@@ -312,7 +320,14 @@ Item {
                 ["Compound", (h.compound_name || h.inchikey || "?")
                              + (h.compound_formula ? " (" + h.compound_formula + ")" : "")],
                 ["Adduct", h.adduct || "?"],
-                ["Mass error", Number(h.ppm_error).toFixed(2) + " ppm"],
+                ["Mass error", Number(h.ppm_error).toFixed(2) + " ppm"
+                               + annotationsSection.spreadText(h, " (feature m/z ", ")")],
+                ["Feature m/z", h.mz_weighted !== null && h.mz_weighted !== undefined
+                                ? Number(h.mz_weighted).toFixed(5) + "  (intensity-weighted across samples)"
+                                : "?"],
+                ["Tied with", h.n_tied > 1
+                              ? (h.n_tied - 1) + " other candidate(s) within the feature's m/z spread"
+                              : "none"],
                 ["Reference m/z", Number(h.ref_mz).toFixed(4)
                                   + (h.ref_source === "formula" ? "  (from formula + adduct)"
                                                                 : "  (library precursor)")],
@@ -774,10 +789,11 @@ Item {
                                                && annotationsSection.selectedHit.id === modelData.id
                                                ? palette.highlightedText : palette.text
                                         text: modelData.kind === "precursor"
-                                              ? (index + 1) + ". " + (modelData.compound_name || "?")
+                                              ? (modelData.tie_rank || index + 1) + ". " + (modelData.compound_name || "?")
                                                 + (modelData.compound_formula ? "  ·  " + modelData.compound_formula : "")
                                                 + "  ·  " + (modelData.adduct || "?")
                                                 + "  ·  <b>" + Number(modelData.ppm_error).toFixed(2) + " ppm</b>"
+                                                + annotationsSection.spreadText(modelData, " (", ")")
                                                 + (modelData.library_name ? "  ·  " + modelData.library_name : "")
                                               : modelData.kind === "predicted"
                                               ? (index + 1) + ". <b>" + modelData.formula + "</b>"

@@ -694,10 +694,11 @@ def test_precursor_candidates_are_a_second_list_of_hits(
     with sqlite3.connect(annotated_analysis_model.analysisDbPath) as con:
         con.executemany(
             "INSERT INTO precursor_annotations (feature_id, compound_name, compound_formula, "
-            "adduct, ref_mz, ref_source, ppm_error, rank) VALUES (7, ?, 'C8H10N4O2', "
-            "'[M+H]+', 123.4567, 'formula', ?, ?)",
+            "adduct, ref_mz, ref_source, ppm_error, rank, tie_rank) VALUES (7, ?, 'C8H10N4O2', "
+            "'[M+H]+', 123.4567, 'formula', ?, ?, 1)",
             [("Caffeine", 0.4, 1), ("Isomer", 0.4, 2)],
         )
+        con.execute("UPDATE features SET mz_spread_ppm = 0.5 WHERE feature_id = 7")
         con.commit()
     view = analysis_view(annotated_analysis_model)
     root = view.rootObject()
@@ -718,7 +719,8 @@ def test_precursor_candidates_are_a_second_list_of_hits(
     assert [h["compound_name"] for h in hits] == ["Caffeine", "Isomer"]
     assert plain("selectedHit")["id"] == hits[0]["id"]
     stats = plain("statsRows")
-    assert stats[stats.index("Mass error:") + 1] == "0.40 ppm"
+    assert stats[stats.index("Mass error:") + 1] == "0.40 ppm (feature m/z ±0.50 ppm)"
+    assert stats[stats.index("Tied with:") + 1].startswith("1 other candidate")
 
 
 def test_name_search_finds_top_n_candidates(

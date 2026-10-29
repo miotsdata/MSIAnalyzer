@@ -206,6 +206,10 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_features_mz ON features(mz)")
+    # The precise m/z and its spread across samples (precursor matching);
+    # `mz` stays the rounded identity every join and .h5ad var uses.
+    _ensure_column(con, "features", "mz_weighted", "REAL")
+    _ensure_column(con, "features", "mz_spread_ppm", "REAL")
 
     # --- Isotopes taken out of `features` (ADR 54) --------------------------
     # Written by core.spectra.isotopes. A row keeps the feature's own id, m/z
@@ -596,6 +600,9 @@ def create_analysis_schema(con: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_precursor_annotations_feature "
         "ON precursor_annotations(feature_id, rank)"
     )
+    # Candidates closer to each other than the feature's m/z spread across
+    # samples can't be told apart by ppm: they share the tie group's best rank.
+    _ensure_column(con, "precursor_annotations", "tie_rank", "INTEGER")
 
     # --- every MS2 annotation state of the analysis (ADR 0063) ------------
     # Written by core.annotation.reannotation: the pipeline's own state
@@ -1915,12 +1922,16 @@ def load_feature_candidate_names(db_path: Path | str, limit: int = 20) -> pd.Dat
 @log_call(source="db_path")
 def load_precursor_annotations_for_feature(db_path: Path | str, feature_id: int) -> pd.DataFrame:
     """One feature's precursor-m/z candidates (ADR 0065), best first, with
-    the library name joined in. Empty without any (or before ADR 0065)."""
+    the library name, ``tie_rank`` (NULL before ties were recorded) and the
+    feature's ``mz_weighted``/``mz_spread_ppm`` joined in. Empty without
+    any (or before ADR 0065)."""
     sql = """
         SELECT p.id, p.compound_name, p.compound_formula, p.inchikey, p.adduct,
-               p.ref_mz, p.ref_source, p.ppm_error, p.rank, lib.name AS library_name
+               p.ref_mz, p.ref_source, p.ppm_error, p.rank, p.tie_rank,
+               lib.name AS library_name, f.mz_weighted, f.mz_spread_ppm
         FROM precursor_annotations p
         LEFT JOIN annotation_libraries lib ON lib.id = p.library_id
+        LEFT JOIN features f ON f.feature_id = p.feature_id
         WHERE p.feature_id = ?
         ORDER BY p.rank
     """

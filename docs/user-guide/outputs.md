@@ -82,8 +82,10 @@ adata.uns["precursor_candidates"]  # every precursor-m/z candidate, only when an
 ```
 
 `.uns["precursor_candidates"]` is one table, one row per candidate:
-`feature` (the `.var_names` entry), `rank` (1 = smallest |ppm|), `name`,
-`formula`, `adduct`, `mz_ref`, `ppm`, `library`. All candidates of one
+`feature` (the `.var_names` entry), `rank` (1 = smallest |ppm|),
+`tie_rank` (candidates within the feature's m/z spread across samples share
+it), `name`, `formula`, `adduct`, `mz_ref`, `ppm` (against the
+intensity-weighted feature m/z), `library`. All candidates of one
 feature:
 
 ```python
