@@ -763,3 +763,27 @@ def test_name_search_finds_top_n_candidates(
     hit = section.property("selectedHit")
     hit = hit.toVariant() if hasattr(hit, "toVariant") else hit
     assert hit["compound_name"] == "Theophylline"
+
+
+def test_annotations_table_builds_only_visible_rows(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # Thousands of features froze the window for seconds when every row
+    # was built up front; only the rows on screen may exist.
+    with sqlite3.connect(annotated_analysis_model.analysisDbPath) as con:
+        con.executemany(
+            "INSERT INTO features (feature_id, mz, members_json) VALUES (?, ?, '{}')",
+            [(100 + i, 200.0 + i) for i in range(300)],
+        )
+        con.executemany(
+            "INSERT INTO predicted_formulas (feature_id, formula, adduct, mass_error, mass_error_ppm, rank) "
+            "VALUES (?, 'C6H12O6', '[M+H]+', 0.001, 1.0, 1)",
+            [(100 + i,) for i in range(300)],
+        )
+        con.commit()
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _open_annotations_tab(view, root, find_visual_child, qtbot)
+
+    assert find_visual_child(root, "annotationRow_100") is not None
+    assert find_visual_child(root, "annotationRow_399") is None

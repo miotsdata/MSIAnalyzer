@@ -512,52 +512,22 @@ Item {
                     horizontalAlignment: Text.AlignHCenter
                 }
 
-                Flickable {
-                    id: tableFlickable
+                // A ListView builds only the rows on screen: a Repeater built
+                // one item per feature, seconds for thousands of features.
+                ListView {
+                    id: tableList
+                    objectName: "annotationsTableList"
                     visible: annotationsSection.sortedRows.length > 0
                     anchors.fill: parent
                     clip: true
-                contentWidth: width
-                // Computed from the row count directly, not
-                // `tableColumn.implicitHeight` — that formed a genuine
-                // binding cycle (Column's own implicit size, computed
-                // from its children's positions, indirectly depends on
-                // this Flickable's contentItem geometry, which this
-                // property was supposed to help determine) that silently
-                // never resolved: `tableColumn` stayed frozen at height 0
-                // and every row at y=0, permanently (confirmed: still 0
-                // after a 1.2s wait, not a timing issue). Every row here
-                // has the same fixed height (40) and spacing (4), so the
-                // total is just arithmetic — no dependency on anything
-                // this property itself feeds into.
-                contentHeight: annotationsSection.sortedRows.length > 0
-                    ? annotationsSection.sortedRows.length * 40
-                      + (annotationsSection.sortedRows.length - 1) * tableColumn.spacing
-                    : 0
-                boundsBehavior: Flickable.StopAtBounds
-
-                // A plain `Column` positioner, not `ColumnLayout` — the
-                // latter, for a Repeater-generated list of same-width
-                // rows nested inside a Flickable, reproducibly failed to
-                // stack its children vertically at all (every row landed
-                // at y=0, overlapping) regardless of what Layout.*
-                // properties the delegates carried. `Column` just stacks
-                // children by `spacing` unconditionally, with no Layout-
-                // system sizing negotiation to go wrong — everything
-                // these rows need (`topHitsColumn` below, same fix).
-                Column {
-                    id: tableColumn
-                    width: tableFlickable.width
                     spacing: 4
-
-                    Repeater {
-                        id: annotationsRepeater
-                        objectName: "annotationsRepeater"
-                        model: annotationsSection.sortedRows
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: annotationsSection.sortedRows
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                         delegate: Rectangle {
                             objectName: "annotationRow_" + modelData.feature_id
-                            width: tableColumn.width
+                            width: tableList.width
                             height: 40
                             radius: 4
                             color: annotationsSection.selectedFeatureId === modelData.feature_id
@@ -636,8 +606,6 @@ Item {
                                 }
                             }
                         }
-                    }
-                }
                 }
             }
         }
@@ -760,17 +728,16 @@ Item {
                         anchors.fill: parent
                         clip: true
                         contentWidth: width
-                        // Computed directly, not topHitsColumn.implicitHeight
-                        // — see tableFlickable's own contentHeight comment
-                        // above for why (the same binding-cycle freeze).
+                        // Computed directly, not topHitsColumn.implicitHeight:
+                        // that forms a binding cycle that leaves every row at y=0.
                         contentHeight: annotationsSection.shownHits.length > 0
                             ? annotationsSection.shownHits.length * 30
                               + (annotationsSection.shownHits.length - 1) * topHitsColumn.spacing
                             : 0
                         boundsBehavior: Flickable.StopAtBounds
 
-                        // Column, not ColumnLayout — see tableColumn's own
-                        // comment above for why.
+                        // Column, not ColumnLayout: a ColumnLayout of Repeater
+                        // rows inside a Flickable stacked them all at y=0.
                         Column {
                             id: topHitsColumn
                             width: topHitsFlickable.width
