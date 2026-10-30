@@ -109,3 +109,25 @@ exceeds 10³.
   alternative (Main.qml reaching three files deep via raw `objectName`
   string lookups, a testing-only convention this ADR did not want to
   promote to production runtime code).
+
+## Addendum (2026-10-30): streamed reads, one export at a time, ROI checkbox
+
+- **Reported:** after choosing a folder, nothing seemed to happen and no
+  image appeared. The export was running, but it read every sample's
+  whole `.h5ad` (`ad.read_h5ad`: `.X`, every layer, `localMoranI`) and
+  held them all in memory before drawing the first image: about 5 min
+  and tens of GB on a 19-sample project on the share. There was no sign
+  it was running, so repeated attempts started parallel exports, and
+  each new one discarded the previous one's result message.
+- `export_visual_inspection_images` now reads each sample as a
+  `LightSample` (ADR 50): only the drawn layer or obs column, one sample
+  at a time, dropped once saved. `export_integration_tables` reads only
+  its one layer the same way. A test fails if either calls
+  `ad.read_h5ad`.
+- **One export at a time.** `AnalysisBridge.exportStatus` is `""` when
+  idle, else what the running export is doing (Image export reports
+  `n/N` samples). The Export menu is disabled and a status banner shows
+  meanwhile; `_run_export` also refuses a second export.
+- **"Include ROIs"** checkbox in the Image dialog, like "Include scale
+  bar". It starts from Visual Inspection's "Show ROIs" but can be changed
+  for the export alone.

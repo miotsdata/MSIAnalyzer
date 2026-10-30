@@ -296,19 +296,21 @@ ApplicationWindow {
             // [the rest] should be hidden from menu").
             readonly property bool isTargetedAnalysis: window.currentAnalysis
                                                         && window.currentAnalysis.analysisType === "targeted"
+            // One export at a time (the bridge refuses a second one too).
+            readonly property bool exporting: (!!AnalysisBridge && AnalysisBridge.exportStatus !== "")
 
             AppMenuItem {
                 objectName: "exportAnnotationMenuItem"
                 text: "Annotation…"
                 visible: !exportMenu.isTargetedAnalysis
-                enabled: window.currentAnalysis !== null
+                enabled: window.currentAnalysis !== null && !exportMenu.exporting
                 onTriggered: exportAnnotationDialog.open()
             }
             AppMenuItem {
                 objectName: "exportIntegrationMenuItem"
                 text: "Integration…"
                 visible: !exportMenu.isTargetedAnalysis
-                enabled: window.currentAnalysis !== null
+                enabled: window.currentAnalysis !== null && !exportMenu.exporting
                 onTriggered: exportIntegrationDialog.open()
             }
             // Only meaningful while Visual Inspection is the tab actually
@@ -321,7 +323,7 @@ ApplicationWindow {
                 objectName: "exportImageMenuItem"
                 text: "Image…"
                 visible: !exportMenu.isTargetedAnalysis
-                enabled: window.currentAnalysis !== null
+                enabled: window.currentAnalysis !== null && !exportMenu.exporting
                          && stackView.currentItem
                          && stackView.currentItem.visualInspectionActive === true
                 onTriggered: exportImageDialog.open()
@@ -332,7 +334,7 @@ ApplicationWindow {
                 objectName: "exportCalibrationMenuItem"
                 text: "Calibration…"
                 visible: exportMenu.isTargetedAnalysis
-                enabled: window.currentAnalysis !== null
+                enabled: window.currentAnalysis !== null && !exportMenu.exporting
                 onTriggered: exportCalibrationFolderDialog.open()
             }
         }
@@ -651,6 +653,7 @@ ApplicationWindow {
             exportImageDialog.scaleBarAvailable = !!(bar && bar.pixel_um
                                                      && Object.keys(bar.pixel_um).length > 0)
             imageScaleBarCheckBox.checked = exportImageDialog.scaleBarAvailable && !!bar.enabled
+            imageRoisCheckBox.checked = !!(section && section.showRois)
         }
 
         Column {
@@ -696,6 +699,13 @@ ApplicationWindow {
                 enabled: exportImageDialog.scaleBarAvailable
             }
 
+            // Checked by default when ROIs are shown in Visual Inspection.
+            AppCheckBox {
+                id: imageRoisCheckBox
+                objectName: "imageRoisCheckBox"
+                text: "Include ROIs"
+            }
+
             Button {
                 objectName: "imageChooseFolderButton"
                 text: "Choose Folder…"
@@ -725,7 +735,7 @@ ApplicationWindow {
                 snap.colormap,
                 snap.vmin,
                 snap.vmax,
-                snap.showRois,
+                imageRoisCheckBox.checked,
                 imageScaleBarCheckBox.checked,
                 imageShownCategoriesCheckBox.checked ? snap.hiddenCategories : [])
         }
@@ -740,6 +750,38 @@ ApplicationWindow {
         function onExportFailed(message) {
             exportResultDialog.text = "Export failed: " + message
             exportResultDialog.open()
+        }
+    }
+
+    // Non-blocking: the export runs in the background, the app stays usable.
+    Rectangle {
+        objectName: "exportStatusBanner"
+        visible: (!!AnalysisBridge && AnalysisBridge.exportStatus !== "")
+        z: 1000
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 16
+        width: exportStatusRow.implicitWidth + 24
+        height: exportStatusRow.implicitHeight + 16
+        radius: 6
+        color: Theme.secondaryColor
+        border.color: Theme.borderColor
+
+        Row {
+            id: exportStatusRow
+            anchors.centerIn: parent
+            spacing: 8
+            BusyIndicator {
+                width: 20
+                height: 20
+                running: parent.parent.visible
+            }
+            Label {
+                objectName: "exportStatusLabel"
+                anchors.verticalCenter: parent.verticalCenter
+                text: AnalysisBridge ? AnalysisBridge.exportStatus : ""
+                color: Theme.textColor
+            }
         }
     }
 

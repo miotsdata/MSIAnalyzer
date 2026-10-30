@@ -14,6 +14,7 @@ import csv
 import logging
 import sqlite3
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -38,6 +39,7 @@ from .plotting.heatmap import (
     render_heatmap_figure,
     scale_bar_spec,
 )
+from .plotting.light_sample import LightSample
 from .plotting.roi import load_sample_rois
 
 from msianalyzer.core.utils.lazy_import import lazy_module
@@ -325,7 +327,11 @@ def export_integration_tables(
             )
             continue
 
-        adata = ad.read_h5ad(h5ad_path)
+        # Only the one layer: a full read also loads `.X`, every other
+        # layer and `localMoranI`, GBs per sample over a share (ADR 50).
+        light = LightSample(h5ad_path)
+        light.ensure_layer(layer)
+        adata = light.adata
         xy = np.asarray(adata.obsm["spatial"], dtype=float)
         columns = [
             _layer_column(adata, layer, _feature_column_index(adata, mz))
@@ -363,6 +369,7 @@ def export_visual_inspection_images(
     rel_dir: str | None = None,
     include_scale_bar: bool = False,
     hidden_categories: list[str] | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> int:
     """Write `<dest_folder>/<sample_name>.<image_format>` for every
     sample — the same raster + colorbar/legend `render_heatmap_figure`
@@ -403,6 +410,12 @@ def export_visual_inspection_images(
         hidden_categories: Categories switched off in Visual Inspection,
             exported black and left out of the legend (the export dialog's
             "Only the categories shown"). `None` exports every category.
+        progress: Called with `(done, total)` after each sample.
+
+    Each sample is read as a `LightSample` (only the layer or obs column
+    drawn) and dropped once saved: a full `ad.read_h5ad` of every sample
+    held `.X`, every layer and `localMoranI` in memory at once, minutes
+    and tens of GB on a real project.
 
     Returns:
         The number of sample images written. A sample with no `.h5ad`
@@ -413,7 +426,7 @@ def export_visual_inspection_images(
     ext = image_format.lower().lstrip(".")
 
     samples = load_samples(db_path)
-    loaded: dict[str, ad.AnnData] = {}
+    paths: dict[str, Path] = {}
     for sample_name in samples["name"]:
         h5ad_path = _sample_h5ad_path(db_path, sample_name, rel_dir)
         if not h5ad_path.exists():
@@ -421,12 +434,22 @@ def export_visual_inspection_images(
                 "skipping %s in image export: no h5ad at %s", sample_name, h5ad_path
             )
             continue
-        loaded[sample_name] = ad.read_h5ad(h5ad_path)
+        paths[sample_name] = h5ad_path
 
+    def _load(path: Path) -> ad.AnnData:
+        light = LightSample(path)
+        if mode == "feature":
+            light.ensure_layer(layer)
+        elif obs_column:
+            light.ensure_obs(obs_column)
+        return light.adata
+
+    logger.info("exporting %d visual inspection image(s) to %s", len(paths), dest_folder)
     categories: list[str] | None = None
     if mode == "obs" and obs_column:
         union: set[str] = set()
-        for adata in loaded.values():
+        for path in paths.values():
+            adata = _load(path)
             if obs_column in adata.obs.columns and not is_numeric_obs_column(
                 adata, obs_column
             ):
@@ -443,7 +466,8 @@ def export_visual_inspection_images(
     )
 
     written = 0
-    for sample_name, adata in loaded.items():
+    for sample_name, path in paths.items():
+        adata = _load(path)
         scale_bar = None
         if scale_bar_settings is not None:
             scale_bar = scale_bar_spec(scale_bar_settings, sample_name)
@@ -482,6 +506,8 @@ def export_visual_inspection_images(
         dest_path = dest_folder / f"{sample_name}.{ext}"
         fig.savefig(dest_path, bbox_inches="tight")
         written += 1
+        if progress is not None:
+            progress(written, len(paths))
 
     logger.info("exported %d visual inspection image(s) to %s", written, dest_folder)
     return written

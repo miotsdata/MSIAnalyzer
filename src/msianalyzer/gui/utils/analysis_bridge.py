@@ -647,6 +647,7 @@ class AnalysisBridge(QObject):
     schemaReady = Signal(str)  # analysis_db_path
     exportFinished = Signal(str)  # human-readable "done" message
     exportFailed = Signal(str)  # human-readable error message
+    exportStatusChanged = Signal()
     heatmapPrefetchReady = Signal()
     obsColumnsReady = Signal(list)
     featureValueRangeReady = Signal(dict)
@@ -736,6 +737,8 @@ class AnalysisBridge(QObject):
         # action, since only one export can sensibly run at a time from
         # one workspace.
         self._export_worker: ExportWorker | None = None
+        # "" when idle, else what the running export is doing.
+        self._export_status = ""
         # Which dataset Visual Inspection / Spatial Correlation read
         # (ADR 49): `None` = the pipeline output, else an
         # `imported_datasets` row of `_active_db_path`. Only one analysis
@@ -3330,16 +3333,41 @@ class AnalysisBridge(QObject):
         value, and `ExportWorker`'s docstring for why it's generic over
         which export function runs.
         """
+        # One export at a time: a second one used to replace the first
+        # as "current", so the first one's result was silently dropped
+        # while both kept reading. The menu is disabled meanwhile too.
+        if self._export_status:
+            logger.warning("export ignored: another export is still running")
+            return
         worker = ExportWorker(export_fn, self)
         worker.succeeded.connect(self._onExportSucceeded)
         worker.failed.connect(self._onExportFailed)
+        worker.progress.connect(self._onExportProgress)
         self._export_worker = worker
+        self._set_export_status("Exporting…")
         worker.start()
+
+    def _set_export_status(self, status: str) -> None:
+        if status != self._export_status:
+            self._export_status = status
+            self.exportStatusChanged.emit()
+
+    def _get_export_status(self) -> str:
+        return self._export_status
+
+    #: What the running export is doing, `""` when none is running.
+    exportStatus = Property(str, _get_export_status, notify=exportStatusChanged)
+
+    @Slot(str)
+    def _onExportProgress(self, status: str) -> None:
+        if self.sender() is self._export_worker:
+            self._set_export_status(status)
 
     @Slot(str)
     def _onExportSucceeded(self, message: str) -> None:
         if self.sender() is not self._export_worker:
             return  # superseded by a newer request — discard
+        self._set_export_status("")
         self.exportFinished.emit(message)
 
     @Slot(str)
@@ -3347,6 +3375,7 @@ class AnalysisBridge(QObject):
         if self.sender() is not self._export_worker:
             return  # superseded by a newer request — discard
         logger.warning("export failed: %s", message)
+        self._set_export_status("")
         self.exportFailed.emit(message)
 
     @Slot(str, str)
@@ -3363,7 +3392,7 @@ class AnalysisBridge(QObject):
                 (`.csv` included) for comma-delimited (see
                 `core.export.export_annotation_table`).
         """
-        def _do_export() -> str:
+        def _do_export(report) -> str:
             core_export.export_annotation_table(analysis_db_path, dest_path)
             return f"Annotation table exported to {dest_path}"
 
@@ -3388,7 +3417,8 @@ class AnalysisBridge(QObject):
                 its own explicit choice (see
                 `core.export.export_integration_tables`).
         """
-        def _do_export() -> str:
+        def _do_export(report) -> str:
+            report("Exporting integration tables…")
             n = core_export.export_integration_tables(
                 analysis_db_path, dest_folder, layer, file_format
             )
@@ -3409,7 +3439,7 @@ class AnalysisBridge(QObject):
                 written into it (whichever of standards/curve/unknowns
                 actually exist).
         """
-        def _do_export() -> str:
+        def _do_export(report) -> str:
             n = core_export.export_calibration_results(analysis_db_path, dest_folder)
             if n == 0:
                 return "No calibration results to export yet."
@@ -3467,7 +3497,7 @@ class AnalysisBridge(QObject):
         # dataset Visual Inspection is showing when the user clicked.
         rel_dir = self._active_rel_dir(analysis_db_path)
 
-        def _do_export() -> str:
+        def _do_export(report) -> str:
             mz = float(mz_str) if mz_str else None
             vmin = None if vmin_token == "auto" else float(vmin_token)
             vmax = None if vmax_token == "auto" else float(vmax_token)
@@ -3486,6 +3516,7 @@ class AnalysisBridge(QObject):
                 rel_dir=rel_dir,
                 include_scale_bar=include_scale_bar,
                 hidden_categories=[str(c) for c in hidden_categories],
+                progress=lambda done, total: report(f"Exporting images… {done}/{total}"),
             )
             return f"Images exported for {n} sample(s) to {dest_folder}"
 

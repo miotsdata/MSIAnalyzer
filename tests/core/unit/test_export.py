@@ -418,6 +418,32 @@ def test_export_visual_inspection_images_creates_destination_directory(tmp_path)
     assert (tmp_path / "nested" / "dir" / "sampleA.png").exists()
 
 
+def test_image_and_integration_exports_never_read_a_whole_h5ad(tmp_path, monkeypatch):
+    # A full read loads .X plus every layer (localMoranI included):
+    # minutes and tens of GB on a real project over a share.
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_two_feature_rows(db, mzs=(100.0,))
+    _seed_sample_with_obs(db, "sampleA", obs_columns={"polarity": ["a", "b", "a", "b"]})
+    _seed_sample_with_obs(db, "sampleB", obs_columns={"polarity": ["a", "a", "b", "b"]})
+
+    def no_full_read(*args, **kwargs):
+        raise AssertionError("ad.read_h5ad must not be used by exports")
+
+    monkeypatch.setattr(ad, "read_h5ad", no_full_read)
+    progress = []
+
+    assert export_visual_inspection_images(
+        db, tmp_path / "f", "png", "feature", mz=100.0,
+        progress=lambda done, total: progress.append((done, total)),
+    ) == 2
+    assert progress == [(1, 2), (2, 2)]
+    assert export_visual_inspection_images(
+        db, tmp_path / "o", "png", "obs", obs_column="polarity"
+    ) == 2
+    assert export_integration_tables(db, tmp_path / "i", "TIC") == 2
+
+
 # ---------------------------------------------------------------------------
 # export_calibration_results
 # ---------------------------------------------------------------------------

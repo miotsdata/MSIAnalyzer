@@ -18,8 +18,9 @@ class ExportWorker(QThread):
     enough to run straight on the GUI thread without freezing it. One-shot
     per request, not reused.
 
-    Generic over which export function runs — `export_fn` takes no
-    arguments (the caller binds them with `functools.partial` beforehand),
+    Generic over which export function runs — `export_fn` takes only a
+    `report(status)` callable for progress (the caller binds the rest
+    beforehand),
     since the three export functions have entirely different signatures
     (a destination file vs. a destination folder vs. a folder plus display
     settings) and there is no shared argument shape worth forcing them
@@ -28,14 +29,15 @@ class ExportWorker(QThread):
 
     succeeded = Signal(str)  # human-readable "done" message/path
     failed = Signal(str)  # human-readable error message
+    progress = Signal(str)  # human-readable status while running
 
-    def __init__(self, export_fn: Callable[[], str], parent=None) -> None:
+    def __init__(self, export_fn: Callable[[Callable[[str], None]], str], parent=None) -> None:
         super().__init__(parent)
         self._export_fn = export_fn
 
     def run(self) -> None:
         try:
-            result = self._export_fn()
+            result = self._export_fn(self.progress.emit)
         except Exception as e:
             logger.exception("export failed")
             self.failed.emit(str(e))

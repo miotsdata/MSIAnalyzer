@@ -207,23 +207,32 @@ def test_export_annotation_table_failure_emits_export_failed(tmp_path, qtbot):
         bridge.exportAnnotationTable(str(tmp_path / "does_not_exist.db"), str(dest))
 
 
-def test_export_annotation_table_stale_request_is_discarded(tmp_path, qtbot):
-    db_path = tmp_path / "analysis.db"
-    init_analysis_db(db_path).close()
+def test_a_second_export_is_refused_while_one_runs(qtbot):
+    import threading
 
     bridge = AnalysisBridge()
-    received = []
-    bridge.exportFinished.connect(received.append)
+    release = threading.Event()
+    ran = []
+    finished = []
+    bridge.exportFinished.connect(finished.append)
 
-    bridge.exportAnnotationTable(str(db_path), str(tmp_path / "first.csv"))
+    def slow(report):
+        report("Exporting images… 1/2")
+        release.wait(5)
+        ran.append("first")
+        return "first done"
+
+    bridge._run_export(slow)
+    qtbot.waitUntil(lambda: bridge.exportStatus == "Exporting images… 1/2", timeout=2000)
     first_worker = bridge._export_worker
-    bridge.exportAnnotationTable(str(db_path), str(tmp_path / "second.csv"))
 
-    qtbot.waitUntil(lambda: not first_worker.isRunning(), timeout=5000)
-    qtbot.waitUntil(lambda: len(received) >= 1, timeout=5000)
-    qtbot.wait(50)
+    bridge._run_export(lambda report: ran.append("second") or "second done")
+    assert bridge._export_worker is first_worker
 
-    assert len(received) == 1
+    release.set()
+    qtbot.waitUntil(lambda: finished == ["first done"], timeout=5000)
+    assert ran == ["first"]
+    assert bridge.exportStatus == ""
 
 
 def _seed_sample_with_h5ad(db_path: Path, name: str) -> None:

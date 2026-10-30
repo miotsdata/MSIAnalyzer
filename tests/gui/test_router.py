@@ -647,6 +647,10 @@ def test_export_image_menu_item_opens_choice_dialog_with_a_controls_snapshot(
     scale_bar_box = window.findChild(QObject, "imageScaleBarCheckBox")
     assert scale_bar_box.property("enabled") is False
     assert scale_bar_box.property("checked") is False
+    # ROIs follow Visual Inspection's "Show ROIs" (off by default).
+    rois_box = window.findChild(QObject, "imageRoisCheckBox")
+    assert rois_box.property("checked") is False
+    assert rois_box.property("enabled") is True
 
 
 def test_export_image_choose_folder_opens_folder_dialog_with_chosen_format(
@@ -680,6 +684,44 @@ def test_export_image_choose_folder_opens_folder_dialog_with_chosen_format(
 
     assert dialog.property("visible") is False
     assert folder_dialog.property("visible") is True
+
+
+def test_running_export_shows_status_and_disables_the_export_menu(
+    application, engine, qtbot, find_visual_child, tmp_path
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    (tmp_path / "out").mkdir()
+    project_model = ProjectModel(Project(name="p"), str(tmp_path), application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+    find_visual_child(window.findChild(QQuickItem, "navRail"), "navButton_3").click()
+    qtbot.wait(100)
+
+    image_item = window.findChild(QObject, "exportImageMenuItem")
+    banner = window.findChild(QObject, "exportStatusBanner")
+    assert image_item.property("enabled") is True
+    assert banner.property("visible") is False
+
+    bridge = application.analysis_bridge
+    bridge._set_export_status("Exporting images… 3/19")
+    qtbot.wait(50)
+    try:
+        assert image_item.property("enabled") is False
+        assert window.findChild(QObject, "exportAnnotationMenuItem").property("enabled") is False
+        assert banner.property("visible") is True
+        assert window.findChild(QObject, "exportStatusLabel").property("text") == (
+            "Exporting images… 3/19"
+        )
+    finally:
+        bridge._set_export_status("")
+    qtbot.wait(50)
+    assert image_item.property("enabled") is True
+    assert banner.property("visible") is False
 
 
 def test_export_finished_shows_result_dialog(application, engine, qtbot):
