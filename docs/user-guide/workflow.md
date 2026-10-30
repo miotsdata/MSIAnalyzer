@@ -229,6 +229,24 @@ Forgot to enable it? You don't need to re-run. The Spatial Correlation tab's
 (global and/or local, on the normalized layer or raw `X`), still one sample
 at a time. If scores already exist, it asks before overwriting them.
 
+## Stage 11.6 — Feature correlation (opt-in)
+
+Off by default (`feature_correlation.enabled: false`). When enabled,
+`core.spatial.feature_correlation.compute_feature_correlation()` runs per
+sample: the Pearson (or Spearman) correlation between every pair of
+features across that sample's pixels, on `feature_correlation.layer`
+(`"TIC"` by default). Never pooled across samples. Written into the
+sample's own `.h5ad` as `adata.varp["featureCorrelation"]`.
+
+The **Feature Correlation** tab lists the features on the left (search by
+name or m/z). Pick one to see its **Most correlated** and **Most
+anti-correlated** features (N of each, default 25): mean r over the
+samples, then r per sample. Right-click a row for **Show spatial
+distribution**. Its **Compute feature correlation** button computes the
+matrix after the run, on the pipeline output or an imported dataset, and
+asks before overwriting. See
+[ADR 66](../developer/adr/0066-feature-correlation.md).
+
 ## After the run — target list without re-running
 
 Forgot some compounds, or have a new list? **Analyses → Match target list…**

@@ -1726,6 +1726,71 @@ class SpatialCorrelationConfig:
     local_n_workers: int | None = None
 
 
+@dataclass
+class FeatureCorrelationConfig:
+    """Feature x feature correlation across each sample's pixels (ADR 66).
+
+    `core.spatial.feature_correlation`: runs after `spatial_correlation`,
+    once every per-sample `.h5ad` exists. For each sample separately
+    (never pooled across samples, the same rule as Moran's I), correlates
+    every pair of features across that sample's pixels: which features
+    rise and fall together, which ones avoid each other. The full matrix
+    is written into that sample's `.h5ad` (`adata.varp["featureCorrelation"]`,
+    with `uns["featureCorrelation"]` recording the method and layer), and
+    the GUI's Feature Correlation page reads one feature's row at a time.
+
+    Attributes:
+        enabled: Run this stage. Off by default.
+
+            The stored matrix has one value per feature pair, so it grows
+            with the square of the feature count: about 4 MB per sample at
+            1,000 features, 400 MB at 10,000.
+
+            **Interaction:** The GUI's Feature Correlation page has nothing
+            to show for a sample whose `.h5ad` was never enriched by this
+            stage; it can also compute it after the run.
+        layer: Which `.h5ad` layer's intensities to correlate. Default
+            `"TIC"` (TIC-normalized, log1p) — falls back to `.X` (raw) if
+            the named layer isn't present, e.g. when
+            `normalization.enabled` is `False`.
+
+            A pixel where a feature isn't detected holds 0, far below its
+            detected values, so the score mostly reflects whether two
+            features are detected in the same pixels. That is what
+            colocalization means, but it also makes every feature spread
+            over the whole tissue correlate with every other one.
+
+            **Interaction:** Only meaningful when `normalization.enabled`
+            is also `True`; otherwise no `"TIC"` layer exists and this
+            silently falls back to raw intensities.
+        method: `"pearson"` or `"spearman"`.
+
+            Pearson: `r = cov(x, y) / (sd(x) * sd(y))` over the sample's
+            pixels, on the layer's values. Spearman: the same formula on
+            each feature's pixel ranks (ties share their average rank), so
+            a few very bright pixels can't dominate it.
+
+            Range: both give **-1** to **1**. **1**: the two features rise
+            and fall together in every pixel; **0**: no relation; **-1**:
+            where one is high the other is low. A feature with the same
+            value in every pixel (e.g. never detected in that sample) has
+            no score. Default `"pearson"`.
+
+            **Interaction:** None.
+    """
+
+    enabled: bool = False
+    layer: str = "TIC"
+    method: str = "pearson"
+
+    def __post_init__(self) -> None:
+        if self.method not in ("pearson", "spearman"):
+            raise ValueError(
+                f"feature_correlation: method must be 'pearson' or 'spearman', "
+                f"got {self.method!r}"
+            )
+
+
 # Maps group name (used as the nested key in dicts/files) -> dataclass type,
 # and doubles as the canonical group order for __str__, CLI wiring and the
 # GUI's config tabs: the order the pipeline runs the stages in (`analysis`,
@@ -1746,6 +1811,7 @@ GROUPS: dict[str, type] = {
     "consensus": ConsensusConfig,
     "normalization": NormalizationConfig,
     "spatial_correlation": SpatialCorrelationConfig,
+    "feature_correlation": FeatureCorrelationConfig,
     "report": ReportConfig,
     "analysis": AnalysisConfig,
 }
@@ -1767,6 +1833,7 @@ GROUP_TITLES: dict[str, str] = {
     "consensus": "MS2 consensus",
     "normalization": "normalization",
     "spatial_correlation": "spatial correlation",
+    "feature_correlation": "feature correlation",
     "report": "summary report",
     "analysis": "analysis database",
 }
@@ -1778,7 +1845,7 @@ class Config:
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
     `align`, `target_list`, `h5ad`, `isotopes`, `ms2_cleaning`, `group_ms2`, `purity`,
     `annotate`, `consensus`, `normalization`, `spatial_correlation`,
-    `report`, `analysis`) and provides
+    `feature_correlation`, `report`, `analysis`) and provides
     (de)serialization to and from YAML and TOML. Only `io` is required; the
     remaining groups fall back to their dataclass defaults.
 
@@ -1824,10 +1891,11 @@ class Config:
             feature's own intensity). The only normalization option for a
             `targeted` run — see `NormalizationConfig.mode`.
         spatial_correlation: Spatial autocorrelation (Moran's I) parameters.
+        feature_correlation: Feature x feature correlation parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 23
+    version: int = 24
 
     def __init__(
         self,
@@ -1847,6 +1915,7 @@ class Config:
         h5ad: H5adConfig | None = None,
         normalization: NormalizationConfig | None = None,
         spatial_correlation: SpatialCorrelationConfig | None = None,
+        feature_correlation: FeatureCorrelationConfig | None = None,
         analysis: AnalysisConfig | None = None,
         analysis_type: str = "untargeted",
     ) -> None:
@@ -1876,6 +1945,9 @@ class Config:
         self.spatial_correlation: SpatialCorrelationConfig = (
             spatial_correlation or SpatialCorrelationConfig()
         )
+        self.feature_correlation: FeatureCorrelationConfig = (
+            feature_correlation or FeatureCorrelationConfig()
+        )
         self.analysis: AnalysisConfig = analysis or AnalysisConfig()
 
         if self.analysis_type == "targeted" and self.normalization.reference_mz is None:
@@ -1901,6 +1973,13 @@ class Config:
             and self.spatial_correlation.layer == "TIC"
         ):
             self.spatial_correlation.layer = (
+                f"mz_{self.normalization.reference_mz:.4f}"
+            )
+        if (
+            self.normalization.mode == "reference_mz"
+            and self.feature_correlation.layer == "TIC"
+        ):
+            self.feature_correlation.layer = (
                 f"mz_{self.normalization.reference_mz:.4f}"
             )
 

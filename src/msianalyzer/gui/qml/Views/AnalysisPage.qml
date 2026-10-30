@@ -35,6 +35,7 @@ Page {
     // section is a lazy Loader, destroyed on every tab switch.
     property var annotationsState: null
     property var visualState: null
+    property var featureCorrState: null
 
     // False until the analysis database's schema is brought up to date on
     // a background thread (adding an index to a big table took seconds
@@ -45,6 +46,7 @@ Page {
     onAnalysisChanged: {
         analysisPage.annotationsState = null
         analysisPage.visualState = null
+        analysisPage.featureCorrState = null
         analysisPage.schemaReady = false
         if (analysisPage.analysis && analysisPage.analysis.analysisDbPath
                 && !analysisPage.outputMissing)
@@ -247,7 +249,7 @@ Page {
                 Repeater {
                     id: navRepeater
                     objectName: "navRepeater"
-                    model: ["Summary", "MS1 Spectra", "Annotations", "Visual Inspection", "Spatial Correlation"]
+                    model: ["Summary", "MS1 Spectra", "Annotations", "Visual Inspection", "Spatial Correlation", "Feature Correlation"]
 
                     delegate: Button {
                         objectName: "navButton_" + index
@@ -306,7 +308,7 @@ Page {
                     ToolTip.visible: hovered && currentIndex > 0
                     ToolTip.text: currentIndex > 0
                         ? "Imported from " + analysisPage.importedDatasets[currentIndex - 1].source_path
-                          + "\nApplies to Visual Inspection and Spatial Correlation."
+                          + "\nApplies to Visual Inspection, Spatial Correlation and Feature Correlation."
                         : ""
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                 }
@@ -489,6 +491,20 @@ Page {
                         })
                     }
                 }
+                Loader {
+                    id: featureCorrLoader
+                    objectName: "featureCorrelationSectionLoader"
+                    active: sectionStack.currentIndex === 5 && analysisPage.sectionsEnabled
+                    source: "qrc:/Views/FeatureCorrelationSection.qml"
+                    onLoaded: {
+                        item.analysis = Qt.binding(function () { return analysisPage.analysis })
+                        item.showSpatialDistributionRequested.connect(function (mz) {
+                            analysisPage.goToVisualInspection(mz)
+                        })
+                        item.stateSaved.connect(function (s) { analysisPage.featureCorrState = s })
+                        item.restoreState(analysisPage.featureCorrState)
+                    }
+                }
             }
 
             // A targeted analysis' sole page — see `isTargeted`'s own
@@ -551,6 +567,8 @@ Page {
                        && visualLoader.item && !visualLoader.item.featuresLoading
         case 4: return spatialCorrLoader.status === Loader.Ready
                        && spatialCorrLoader.item && !spatialCorrLoader.item.rowsLoading
+        case 5: return featureCorrLoader.status === Loader.Ready
+                       && featureCorrLoader.item && !featureCorrLoader.item.rowsLoading
         default: return true
         }
     }

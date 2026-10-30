@@ -53,6 +53,7 @@ from msianalyzer.core.registration import (
     fit_and_save_registration,
     load_registration,
 )
+from msianalyzer.core.spatial.feature_correlation import read_correlation_info, read_correlation_row
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
 from msianalyzer.core.utils import h5ad_io
 from msianalyzer.core.utils import tic_normalization
@@ -372,6 +373,78 @@ def _load_spatial_correlation_table(
     return pd.DataFrame(rows, columns=columns)
 
 
+def _load_feature_correlation(
+    analysis_db_path: str, mz: float | None, rel_dir: str | None = None
+) -> dict:
+    """One feature's correlations with every other feature (ADR 66), from
+    each sample's stored matrix — one row per sample, never the whole
+    matrix.
+
+    Args:
+        mz: The feature, matched to each file's `var["mz"]` within
+            `heatmap._RENDER_MZ_TOLERANCE_PPM`. `None` only reports which
+            samples have a stored correlation.
+        rel_dir: An imported dataset's folder (ADR 49); `None` = pipeline.
+
+    Returns:
+        `samples` (names with a stored matrix), `method`, `layer`,
+        `feature_mz` (the matched var m/z, `None` if not found), and
+        `rows`: one dict per other feature, `mz`, `compound_name`,
+        `mean_r` (mean over the samples that have a score) and
+        `<sample>: r` (`None` when that sample has no score), sorted by
+        `mean_r` descending. Features with no score in any sample are left
+        out.
+    """
+    out = {"samples": [], "method": "", "layer": "", "feature_mz": None, "rows": []}
+    samples = _inspection_samples_frame(analysis_db_path, rel_dir)
+    by_var: dict[str, dict] = {}
+    names = None
+    for name in samples.get("name", []):
+        path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name, rel_dir)
+        if not path.exists():
+            continue
+        info = read_correlation_info(path)
+        if info is None:
+            continue
+        out["samples"].append(name)
+        out["method"] = out["method"] or str(info.get("method", ""))
+        out["layer"] = out["layer"] or str(info.get("layer", ""))
+        if mz is None:
+            continue
+        with h5py.File(path, "r") as f:
+            var_mz = ad.io.read_elem(f["var"])["mz"].astype(float)
+        diffs = (var_mz - mz).abs()
+        if diffs.empty or diffs.min() > abs(mz) * _RENDER_MZ_TOLERANCE_PPM * 1e-6:
+            continue
+        own = diffs.idxmin()
+        out["feature_mz"] = float(var_mz[own])
+        row = read_correlation_row(path, own)
+        for var_name, r in row.items():
+            if var_name == own:
+                continue
+            entry = by_var.setdefault(var_name, {"mz": float(var_mz[var_name])})
+            entry[name] = None if np.isnan(r) else float(r)
+    if not by_var:
+        return out
+
+    features = analysis_db.load_feature_list(analysis_db_path)
+    feature_mzs = features["mz"].to_numpy() if not features.empty else np.array([])
+    feature_names = features["compound_name"].to_numpy() if not features.empty else np.array([])
+    rows = []
+    for entry in by_var.values():
+        values = [entry[s] for s in out["samples"] if entry.get(s) is not None]
+        if not values:
+            continue
+        for s in out["samples"]:
+            entry.setdefault(s, None)
+        entry["mean_r"] = float(np.mean(values))
+        entry["compound_name"] = _nearest_compound_name(entry["mz"], feature_mzs, feature_names)
+        rows.append(entry)
+    rows.sort(key=lambda r: r["mean_r"], reverse=True)
+    out["rows"] = rows
+    return out
+
+
 def _load_local_moran_layer_data(
     analysis_db_path: str, rel_dir: str | None = None
 ) -> tuple[list[dict], list[str]]:
@@ -661,6 +734,9 @@ class AnalysisBridge(QObject):
     datasetImportFailed = Signal(str)
     datasetMoranFinished = Signal(str)
     datasetMoranFailed = Signal(str)
+    datasetFeatureCorrelationFinished = Signal(str)  # ADR 66
+    datasetFeatureCorrelationFailed = Signal(str)
+    featureCorrelationReady = Signal(dict)
     roiSourceWriteFailed = Signal(str)  # ROI saved locally, write-back failed
     registrationChanged = Signal()  # an H&E image attached or a fit saved
     targetListMatchesChanged = Signal(str)  # analysis_db_path (ADR 60)
@@ -752,6 +828,8 @@ class AnalysisBridge(QObject):
         self._summary_worker_path: str | None = None
         self._summary_cache_path: str | None = None
         self._summary_cache: dict = {}
+        self._feature_correlation_worker: TableQueryWorker | None = None
+        self._feature_correlation_request: float | None = None
 
     @Slot(str)
     def setHeatmapAnalysis(self, analysis_db_path: str) -> None:
@@ -2059,6 +2137,84 @@ class AnalysisBridge(QObject):
         self._drop_spatial_correlation_caches()
         self.heatmap_provider.clearCaches()  # the files changed on disk
         self.datasetMoranFinished.emit(f"Moran's I computed for {n_samples} sample(s).")
+
+    # -----------------------------------------------------------------
+    # Feature correlation (ADR 66)
+    # -----------------------------------------------------------------
+
+    @Slot(str, float)
+    def requestFeatureCorrelation(self, analysis_db_path: str, mz: float) -> None:
+        """Fetch one feature's correlations on a background thread, for the
+        active dataset; the result arrives via `featureCorrelationReady`
+        (`_load_feature_correlation`'s dict plus `requested_mz`). A NaN
+        `mz` only reports which samples have a stored correlation. A newer
+        request discards an older one still running."""
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            self.featureCorrelationReady.emit({"samples": [], "rows": [], "requested_mz": mz})
+            return
+        query_mz = None if mz != mz else float(mz)  # NaN
+        worker = TableQueryWorker(
+            functools.partial(
+                _load_feature_correlation, mz=query_mz,
+                rel_dir=self._active_rel_dir(analysis_db_path),
+            ),
+            analysis_db_path, self,
+        )
+        worker.succeeded.connect(self._onFeatureCorrelationSucceeded)
+        worker.failed.connect(self._onFeatureCorrelationFailed)
+        self._feature_correlation_worker = worker
+        self._feature_correlation_request = mz
+        worker.start()
+
+    @Slot(object)
+    def _onFeatureCorrelationSucceeded(self, result: dict) -> None:
+        if self.sender() is not self._feature_correlation_worker:
+            return  # superseded by a newer request — discard
+        self.featureCorrelationReady.emit({**result, "requested_mz": self._feature_correlation_request})
+
+    @Slot(str)
+    def _onFeatureCorrelationFailed(self, message: str) -> None:
+        if self.sender() is not self._feature_correlation_worker:
+            return
+        logger.warning("feature correlation load failed: %s", message)
+        self.featureCorrelationReady.emit(
+            {"samples": [], "rows": [], "requested_mz": self._feature_correlation_request}
+        )
+
+    @Slot(str, str, str)
+    def computeDatasetFeatureCorrelation(self, analysis_db_path: str, layer: str, method: str) -> None:
+        """Feature correlation over the active dataset (the pipeline output
+        or an imported one), on a background thread (see
+        `imported_dataset.compute_dataset_feature_correlation`). Progress
+        arrives via `datasetTaskProgress`, then
+        `datasetFeatureCorrelationFinished(message)` or
+        `datasetFeatureCorrelationFailed(message)`."""
+        dataset_id = (
+            self._get_active_dataset_id()
+            if self._active_rel_dir(analysis_db_path) is not None else None
+        )
+        task = functools.partial(
+            self._run_dataset_feature_correlation, analysis_db_path, dataset_id, layer, method,
+        )
+        self._start_dataset_task(
+            task, self._onDatasetFeatureCorrelationSucceeded,
+            self.datasetFeatureCorrelationFailed.emit,
+        )
+
+    @staticmethod
+    def _run_dataset_feature_correlation(db, dataset_id, layer, method, progress):
+        return imported_dataset.compute_dataset_feature_correlation(
+            db, dataset_id, layer=layer, method=method, progress=progress,
+        )
+
+    @Slot(object)
+    def _onDatasetFeatureCorrelationSucceeded(self, n_samples) -> None:
+        if self.sender() is not self._dataset_task_worker:
+            return
+        self.heatmap_provider.clearCaches()  # the files changed on disk
+        self.datasetFeatureCorrelationFinished.emit(
+            f"Feature correlation computed for {n_samples} sample(s)."
+        )
 
     def _drop_spatial_correlation_caches(self) -> None:
         self._spatial_correlation_model_path = None

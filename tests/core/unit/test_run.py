@@ -172,6 +172,13 @@ class MockSpatialCorrelationConfig:
     local_n_workers: int | None = None
 
 
+@dataclass
+class MockFeatureCorrelationConfig:
+    enabled: bool = False
+    layer: str = "TIC"
+    method: str = "pearson"
+
+
 class DummyConfig:
     def __init__(self, tmp_path):
         self.analysis_type = "untargeted"
@@ -199,6 +206,7 @@ class DummyConfig:
         self.h5ad = MockH5ADConfig()
         self.normalization = MockNormalizationConfig()
         self.spatial_correlation = MockSpatialCorrelationConfig()
+        self.feature_correlation = MockFeatureCorrelationConfig()
         self.analysis = MockAnalysisConfig()
 
     @classmethod
@@ -1226,6 +1234,7 @@ _FULL_RUN_STAGES_SUCCESS = [
     ("normalize_tic", "started"),
     ("normalize_tic", "completed"),
     ("spatial_correlation", "skipped"),
+    ("feature_correlation", "skipped"),
     ("summary_report", "started"),
     ("summary_report", "completed"),
 ]
@@ -1378,6 +1387,50 @@ def test_run_core_runs_both_moran_passes_when_both_enabled(mocker, tmp_path):
     )
     assert mock_global.call_count == 2
     assert mock_local.call_count == 2
+
+
+def _run_core_with_feature_correlation(mocker, tmp_path, *, enabled):
+    run = Run("test_config.yml")
+    config = DummyConfig(tmp_path)
+    config.annotate.library_path = str(tmp_path / "lib.db")
+    config.feature_correlation.enabled = enabled
+    config.feature_correlation.method = "spearman"
+    out_dir = Path(config.io.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    run.config = config
+    run.project = mocker.MagicMock(uuid="proj_uuid_123")
+    results = [
+        SampleResult(out_db_path=out_dir / f"sample{i}.db", peaks_mzs=np.array([100.0]))
+        for i in (1, 2)
+    ]
+    mock_adb = mocker.patch("msianalyzer.core.run.run.analysis_db")
+    mock_adb.analysis_db_path.return_value = out_dir / "analysis_ana.db"
+    mock_adb.register_sample.side_effect = [1, 2]
+    mock_adb.is_command_already_run.return_value = False
+    mocker.patch("msianalyzer.core.annotation.reannotation.analysis_db", mock_adb)
+    _patch_run_core_collaborators(mocker)
+    mock_corr = mocker.patch("msianalyzer.core.run.run.compute_feature_correlation")
+    _mock_pool_executor(mocker, results)
+    run.run_core()
+    return mock_corr, mock_adb, out_dir
+
+
+def test_run_core_skips_feature_correlation_when_disabled(mocker, tmp_path):
+    mock_corr, _, _ = _run_core_with_feature_correlation(mocker, tmp_path, enabled=False)
+    mock_corr.assert_not_called()
+
+
+def test_run_core_runs_feature_correlation_per_sample_when_enabled(mocker, tmp_path):
+    mock_corr, mock_adb, out_dir = _run_core_with_feature_correlation(
+        mocker, tmp_path, enabled=True
+    )
+    assert [c.args[0] for c in mock_corr.call_args_list] == [
+        out_dir / "sample1.h5ad", out_dir / "sample2.h5ad"
+    ]
+    for call in mock_corr.call_args_list:
+        assert call.kwargs == {"layer": "TIC", "method": "spearman"}
+    logged = [c.kwargs.get("command_name") for c in mock_adb.log_command.call_args_list]
+    assert "feature_correlation" in logged
 
 
 def test_run_core_emits_sample_progress_as_each_sample_completes(mocker, tmp_path):
@@ -1539,6 +1592,7 @@ def test_run_core_emits_skipped_for_disabled_stages(mocker, tmp_path):
         ("ms2_consensus", "skipped"),
         ("normalize_tic", "skipped"),
         ("spatial_correlation", "skipped"),
+    ("feature_correlation", "skipped"),
         ("summary_report", "skipped"),
     ]
 

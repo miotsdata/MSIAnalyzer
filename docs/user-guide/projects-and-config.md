@@ -15,13 +15,13 @@ opened; older MSIAnalyzer versions can no longer open it after that.
 ## The config file
 
 A run is driven by one config file (`.yaml`/`.yml` or `.toml`). It has a
-`version` key (currently **23**) and one section per pipeline stage. Only `io` is
+`version` key (currently **24**) and one section per pipeline stage. Only `io` is
 required; every other section falls back to its defaults — you never need to
 write out every field, only the ones you want to change from the defaults shown
 below.
 
 ```yaml
-version: 23
+version: 24
 io:
   project_folder: .
   mzml_paths: [data/s1.mzML, data/s2.mzML]
@@ -67,7 +67,7 @@ every tab anyway.
 Sections run in this order during a pipeline execution, which is also the
 order of the GUI's tabs: `ms1` → `centroid` → `peak` → `align` →
 `target_list` → `h5ad` → `isotopes` → `ms2_cleaning` → `group_ms2` → `purity` → `annotate` →
-`consensus` → `normalization` → `spatial_correlation` → `report`.
+`consensus` → `normalization` → `spatial_correlation` → `feature_correlation` → `report`.
 `io` isn't a "stage" as such — it's the input/output paths every other stage
 reads from or writes into — and `analysis` only names the analysis database.
 
@@ -356,6 +356,22 @@ See [ADR 48](../developer/adr/0048-spatial-correlation-morans-i.md).
 | `local_threshold` | `1.0` | **not a pipeline parameter** — only the value the GUI's local-summary table starts at when it first opens; adjustable live in the GUI afterward with no re-run needed. **Not bounded to -1–1** like the global score — see the in-app field help (or [Concepts](concepts.md)) for what values mean. |
 | `local_n_workers` | `null` | worker processes scoring features in parallel for the local pass — it has no built-in parallelism of its own the way `n_jobs` gives the global pass, so every feature's score is split across worker processes instead. `null` uses `os.cpu_count()`; `1` forces a fully serial run. Independent of `n_jobs`, which only affects the global pass. |
 
+
+### `feature_correlation` — feature x feature correlation (opt-in, off by default)
+
+For each sample separately, the correlation between every pair of features
+across that sample's pixels: which features rise and fall together
+(colocalize), which ones avoid each other. Runs after
+`spatial_correlation`. The full matrix goes into each sample's own `.h5ad`
+(`adata.varp["featureCorrelation"]`), browsable in the GUI's **Feature
+Correlation** tab, which can also compute it after the run. See
+[ADR 66](../developer/adr/0066-feature-correlation.md).
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | run the stage. The matrix is one value per feature pair: about 4 MB per sample at 1,000 features, 400 MB at 10,000. |
+| `layer` | `"TIC"` | which layer to correlate; falls back to raw `.X` when missing. A pixel where a feature isn't detected is 0, so r mostly reflects co-detection, and features spread over the whole tissue all correlate with each other. |
+| `method` | `"pearson"` | `pearson` (on the values) or `spearman` (on their ranks, so a few very bright pixels can't dominate). Both range -1 to 1. |
 ### `analysis` — analysis database and run log
 
 Names the per-run SQLite database that collects this analysis' results

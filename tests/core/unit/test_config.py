@@ -5,6 +5,7 @@ import tomllib
 from unittest.mock import patch, MagicMock
 
 from msianalyzer.core.config.config import (
+    FeatureCorrelationConfig,
     IOConfig,
     MS1Config,
     CentroidConfig,
@@ -299,6 +300,37 @@ def test_spatial_correlation_layer_unaffected_by_tic_mode(sample_io_config: IOCo
     assert config.spatial_correlation.layer == "TIC"
 
 
+def test_feature_correlation_defaults():
+    cfg = FeatureCorrelationConfig()
+    assert (cfg.enabled, cfg.layer, cfg.method) == (False, "TIC", "pearson")
+
+
+def test_feature_correlation_rejects_unknown_method():
+    with pytest.raises(ValueError, match="pearson' or 'spearman"):
+        FeatureCorrelationConfig(method="kendall")
+
+
+def test_feature_correlation_layer_auto_corrects_when_reference_mz_normalized(
+    sample_io_config: IOConfig,
+):
+    config = Config(
+        io=sample_io_config,
+        normalization=NormalizationConfig(mode="reference_mz", reference_mz=154.0863),
+    )
+    assert config.feature_correlation.layer == "mz_154.0863"
+
+
+def test_feature_correlation_round_trips_through_dict(sample_io_config: IOConfig):
+    config = Config(
+        io=sample_io_config,
+        feature_correlation=FeatureCorrelationConfig(enabled=True, method="spearman"),
+    )
+    loaded = Config.from_dict(config.to_dict())
+    assert loaded.feature_correlation == FeatureCorrelationConfig(
+        enabled=True, layer="TIC", method="spearman"
+    )
+
+
 # ===========================================================================
 # Config Serialization & Deserialization Tests
 # ===========================================================================
@@ -320,7 +352,7 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     d = config.to_dict()
 
-    assert d["version"] == 23
+    assert d["version"] == 24
     assert d["analysis_type"] == "untargeted"
     assert isinstance(d["io"]["project_folder"], str)
     assert isinstance(d["io"]["mzml_paths"][0], str)
@@ -350,7 +382,7 @@ def test_config_to_dict_stores_paths_inside_project_relative(tmp_path: Path):
 def test_config_from_dict_success(sample_io_config: IOConfig):
     """Verify creating Config from a valid dictionary."""
     raw_data = {
-        "version": 23,
+        "version": 24,
         "io": {
             "project_folder": str(sample_io_config.project_folder),
             "mzml_paths": [str(p) for p in sample_io_config.mzml_paths],
@@ -388,7 +420,7 @@ def test_config_from_dict_targeted_without_reference_mz_raises(
     sample_io_config: IOConfig,
 ):
     raw_data = {
-        "version": 23,
+        "version": 24,
         "analysis_type": "targeted",
         "io": {
             "project_folder": str(sample_io_config.project_folder),
@@ -406,7 +438,7 @@ def test_config_from_dict_targeted_without_analyte_mzs_raises(
     sample_io_config: IOConfig,
 ):
     raw_data = {
-        "version": 23,
+        "version": 24,
         "analysis_type": "targeted",
         "io": {
             "project_folder": str(sample_io_config.project_folder),
@@ -430,7 +462,7 @@ def test_config_from_dict_version_mismatch():
 
 def test_config_from_dict_missing_required_io_fields():
     """Verify TypeError inside dataclasses wraps cleanly into ValueError."""
-    bad_data = {"version": 23, "io": {}}  # Missing required IO fields
+    bad_data = {"version": 24, "io": {}}  # Missing required IO fields
     with pytest.raises(ValueError, match="Invalid or incomplete config"):
         Config.from_dict(bad_data)
 
@@ -491,7 +523,7 @@ def test_config_str_representation(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     output = str(config)
 
-    assert "Config(version=23, analysis_type='untargeted')" in output
+    assert "Config(version=24, analysis_type='untargeted')" in output
     assert "input/output:" in output
     assert "detect centroids:" in output
     assert "group MS2:" in output
@@ -553,7 +585,7 @@ def test_create_config_file_force_overwrite(tmp_path: Path):
     )
 
     loaded = Config.load(config_file)
-    assert loaded.version == 23
+    assert loaded.version == 24
 
 
 def test_create_config_file_nonexistent_project_folder(tmp_path: Path):
@@ -641,7 +673,7 @@ def test_groups_follow_pipeline_order():
     assert list(GROUPS) == [
         "io", "ms1", "centroid", "peak", "align", "target_list", "h5ad",
         "isotopes", "ms2_cleaning", "group_ms2", "purity", "annotate", "consensus",
-        "normalization", "spatial_correlation", "report", "analysis",
+        "normalization", "spatial_correlation", "feature_correlation", "report", "analysis",
     ]
 
 

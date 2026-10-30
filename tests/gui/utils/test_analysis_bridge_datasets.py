@@ -16,6 +16,7 @@ from msianalyzer.core.imported_dataset import import_analyzed_h5ad, sample_h5ad_
 from msianalyzer.gui.utils.analysis_bridge import (
     AnalysisBridge,
     _load_dataset_feature_list,
+    _load_feature_correlation,
     _load_spatial_correlation_table,
 )
 
@@ -301,6 +302,88 @@ def test_compute_dataset_moran_populates_spatial_correlation(analysis, qtbot):
     assert len(df) == 3 * 2
     model = bridge.getSpatialCorrelationModel(str(db))
     qtbot.waitUntil(lambda: not model.rowsLoading, timeout=5000)
+
+
+# ---------------------------------------------------------------------------
+# Feature correlation (ADR 66)
+# ---------------------------------------------------------------------------
+
+
+def _seed_correlation(path, matrix, method="pearson"):
+    """Write a hand-made correlation matrix where the pipeline stage would."""
+    adata = ad.read_h5ad(path)
+    adata.varp["featureCorrelation"] = np.asarray(matrix, dtype=np.float32)
+    adata.uns["featureCorrelation"] = {"method": method, "layer": "TIC"}
+    adata.write_h5ad(path)
+
+
+def test_feature_correlation_loader_without_any_computed(analysis):
+    db, _src, _result = analysis
+    out = _load_feature_correlation(str(db), 100.0)
+    assert out["samples"] == [] and out["rows"] == []
+
+
+def test_feature_correlation_loader_rows_sorted_by_mean_r(analysis):
+    db, _src, _result = analysis
+    # s1 and s2 computed, s3 not; feature 300 has no score in s2 (NaN).
+    _seed_correlation(sample_h5ad_path(db, "s1"), [[1, -0.2, 0.8], [-0.2, 1, 0.1], [0.8, 0.1, 1]])
+    _seed_correlation(sample_h5ad_path(db, "s2"), [[1, -0.6, np.nan], [-0.6, 1, np.nan], [np.nan, np.nan, np.nan]])
+
+    out = _load_feature_correlation(str(db), 100.0)
+
+    assert out["samples"] == ["s1", "s2"]
+    assert out["method"] == "pearson" and out["layer"] == "TIC"
+    assert out["feature_mz"] == pytest.approx(100.0)
+    assert [r["mz"] for r in out["rows"]] == [300.0, 200.0]  # self excluded
+    by_mz = {r["mz"]: r for r in out["rows"]}
+    assert by_mz[300.0]["mean_r"] == pytest.approx(0.8)  # NaN sample ignored
+    assert by_mz[300.0]["s2"] is None
+    assert by_mz[200.0]["mean_r"] == pytest.approx(-0.4)
+    assert by_mz[200.0]["s1"] == pytest.approx(-0.2)
+
+
+def test_feature_correlation_loader_info_only_and_unknown_mz(analysis):
+    db, _src, _result = analysis
+    _seed_correlation(sample_h5ad_path(db, "s1"), np.eye(3))
+    info = _load_feature_correlation(str(db), None)
+    assert info["samples"] == ["s1"] and info["rows"] == []
+    missing = _load_feature_correlation(str(db), 555.0)
+    assert missing["samples"] == ["s1"] and missing["rows"] == []
+
+
+def test_compute_feature_correlation_on_the_pipeline_output(analysis, qtbot):
+    db, _src, _result = analysis
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.datasetFeatureCorrelationFinished, timeout=60000) as blocker:
+        bridge.computeDatasetFeatureCorrelation(str(db), "TIC", "spearman")
+    assert "3 sample" in blocker.args[0]
+
+    out = _load_feature_correlation(str(db), 100.0)
+    assert out["samples"] == list(SAMPLES) and out["method"] == "spearman"
+    assert sorted(r["mz"] for r in out["rows"]) == [200.0, 300.0]
+
+
+def test_compute_feature_correlation_on_an_imported_dataset(analysis, qtbot):
+    db, _src, result = analysis
+    bridge = AnalysisBridge()
+    bridge.setActiveDataset(str(db), result.dataset_id)
+    with qtbot.waitSignal(bridge.datasetFeatureCorrelationFinished, timeout=60000):
+        bridge.computeDatasetFeatureCorrelation(str(db), "TIC", "pearson")
+
+    out = _load_feature_correlation(str(db), 100.0, rel_dir=result.rel_dir)
+    assert [r["mz"] for r in out["rows"]] == [300.0]  # 200 was filtered out of the dataset
+    assert _load_feature_correlation(str(db), 100.0)["samples"] == []  # pipeline untouched
+
+
+def test_request_feature_correlation_emits_ready(analysis, qtbot):
+    db, _src, _result = analysis
+    _seed_correlation(sample_h5ad_path(db, "s1"), [[1, 0.5, 0.2], [0.5, 1, 0.3], [0.2, 0.3, 1]])
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.featureCorrelationReady, timeout=10000) as blocker:
+        bridge.requestFeatureCorrelation(str(db), 200.0)
+    payload = blocker.args[0]
+    assert payload["requested_mz"] == pytest.approx(200.0)
+    assert [r["mz"] for r in payload["rows"]] == [100.0, 300.0]
 
 
 def test_normalize_to_feature_adds_a_layer_and_lists_it(analysis, qtbot):

@@ -579,6 +579,43 @@ def test_compute_dataset_spatial_correlation_needs_a_pass(analysis, tmp_path):
         )
 
 
+def test_compute_dataset_feature_correlation_writes_every_sample(analysis, tmp_path):
+    from msianalyzer.core.imported_dataset import compute_dataset_feature_correlation
+
+    db, _src, result = _import_merged(analysis, tmp_path)
+    calls = []
+    n = compute_dataset_feature_correlation(
+        db, result.dataset_id, layer="TIC", method="spearman",
+        progress=lambda d, t, s: calls.append(s),
+    )
+
+    assert n == 3
+    assert sorted(calls) == list(SAMPLES)
+    for name in SAMPLES:
+        out = ad.read_h5ad(sample_h5ad_path(db, name, result.rel_dir))
+        assert out.varp["featureCorrelation"].shape == (out.n_vars, out.n_vars)
+        assert out.uns["featureCorrelation"]["method"] == "spearman"
+    assert "featureCorrelation" not in ad.read_h5ad(db.parent / "s1.h5ad").varp
+
+
+def test_compute_feature_correlation_on_the_pipeline_output(analysis):
+    from msianalyzer.core.imported_dataset import compute_dataset_feature_correlation
+
+    db, _samples = analysis
+    assert compute_dataset_feature_correlation(db, None, layer="TIC") == 3
+    for name in SAMPLES:
+        out = ad.read_h5ad(sample_h5ad_path(db, name))
+        assert out.varp["featureCorrelation"].shape == (len(MZS), len(MZS))
+
+
+def test_compute_dataset_feature_correlation_unknown_dataset(analysis):
+    from msianalyzer.core.imported_dataset import compute_dataset_feature_correlation
+
+    db, _samples = analysis
+    with pytest.raises(ImportedDatasetError):
+        compute_dataset_feature_correlation(db, 999, layer="TIC")
+
+
 def test_image_export_follows_the_imported_dataset(analysis, tmp_path):
     from msianalyzer.core.export import export_visual_inspection_images
 

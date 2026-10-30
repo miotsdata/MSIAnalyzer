@@ -75,3 +75,4 @@ useful).
 | [63](0063-reannotate-a-finished-analysis.md) | Re-annotate a finished analysis, with every annotation kept in a history | Accepted |
 | [64](0064-ms2-cleaning.md) | MS2 cleaning: background fragments (counted per precursor) and fragments above the precursor | Accepted |
 | [65](0065-precursor-mz-annotation.md) | Annotation by precursor m/z alone, every candidate kept and ranked by ppm | Accepted |
+| [66](0066-feature-correlation.md) | Feature correlation: every feature pair per sample, stored in `varp`, its own tab | Accepted |

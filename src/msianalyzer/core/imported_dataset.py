@@ -601,6 +601,26 @@ def remove_roi_from_source(
 # ---------------------------------------------------------------------------
 
 
+def _dataset_samples(
+    analysis_db_path: Path | str, dataset_id: int | None
+) -> tuple[str | None, list[str]]:
+    """`(rel_dir, sample names)` of an imported dataset, or of the pipeline
+    output (`dataset_id=None`: every sample whose `.h5ad` exists).
+
+    Raises:
+        ImportedDatasetError: unknown dataset.
+    """
+    if dataset_id is None:
+        return None, [
+            name for name in analysis_db.load_samples(analysis_db_path).get("name", [])
+            if sample_h5ad_path(analysis_db_path, name).exists()
+        ]
+    info = analysis_db.load_imported_dataset(analysis_db_path, dataset_id)
+    if info is None:
+        raise ImportedDatasetError("That imported dataset no longer exists.")
+    return info["rel_dir"], [s["name"] for s in info["samples"]]
+
+
 @log_call(source="analysis_db_path")
 def compute_dataset_spatial_correlation(
     analysis_db_path: Path | str,
@@ -646,18 +666,7 @@ def compute_dataset_spatial_correlation(
 
     if not (run_global or run_local):
         raise ImportedDatasetError("Select global and/or local Moran's I.")
-    if dataset_id is None:
-        rel_dir = None
-        samples = [
-            name for name in analysis_db.load_samples(analysis_db_path).get("name", [])
-            if sample_h5ad_path(analysis_db_path, name).exists()
-        ]
-    else:
-        info = analysis_db.load_imported_dataset(analysis_db_path, dataset_id)
-        if info is None:
-            raise ImportedDatasetError("That imported dataset no longer exists.")
-        rel_dir = info["rel_dir"]
-        samples = [s["name"] for s in info["samples"]]
+    rel_dir, samples = _dataset_samples(analysis_db_path, dataset_id)
     n_cpu = n_workers or os.cpu_count() or 1
     for done, sample_name in enumerate(samples, start=1):
         path = sample_h5ad_path(analysis_db_path, sample_name, rel_dir)
@@ -665,6 +674,44 @@ def compute_dataset_spatial_correlation(
             compute_spatial_autocorr(path, layer=layer, n_jobs=n_cpu)
         if run_local:
             compute_local_moran_layer(path, layer=layer, n_workers=n_cpu)
+        if progress is not None:
+            progress(done, len(samples), sample_name)
+    return len(samples)
+
+
+# ---------------------------------------------------------------------------
+# Feature correlation after the run (ADR 66)
+# ---------------------------------------------------------------------------
+
+
+@log_call(source="analysis_db_path")
+def compute_dataset_feature_correlation(
+    analysis_db_path: Path | str,
+    dataset_id: int | None,
+    *,
+    layer: str,
+    method: str = "pearson",
+    progress: Callable[[int, int, str], None] | None = None,
+) -> int:
+    """Feature correlation for every sample file of an imported dataset, or
+    of the pipeline output (`dataset_id=None`), written exactly as the
+    pipeline's `feature_correlation` stage writes it, so the Feature
+    Correlation section reads it unchanged. Samples run one after another;
+    each one's matrix products use every core.
+
+    Returns:
+        The number of samples processed.
+
+    Raises:
+        ImportedDatasetError: unknown dataset.
+    """
+    from msianalyzer.core.spatial.feature_correlation import compute_feature_correlation
+
+    rel_dir, samples = _dataset_samples(analysis_db_path, dataset_id)
+    for done, sample_name in enumerate(samples, start=1):
+        compute_feature_correlation(
+            sample_h5ad_path(analysis_db_path, sample_name, rel_dir), layer=layer, method=method
+        )
         if progress is not None:
             progress(done, len(samples), sample_name)
     return len(samples)

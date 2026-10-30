@@ -44,6 +44,7 @@ from msianalyzer.core.spectra.average_spectra import (
     load_aggregated_spectra,
     save_aggregated_spectra,
 )
+from msianalyzer.core.spatial.feature_correlation import compute_feature_correlation
 from msianalyzer.core.spatial.local_moran import compute_local_moran_layer
 from msianalyzer.core.spatial.moran import compute_spatial_autocorr
 from msianalyzer.core.spectra.isotopes import run_detect_isotopes
@@ -81,6 +82,7 @@ RUN_STEPS: tuple[str, ...] = (
     "ms2_consensus",
     "normalize_tic",
     "spatial_correlation",
+    "feature_correlation",
     "summary_report",
 )
 
@@ -1013,6 +1015,39 @@ class Run:
             logger.info("Spatial correlation disabled; skipping")
             self._emit_step("spatial_correlation", "skipped")
 
+    def _run_feature_correlation_stage(self, head: _SampleProcessingHead) -> None:
+        """Correlate every pair of features within each sample's `.h5ad`
+        (ADR 66), if `config.feature_correlation.enabled` — same
+        one-command-per-stage and per-sample shape as
+        `_run_spatial_correlation_stage`. Untargeted runs only."""
+        cfg = getattr(self.config, "feature_correlation", None)
+        if cfg is None or not getattr(cfg, "enabled", False):
+            logger.info("Feature correlation disabled; skipping")
+            self._emit_step("feature_correlation", "skipped")
+            return
+        self._emit_step("feature_correlation", "started")
+        if not analysis_db.is_command_already_run(
+            "feature_correlation", head.analysis_id, head.adb_path
+        ):
+            analysis_db.log_command(
+                head.adb_path,
+                command_name="feature_correlation",
+                arguments={**vars(cfg)},
+                run_id=head.analysis_id,
+            )
+            for db_path in head.out_db_paths:
+                out_adata_path = head.out_dir / f"{db_path.stem}.h5ad"
+                compute_feature_correlation(out_adata_path, layer=cfg.layer, method=cfg.method)
+                logger.info(
+                    "%s: computed feature correlation -> %s",
+                    db_path,
+                    out_adata_path.name,
+                    extra={"source_file": db_path},
+                )
+        else:
+            logger.debug("Already run feature_correlation")
+        self._emit_step("feature_correlation", "completed")
+
     @log_call
     def _run_core_targeted(self) -> None:
         """Run the MS1-only, calibration-curve-oriented pipeline.
@@ -1279,6 +1314,7 @@ class Run:
         self._write_var_annotations(head)
         self._run_normalization_stage(head)
         self._run_spatial_correlation_stage(head)
+        self._run_feature_correlation_stage(head)
 
         # --- SUMMARY REPORT ---
         report_cfg = getattr(config, "report", None)

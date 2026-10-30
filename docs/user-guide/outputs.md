@@ -78,6 +78,7 @@ adata.layers["localMoranI"]  # per-pixel, per-feature local Moran's I, only when
 adata.var_names            # feature m/z
 adata.obs                  # pixel x / y coordinates, obs["tic"] is the per-pixel TIC used for normalization
 adata.uns["moranI"]        # per-feature global Moran's I (+ p-values), only when spatial_correlation.enabled: true
+adata.varp["featureCorrelation"]  # feature x feature correlation (float32), only when feature_correlation.enabled: true
 adata.uns["precursor_candidates"]  # every precursor-m/z candidate, only when annotate.precursor_enabled: true
 ```
 

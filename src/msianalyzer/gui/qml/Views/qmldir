@@ -16,6 +16,8 @@ MirrorPlotMetadataRow 1.0 MirrorPlotMetadataRow.qml
 MS1SpectraSection 1.0 MS1SpectraSection.qml
 VisualInspectionSection 1.0 VisualInspectionSection.qml
 SpatialCorrelationSection 1.0 SpatialCorrelationSection.qml
+FeatureCorrelationSection 1.0 FeatureCorrelationSection.qml
+FeatureCorrelationTable 1.0 FeatureCorrelationTable.qml
 CalibrationSection 1.0 CalibrationSection.qml
 ZoomableImage 1.0 ZoomableImage.qml
 HeatmapControlsPanel 1.0 HeatmapControlsPanel.qml
