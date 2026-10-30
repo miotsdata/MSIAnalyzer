@@ -94,10 +94,14 @@ c[c["feature"] == adata.var_names[0]]
 ```
 
 `layers["localMoranI"]` is the *full* per-pixel local Moran's I, same
-`(pixels, features)` shape as `.X` — not a pre-thresholded summary. The
-GUI's Spatial Correlation page reads it directly to build its "% of
-pixels above a threshold" table, recomputing that percentage for whatever
-threshold you currently have set in the GUI. Visual Inspection's own
+`(pixels, features)` shape as `.X`. Next to it,
+`uns["localMoranSummary"]` holds, per feature, the number of pixels
+above each threshold from -1 to 5 in steps of 0.05 (`counts`,
+thresholds × features, plus `n_finite`). The GUI's Spatial Correlation
+page reads only this summary for its "% of pixels above a threshold"
+table, and snaps the threshold you type to the nearest step. An analysis
+run before the summary existed gets it written the first time the page
+opens (slower once). Visual Inspection's own
 **Local Moran's I** layer is unrelated to this file — it's always
 recomputed live, on demand, whether or not this pass has run. See
 [Concepts](concepts.md).

@@ -898,10 +898,13 @@ def test_load_local_moran_layer_data_reads_every_feature_not_just_the_last(tmp_p
     assert samples == ["s1"]
     assert len(feature_rows) == 3
     assert sorted(row["mz"] for row in feature_rows) == [100.0, 200.0, 300.0]
-    # Each row's per-sample value is the raw per-pixel array, not a scalar.
+    # Each row's per-sample value is the % above every summary threshold
+    # (not the per-pixel array, which took minutes to read over a share).
+    from msianalyzer.core.spatial.local_moran import SUMMARY_THRESHOLDS, snap_threshold
+
     row_100 = next(r for r in feature_rows if r["mz"] == 100.0)
-    assert isinstance(row_100["s1"], np.ndarray)
-    assert row_100["s1"].shape == (_LOCAL_MORAN_FIXTURE_N_PIXELS,)
+    assert row_100["s1"].shape == (len(SUMMARY_THRESHOLDS),)
+    assert row_100["s1"][snap_threshold(1.0)] == 10.0
 
 
 def test_load_local_moran_threshold_default_reads_from_commands_arguments(tmp_path):

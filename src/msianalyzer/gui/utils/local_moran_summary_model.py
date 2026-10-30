@@ -4,7 +4,7 @@ import math
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Property, Signal, Slot
 
-from msianalyzer.core.spatial.local_moran import pct_above_threshold
+from msianalyzer.core.spatial.local_moran import SUMMARY_THRESHOLDS, snap_threshold
 from msianalyzer.gui.utils.spatial_correlation_model import _matches_mz
 
 
@@ -15,19 +15,15 @@ class LocalMoranSummaryModel(QAbstractTableModel):
     `threshold` property.
 
     Unlike `SpatialCorrelationModel` (whose cells are pre-computed scores,
-    fixed once fetched), this model's `_all_rows` hold the *raw per-pixel*
-    `local_moran_values` array for each (feature, sample) — read from
-    `adata.layers["localMoranI"]` (`core.spatial.local_moran.compute_local_moran_layer`)
-    — and `threshold` is mutable, settable live from QML. Every cell,
-    every sort key, is computed from the raw array *at the current
-    threshold* on demand, in `data()`/`_sort_key()`; changing `threshold`
-    just re-applies both against the same already-loaded arrays (see
-    `setThreshold`), no new fetch needed. This is the whole point of
-    storing the full per-pixel arrays instead of one pre-thresholded
-    number per feature, the way this pass' first version did: a
-    poorly-chosen threshold (local Moran's I has no fixed range — see
-    `SpatialCorrelationConfig.local_threshold`) used to mean "0 features
-    above threshold" with no way to recover short of a full re-run.
+    fixed once fetched), this model's `_all_rows` hold, per (feature,
+    sample), the % of pixels above every `SUMMARY_THRESHOLDS` value (from
+    `uns["localMoranSummary"]`, see `core.spatial.local_moran`), and
+    `threshold` is mutable, settable live from QML and snapped to that
+    grid. Every cell and sort key is a lookup at the current threshold;
+    changing it needs no new fetch. A poorly-chosen threshold (local
+    Moran's I has no fixed range, see
+    `SpatialCorrelationConfig.local_threshold`) is fixed by typing another
+    one, no re-run needed.
 
     Otherwise a deliberate near-duplicate of `SpatialCorrelationModel`
     rather than a shared base class — see that class's own docstring for
@@ -48,8 +44,7 @@ class LocalMoranSummaryModel(QAbstractTableModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         # [{"mz", "compound_name", <sample>: np.ndarray | None}, ...] — the
-        # per-sample value is the *raw* per-pixel local Moran's I array,
-        # not a pre-thresholded percentage.
+        # per-sample value is the % above each SUMMARY_THRESHOLDS value.
         self._all_rows: list[dict] = []
         self._samples: list[str] = []
         self._visible: list[dict] = []
@@ -91,7 +86,7 @@ class LocalMoranSummaryModel(QAbstractTableModel):
         values = row.get(self._samples[column - 1])
         if values is None:
             return "–"
-        return f"{pct_above_threshold(values, self._threshold):.1f}%"
+        return f"{self._pct(values):.1f}%"
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
         if orientation != Qt.Horizontal or role != Qt.DisplayRole:
@@ -104,6 +99,9 @@ class LocalMoranSummaryModel(QAbstractTableModel):
     # ------------------------------------------------------------------
     # Data plumbing
     # ------------------------------------------------------------------
+
+    def _pct(self, values) -> float:
+        return float(values[snap_threshold(self._threshold)])
 
     @staticmethod
     def _feature_label(row: dict) -> str:
@@ -123,7 +121,7 @@ class LocalMoranSummaryModel(QAbstractTableModel):
             values = r.get(column)
             if values is None:
                 return (1, 0.0)
-            pct = pct_above_threshold(values, self._threshold)
+            pct = self._pct(values)
             return (0, pct if ascending else -pct)
 
         return key
@@ -227,7 +225,9 @@ class LocalMoranSummaryModel(QAbstractTableModel):
         sort key is a function of `self._threshold`, so re-applying the
         current sort/filter is all that's needed to update the whole
         table; no new data fetch, no `.h5ad` I/O, just a resort/redisplay
-        over the already-loaded raw arrays."""
+        over the already-loaded percentages. Snapped to the nearest
+        `SUMMARY_THRESHOLDS` value."""
+        value = float(SUMMARY_THRESHOLDS[snap_threshold(value)])
         if value == self._threshold:
             return
         self._threshold = value

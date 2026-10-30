@@ -1600,9 +1600,10 @@ class SpatialCorrelationConfig:
     see that field's own docstring for why this is a genuinely different
     question from the global score above. Written to
     `adata.layers["localMoranI"]` as full per-pixel values, not a single
-    collapsed number — the GUI's Spatial Correlation page turns this into
-    a "% of pixels above a threshold" summary table on the fly, for
-    whatever threshold the user currently has set (`local_threshold` only
+    collapsed number, plus `uns["localMoranSummary"]` (pixels above each
+    threshold, -1 to 5 in steps of 0.05) — the GUI's Spatial Correlation
+    page reads that summary for its "% of pixels above a threshold" table,
+    at whatever threshold the user currently has set (`local_threshold` only
     seeds that threshold's *initial* value; changing it in the GUI needs
     no re-run).
 

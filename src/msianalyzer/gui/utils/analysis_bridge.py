@@ -375,20 +375,16 @@ def _load_spatial_correlation_table(
 def _load_local_moran_layer_data(
     analysis_db_path: str, rel_dir: str | None = None
 ) -> tuple[list[dict], list[str]]:
-    """Reads every sample's `adata.layers["localMoranI"]` (written by
-    `core.spatial.local_moran.compute_local_moran_layer`) and assembles
-    the `LocalMoranSummaryModel.setRows` shape directly — one dict per
-    feature, that sample's *raw per-pixel local Moran's I array* (not a
-    pre-thresholded percentage) folded in as `row[sample_name]`, plus its
-    representative compound name.
+    """Every sample's local Moran's I summary (`uns["localMoranSummary"]`,
+    see `core.spatial.local_moran.load_local_moran_summary`) in the
+    `LocalMoranSummaryModel.setRows` shape: one dict per feature, that
+    sample's % of pixels above each `SUMMARY_THRESHOLDS` value as
+    `row[sample_name]`, plus its representative compound name.
 
-    Unlike `_load_spatial_correlation_table`, this doesn't go through the
-    flat-DataFrame/`_pivot_spatial_correlation_rows` convention — that
-    convention exists to keep values QML-safe via `_dataframe_to_records`,
-    but the raw arrays here never reach QML directly (only the formatted
-    percentage strings `LocalMoranSummaryModel.data()` computes from them
-    do), so there's nothing to scrub and no reason to round-trip through a
-    DataFrame just to pivot it straight back apart.
+    Not the per-pixel `layers["localMoranI"]`: that is pixels x features
+    per sample, GBs per analysis, and took minutes to read over a share.
+    An analysis run before the summary existed reads it once, here, and
+    stores the summary for the next open.
 
     Args:
         analysis_db_path: The analysis' SQLite database.
@@ -398,6 +394,11 @@ def _load_local_moran_layer_data(
         `(feature_rows, samples)` — empty/empty when no sample's `.h5ad`
         has ever had `spatial_correlation.local_enabled` run on it.
     """
+    from msianalyzer.core.spatial.local_moran import (
+        load_local_moran_summary,
+        summary_percentages,
+    )
+
     samples = _inspection_samples_frame(analysis_db_path, rel_dir)
     if samples.empty:
         return [], []
@@ -412,27 +413,23 @@ def _load_local_moran_layer_data(
         h5ad_path = AnalysisBridge._sample_h5ad_path(analysis_db_path, name, rel_dir)
         if not h5ad_path.exists():
             continue
-        # Only `var` and `layers/localMoranI` are read (see
-        # _load_spatial_correlation_table for why not `backed="r"`).
+        summary = load_local_moran_summary(h5ad_path)
+        if summary is None:
+            continue
         with h5py.File(h5ad_path, "r") as f:
-            if "layers" not in f or "localMoranI" not in f["layers"]:
-                continue
-            layer = ad.io.read_elem(f["layers"]["localMoranI"])
-            var = ad.io.read_elem(f["var"])
-        if hasattr(layer, "toarray"):
-            layer = layer.toarray()
-        mz_by_var = var["mz"]
+            mzs = ad.io.read_elem(f["var"]["mz"])
+        pct = summary_percentages(summary)
         sample_names_with_data.add(name)
-        for col_idx, var_name in enumerate(var.index):
-            mz = float(mz_by_var.loc[var_name])
-            row = by_mz.setdefault(
-                mz,
-                {
+        for col_idx, mz in enumerate(np.asarray(mzs, dtype=float)):
+            mz = float(mz)
+            row = by_mz.get(mz)
+            if row is None:
+                # Once per feature, not per sample and feature.
+                row = by_mz[mz] = {
                     "mz": mz,
                     "compound_name": _nearest_compound_name(mz, feature_mzs, feature_names),
-                },
-            )
-            row[name] = np.asarray(layer[:, col_idx], dtype=float)
+                }
+            row[name] = pct[:, col_idx]
 
     return list(by_mz.values()), sorted(sample_names_with_data)
 

@@ -5,6 +5,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
+import h5py
 import numpy as np
 
 from msianalyzer.core.plotting.heatmap import (
@@ -182,6 +183,73 @@ def pct_above_threshold(values: np.ndarray, threshold: float) -> float:
     return 100.0 * float(np.count_nonzero(finite > threshold)) / finite.size
 
 
+#: `.uns` key of the per-threshold summary `compute_local_moran_layer`
+#: writes next to the layer.
+SUMMARY_UNS_KEY = "localMoranSummary"
+
+#: Thresholds the summary is computed at. The GUI snaps its threshold to
+#: the nearest one: reading the full per-pixel layer instead took minutes
+#: and GBs per analysis over a network share.
+SUMMARY_THRESHOLDS = np.round(np.arange(-1.0, 5.0 + 1e-9, 0.05), 2)
+
+
+def local_moran_summary(layer) -> dict:
+    """`pct_above_threshold`'s inputs for every feature at every
+    `SUMMARY_THRESHOLDS` value, from a `(n_pixels, n_features)` layer:
+    `counts[t, j]` = finite pixels of feature `j` strictly above threshold
+    `t`, `n_finite[j]` = its finite pixels. Small enough to store in `.uns`.
+    """
+    layer = np.asarray(layer.toarray() if hasattr(layer, "toarray") else layer, dtype=float)
+    # One row per feature, non-finite as NaN, which sorts last.
+    by_feature = np.where(np.isfinite(layer), layer, np.nan).T.copy()
+    by_feature.sort(axis=1)
+    n_finite = np.isfinite(by_feature).sum(axis=1)
+    counts = np.empty((len(SUMMARY_THRESHOLDS), by_feature.shape[0]), dtype=np.int32)
+    for j, n in enumerate(n_finite):
+        counts[:, j] = n - np.searchsorted(by_feature[j, :n], SUMMARY_THRESHOLDS, side="right")
+    return {
+        "thresholds": SUMMARY_THRESHOLDS.copy(),
+        "counts": counts,
+        "n_finite": n_finite.astype(np.int32),
+    }
+
+
+def summary_percentages(summary: dict) -> np.ndarray:
+    """`(n_thresholds, n_features)` % of pixels above each threshold —
+    `pct_above_threshold` at every grid value (0 with no finite pixels)."""
+    n_finite = np.asarray(summary["n_finite"], dtype=float)
+    counts = np.asarray(summary["counts"], dtype=float)
+    return np.divide(100.0 * counts, n_finite, out=np.zeros_like(counts), where=n_finite > 0)
+
+
+def snap_threshold(value: float) -> int:
+    """Index of the `SUMMARY_THRESHOLDS` value nearest `value` (clamped)."""
+    step = SUMMARY_THRESHOLDS[1] - SUMMARY_THRESHOLDS[0]
+    i = int(round((float(value) - SUMMARY_THRESHOLDS[0]) / step))
+    return min(max(i, 0), len(SUMMARY_THRESHOLDS) - 1)
+
+
+def load_local_moran_summary(h5ad_path: str | Path) -> dict | None:
+    """One sample's stored summary, or `None` without a local Moran's I
+    layer. A file computed before the summary existed gets it built from
+    the layer once (slow: the full layer is read) and written back."""
+    with h5py.File(h5ad_path, "r") as f:
+        summary = h5ad_io.read_uns(f, SUMMARY_UNS_KEY)
+        if summary is not None and np.array_equal(summary["thresholds"], SUMMARY_THRESHOLDS):
+            return summary
+        if "layers" not in f or "localMoranI" not in f["layers"]:
+            return None
+        layer = ad.io.read_elem(f["layers"]["localMoranI"])
+    summary = local_moran_summary(layer)
+    del layer
+    try:
+        with h5ad_io.open_for_write(h5ad_path) as f:
+            h5ad_io.write_uns(f, SUMMARY_UNS_KEY, summary)
+    except OSError:
+        logger.warning("%s: could not store the local Moran's I summary", h5ad_path)
+    return summary
+
+
 def _resolve_n_workers(requested: int | None, n_items: int) -> int:
     """Same clamping convention as `precursor_purity._resolve_n_workers`:
     `None`/**0**/negative means "one per CPU", always clamped to
@@ -355,5 +423,6 @@ def compute_local_moran_layer(
         local_moran_layer[:, idx] = values
 
     adata.layers["localMoranI"] = local_moran_layer
+    adata.uns[SUMMARY_UNS_KEY] = local_moran_summary(local_moran_layer)
     with h5ad_io.write_lock:
         adata.write_h5ad(h5ad_path)

@@ -3,7 +3,14 @@ import math
 import numpy as np
 from PySide6.QtCore import QModelIndex, Qt
 
+from msianalyzer.core.spatial.local_moran import local_moran_summary, summary_percentages
 from msianalyzer.gui.utils.local_moran_summary_model import LocalMoranSummaryModel
+
+
+def _grid(raw) -> np.ndarray:
+    """What the loader hands the model for one (feature, sample): the %
+    above every summary threshold, built from raw per-pixel values."""
+    return summary_percentages(local_moran_summary(np.asarray(raw, dtype=float)[:, None]))[:, 0]
 
 
 def _pixels(n_above: int, n_total: int = 10) -> np.ndarray:
@@ -11,7 +18,7 @@ def _pixels(n_above: int, n_total: int = 10) -> np.ndarray:
     default threshold (1.0) — lets tests reason about exact percentages
     (`n_above / n_total * 100`) without hardcoding real local Moran's I
     values."""
-    return np.array([2.0] * n_above + [0.0] * (n_total - n_above))
+    return _grid([2.0] * n_above + [0.0] * (n_total - n_above))
 
 
 def _rows():
@@ -218,9 +225,9 @@ def test_set_threshold_can_change_sort_order():
     # (50%) above mz 200 (10%). Raising the threshold so only mz 200's
     # pixels (all exactly 2.0) still qualify should flip that ordering.
     rows = [
-        {"mz": 100.0, "compound_name": None, "s1": np.array([2.0] * 9 + [0.0])},
-        {"mz": 200.0, "compound_name": None, "s1": np.array([5.0] * 1 + [0.0] * 9)},
-        {"mz": 300.0, "compound_name": None, "s1": np.array([2.0] * 5 + [0.0] * 5)},
+        {"mz": 100.0, "compound_name": None, "s1": _grid([2.0] * 9 + [0.0])},
+        {"mz": 200.0, "compound_name": None, "s1": _grid([5.0] * 1 + [0.0] * 9)},
+        {"mz": 300.0, "compound_name": None, "s1": _grid([2.0] * 5 + [0.0] * 5)},
     ]
     model = LocalMoranSummaryModel()
     model.setRows(rows, ["s1"])
@@ -230,3 +237,17 @@ def test_set_threshold_can_change_sort_order():
 
     model.threshold = 3.0  # only mz 200's pixels (value 5.0) still clear this
     assert [model.mzForRow(i) for i in range(3)] == [100.0, 300.0, 200.0]
+
+
+def test_threshold_snaps_to_the_summary_grid():
+    model = LocalMoranSummaryModel()
+    model.setRows([{"mz": 1.0, "compound_name": None, "s1": _grid([1.02, 1.02, 0.0, 0.0])}], ["s1"])
+
+    model.threshold = 1.02  # nearest step is 1.00: both 1.02 pixels count
+    assert model.threshold == 1.0
+    assert model.data(model.index(0, 1, QModelIndex())) == "50.0%"
+    model.threshold = 1.04  # nearest step is 1.05
+    assert model.threshold == 1.05
+    assert model.data(model.index(0, 1, QModelIndex())) == "0.0%"
+    model.threshold = 99.0  # clamped to the top of the grid
+    assert model.threshold == 5.0

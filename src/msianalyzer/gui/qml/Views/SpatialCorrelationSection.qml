@@ -528,6 +528,12 @@ Item {
                             if (!spatialCorrelationSection.localModel) return
                             var v = parseFloat(text)
                             if (!isNaN(v)) spatialCorrelationSection.localModel.threshold = v
+                            // Show the value actually used: thresholds snap
+                            // to steps of 0.05 between -1 and 5.
+                            text = Qt.binding(function () {
+                                return spatialCorrelationSection.localModel
+                                    ? spatialCorrelationSection.localModel.threshold.toFixed(2) : ""
+                            })
                         }
                     }
                     TextField {

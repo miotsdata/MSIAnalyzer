@@ -336,8 +336,9 @@ the GUI's **Spatial Correlation** tab.
 *local* (per-pixel) Moran's I for every feature, written in full to
 `adata.layers["localMoranI"]` (not a pre-thresholded summary) — the
 GUI's **Spatial Correlation** tab turns this into a "% of pixels above a
-threshold" table on the fly, and that threshold is freely adjustable
-right there, live, with no re-run: `local_threshold` below only sets what
+threshold" table (from a small summary stored next to the layer), and
+that threshold is adjustable right there, live, in steps of 0.05
+between -1 and 5, with no re-run: `local_threshold` below only sets what
 the table shows when it first opens. Independent of `enabled`: either,
 both, or neither can be on. Visual Inspection's **Local Moran's I**
 heatmap layer computes the same per-pixel score live, on demand, and

@@ -768,3 +768,26 @@ the one that actually matters — sort order changing as the threshold
 does); a new QML test driving the real `localMoranThresholdField`
 `TextField`'s `editingFinished` signal end-to-end and confirming the
 table updates with no new fetch involved.
+
+
+## Addendum (2026-10-30): the summary table reads a stored summary, not the layer
+
+- **Reported:** opening Spatial Correlation took very long on a
+  19-sample project on the share. The local summary table read every
+  sample's full `layers["localMoranI"]` (pixels × 3,033 features,
+  float64: hundreds of MB per sample) to recompute "% above threshold"
+  live.
+- `compute_local_moran_layer` now also writes `uns["localMoranSummary"]`:
+  `counts[t, j]` = finite pixels of feature `j` strictly above
+  `SUMMARY_THRESHOLDS[t]` (-1 to 5, step 0.05), and `n_finite[j]`. Built
+  by sorting each feature once; it equals `pct_above_threshold` exactly at
+  every grid value (tested). About 1.5 MB per sample.
+- The GUI reads only that summary. `LocalMoranSummaryModel` holds the %
+  at every grid value and snaps its threshold to the nearest one; the
+  field shows the snapped value. The threshold stays live, with no
+  re-run.
+- **Older analyses:** `load_local_moran_summary` builds the summary from
+  the layer once, writes it into the `.h5ad` (under the `.h5ad` write
+  lock), and reads it back on later opens.
+- The layer itself is unchanged and still written. Visual Inspection's
+  Local Moran's I map and "Show spatial distribution" never read it.
