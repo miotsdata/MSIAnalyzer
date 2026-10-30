@@ -3,6 +3,26 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
+## 0.7.2 — 2026-10-30
+
+### Fixed
+- **Image export seemed to do nothing** (ADR 41 addendum). It read every
+  sample's whole `.h5ad` before drawing anything: minutes and tens of GB
+  on a large project. It now reads only what each image needs, one sample
+  at a time, and the Integration export reads only its one layer.
+- **Export progress:** a banner shows what is being exported (images
+  count up as they are written). The Export menu is disabled until it
+  finishes, and the result message always appears.
+- **Spatial Correlation opened slowly** (ADR 48 addendum). The local
+  Moran's I table now reads a small stored summary instead of the full
+  per-pixel layer. The threshold snaps to steps of 0.05 between -1 and 5.
+  Analyses run before this version build the summary once, the first
+  time the page opens.
+
+### Added
+- **"Include ROIs"** checkbox in the Image export dialog, like "Include
+  scale bar". It starts from Visual Inspection's "Show ROIs".
+
 ## 0.7.1 — 2026-10-29
 
 ### Changed
