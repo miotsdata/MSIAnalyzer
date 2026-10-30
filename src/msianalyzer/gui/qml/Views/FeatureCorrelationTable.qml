@@ -36,105 +36,52 @@ ColumnLayout {
         font.bold: true
     }
 
-    // Header row, scrolled together with the body horizontally.
-    Flickable {
-        id: headerFlick
-        Layout.fillWidth: true
-        Layout.preferredHeight: correlationTable.rowHeight
-        contentWidth: headerRow.implicitWidth
-        contentX: body.contentX
-        interactive: false
-        clip: true
-
-        Row {
-            id: headerRow
-            height: parent.height
-            Label {
-                width: correlationTable.nameWidth
-                height: parent.height
-                text: "Feature"
-                font.bold: true
-                verticalAlignment: Text.AlignVCenter
-                leftPadding: 6
-            }
-            Label {
-                width: correlationTable.mzWidth
-                height: parent.height
-                text: "m/z"
-                font.bold: true
-                verticalAlignment: Text.AlignVCenter
-            }
-            Label {
-                width: correlationTable.valueWidth
-                height: parent.height
-                text: "Mean r"
-                font.bold: true
-                verticalAlignment: Text.AlignVCenter
-            }
-            Repeater {
-                model: correlationTable.samples
-                delegate: Label {
-                    required property var modelData
-                    width: correlationTable.valueWidth
-                    height: headerRow.height
-                    text: modelData
-                    font.bold: true
-                    elide: Text.ElideRight
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
-        }
-    }
-
-    Rectangle {
-        Layout.fillWidth: true
-        height: 1
-        color: palette.mid
-    }
-
-    ListView {
-        id: body
-        objectName: correlationTable.tableName + "List"
+    // Header and rows scroll sideways together inside one horizontal
+    // Flickable; the rows also scroll vertically inside it (the ListView).
+    // A vertical ListView ignores a horizontal contentWidth, which is why
+    // the sideways scroll lives on this outer Flickable.
+    RowLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
-        clip: true
-        model: correlationTable.rows
-        contentWidth: headerRow.implicitWidth
-        flickableDirection: Flickable.AutoFlickIfNeeded
-        boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar {}
-        ScrollBar.horizontal: ScrollBar {}
+        spacing: 0
 
-        delegate: Rectangle {
-            id: rowItem
-            required property var modelData
-            required property int index
-            objectName: correlationTable.tableName + "Row_" + index
-            width: Math.max(body.width, headerRow.implicitWidth)
-            height: correlationTable.rowHeight
-            color: rowMouse.containsMouse ? palette.alternateBase : "transparent"
+        Flickable {
+            id: hFlick
+            objectName: correlationTable.tableName + "HScroll"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            contentWidth: Math.max(width, headerRow.implicitWidth)
+            contentHeight: height
+            flickableDirection: Flickable.HorizontalFlick
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.horizontal: ScrollBar {
+                id: hBar
+                policy: hFlick.contentWidth > hFlick.width ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+            }
 
             Row {
-                height: parent.height
+                id: headerRow
+                height: correlationTable.rowHeight
                 Label {
                     width: correlationTable.nameWidth
                     height: parent.height
-                    leftPadding: 6
-                    text: rowItem.modelData.compound_name || ("m/z " + Number(rowItem.modelData.mz).toFixed(4))
-                    elide: Text.ElideRight
+                    text: "Feature"
+                    font.bold: true
                     verticalAlignment: Text.AlignVCenter
+                    leftPadding: 6
                 }
                 Label {
                     width: correlationTable.mzWidth
                     height: parent.height
-                    text: Number(rowItem.modelData.mz).toFixed(4)
+                    text: "m/z"
+                    font.bold: true
                     verticalAlignment: Text.AlignVCenter
                 }
                 Label {
-                    objectName: correlationTable.tableName + "MeanR_" + rowItem.index
                     width: correlationTable.valueWidth
                     height: parent.height
-                    text: correlationTable.formatR(rowItem.modelData.mean_r)
+                    text: "Mean r"
                     font.bold: true
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -142,37 +89,127 @@ ColumnLayout {
                     model: correlationTable.samples
                     delegate: Label {
                         required property var modelData
+                        required property int index
+                        objectName: correlationTable.tableName + "SampleHeader_" + index
                         width: correlationTable.valueWidth
-                        height: correlationTable.rowHeight
-                        text: correlationTable.formatR(rowItem.modelData[modelData])
-                        color: Theme.mutedTextColor
+                        height: headerRow.height
+                        rightPadding: 4
+                        text: modelData
+                        font.bold: true
+                        elide: Text.ElideRight
                         verticalAlignment: Text.AlignVCenter
+                        // Sample names rarely fit the column: the full name on hover.
+                        ToolTip.visible: headerHover.hovered
+                        ToolTip.delay: 300
+                        ToolTip.text: modelData
+                        HoverHandler { id: headerHover }
                     }
                 }
             }
 
-            MouseArea {
-                id: rowMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                acceptedButtons: Qt.RightButton
-                onClicked: rowMenu.popup()
+            Rectangle {
+                y: headerRow.height
+                width: hFlick.contentWidth
+                height: 1
+                color: palette.mid
             }
 
-            Menu {
-                id: rowMenu
-                objectName: correlationTable.tableName + "RowMenu_" + rowItem.index
-                AppMenuItem {
-                    objectName: correlationTable.tableName + "ShowDistribution_" + rowItem.index
-                    text: "Show spatial distribution"
-                    onTriggered: correlationTable.showSpatialDistributionRequested(rowItem.modelData.mz)
-                }
-                AppMenuItem {
-                    objectName: correlationTable.tableName + "AddToOverlay_" + rowItem.index
-                    text: "Add to overlay"
-                    onTriggered: correlationTable.addToOverlayRequested(rowItem.modelData.mz)
+            ListView {
+                id: body
+                objectName: correlationTable.tableName + "List"
+                y: headerRow.height + 1
+                width: hFlick.contentWidth
+                height: hFlick.height - y - (hBar.visible ? hBar.height : 0)
+                clip: true
+                model: correlationTable.rows
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: vBar
+
+                delegate: Rectangle {
+                    id: rowItem
+                    required property var modelData
+                    required property int index
+                    objectName: correlationTable.tableName + "Row_" + index
+                    width: body.width
+                    height: correlationTable.rowHeight
+                    color: rowMouse.containsMouse ? palette.alternateBase : "transparent"
+
+                    Row {
+                        height: parent.height
+                        Label {
+                            id: nameLabel
+                            width: correlationTable.nameWidth
+                            height: parent.height
+                            leftPadding: 6
+                            text: rowItem.modelData.compound_name || ("m/z " + Number(rowItem.modelData.mz).toFixed(4))
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Label {
+                            width: correlationTable.mzWidth
+                            height: parent.height
+                            text: Number(rowItem.modelData.mz).toFixed(4)
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Label {
+                            objectName: correlationTable.tableName + "MeanR_" + rowItem.index
+                            width: correlationTable.valueWidth
+                            height: parent.height
+                            text: correlationTable.formatR(rowItem.modelData.mean_r)
+                            font.bold: true
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Repeater {
+                            model: correlationTable.samples
+                            delegate: Label {
+                                required property var modelData
+                                width: correlationTable.valueWidth
+                                height: correlationTable.rowHeight
+                                text: correlationTable.formatR(rowItem.modelData[modelData])
+                                color: Theme.mutedTextColor
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                    }
+
+                    // A cut-off feature name in full, on hover over it.
+                    ToolTip.visible: rowMouse.containsMouse && nameLabel.truncated
+                                     && rowMouse.mouseX < correlationTable.nameWidth
+                    ToolTip.delay: 300
+                    ToolTip.text: nameLabel.text
+
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.RightButton
+                        onClicked: rowMenu.popup()
+                    }
+
+                    Menu {
+                        id: rowMenu
+                        objectName: correlationTable.tableName + "RowMenu_" + rowItem.index
+                        AppMenuItem {
+                            objectName: correlationTable.tableName + "ShowDistribution_" + rowItem.index
+                            text: "Show spatial distribution"
+                            onTriggered: correlationTable.showSpatialDistributionRequested(rowItem.modelData.mz)
+                        }
+                        AppMenuItem {
+                            objectName: correlationTable.tableName + "AddToOverlay_" + rowItem.index
+                            text: "Add to overlay"
+                            onTriggered: correlationTable.addToOverlayRequested(rowItem.modelData.mz)
+                        }
+                    }
                 }
             }
+        }
+
+        // Outside the horizontal Flickable, so it stays in view however
+        // far the table is scrolled sideways.
+        ScrollBar {
+            id: vBar
+            Layout.fillHeight: true
+            orientation: Qt.Vertical
         }
     }
 }

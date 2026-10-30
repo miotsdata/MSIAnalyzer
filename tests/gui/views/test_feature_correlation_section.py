@@ -194,3 +194,26 @@ def test_compute_fills_an_empty_analysis(
     assert "1 sample" in section.property("computeMessage")
     qtbot.waitUntil(lambda: _prop(section, "sampleNames") == ["s1"], timeout=3000)
     assert find_visual_child(root, "featureCorrelationSplit").property("visible") is True
+
+
+def test_tables_scroll_sideways_and_name_samples_on_hover(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    _seed_h5ad(annotated_analysis_model)
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    section = _open_tab(view, root, find_visual_child, qtbot)
+    _select(section, qtbot, 123.4567)
+
+    hscroll = find_visual_child(root, "mostCorrelatedHScroll")
+    hscroll.setProperty("width", 200)  # narrower than name + m/z + mean r + s1
+    qtbot.wait(20)
+    assert hscroll.property("contentWidth") >= 240 + 90 + 80 + 80
+    # The rows are as wide as the scrolled content, not the visible area.
+    rows = find_visual_child(root, "mostCorrelatedList")
+    assert rows.property("width") == hscroll.property("contentWidth")
+    hscroll.setProperty("contentX", 100)
+    assert hscroll.property("contentX") == 100
+
+    header = find_visual_child(root, "mostCorrelatedSampleHeader_0")
+    assert header.property("text") == "s1"

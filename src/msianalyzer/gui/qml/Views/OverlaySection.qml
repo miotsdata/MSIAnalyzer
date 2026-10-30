@@ -181,6 +181,19 @@ Item {
         anchors.margins: 8
         orientation: Qt.Horizontal
 
+        // A gap on both sides of the divider (same handle as
+        // ProjectHomePage): a 1 px line centered in a 12 px drag area.
+        handle: Rectangle {
+            implicitWidth: 12
+            color: "transparent"
+            Rectangle {
+                anchors.centerIn: parent
+                width: 1
+                height: parent.height
+                color: SplitHandle.hovered ? palette.dark : palette.mid
+            }
+        }
+
         // ============================== controls
         ScrollView {
             id: controlsScroll
