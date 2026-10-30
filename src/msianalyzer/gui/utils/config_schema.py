@@ -230,9 +230,11 @@ def build_config_schema() -> list[dict]:
         One entry per group, in `GROUPS` order: `{"key", "title",
         "description", "fields"}`, where `fields` is a list of `{"name",
         "label", "kind", "default", "help", "enabledWhenField",
-        "enabledWhenEquals", "section"}`. `description` is the group dataclass's
+        "enabledWhenEquals", "section", "choices"}`. `description` is the group dataclass's
         docstring summary; `help` is that field's docstring text (empty
         string if undocumented); `label` is `name` prettified for display.
+        A `str` field with `metadata={"choices": (...)}` gets kind
+        `"choice"` (a dropdown of `choices`); `choices` is `[]` otherwise.
         `section` (from `metadata={"section": "..."}`) starts a titled
         part of the tab at that field; `None` continues the current one.
         `enabledWhenField`/`enabledWhenEquals` come from that field's
@@ -273,7 +275,8 @@ def build_config_schema() -> list[dict]:
                 {
                     "name": f.name,
                     "label": _prettify_label(f.name),
-                    "kind": _classify(hints[f.name]),
+                    "kind": "choice" if f.metadata.get("choices") else _classify(hints[f.name]),
+                    "choices": list(f.metadata.get("choices", ())),
                     "default": f.default
                     if f.default is not dataclasses.MISSING
                     else None,

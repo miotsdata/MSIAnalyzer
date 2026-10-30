@@ -1200,10 +1200,24 @@ Page {
                                         }
                                     }
 
+                                    ComboBox {
+                                        objectName: modelData.kind === "choice" ? fieldRow.fieldObjectName : ""
+                                        visible: modelData.kind === "choice"
+                                        model: modelData.choices
+                                        currentIndex: Math.max(0, modelData.choices.indexOf(modelData.default))
+                                        Layout.fillWidth: true
+
+                                        HoverHandler {
+                                            cursorShape: Qt.PointingHandCursor
+                                        }
+                                    }
+
                                     TextField {
-                                        objectName: (modelData.kind !== "bool" && modelData.kind !== "path_list")
+                                        objectName: (modelData.kind !== "bool" && modelData.kind !== "path_list"
+                                                     && modelData.kind !== "choice")
                                                     ? fieldRow.fieldObjectName : ""
                                         visible: modelData.kind !== "bool" && modelData.kind !== "path_list"
+                                                 && modelData.kind !== "choice"
                                         text: (modelData.default === null || modelData.default === undefined)
                                               ? "" : String(modelData.default)
                                         // "float_list"/"optional_str_list" look

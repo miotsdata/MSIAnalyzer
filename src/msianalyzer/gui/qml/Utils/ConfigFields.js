@@ -30,6 +30,8 @@ function parseFieldValue(kind, control) {
     switch (kind) {
     case "bool":
         return control.checked
+    case "choice":
+        return control.currentText
     case "int":
         return parseInt(text, 10)
     case "float":
@@ -70,6 +72,9 @@ function applyFieldValue(kind, control, value) {
     switch (kind) {
     case "bool":
         control.checked = value === true
+        return
+    case "choice":
+        control.currentIndex = Math.max(0, control.find(String(value)))
         return
     case "optional_bool":
         control.text = (value === null || value === undefined) ? "" : String(value)

@@ -1781,7 +1781,7 @@ class FeatureCorrelationConfig:
 
     enabled: bool = False
     layer: str = "TIC"
-    method: str = "pearson"
+    method: str = field(default="pearson", metadata={"choices": ("pearson", "spearman")})
 
     def __post_init__(self) -> None:
         if self.method not in ("pearson", "spearman"):

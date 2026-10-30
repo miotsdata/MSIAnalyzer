@@ -36,7 +36,10 @@ colocalize, which avoid each other. Users did this in notebooks.
 - **Config:** a new group `feature_correlation` (`enabled`, `layer`,
   `method`), config version 24. It gets its own New Analysis tab, generated
   like the others, and is hidden for targeted analyses. The stage runs
-  right after `spatial_correlation`.
+  right after `spatial_correlation`. `method` is a dropdown: a `str` field
+  declared with `metadata={"choices": (...)}` gets the schema kind
+  `"choice"`, rendered as a ComboBox in New Analysis and in
+  `ConfigGroupForm`; any future fixed-value field can use it.
 - **After the run:** the Feature Correlation tab's **Compute feature
   correlation** bar runs it on the active dataset (the pipeline output or
   an imported one, ADR 49), sample by sample, and asks before overwriting

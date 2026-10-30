@@ -1019,3 +1019,19 @@ def test_targeted_mode_shows_input_and_output_tabs(new_analysis_view, project, f
 
     assert find_visual_child(root, "tabButton_input").property("visible") is True
     assert find_visual_child(root, "tabButton_output").property("visible") is True
+
+
+def test_choice_field_is_a_dropdown_collected_and_applied(
+    new_analysis_view, project, find_visual_child
+):
+    _, root, _ = _make_page(new_analysis_view, project)
+    combo = find_visual_child(root, "field_feature_correlation_method")
+    assert combo.property("currentText") == "pearson"
+
+    combo.setProperty("currentIndex", 1)
+    assert _collected(root)["feature_correlation"]["method"] == "spearman"
+
+    root.resetToBlank()
+    assert combo.property("currentText") == "pearson"
+    root.applyConfig({"feature_correlation": {"method": "spearman"}})
+    assert combo.property("currentText") == "spearman"

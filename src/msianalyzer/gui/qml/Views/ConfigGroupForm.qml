@@ -120,10 +120,20 @@ ColumnLayout {
                     Layout.fillWidth: true
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                 }
+                ComboBox {
+                    id: choiceCombo
+                    objectName: modelData.kind === "choice" ? row.controlName : ""
+                    visible: modelData.kind === "choice"
+                    model: modelData.choices
+                    Layout.fillWidth: true
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                }
                 TextField {
                     id: textField
-                    objectName: modelData.kind !== "bool" && modelData.kind !== "path_list" ? row.controlName : ""
-                    visible: modelData.kind !== "bool" && modelData.kind !== "path_list"
+                    readonly property bool isText: modelData.kind !== "bool" && modelData.kind !== "path_list"
+                                                   && modelData.kind !== "choice"
+                    objectName: isText ? row.controlName : ""
+                    visible: isText
                     placeholderText: modelData.kind === "float_list" ? "comma-separated, e.g. 154.0863, 200.1234"
                                      : (modelData.kind === "optional_str_list" ? "comma-separated" : "")
                     Layout.fillWidth: true
@@ -174,7 +184,8 @@ ColumnLayout {
 
                 Component.onCompleted: {
                     if (modelData.kind !== "path_list")
-                        form.controls[modelData.name] = modelData.kind === "bool" ? check : textField
+                        form.controls[modelData.name] = modelData.kind === "bool" ? check
+                                                        : (modelData.kind === "choice" ? choiceCombo : textField)
                     form.loadField(modelData)
                     form.registered += 1
                 }

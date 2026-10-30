@@ -294,3 +294,12 @@ def test_config_schema_provider_analysis_schema_has_db_name_and_log_level():
     assert set(fields) == {"db_name", "log_level"}
     assert fields["log_level"]["default"] == "info"
     assert fields["log_level"]["help"]
+
+
+def test_field_with_choices_is_a_choice_field():
+    by_key = {g["key"]: g for g in build_config_schema()}
+    method = next(f for f in by_key["feature_correlation"]["fields"] if f["name"] == "method")
+    assert method["kind"] == "choice"
+    assert method["choices"] == ["pearson", "spearman"]
+    layer = next(f for f in by_key["feature_correlation"]["fields"] if f["name"] == "layer")
+    assert layer["kind"] == "str" and layer["choices"] == []
