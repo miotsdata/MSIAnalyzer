@@ -247,6 +247,22 @@ matrix after the run, on the pipeline output or an imported dataset, and
 asks before overwriting. See
 [ADR 66](../developer/adr/0066-feature-correlation.md).
 
+## Overlay — several features in one image
+
+The **Overlay** tab draws up to 6 features in one image per sample, one
+color each, like an immunofluorescence composite. Click features in the
+list on the left to add them as channels. Each channel has a color (click
+its swatch), a visibility checkbox, and its own contrast: **Min** and
+**Max** (empty = automatic, per sample) and **Gamma** (below 1 brightens
+faint pixels).
+
+**Additive** blending sums the channels, so where features overlap their
+colors mix (red + green = yellow, magenta + green = white); the order of the
+channels doesn't matter. **Max** keeps each pixel's brightest channel. In
+Feature Correlation, right-click a row and choose **Add to overlay** to
+overlay it with the selected feature. See
+[ADR 67](../developer/adr/0067-multi-feature-overlay.md).
+
 ## After the run — target list without re-running
 
 Forgot some compounds, or have a new list? **Analyses → Match target list…**

@@ -9,6 +9,7 @@ import matplotlib.ticker
 import numpy as np
 import pandas as pd
 
+from msianalyzer.core.plotting.feature_overlay import Channel, composite, parse_channels
 from msianalyzer.core.utils.lazy_import import lazy_module
 
 ad = lazy_module("anndata")
@@ -428,6 +429,16 @@ def parse_category_colors(field: str) -> tuple[list[str], list[str]]:
     return categories, colors
 
 
+def render_feature_overlay(
+    adata: ad.AnnData, channels: list[Channel], layer: str = "TIC", mode: str = "add"
+) -> np.ndarray:
+    """Several features in one RGBA `uint8` raster, one color each (ADR 67;
+    see `feature_overlay.composite`), on the same grid as
+    `render_feature_heatmap`. Automatic contrast is per sample."""
+    grids = [_reconstruct_grid(adata, _rendered_feature_values(adata, c.mz, layer)) for c in channels]
+    return composite(grids, channels, mode)
+
+
 def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -> np.ndarray:
     """Dispatch to `render_feature_heatmap`/`render_obs_heatmap`/
     `render_obs_categories_heatmap` from an `image://heatmap/...`-style
@@ -456,6 +467,10 @@ def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -
             return render_obs_heatmap(adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax)
         categories, colors = parse_category_colors(parts[2])
         return render_obs_categories_heatmap(adata, obs_column, categories, colors)
+
+    if target == "overlay":
+        # "<sample>|overlay|<layer>|<mode>|<channels>" (ADR 67)
+        return render_feature_overlay(adata, parse_channels(parts[4]), layer=parts[2], mode=parts[3])
 
     mz_str, layer, colormap, vmin_str, vmax_str = parts[1:6]
     vmin = None if vmin_str == "auto" else float(vmin_str)

@@ -18,6 +18,7 @@ VisualInspectionSection 1.0 VisualInspectionSection.qml
 SpatialCorrelationSection 1.0 SpatialCorrelationSection.qml
 FeatureCorrelationSection 1.0 FeatureCorrelationSection.qml
 FeatureCorrelationTable 1.0 FeatureCorrelationTable.qml
+OverlaySection 1.0 OverlaySection.qml
 CalibrationSection 1.0 CalibrationSection.qml
 ZoomableImage 1.0 ZoomableImage.qml
 HeatmapControlsPanel 1.0 HeatmapControlsPanel.qml

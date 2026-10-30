@@ -16,6 +16,9 @@ Item {
     // Right-click a row -> Visual Inspection on that feature (ADR 32
     // handoff, see AnalysisPage.qml's featureCorrLoader).
     signal showSpatialDistributionRequested(real mz)
+    // Right-click -> "Add to overlay": the selected feature and that row's
+    // feature, as two channels of the Overlay tab (ADR 67).
+    signal addToOverlayRequested(var mzs)
 
     property var analysis
     readonly property string dbPath: (analysis && analysis.analysisDbPath) ? analysis.analysisDbPath : ""
@@ -395,6 +398,7 @@ Item {
                     rows: featureCorrelationSection.topRows
                     samples: featureCorrelationSection.sampleNames
                     onShowSpatialDistributionRequested: (mz) => featureCorrelationSection.showSpatialDistributionRequested(mz)
+                    onAddToOverlayRequested: (mz) => featureCorrelationSection.addToOverlayRequested([featureCorrelationSection.selectedMz, mz])
                 }
                 FeatureCorrelationTable {
                     objectName: "mostAntiCorrelatedTable"
@@ -406,6 +410,7 @@ Item {
                     rows: featureCorrelationSection.bottomRows
                     samples: featureCorrelationSection.sampleNames
                     onShowSpatialDistributionRequested: (mz) => featureCorrelationSection.showSpatialDistributionRequested(mz)
+                    onAddToOverlayRequested: (mz) => featureCorrelationSection.addToOverlayRequested([featureCorrelationSection.selectedMz, mz])
                 }
             }
         }

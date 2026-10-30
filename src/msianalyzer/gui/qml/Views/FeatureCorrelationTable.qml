@@ -6,7 +6,8 @@ import "qrc:/Style"
 // One of Feature Correlation's two tables (ADR 66): a title, a header
 // row, then one row per feature — name, m/z, mean r over the samples,
 // and r in each sample. Right-click a row for "Show spatial
-// distribution". A ListView: only the visible rows get delegates.
+// distribution" or "Add to overlay" (ADR 67). A ListView: only the
+// visible rows get delegates.
 ColumnLayout {
     id: correlationTable
     spacing: 4
@@ -18,6 +19,7 @@ ColumnLayout {
     property string tableName: "correlationTable"
 
     signal showSpatialDistributionRequested(real mz)
+    signal addToOverlayRequested(real mz)
 
     readonly property int nameWidth: 240
     readonly property int mzWidth: 90
@@ -164,6 +166,11 @@ ColumnLayout {
                     objectName: correlationTable.tableName + "ShowDistribution_" + rowItem.index
                     text: "Show spatial distribution"
                     onTriggered: correlationTable.showSpatialDistributionRequested(rowItem.modelData.mz)
+                }
+                AppMenuItem {
+                    objectName: correlationTable.tableName + "AddToOverlay_" + rowItem.index
+                    text: "Add to overlay"
+                    onTriggered: correlationTable.addToOverlayRequested(rowItem.modelData.mz)
                 }
             }
         }

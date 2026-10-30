@@ -36,6 +36,10 @@ Page {
     property var annotationsState: null
     property var visualState: null
     property var featureCorrState: null
+    property var overlayState: null
+    // Features "Add to overlay" (Feature Correlation) hands to the Overlay
+    // tab, added as channels once it loads (ADR 67). One-shot.
+    property var pendingOverlayMzs: []
 
     // False until the analysis database's schema is brought up to date on
     // a background thread (adding an index to a big table took seconds
@@ -47,6 +51,7 @@ Page {
         analysisPage.annotationsState = null
         analysisPage.visualState = null
         analysisPage.featureCorrState = null
+        analysisPage.overlayState = null
         analysisPage.schemaReady = false
         if (analysisPage.analysis && analysisPage.analysis.analysisDbPath
                 && !analysisPage.outputMissing)
@@ -249,7 +254,7 @@ Page {
                 Repeater {
                     id: navRepeater
                     objectName: "navRepeater"
-                    model: ["Summary", "MS1 Spectra", "Annotations", "Visual Inspection", "Spatial Correlation", "Feature Correlation"]
+                    model: ["Summary", "MS1 Spectra", "Annotations", "Visual Inspection", "Spatial Correlation", "Feature Correlation", "Overlay"]
 
                     delegate: Button {
                         objectName: "navButton_" + index
@@ -308,7 +313,7 @@ Page {
                     ToolTip.visible: hovered && currentIndex > 0
                     ToolTip.text: currentIndex > 0
                         ? "Imported from " + analysisPage.importedDatasets[currentIndex - 1].source_path
-                          + "\nApplies to Visual Inspection, Spatial Correlation and Feature Correlation."
+                          + "\nApplies to Visual Inspection, Spatial Correlation, Feature Correlation and Overlay."
                         : ""
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                 }
@@ -501,8 +506,27 @@ Page {
                         item.showSpatialDistributionRequested.connect(function (mz) {
                             analysisPage.goToVisualInspection(mz)
                         })
+                        item.addToOverlayRequested.connect(function (mzs) {
+                            analysisPage.pendingOverlayMzs = mzs
+                            sectionStack.currentIndex = 6
+                        })
                         item.stateSaved.connect(function (s) { analysisPage.featureCorrState = s })
                         item.restoreState(analysisPage.featureCorrState)
+                    }
+                }
+                Loader {
+                    id: overlayLoader
+                    objectName: "overlaySectionLoader"
+                    active: sectionStack.currentIndex === 6 && analysisPage.sectionsEnabled
+                    source: "qrc:/Views/OverlaySection.qml"
+                    onLoaded: {
+                        item.analysis = Qt.binding(function () { return analysisPage.analysis })
+                        item.stateSaved.connect(function (s) { analysisPage.overlayState = s })
+                        item.restoreState(analysisPage.overlayState)
+                        for (var i = 0; i < analysisPage.pendingOverlayMzs.length; i++)
+                            if (!isNaN(analysisPage.pendingOverlayMzs[i]))
+                                item.addChannel(analysisPage.pendingOverlayMzs[i])
+                        analysisPage.pendingOverlayMzs = []
                     }
                 }
             }
@@ -569,6 +593,8 @@ Page {
                        && spatialCorrLoader.item && !spatialCorrLoader.item.rowsLoading
         case 5: return featureCorrLoader.status === Loader.Ready
                        && featureCorrLoader.item && !featureCorrLoader.item.rowsLoading
+        case 6: return overlayLoader.status === Loader.Ready
+                       && overlayLoader.item && !overlayLoader.item.rowsLoading
         default: return true
         }
     }

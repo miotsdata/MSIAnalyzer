@@ -26,6 +26,7 @@
         <file>Views/SpatialCorrelationSection.qml</file>
         <file>Views/FeatureCorrelationSection.qml</file>
         <file>Views/FeatureCorrelationTable.qml</file>
+        <file>Views/OverlaySection.qml</file>
         <file>Views/CalibrationSection.qml</file>
         <file>Views/ZoomableImage.qml</file>
         <file>Views/HeatmapControlsPanel.qml</file>
