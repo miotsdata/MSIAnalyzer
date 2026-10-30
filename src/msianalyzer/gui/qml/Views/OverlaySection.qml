@@ -108,7 +108,10 @@ Item {
         return Math.abs(v) >= 1e4 ? Number(v).toExponential(2) : String(Number(Number(v).toPrecision(3)))
     }
     onChannelsChanged: overlaySection.requestRanges()
-    onSamplesChanged: overlaySection.requestRanges()
+    onSamplesChanged: {
+        overlaySection.requestRanges()
+        overlaySection.refreshSampleRois()
+    }
     // Bounds picked on another layer mean nothing on this one.
     onDataLayerChanged: {
         overlaySection.channels = overlaySection.channels.map(function (c) {
@@ -164,6 +167,26 @@ Item {
     }
     property var scaleBar: ({})
 
+    // Saved ROIs, drawn on the tiles while "Show ROIs" is on (same as
+    // Visual Inspection): { sampleName: [{"name","color","vertices"}, ...] }.
+    property bool showRois: false
+    property var sampleRoisCache: ({})
+    function refreshSampleRois() {
+        var cache = {}
+        if (overlaySection.showRois && overlaySection.dbPath)
+            overlaySection.samples.forEach(function (s) {
+                cache[s.name] = AnalysisBridge.getSampleRois(overlaySection.dbPath, s.name)
+            })
+        overlaySection.sampleRoisCache = cache
+    }
+    onShowRoisChanged: overlaySection.refreshSampleRois()
+
+    // What Export > Image… writes from this tab (Main.qml): the visible
+    // channels' legend labels, in the tile id's order.
+    readonly property var visibleChannelLabels: overlaySection.channels
+        .filter(function (c) { return c.visible })
+        .map(function (c) { return c.label })
+
     onDbPathChanged: {
         overlaySection.refreshLayers()
         overlaySection.refreshSamples()
@@ -199,7 +222,8 @@ Item {
     Component.onDestruction: overlaySection.stateSaved({
         "channels": overlaySection.channels,
         "mode": overlaySection.mode,
-        "layer": overlaySection.dataLayer
+        "layer": overlaySection.dataLayer,
+        "showRois": overlaySection.showRois
     })
     function restoreState(s) {
         if (!s) return
@@ -207,6 +231,7 @@ Item {
         if (overlaySection.layerOptions.indexOf(s.layer) >= 0) overlaySection.dataLayer = s.layer
         overlaySection.channels = s.channels || []
         overlaySection.mode = s.mode || "add"
+        overlaySection.showRois = !!s.showRois
     }
 
     ColorDialog {
@@ -456,6 +481,13 @@ Item {
                         HoverHandler { cursorShape: Qt.PointingHandCursor }
                     }
                 }
+                AppCheckBox {
+                    objectName: "overlayShowRoisCheckBox"
+                    text: "Show ROIs"
+                    checked: overlaySection.showRois
+                    onToggled: overlaySection.showRois = checked
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                }
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
@@ -550,6 +582,15 @@ Item {
                                     scaleBarPixelUm: ScaleBar.pixelUm(overlaySection.scaleBar, modelData.name)
                                     scaleBarUm: overlaySection.scaleBar.bar_um || 0
                                     scaleBarColor: overlaySection.scaleBar.color || "white"
+
+                                    RoiOverlay {
+                                        objectName: "overlayRoiOverlay_" + modelData.name
+                                        anchors.fill: parent
+                                        readOnly: true
+                                        visible: overlaySection.showRois
+                                        effectiveScale: parent.effectiveScale
+                                        savedRois: overlaySection.sampleRoisCache[modelData.name] || []
+                                    }
                                 }
                             }
                         }

@@ -25,6 +25,7 @@ from msianalyzer.core.export import (
     export_annotation_table,
     export_calibration_results,
     export_integration_tables,
+    export_overlay_images,
     export_visual_inspection_images,
     var_has_annotations,
     write_annotations_to_var,
@@ -613,3 +614,43 @@ def test_write_annotations_to_var_matches_export_and_keeps_var_names(tmp_path):
         {"a": after, "b": after}, label="sample", index_unique="-", merge="same"
     )
     assert list(merged.var["compound_name"]) == list(after.var["compound_name"])
+
+
+def test_export_overlay_images_with_legend_rois_and_scale_bar(tmp_path, monkeypatch):
+    import msianalyzer.core.export as export_module
+
+    db = tmp_path / "analysis.db"
+    init_analysis_db(db).close()
+    _seed_sample_with_obs(db, "sampleA")
+    _seed_sample_with_obs(db, "sampleB")
+    register_sample(db, name="ghost", raw_db_path=tmp_path / "ghost_raw.db")
+    save_roi_to_sample(
+        db.parent / "sampleA.h5ad", "tumor", "#ff0000", [[0, 0], [1, 0], [1, 1], [0, 1]]
+    )
+    save_scale_bar(db, {"enabled": False, "bar_um": 20.0, "color": "#ffffff",
+                        "pixel_um": {"sampleA": 10.0}})
+    seen = {}
+    real = export_module.render_overlay_figure
+
+    def spy(adata, channels, labels, **kwargs):
+        fig = real(adata, channels, labels, **kwargs)
+        seen[kwargs["title"]] = {
+            "rois": sorted(kwargs["rois"] or {}),
+            "scale_bar": kwargs["scale_bar"] is not None,
+            "legend": [t.get_text() for t in fig.axes[0].get_legend().get_texts()],
+        }
+        return fig
+
+    monkeypatch.setattr(export_module, "render_overlay_figure", spy)
+
+    written = export_overlay_images(
+        db, tmp_path / "out", "png",
+        "100:ff00ff:auto:auto:1,200:00ff00:0:5:0.5", ["m/z 100", "Caffeine"],
+        mode="max", show_rois=True, include_scale_bar=True,
+    )
+
+    assert written == 2  # ghost has no .h5ad
+    assert (tmp_path / "out" / "sampleA_overlay.png").exists()
+    assert (tmp_path / "out" / "sampleB_overlay.png").exists()
+    assert seen["sampleA"] == {"rois": ["tumor"], "scale_bar": True, "legend": ["m/z 100", "Caffeine"]}
+    assert seen["sampleB"] == {"rois": [], "scale_bar": False, "legend": ["m/z 100", "Caffeine"]}

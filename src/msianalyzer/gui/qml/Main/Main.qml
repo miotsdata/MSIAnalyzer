@@ -323,9 +323,13 @@ ApplicationWindow {
                 objectName: "exportImageMenuItem"
                 text: "Image…"
                 visible: !exportMenu.isTargetedAnalysis
+                // Also from the Overlay tab, once it shows something (ADR 67).
                 enabled: window.currentAnalysis !== null && !exportMenu.exporting
                          && stackView.currentItem
-                         && stackView.currentItem.visualInspectionActive === true
+                         && (stackView.currentItem.visualInspectionActive === true
+                             || (stackView.currentItem.overlayActive === true
+                                 && !!stackView.currentItem.overlaySection
+                                 && stackView.currentItem.overlaySection.channelsToken !== ""))
                 onTriggered: exportImageDialog.open()
             }
             // Only meaningful for a targeted analysis — hidden the other
@@ -622,7 +626,8 @@ ApplicationWindow {
     Dialog {
         id: exportImageDialog
         objectName: "exportImageDialog"
-        title: "Export Visual Inspection Images"
+        title: exportImageDialog.controlsSnapshot && exportImageDialog.controlsSnapshot.mode === "overlay"
+               ? "Export Overlay Images" : "Export Visual Inspection Images"
         modal: true
         standardButtons: Dialog.Cancel
         anchors.centerIn: parent
@@ -632,7 +637,26 @@ ApplicationWindow {
         property bool scaleBarAvailable: false
 
         onAboutToShow: {
-            var section = stackView.currentItem ? stackView.currentItem.visualInspectionSection : null
+            var page = stackView.currentItem
+            if (page && page.overlayActive === true) {
+                // Overlay tab: its channels, blend mode and layer as shown.
+                var overlay = page.overlaySection
+                exportImageDialog.controlsSnapshot = {
+                    "mode": "overlay",
+                    "layer": overlay.dataLayer,
+                    "blend": overlay.mode,
+                    "channels": overlay.channelsToken,
+                    "labels": overlay.visibleChannelLabels.slice(),
+                    "hiddenCategories": [],
+                }
+                var overlayBar = overlay.scaleBar
+                exportImageDialog.scaleBarAvailable = !!(overlayBar && overlayBar.pixel_um
+                                                         && Object.keys(overlayBar.pixel_um).length > 0)
+                imageScaleBarCheckBox.checked = exportImageDialog.scaleBarAvailable && !!overlayBar.enabled
+                imageRoisCheckBox.checked = overlay.showRois
+                return
+            }
+            var section = page ? page.visualInspectionSection : null
             var controls = section ? section.controlsPanel : null
             exportImageDialog.controlsSnapshot = controls ? {
                 "mode": controls.inspectionMode,
@@ -724,6 +748,19 @@ ApplicationWindow {
         options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
         onAccepted: {
             var snap = exportImageDialog.controlsSnapshot
+            if (snap.mode === "overlay") {
+                AnalysisBridge.exportOverlayImages(
+                    window.currentAnalysis.analysisDbPath,
+                    Router.toLocalPath(selectedFolder),
+                    exportImageDialog.format,
+                    snap.layer,
+                    snap.blend,
+                    snap.channels,
+                    snap.labels,
+                    imageRoisCheckBox.checked,
+                    imageScaleBarCheckBox.checked)
+                return
+            }
             AnalysisBridge.exportVisualInspectionImages(
                 window.currentAnalysis.analysisDbPath,
                 Router.toLocalPath(selectedFolder),

@@ -37,8 +37,10 @@ from .plotting.heatmap import (
     is_numeric_obs_column,
     obs_categories,
     render_heatmap_figure,
+    render_overlay_figure,
     scale_bar_spec,
 )
+from .plotting.feature_overlay import parse_channels
 from .plotting.light_sample import LightSample
 from .plotting.roi import load_sample_rois
 
@@ -353,6 +355,21 @@ def export_integration_tables(
     return written
 
 
+def _existing_sample_h5ads(db_path: str | Path, rel_dir: str | None) -> dict[str, Path]:
+    """`{sample_name: .h5ad path}` for every sample whose file exists; a
+    missing one is skipped (logged), not an error."""
+    paths: dict[str, Path] = {}
+    for sample_name in load_samples(db_path)["name"]:
+        h5ad_path = _sample_h5ad_path(db_path, sample_name, rel_dir)
+        if not h5ad_path.exists():
+            logger.warning(
+                "skipping %s in image export: no h5ad at %s", sample_name, h5ad_path
+            )
+            continue
+        paths[sample_name] = h5ad_path
+    return paths
+
+
 def export_visual_inspection_images(
     db_path: str | Path,
     dest_folder: str | Path,
@@ -425,16 +442,7 @@ def export_visual_inspection_images(
     dest_folder.mkdir(parents=True, exist_ok=True)
     ext = image_format.lower().lstrip(".")
 
-    samples = load_samples(db_path)
-    paths: dict[str, Path] = {}
-    for sample_name in samples["name"]:
-        h5ad_path = _sample_h5ad_path(db_path, sample_name, rel_dir)
-        if not h5ad_path.exists():
-            logger.warning(
-                "skipping %s in image export: no h5ad at %s", sample_name, h5ad_path
-            )
-            continue
-        paths[sample_name] = h5ad_path
+    paths = _existing_sample_h5ads(db_path, rel_dir)
 
     def _load(path: Path) -> ad.AnnData:
         light = LightSample(path)
@@ -510,6 +518,71 @@ def export_visual_inspection_images(
             progress(written, len(paths))
 
     logger.info("exported %d visual inspection image(s) to %s", written, dest_folder)
+    return written
+
+
+def export_overlay_images(
+    db_path: str | Path,
+    dest_folder: str | Path,
+    image_format: str,
+    channels: str,
+    labels: list[str],
+    *,
+    layer: str = "TIC",
+    mode: str = "add",
+    show_rois: bool = False,
+    rel_dir: str | None = None,
+    include_scale_bar: bool = False,
+    progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """Write `<dest_folder>/<sample_name>_overlay.<image_format>` for every
+    sample: the Overlay tab's image (ADR 67) with a legend of its channels.
+
+    Args:
+        channels: The tile id's channels part (`feature_overlay.parse_channels`),
+            visible channels only, exactly as the tab renders them.
+        labels: One legend label per channel, same order.
+        layer, mode: As in the tab.
+        show_rois, rel_dir, include_scale_bar, progress: As in
+            `export_visual_inspection_images`.
+
+    Returns:
+        The number of sample images written.
+    """
+    dest_folder = Path(dest_folder)
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    ext = image_format.lower().lstrip(".")
+    parsed = parse_channels(channels)
+    paths = _existing_sample_h5ads(db_path, rel_dir)
+    scale_bar_settings = (
+        {**load_scale_bar(db_path), "enabled": True} if include_scale_bar else None
+    )
+
+    written = 0
+    for sample_name, path in paths.items():
+        light = LightSample(path)
+        light.ensure_layer(layer)
+        scale_bar = None
+        if scale_bar_settings is not None:
+            scale_bar = scale_bar_spec(scale_bar_settings, sample_name)
+            if scale_bar is None:
+                logger.warning("no scale bar on %s: no pixel size set", sample_name)
+        fig = render_overlay_figure(
+            light.adata,
+            parsed,
+            labels,
+            layer=layer,
+            mode=mode,
+            rois=load_sample_rois(path) if show_rois else None,
+            title=sample_name,
+            scale_bar=scale_bar,
+        )
+        fig.savefig(dest_folder / f"{sample_name}_overlay.{ext}", bbox_inches="tight")
+        written += 1
+        if progress is not None:
+            progress(written, len(paths))
+
+    logger.info("exported %d overlay image(s) to %s", written, dest_folder)
     return written
 
 

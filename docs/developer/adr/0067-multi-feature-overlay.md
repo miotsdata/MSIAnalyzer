@@ -61,9 +61,14 @@ correlate, but not where.
 ## Consequences
 
 - Tiles are the same hand-stacked column as Visual Inspection, with the
-  same zoom and scale bar. ROIs are not drawn on the overlay.
-- Export > Image… still exports Visual Inspection only; an overlay export
-  is not built.
+  same zoom and scale bar, and the same read-only ROI outlines under a
+  **Show ROIs** checkbox.
+- **Export > Image…** works from this tab too: the same dialog (PNG, PDF
+  or SVG, scale bar, ROIs, defaulting to the tab's "Show ROIs") writes
+  `<sample>_overlay.<ext>` per sample (`core.export.export_overlay_images`,
+  `heatmap.render_overlay_figure`): the tile's raster, ROIs and scale bar
+  drawn by the helper `render_heatmap_figure` also uses, and a legend
+  with one color swatch per visible channel.
 - QML gotcha met again: the section first declared `property string
   layer`, which shadows `Item.layer`. Qt then warns from the QML loader
   thread and the test harness deadlocks at `setSource` (the same

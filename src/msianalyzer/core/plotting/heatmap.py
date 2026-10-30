@@ -621,6 +621,37 @@ def render_heatmap_figure(
     else:
         raise ValueError(f"unknown mode {mode!r}")
 
+    _draw_raster(ax, rgba, rois, scale_bar)
+
+    if legend_kind == "colorbar":
+        if eff_vmax <= eff_vmin:
+            eff_vmax = eff_vmin + 1.0
+        norm = matplotlib.colors.Normalize(vmin=eff_vmin, vmax=eff_vmax)
+        mappable = matplotlib.cm.ScalarMappable(norm=norm, cmap=matplotlib.colormaps[colormap])
+        cbar = fig.colorbar(mappable, ax=ax)
+        if max(abs(eff_vmin), abs(eff_vmax)) > _SCIENTIFIC_NOTATION_THRESHOLD:
+            formatter = matplotlib.ticker.ScalarFormatter(useMathText=True)
+            formatter.set_powerlimits((0, 0))
+            cbar.ax.yaxis.set_major_formatter(formatter)
+    else:
+        handles = [
+            matplotlib.patches.Patch(facecolor=colors[i], label=cat)
+            for i, cat in enumerate(categories or [])
+            if cat not in hidden_categories
+        ]
+        if handles:
+            ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.0, 0.5))
+
+    if title:
+        ax.set_title(title)
+
+    return fig
+
+
+def _draw_raster(ax, rgba: np.ndarray, rois: dict | None, scale_bar: dict | None) -> None:
+    """`imshow` an RGBA raster, then each ROI's outline and the scale bar
+    (bottom-right) on top — shared by `render_heatmap_figure` and
+    `render_overlay_figure`."""
     ax.imshow(rgba, origin="upper")
 
     for info in (rois or {}).values():
@@ -651,26 +682,31 @@ def render_heatmap_figure(
             scale_bar["label"], color=scale_bar["color"], ha="center", va="bottom",
         )
 
-    if legend_kind == "colorbar":
-        if eff_vmax <= eff_vmin:
-            eff_vmax = eff_vmin + 1.0
-        norm = matplotlib.colors.Normalize(vmin=eff_vmin, vmax=eff_vmax)
-        mappable = matplotlib.cm.ScalarMappable(norm=norm, cmap=matplotlib.colormaps[colormap])
-        cbar = fig.colorbar(mappable, ax=ax)
-        if max(abs(eff_vmin), abs(eff_vmax)) > _SCIENTIFIC_NOTATION_THRESHOLD:
-            formatter = matplotlib.ticker.ScalarFormatter(useMathText=True)
-            formatter.set_powerlimits((0, 0))
-            cbar.ax.yaxis.set_major_formatter(formatter)
-    else:
-        handles = [
-            matplotlib.patches.Patch(facecolor=colors[i], label=cat)
-            for i, cat in enumerate(categories or [])
-            if cat not in hidden_categories
-        ]
-        if handles:
-            ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.0, 0.5))
 
+def render_overlay_figure(
+    adata: ad.AnnData,
+    channels: list[Channel],
+    labels: list[str],
+    *,
+    layer: str = "TIC",
+    mode: str = "add",
+    rois: dict | None = None,
+    title: str | None = None,
+    scale_bar: dict | None = None,
+) -> matplotlib.figure.Figure:
+    """The Overlay tab's image of one sample (ADR 67) as a Matplotlib
+    `Figure`: the same raster as the live tile (`render_feature_overlay`),
+    ROIs and scale bar as in `render_heatmap_figure`, and a legend of one
+    color swatch per channel, labelled with `labels` (same order)."""
+    fig = matplotlib.figure.Figure()
+    ax = fig.add_subplot(111)
+    ax.set_axis_off()
+    _draw_raster(ax, render_feature_overlay(adata, channels, layer=layer, mode=mode), rois, scale_bar)
+    handles = [
+        matplotlib.patches.Patch(facecolor=c.color, label=label)
+        for c, label in zip(channels, labels)
+    ]
+    ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.0, 0.5))
     if title:
         ax.set_title(title)
-
     return fig

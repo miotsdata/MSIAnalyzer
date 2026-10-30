@@ -192,6 +192,10 @@ Page {
     readonly property bool visualInspectionActive: sectionStack.currentIndex === 3
                                                      && visualLoader.status === Loader.Ready
     property var visualInspectionSection: visualLoader.item
+    // The same, for the Overlay tab's own Export > Image… (ADR 67).
+    readonly property bool overlayActive: sectionStack.currentIndex === 6
+                                          && overlayLoader.status === Loader.Ready
+    property var overlaySection: overlayLoader.item
 
     ColumnLayout {
         anchors.fill: parent

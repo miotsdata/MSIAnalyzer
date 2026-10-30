@@ -653,6 +653,46 @@ def test_export_image_menu_item_opens_choice_dialog_with_a_controls_snapshot(
     assert rois_box.property("enabled") is True
 
 
+def test_export_image_from_the_overlay_tab_snapshots_its_channels(
+    application, engine, qtbot, find_visual_child, tmp_path
+):
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    (tmp_path / "out").mkdir()
+    project_model = ProjectModel(Project(name="p"), str(tmp_path), application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+    find_visual_child(window.findChild(QQuickItem, "navRail"), "navButton_6").click()
+    qtbot.wait(100)
+
+    image_item = window.findChild(QObject, "exportImageMenuItem")
+    assert image_item.property("enabled") is False  # no channel yet
+
+    overlay = find_visual_child(window.contentItem(), "overlaySection")
+    overlay.setProperty("channels", [{
+        "mz": 100.0, "label": "m/z 100.0000", "color": "#ff00ff",
+        "vmin": "", "vmax": "", "gamma": 1.0, "visible": True,
+    }])
+    overlay.setProperty("showRois", True)
+    qtbot.wait(20)
+    assert image_item.property("enabled") is True
+
+    image_item.click()
+    qtbot.wait(50)
+    dialog = window.findChild(QObject, "exportImageDialog")
+    assert dialog.property("title") == "Export Overlay Images"
+    snapshot = dialog.property("controlsSnapshot").toVariant()
+    assert snapshot["mode"] == "overlay"
+    assert snapshot["channels"] == "100:ff00ff:auto:auto:1"
+    assert snapshot["labels"] == ["m/z 100.0000"]
+    # ROIs follow the tab's own "Show ROIs".
+    assert window.findChild(QObject, "imageRoisCheckBox").property("checked") is True
+
+
 def test_export_image_choose_folder_opens_folder_dialog_with_chosen_format(
     application, engine, qtbot, find_visual_child
 ):

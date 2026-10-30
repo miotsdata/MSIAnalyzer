@@ -252,9 +252,18 @@ asks before overwriting. See
 The **Overlay** tab draws up to 6 features in one image per sample, one
 color each, like an immunofluorescence composite. Click features in the
 list on the left to add them as channels. Each channel has a color (click
-its swatch), a visibility checkbox, and its own contrast: **Min** and
-**Max** (empty = automatic, per sample) and **Gamma** (below 1 brightens
-faint pixels).
+its swatch), a visibility checkbox, and its own contrast:
+
+- **Auto** (default): Min and Max worked out for each sample on its own.
+- **The range slider**: drag its two handles to set Min and Max, the same
+  for every sample, so samples can be compared. It spans the feature's
+  values over all samples, and the image redraws when you release a handle.
+- **Gamma**: brightness = (position between Min and Max)^gamma. Below 1
+  brings up faint signal; above 1 keeps only the bright spots.
+
+**Show ROIs** draws the saved ROIs on the tiles. **Export > Image…** works
+from this tab too: one PNG, PDF or SVG per sample (`<sample>_overlay`),
+with a color legend and, optionally, the ROIs and scale bar.
 
 **Additive** blending sums the channels, so where features overlap their
 colors mix (red + green = yellow, magenta + green = white); the order of the

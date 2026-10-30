@@ -335,6 +335,23 @@ def test_export_visual_inspection_images_writes_files_and_emits_finished(tmp_pat
     assert "1 sample" in spy.args[0]
 
 
+def test_export_overlay_images_writes_files_and_emits_finished(tmp_path, qtbot):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_sample_with_h5ad(db_path, "sampleA")
+    dest_folder = tmp_path / "out"
+
+    bridge = AnalysisBridge()
+    with qtbot.waitSignal(bridge.exportFinished, timeout=2000) as spy:
+        bridge.exportOverlayImages(
+            str(db_path), str(dest_folder), "pdf", "TIC", "add",
+            "100.0:ff00ff:auto:auto:1", ["m/z 100.0000"], False, False,
+        )
+
+    assert (dest_folder / "sampleA_overlay.pdf").exists()
+    assert "1 sample" in spy.args[0]
+
+
 def test_export_visual_inspection_images_failure_emits_export_failed(tmp_path, qtbot):
     bridge = AnalysisBridge()
     blocker = tmp_path / "blocker"

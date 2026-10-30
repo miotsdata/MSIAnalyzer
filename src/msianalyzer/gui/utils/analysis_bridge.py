@@ -3627,6 +3627,43 @@ class AnalysisBridge(QObject):
 
         self._run_export(_do_export)
 
+    @Slot(str, str, str, str, str, str, "QVariantList", bool, bool)
+    def exportOverlayImages(
+        self,
+        analysis_db_path: str,
+        dest_folder: str,
+        image_format: str,
+        layer: str,
+        mode: str,
+        channels: str,
+        labels: list,
+        show_rois: bool,
+        include_scale_bar: bool,
+    ) -> None:
+        """Start the Overlay tab's Image export (ADR 67) on a background
+        thread: `core.export.export_overlay_images` with the tab's own
+        `dataLayer`, `mode`, `channelsToken` and one legend label per
+        visible channel. Completion arrives via `exportFinished`/`exportFailed`."""
+        rel_dir = self._active_rel_dir(analysis_db_path)
+
+        def _do_export(report) -> str:
+            n = core_export.export_overlay_images(
+                analysis_db_path,
+                dest_folder,
+                image_format,
+                channels,
+                [str(label) for label in labels],
+                layer=layer,
+                mode=mode,
+                show_rois=show_rois,
+                rel_dir=rel_dir,
+                include_scale_bar=include_scale_bar,
+                progress=lambda done, total: report(f"Exporting overlay images… {done}/{total}"),
+            )
+            return f"Overlay images exported for {n} sample(s) to {dest_folder}"
+
+        self._run_export(_do_export)
+
     @Slot(str, str, str, str, str, str, str, str, str, str, bool, bool, "QVariantList")
     def exportVisualInspectionImages(
         self,
