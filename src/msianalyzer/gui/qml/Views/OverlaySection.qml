@@ -80,6 +80,41 @@ Item {
         c[index][key] = value
         overlaySection.channels = c
     }
+    // Both bounds at once: one re-render, not two. "" = automatic.
+    function setChannelRange(index, vmin, vmax) {
+        var c = overlaySection.channels.slice()
+        c[index] = Object.assign({}, c[index], { "vmin": vmin, "vmax": vmax })
+        overlaySection.channels = c
+    }
+
+    // --- Range sliders -----------------------------------------------------
+    // Each channel's slider spans its feature's values in the current
+    // layer over every sample: { "<layer>|<mz>": {vmin, vmax} }, fetched in
+    // the background (AnalysisBridge.requestOverlayRange).
+    property var channelRanges: ({})
+    function rangeFor(mz) {
+        return overlaySection.channelRanges[overlaySection.dataLayer + "|" + mz] || null
+    }
+    function requestRanges() {
+        if (!overlaySection.dataLayer || overlaySection.samples.length === 0) return
+        var names = overlaySection.samples.map(function (s) { return s.name })
+        overlaySection.channels.forEach(function (c) {
+            if (!overlaySection.rangeFor(c.mz))
+                AnalysisBridge.requestOverlayRange(names, c.mz, overlaySection.dataLayer)
+        })
+    }
+    // A slider readout: short, scientific past 10^4 (raw intensities).
+    function formatValue(v) {
+        return Math.abs(v) >= 1e4 ? Number(v).toExponential(2) : String(Number(Number(v).toPrecision(3)))
+    }
+    onChannelsChanged: overlaySection.requestRanges()
+    onSamplesChanged: overlaySection.requestRanges()
+    // Bounds picked on another layer mean nothing on this one.
+    onDataLayerChanged: {
+        overlaySection.channels = overlaySection.channels.map(function (c) {
+            return Object.assign({}, c, { "vmin": "", "vmax": "" })
+        })
+    }
     // The channels part of the tile id: "mz:rrggbb:vmin:vmax:gamma,..."
     // ("auto" for an empty bound; no "#", it would start the URL fragment).
     readonly property string channelsToken: overlaySection.channels
@@ -146,7 +181,13 @@ Item {
                 return Object.assign({}, c, { "label": overlaySection.labelForMz(c.mz) })
             })
         }
+        function onOverlayRangeReady(r) {
+            var ranges = Object.assign({}, overlaySection.channelRanges)
+            ranges[r.layer + "|" + r.mz] = { "vmin": r.vmin, "vmax": r.vmax }
+            overlaySection.channelRanges = ranges
+        }
         function onActiveDatasetChanged() {
+            overlaySection.channelRanges = {}
             overlaySection.refreshLayers()
             overlaySection.refreshSamples()
             overlaySection.refreshFeatures()
@@ -162,9 +203,10 @@ Item {
     })
     function restoreState(s) {
         if (!s) return
+        // Layer first: changing it resets the channels' bounds to automatic.
+        if (overlaySection.layerOptions.indexOf(s.layer) >= 0) overlaySection.dataLayer = s.layer
         overlaySection.channels = s.channels || []
         overlaySection.mode = s.mode || "add"
-        if (overlaySection.layerOptions.indexOf(s.layer) >= 0) overlaySection.dataLayer = s.layer
     }
 
     ColorDialog {
@@ -323,28 +365,19 @@ Item {
                             }
                             RowLayout {
                                 Layout.fillWidth: true
-                                Label { text: "Min" }
-                                TextField {
-                                    objectName: "overlayChannelMin_" + channelCard.index
-                                    Layout.fillWidth: true
-                                    placeholderText: "auto"
-                                    text: channelCard.modelData.vmin === "" ? "" : String(channelCard.modelData.vmin)
-                                    onEditingFinished: {
-                                        var v = overlaySection.parseBound(text)
-                                        if (v !== null) overlaySection.updateChannel(channelCard.index, "vmin", v)
+                                AppCheckBox {
+                                    objectName: "overlayChannelAuto_" + channelCard.index
+                                    text: "Auto"
+                                    checked: channelCard.modelData.vmin === "" && channelCard.modelData.vmax === ""
+                                    onClicked: {
+                                        if (checked) overlaySection.setChannelRange(channelCard.index, "", "")
+                                        else overlaySection.setChannelRange(channelCard.index,
+                                                                           rangeSlider.first.value, rangeSlider.second.value)
                                     }
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: "Automatic contrast, worked out for each sample on its own"
                                 }
-                                Label { text: "Max" }
-                                TextField {
-                                    objectName: "overlayChannelMax_" + channelCard.index
-                                    Layout.fillWidth: true
-                                    placeholderText: "auto"
-                                    text: channelCard.modelData.vmax === "" ? "" : String(channelCard.modelData.vmax)
-                                    onEditingFinished: {
-                                        var v = overlaySection.parseBound(text)
-                                        if (v !== null) overlaySection.updateChannel(channelCard.index, "vmax", v)
-                                    }
-                                }
+                                Item { Layout.fillWidth: true }
                                 Label { text: "Gamma" }
                                 TextField {
                                     objectName: "overlayChannelGamma_" + channelCard.index
@@ -357,6 +390,42 @@ Item {
                                     }
                                     ToolTip.visible: hovered
                                     ToolTip.text: "Below 1 brightens faint pixels, above 1 darkens them."
+                                }
+                            }
+                            // Min and Max on one track, over the feature's
+                            // values in every sample. Applied on release:
+                            // each change re-renders every tile.
+                            RowLayout {
+                                Layout.fillWidth: true
+                                readonly property var range: overlaySection.rangeFor(channelCard.modelData.mz)
+                                Label {
+                                    objectName: "overlayChannelMinLabel_" + channelCard.index
+                                    Layout.preferredWidth: 56
+                                    text: rangeSlider.enabled ? overlaySection.formatValue(rangeSlider.first.value) : "…"
+                                    color: channelCard.modelData.vmin === "" ? Theme.mutedTextColor : palette.windowText
+                                }
+                                RangeSlider {
+                                    id: rangeSlider
+                                    objectName: "overlayChannelRange_" + channelCard.index
+                                    Layout.fillWidth: true
+                                    enabled: parent.range !== null
+                                    from: parent.range ? parent.range.vmin : 0
+                                    to: parent.range ? Math.max(parent.range.vmax, parent.range.vmin + 1e-9) : 1
+                                    first.value: channelCard.modelData.vmin === "" ? from : channelCard.modelData.vmin
+                                    second.value: channelCard.modelData.vmax === "" ? to : channelCard.modelData.vmax
+                                    function commit() {
+                                        overlaySection.setChannelRange(channelCard.index, first.value, second.value)
+                                    }
+                                    first.onPressedChanged: if (!first.pressed) commit()
+                                    second.onPressedChanged: if (!second.pressed) commit()
+                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                }
+                                Label {
+                                    objectName: "overlayChannelMaxLabel_" + channelCard.index
+                                    Layout.preferredWidth: 56
+                                    horizontalAlignment: Text.AlignRight
+                                    text: rangeSlider.enabled ? overlaySection.formatValue(rangeSlider.second.value) : "…"
+                                    color: channelCard.modelData.vmax === "" ? Theme.mutedTextColor : palette.windowText
                                 }
                             }
                         }
@@ -392,8 +461,9 @@ Item {
                     wrapMode: Text.Wrap
                     color: Theme.mutedTextColor
                     text: "Additive: overlapping features mix (magenta + green = white, red + green = yellow). "
-                          + "Max: each pixel keeps its brightest channel. Empty Min/Max: automatic, per sample "
-                          + "(the 99.5th percentile of the detected pixels as Max)."
+                          + "Max: each pixel keeps its brightest channel. Auto: contrast set for each sample on its own "
+                          + "(the 99.5th percentile of the detected pixels as Max). Moving the slider sets one "
+                          + "Min/Max for every sample, so samples compare."
                 }
             }
         }

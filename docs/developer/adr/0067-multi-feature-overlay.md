@@ -17,7 +17,17 @@ correlate, but not where.
 - **Per channel:** a color (the classic fluorescence set, magenta and green
   first because that pair stays distinct with red-green color blindness;
   any color through Qt's color dialog), a visibility toggle, and its own
-  contrast: Min, Max (empty = automatic) and gamma.
+  contrast: Min and Max on one range slider, and gamma.
+- **Range slider:** it spans the feature's values in the current layer
+  over every sample (`AnalysisBridge.requestOverlayRange`, a background
+  read; unlike `requestFeatureValueRange` it is never superseded, since
+  several channels ask at once). **Auto** (default) leaves Min/Max empty:
+  automatic contrast for each sample on its own. Moving a handle sets one
+  Min/Max for every sample, so samples compare; it applies on release,
+  since each change re-renders every tile. Changing the layer resets
+  every channel to Auto: bounds from one layer mean nothing on another.
+- **Gamma:** brightness = (scaled value)^gamma. Below 1 lifts faint
+  pixels, above 1 leaves only the bright ones.
 - **Blending** (`core.plotting.feature_overlay.composite`): each channel's
   values are scaled to 0-1 by its contrast, raised to its gamma and
   multiplied by its color, then:

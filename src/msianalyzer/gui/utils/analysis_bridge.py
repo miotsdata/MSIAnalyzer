@@ -721,6 +721,7 @@ class AnalysisBridge(QObject):
     heatmapPrefetchReady = Signal()
     obsColumnsReady = Signal(list)
     featureValueRangeReady = Signal(dict)
+    overlayRangeReady = Signal(dict)
     obsValueRangeReady = Signal(dict)
     obsCategoriesReady = Signal(list)
     summaryReady = Signal(str, dict)  # analysis_db_path, counts
@@ -953,6 +954,32 @@ class AnalysisBridge(QObject):
             return  # superseded by a newer request — discard
         logger.warning("feature value range load failed: %s", message)
         self.featureValueRangeReady.emit({"vmin": 0, "vmax": 1})
+
+    @Slot(list, float, str)
+    def requestOverlayRange(self, sample_names: list, mz: float, layer: str) -> None:
+        """`requestFeatureValueRange` for one Overlay channel's range
+        slider (ADR 67): never superseded, since several channels ask at
+        once, so the result carries its own `mz` and `layer`:
+        `overlayRangeReady({"mz", "layer", "vmin", "vmax"})`."""
+        provider = self.heatmap_provider
+
+        def _range() -> dict:
+            return {"mz": mz, "layer": layer,
+                    **provider.getFeatureValueRange(sample_names, mz, layer)}
+
+        worker = HeatmapQueryWorker(_range, parent=self)
+        worker.succeeded.connect(self._onOverlayRangeSucceeded)
+        worker.failed.connect(self._onOverlayRangeFailed)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    @Slot(object)
+    def _onOverlayRangeSucceeded(self, value_range: dict) -> None:
+        self.overlayRangeReady.emit(value_range)
+
+    @Slot(str)
+    def _onOverlayRangeFailed(self, message: str) -> None:
+        logger.warning("overlay range load failed: %s", message)
 
     @Slot(list)
     def requestObsColumns(self, sample_names: list) -> None:

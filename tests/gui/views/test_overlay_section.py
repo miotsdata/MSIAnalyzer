@@ -109,22 +109,44 @@ def test_channel_controls_update_the_token(analysis_view, annotated_analysis_mod
     _add(section, 123.4567)
     _add(section, 200.0)
 
-    min_field = find_visual_child(root, "overlayChannelMin_0")
-    min_field.setProperty("text", "2.5")
-    min_field.editingFinished.emit()
+    # The slider spans the feature's values over every sample (0..10),
+    # fetched in the background.
+    slider = find_visual_child(root, "overlayChannelRange_0")
+    qtbot.waitUntil(lambda: slider.property("enabled") is True, timeout=3000)
+    assert (slider.property("from"), slider.property("to")) == (0.0, 10.0)
+    assert find_visual_child(root, "overlayChannelAuto_0").property("checked") is True
+
+    # Dragging both handles and releasing (commit) sets one Min/Max.
+    QMetaObject.invokeMethod(slider, "setValues", Q_ARG(float, 2.5), Q_ARG(float, 8.0))
+    QMetaObject.invokeMethod(slider, "commit")
+    slider = find_visual_child(root, "overlayChannelRange_0")  # re-created
+    assert find_visual_child(root, "overlayChannelMinLabel_0").property("text") == "2.5"
+    assert find_visual_child(root, "overlayChannelAuto_0").property("checked") is False
     gamma = find_visual_child(root, "overlayChannelGamma_0")
     gamma.setProperty("text", "0.5")
     gamma.editingFinished.emit()
-    assert section.property("channelsToken").split(",")[0] == "123.4567:ff00ff:2.5:auto:0.5"
+    assert section.property("channelsToken").split(",")[0] == "123.4567:ff00ff:2.5:8:0.5"
+
+    auto = find_visual_child(root, "overlayChannelAuto_0")
+    auto.setProperty("checked", True)
+    auto.clicked.emit()
+    assert section.property("channelsToken").split(",")[0] == "123.4567:ff00ff:auto:auto:0.5"
+    QMetaObject.invokeMethod(find_visual_child(root, "overlayChannelRange_0"), "setValues",
+                             Q_ARG(float, 2.5), Q_ARG(float, 10.0))
+    QMetaObject.invokeMethod(find_visual_child(root, "overlayChannelRange_0"), "commit")
 
     visible = find_visual_child(root, "overlayChannelVisible_1")
     visible.setProperty("checked", False)  # what a real click does first
     visible.clicked.emit()
-    assert section.property("channelsToken") == "123.4567:ff00ff:2.5:auto:0.5"
+    assert section.property("channelsToken") == "123.4567:ff00ff:2.5:10:0.5"
+
+    # Bounds from one layer mean nothing on another: back to automatic.
+    section.setProperty("dataLayer", "raw")
+    assert section.property("channelsToken") == "123.4567:ff00ff:auto:auto:0.5"
 
     section.setProperty("mode", "max")
     source = _tile_source(section, "s1")
-    assert "|overlay|TIC|max|" in source
+    assert "|overlay|raw|max|" in source
 
     find_visual_child(root, "overlayChannelRemove_0").clicked.emit()
     assert [c["mz"] for c in _prop(section, "channels")] == [200.0]
