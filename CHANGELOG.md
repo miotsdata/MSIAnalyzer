@@ -3,6 +3,40 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
+## 0.8.0 — 2026-11-03
+
+### Added
+- **Feature Correlation** (ADR 66, config v24). New opt-in config group
+  `feature_correlation`: for each sample, the Pearson or Spearman
+  correlation between every pair of features across its pixels, on the
+  chosen layer (TIC by default). Also computable afterwards from the tab's
+  "Compute feature correlation" bar, on pipeline output or an imported
+  dataset. The new tab shows a feature's most correlated and
+  anti-correlated features, with mean r and r per sample; right-click
+  shows the spatial distribution.
+- **Overlay tab** (ADR 67): up to 6 features in one image per sample, one
+  color each, like an immunofluorescence composite. Each channel has its
+  own visibility and contrast (Min/Max range slider with an Auto switch,
+  gamma). Additive or Max blending. "Add to overlay" from Feature
+  Correlation's right-click menu. Export > Image… from the tab, with
+  legend, ROIs and scale bar; "Show ROIs" on the overlay tiles.
+- **Rotate ROIs** in ROI Design (ADR 58 addendum): Q / E (1°, Shift =
+  15°), the ⟲ / ⟳ 15° buttons, or Ctrl+drag inside the selected ROI.
+  Ctrl+Z undoes a rotation.
+- **"Paste as…"** in ROI Design: paste the copied shape as any ROI already
+  in the analysis, picked from a list, with no name to retype. An ROI the
+  sample already has is replaced (Ctrl+Z restores it).
+- Config fields with fixed choices are dropdowns (first used by
+  `feature_correlation.method`).
+
+### Fixed
+- **Deleting an ROI removed it from every sample.** The ✕ in ROI Design
+  now deletes it from the shown sample only; it is offered again there
+  as "Draw for this sample". The name leaves the analysis once no sample
+  has it.
+- Feature Correlation tables scroll sideways and show full sample names
+  on hover.
+
 ## 0.7.2 — 2026-10-30
 
 ### Fixed
