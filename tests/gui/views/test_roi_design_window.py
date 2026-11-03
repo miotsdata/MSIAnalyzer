@@ -966,6 +966,43 @@ def test_undo_right_after_arrow_keys_saves_and_undoes_the_burst(
     assert (nudge.x(), nudge.y()) == (0, 0)
 
 
+def test_rotate_keys_preview_then_save_once_and_undo_restores_it(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    window.setProperty("selectedRoiName", "liver")
+    _activate(window, qtbot)
+
+    for _ in range(6):  # 6 x 15° = 90° clockwise
+        qtbot.keyClick(window, Qt.Key_E, Qt.ShiftModifier)
+
+    # About the bounding-box center (3.5, 3.5): each corner moves to the next.
+    rotated = [[5, 2], [5, 5], [2, 5], [2, 2]]
+    assert window.property("pendingRotation") == 90
+    assert _vertices(window, "liver") == _SQUARE
+    shown = next(r for r in _as_list(canvas.property("savedRois")) if r["name"] == "liver")
+    assert shown["vertices"] == rotated
+
+    _wait_vertices(window, "liver", rotated, qtbot)
+    assert window.property("pendingRotation") == 0
+    assert len(_as_list(window.property("moveHistory"))) == 1
+
+    qtbot.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
+    qtbot.wait(50)
+    assert _vertices(window, "liver") == _SQUARE
+
+
+def test_rotate_button_turns_the_selected_roi(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    window.setProperty("selectedRoiName", "liver")
+    for _ in range(6):  # 6 x -15° = 90° counter-clockwise
+        _click(window, window.findChild(QQuickItem, "roiRotateLeftButton"), qtbot)
+
+    _wait_vertices(window, "liver", [[2, 5], [2, 2], [5, 2], [5, 5]], qtbot)
+
+
 def test_dragging_the_selected_roi_moves_it_by_whole_cells(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):

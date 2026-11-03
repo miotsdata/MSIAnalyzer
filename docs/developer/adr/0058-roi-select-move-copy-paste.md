@@ -75,7 +75,7 @@ sample, so the mask, `merged.h5ad` and an imported dataset's write-back
   under the same name already did.
 - Moves aren't clamped to the image: an ROI dragged off the grid covers
   fewer (possibly zero) pixels until dragged back or undone.
-- Not included: editing single vertices, resize/rotate, multi-select.
+- Not included: editing single vertices, resize, multi-select (rotate: see the addendum below).
 
 ## Addendum (2026-11-03): ✕ deletes from one sample only
 
@@ -86,3 +86,16 @@ sample shown only (`AnalysisBridge.deleteRoi`). The catalog entry
 reappears under "Other ROIs in analyses" with "Draw for this sample". Once
 the last sample's copy is gone the catalog entry is dropped too, so no
 orphan name lingers with no way to remove it.
+
+## Addendum (2026-11-03): rotate
+
+The selected ROI rotates with Q / E (1°, Shift = 15°) or the ⟲ / ⟳ 15°
+buttons, clockwise on screen for positive angles, about its bounding-box
+center (stable however the vertices are spread along the outline). It works
+like the arrow keys: `pendingRotation` is previewed by handing the canvas
+the rotated vertices (so the grid→H&E mapping applies unchanged) and saved
+together with any pending nudge once input is idle, one undo step per burst.
+Vertices are stored as floats, so repeated rotations don't drift; the pixel
+count can still change by a few since membership is whole pixels. Letters
+instead of `[` / `]`, which need AltGr on Italian/German layouts. A mouse
+rotation handle was left out.

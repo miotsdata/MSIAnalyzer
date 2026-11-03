@@ -270,27 +270,68 @@ Window {
         interval: 400
         onTriggered: roiWindow.flushNudge()
     }
+    // Rotation keys/buttons work the same way: degrees, clockwise on
+    // screen, pending until idle, saved together with any pending nudge
+    // as one undo step.
+    property real pendingRotation: 0
     function nudgeSelectedRoi(dCol, dRow) {
         roiWindow.pendingNudge = Qt.point(roiWindow.pendingNudge.x + dCol, roiWindow.pendingNudge.y + dRow)
         nudgeTimer.restart()
     }
+    function rotateSelectedRoi(degrees) {
+        roiWindow.pendingRotation += degrees
+        nudgeTimer.restart()
+    }
+    readonly property bool _hasPendingEdit: roiWindow.pendingNudge.x !== 0
+                                            || roiWindow.pendingNudge.y !== 0
+                                            || roiWindow.pendingRotation % 360 !== 0
     function flushNudge() {
         nudgeTimer.stop()
+        if (!roiWindow._hasPendingEdit) {
+            roiWindow.pendingRotation = 0
+            return
+        }
         var n = roiWindow.pendingNudge
-        if (n.x === 0 && n.y === 0) return
-        // Save first, then drop the preview offset, so the outline never
-        // jumps back to the old place in between.
-        roiWindow._applyMove(n.x, n.y)
+        // Save first, then drop the preview, so the outline never jumps
+        // back to the old place in between.
+        roiWindow._applyMove(n.x, n.y, roiWindow.pendingRotation)
         roiWindow.pendingNudge = Qt.point(0, 0)
+        roiWindow.pendingRotation = 0
     }
     function moveSelectedRoi(dCol, dRow) {
         roiWindow.flushNudge()
-        roiWindow._applyMove(dCol, dRow)
+        roiWindow._applyMove(dCol, dRow, 0)
     }
-    function _applyMove(dCol, dRow) {
+    // `vertices` rotated about their bounding-box center (stable however
+    // the vertices are spread along the outline). Rounded to 1e-6 so a
+    // 90° turn lands on exact values instead of float noise.
+    function _rotated(vertices, degrees) {
+        if (degrees % 360 === 0) return vertices
+        var cols = vertices.map(function (v) { return v[0] })
+        var rows = vertices.map(function (v) { return v[1] })
+        var cx = (Math.min.apply(null, cols) + Math.max.apply(null, cols)) / 2
+        var cy = (Math.min.apply(null, rows) + Math.max.apply(null, rows)) / 2
+        var a = degrees * Math.PI / 180, c = Math.cos(a), s = Math.sin(a)
+        var r = function (x) { return Math.round(x * 1e6) / 1e6 }
+        return vertices.map(function (v) {
+            var dx = v[0] - cx, dy = v[1] - cy
+            return [r(cx + dx * c - dy * s), r(cy + dx * s + dy * c)]
+        })
+    }
+    // What the canvas draws: the selected ROI rotated by the pending
+    // rotation (the pending nudge is applied by the canvas itself).
+    readonly property var _displayedRois: roiWindow.pendingRotation % 360 === 0
+        ? roiWindow.savedRois
+        : roiWindow.savedRois.map(function (r) {
+            return r.name !== roiWindow.selectedRoiName ? r
+                : {name: r.name, color: r.color,
+                   vertices: roiWindow._rotated(r.vertices, roiWindow.pendingRotation)}
+        })
+    function _applyMove(dCol, dRow, degrees) {
         var roi = roiWindow._savedRoi(roiWindow.selectedRoiName)
-        if (!roi || (dCol === 0 && dRow === 0)) return
-        var moved = roi.vertices.map(function (v) { return [v[0] + dCol, v[1] + dRow] })
+        if (!roi || (dCol === 0 && dRow === 0 && degrees % 360 === 0)) return
+        var moved = roiWindow._rotated(roi.vertices, degrees)
+            .map(function (v) { return [v[0] + dCol, v[1] + dRow] })
         if (roiWindow._saveGeometry(roi.name, roi.color, moved)) {
             roiWindow.moveHistory = roiWindow.moveHistory.concat(
                 [{name: roi.name, color: roi.color, vertices: roi.vertices}])
@@ -358,6 +399,11 @@ Window {
     Shortcut { sequence: "Shift+Right"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(10, 0) }
     Shortcut { sequence: "Shift+Up"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(0, -10) }
     Shortcut { sequence: "Shift+Down"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(0, 10) }
+    // Letters, not [ ]: those need AltGr on Italian/German layouts.
+    Shortcut { sequence: "Q"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.rotateSelectedRoi(-1) }
+    Shortcut { sequence: "E"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.rotateSelectedRoi(1) }
+    Shortcut { sequence: "Shift+Q"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.rotateSelectedRoi(-15) }
+    Shortcut { sequence: "Shift+E"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.rotateSelectedRoi(15) }
     Shortcut { sequences: [StandardKey.Copy]; enabled: roiWindow._canEditSelection; onActivated: roiWindow.copySelectedRoi() }
     Shortcut {
         sequences: [StandardKey.Paste]
@@ -367,8 +413,7 @@ Window {
     Shortcut {
         sequences: [StandardKey.Undo]
         enabled: roiWindow.draftState === "idle"
-                 && (roiWindow.moveHistory.length > 0
-                     || roiWindow.pendingNudge.x !== 0 || roiWindow.pendingNudge.y !== 0)
+                 && (roiWindow.moveHistory.length > 0 || roiWindow._hasPendingEdit)
         onActivated: roiWindow.undoLastMove()
     }
     Shortcut { sequence: "Escape"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.selectRoi("") }
@@ -388,6 +433,7 @@ Window {
         // apply a pending arrow move to the new sample's ROI of that name.
         nudgeTimer.stop()
         roiWindow.pendingNudge = Qt.point(0, 0)
+        roiWindow.pendingRotation = 0
         roiWindow.selectedRoiName = ""
         roiWindow.moveHistory = []
         roiWindow.refreshSavedRois()
@@ -621,7 +667,7 @@ Window {
                 showOverlay: roiWindow.showOverlay
                 overlayOpacity: roiWindow.overlayOpacity
                 drawingEnabled: roiWindow.draftState === "drawing"
-                savedRois: roiWindow.savedRois
+                savedRois: roiWindow._displayedRois
                 draftVertices: roiWindow.draftVertices
                 draftColor: roiWindow.draftColor
                 onVertexRequested: (col, row) => roiWindow.addVertex(col, row)
@@ -700,10 +746,32 @@ Window {
                         HoverHandler { cursorShape: Qt.PointingHandCursor }
                     }
                 }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: roiWindow.draftState === "idle" && roiWindow.savedRois.length > 0
+                    Label { text: "Rotate:" }
+                    Button {
+                        objectName: "roiRotateLeftButton"
+                        text: "⟲ 15°"
+                        Layout.fillWidth: true
+                        enabled: roiWindow._canEditSelection
+                        onClicked: roiWindow.rotateSelectedRoi(-15)
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    }
+                    Button {
+                        objectName: "roiRotateRightButton"
+                        text: "⟳ 15°"
+                        Layout.fillWidth: true
+                        enabled: roiWindow._canEditSelection
+                        onClicked: roiWindow.rotateSelectedRoi(15)
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    }
+                }
                 Label {
                     visible: roiWindow._canEditSelection
                     text: "Drag the selected ROI or use the arrow keys (Shift = 10 px) "
-                          + "to move it; Ctrl+Z undoes moves one at a time."
+                          + "to move it, Q / E to rotate it (1°, Shift = 15°); "
+                          + "Ctrl+Z undoes moves one at a time."
                     color: Theme.mutedTextColor
                     font.pixelSize: Theme.captionPixelSize
                     wrapMode: Text.Wrap
