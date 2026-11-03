@@ -98,7 +98,7 @@ together with any pending nudge once input is idle, one undo step per burst.
 Vertices are stored as floats, so repeated rotations don't drift; the pixel
 count can still change by a few since membership is whole pixels. Letters
 instead of `[` / `]`, which need AltGr on Italian/German layouts. A mouse
-rotation handle was left out.
+rotation handle was left out; Ctrl+drag (below) covers the mouse.
 
 ## Addendum (2026-11-03): Paste as…
 
@@ -112,3 +112,16 @@ replaced; the old shape goes on `moveHistory`, so Ctrl+Z restores it (no
 confirmation dialog). Placement follows Paste: offset by 5 pixels on the
 sample it was copied from, same position elsewhere. Plain Paste (new name)
 is unchanged.
+
+## Addendum (2026-11-03): Ctrl+drag rotates
+
+A drag that starts inside the selected ROI with Ctrl held rotates it about
+the same pivot instead of moving it (Shift snaps to 15°, else whole
+degrees). It reuses the move `DragHandler` and `pendingRotation`, so the
+pan pause, preview and undo are the ones already in place; the rotation is
+saved on release. The angle is the pointer's sweep around the pivot as
+drawn on the surface; on H&E it is negated for a mirroring fit (negative
+determinant). Chosen over a visible rotation handle (one more item
+competing with pan/select/move for the press, and off-screen when zoomed
+near an edge). Ctrl rather than Alt: Alt+drag moves windows on KDE and
+some other Linux desktops.

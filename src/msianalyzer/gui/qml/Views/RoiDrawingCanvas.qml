@@ -102,6 +102,11 @@ Item {
     // The finished drag, always in grid-index units (whole cells on the
     // grid surface; converted from H&E pixels in heMode).
     signal moveRequested(real dCol, real dRow)
+    // Ctrl+drag inside the selected ROI rotates it instead: degrees for
+    // the whole drag so far, clockwise on screen (Shift snaps to 15°).
+    signal rotateStarted()
+    signal rotateDragged(real degrees)
+    signal rotateFinished()
     // Whether the pointer is over the selected ROI, which pauses the
     // image's pan. Refreshed on hover, on every press (a real compositor
     // may deliver no hover between selecting and dragging, and then the
@@ -193,6 +198,32 @@ Item {
         } else {
             canvas.moveRequested(Math.round(dx), Math.round(dy))
         }
+    }
+
+    // The selected ROI's bounding-box center in item pixels, the pivot
+    // RoiDesignWindow._rotated uses (grid bbox, mapped to the surface).
+    function _selectedPivotPx() {
+        var rois = canvas.savedRois
+        for (var i = 0; i < rois.length; i++) {
+            if (rois[i].name !== canvas.selectedRoiName) continue
+            var cols = rois[i].vertices.map(function (v) { return v[0] })
+            var rows = rois[i].vertices.map(function (v) { return v[1] })
+            var c = canvas._displayVertex([(Math.min.apply(null, cols) + Math.max.apply(null, cols)) / 2,
+                                           (Math.min.apply(null, rows) + Math.max.apply(null, rows)) / 2])
+            return Qt.point(overlay.toItemX(c[0]), overlay.toItemY(c[1]))
+        }
+        return Qt.point(0, 0)
+    }
+    // Pointer angle change around `pivot`, in grid-space degrees: a
+    // mirroring H&E fit (negative determinant) turns the other way.
+    function _dragDegrees(pivot, from, to, snap) {
+        var a = Math.atan2(to.y - pivot.y, to.x - pivot.x) - Math.atan2(from.y - pivot.y, from.x - pivot.x)
+        var deg = a * 180 / Math.PI
+        deg = ((deg + 540) % 360) - 180
+        var m = canvas.heMode ? canvas.heToGridMatrix : null
+        if (m && m[0][0] * m[1][1] - m[0][1] * m[1][0] < 0) deg = -deg
+        var step = snap ? 15 : 1
+        return Math.round(deg / step) * step
     }
 
     // A fixed *screen*-pixel radius (not grid-space) so the close target
@@ -294,19 +325,35 @@ Item {
             // Whether this drag began inside the selected ROI; a drag
             // starting anywhere else is left alone.
             property bool _moving: false
+            // Ctrl held when the drag began: rotate about `_pivot` instead.
+            property bool _rotating: false
+            property point _pivot: Qt.point(0, 0)
             property point _last: Qt.point(0, 0)
             onActiveChanged: {
                 if (active) {
                     _moving = canvas._insideSelected(centroid.pressPosition.x, centroid.pressPosition.y)
+                    _rotating = _moving && (centroid.modifiers & Qt.ControlModifier) !== 0
                     _last = Qt.point(0, 0)
+                    if (_rotating) {
+                        canvas.rotateStarted()
+                        _pivot = canvas._selectedPivotPx()
+                    }
                     return
                 }
-                if (_moving && (_last.x !== 0 || _last.y !== 0)) canvas._finishMove(_last)
+                if (_rotating) canvas.rotateFinished()
+                else if (_moving && (_last.x !== 0 || _last.y !== 0)) canvas._finishMove(_last)
                 canvas._dragPx = Qt.point(0, 0)
                 _moving = false
+                _rotating = false
             }
             onActiveTranslationChanged: {
                 if (!active || !_moving) return
+                if (_rotating) {
+                    canvas.rotateDragged(canvas._dragDegrees(
+                        _pivot, centroid.pressPosition, centroid.position,
+                        (centroid.modifiers & Qt.ShiftModifier) !== 0))
+                    return
+                }
                 _last = canvas._snappedOffset(activeTranslation)
                 canvas._dragPx = _last
             }

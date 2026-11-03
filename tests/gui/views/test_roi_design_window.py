@@ -1003,6 +1003,53 @@ def test_rotate_button_turns_the_selected_roi(
     _wait_vertices(window, "liver", [[2, 5], [2, 2], [5, 2], [5, 5]], qtbot)
 
 
+def _ctrl_drag(window, points, qtbot):
+    """A left-button drag through `points` (scene positions) with Ctrl
+    held on every event — qtbot.mouseMove can't carry modifiers."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    def send(kind, pos, button, buttons):
+        local = QPointF(pos)
+        QApplication.sendEvent(window, QMouseEvent(
+            kind, local, window.mapToGlobal(local), button, buttons, Qt.ControlModifier))
+
+    send(QEvent.MouseButtonPress, points[0], Qt.LeftButton, Qt.LeftButton)
+    for pos in points[1:]:
+        send(QEvent.MouseMove, pos, Qt.NoButton, Qt.LeftButton)
+        qtbot.wait(5)
+    send(QEvent.MouseButtonRelease, points[-1], Qt.LeftButton, Qt.NoButton)
+    qtbot.wait(50)
+
+
+def test_ctrl_drag_rotates_the_selected_roi_about_its_center(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    import math
+
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    window.setProperty("selectedRoiName", "liver")
+    qtbot.wait(20)
+    holder = canvas.findChild(QQuickItem, "zoomableImageOverlayHolder")
+    scale = canvas.findChild(QQuickItem, "roiZoomableImage").property("effectiveScale")
+
+    # A quarter turn clockwise on screen around the center, grid (3.5,
+    # 3.5), drawn at item (4, 4) cells (the overlay draws vertex v at
+    # v + 0.5), starting inside the ROI 1.2 cells right of it.
+    arc = [holder.mapToScene(QPointF((4 + 1.2 * math.cos(t)) * scale,
+                                     (4 + 1.2 * math.sin(t)) * scale))
+           for t in (i * math.pi / 2 / 12 for i in range(13))]
+    _ctrl_drag(window, arc, qtbot)
+
+    _wait_vertices(window, "liver", [[5, 2], [5, 5], [2, 5], [2, 2]], qtbot)
+    assert window.property("pendingRotation") == 0
+    _activate(window, qtbot)
+    qtbot.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
+    qtbot.wait(50)
+    assert _vertices(window, "liver") == _SQUARE
+
+
 def test_dragging_the_selected_roi_moves_it_by_whole_cells(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):

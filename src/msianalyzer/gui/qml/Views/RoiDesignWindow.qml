@@ -701,6 +701,13 @@ Window {
                 selectedRoiName: roiWindow.selectedRoiName
                 onRoiTapped: (name) => roiWindow.selectRoi(name)
                 onMoveRequested: (dCol, dRow) => roiWindow.moveSelectedRoi(dCol, dRow)
+                // Ctrl+drag: the same pending rotation as Q/E, saved on release.
+                onRotateStarted: roiWindow.flushNudge()
+                onRotateDragged: (degrees) => {
+                    nudgeTimer.stop()
+                    roiWindow.pendingRotation = degrees
+                }
+                onRotateFinished: roiWindow.flushNudge()
                 nudgeCells: roiWindow.pendingNudge
             }
 
@@ -842,7 +849,7 @@ Window {
                 Label {
                     visible: roiWindow._canEditSelection
                     text: "Drag the selected ROI or use the arrow keys (Shift = 10 px) "
-                          + "to move it, Q / E to rotate it (1°, Shift = 15°); "
+                          + "to move it. Ctrl+drag or Q / E rotates it (Shift = 15° steps); "
                           + "Ctrl+Z undoes moves one at a time."
                     color: Theme.mutedTextColor
                     font.pixelSize: Theme.captionPixelSize
