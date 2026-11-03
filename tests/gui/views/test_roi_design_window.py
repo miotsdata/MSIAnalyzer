@@ -1065,6 +1065,57 @@ def test_paste_on_another_sample_keeps_the_name_and_position(
     assert _mask_pixels(out_dir, "s2", "liver") == _mask_pixels(out_dir, "s1", "liver")
 
 
+def _paste_as(window, name, find_visual_child, qtbot):
+    _click(window, window.findChild(QQuickItem, "roiPasteAsButton"), qtbot)
+    popup = window.findChild(QObject, "roiPasteAsPopup")
+    qtbot.waitUntil(lambda: popup.property("opened"), timeout=2000)
+    item = find_visual_child(popup.property("contentItem"), f"roiPasteAsItem_{name}")
+    _click(window, item, qtbot)
+
+
+def test_paste_as_another_roi_on_same_sample_adds_it_without_naming(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    # "tumor" is drawn on s2 only: it's a target on s1 too.
+    _seed_roi(visual_analysis_model, "s2", "tumor", color="#00ff00")
+    window.refreshCatalogRois()
+    window.setProperty("selectedRoiName", "liver")
+    _click(window, window.findChild(QQuickItem, "roiCopyButton"), qtbot)
+
+    targets = [r["name"] for r in _as_list(window.property("pasteAsTargets"))]
+    assert targets == ["tumor"]  # never the copied ROI onto itself
+    _paste_as(window, "tumor", find_visual_child, qtbot)
+
+    assert window.property("draftState") == "idle"
+    assert window.property("selectedRoiName") == "tumor"
+    tumor = next(r for r in _as_list(window.property("savedRois")) if r["name"] == "tumor")
+    assert tumor["vertices"] == [[v[0] + 5, v[1] + 5] for v in _SQUARE]
+    assert tumor["color"] == "#00ff00"
+    assert _vertices(window, "liver") == _SQUARE
+
+
+def test_paste_as_an_roi_already_on_the_sample_replaces_it_and_undo_restores(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    window, canvas = _open_with_roi(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    small = [[8, 8], [10, 8], [10, 10]]
+    _seed_roi(visual_analysis_model, "s1", "tumor", small, color="#00ff00")
+    window.refreshSavedRois()
+    window.refreshCatalogRois()
+    qtbot.wait(50)  # the new list row moves the buttons below it
+    window.setProperty("selectedRoiName", "liver")
+    _click(window, window.findChild(QQuickItem, "roiCopyButton"), qtbot)
+
+    _paste_as(window, "tumor", find_visual_child, qtbot)
+    assert _vertices(window, "tumor") == [[v[0] + 5, v[1] + 5] for v in _SQUARE]
+
+    _activate(window, qtbot)
+    qtbot.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
+    qtbot.wait(50)
+    assert _vertices(window, "tumor") == small
+
+
 def test_new_roi_with_a_name_already_on_this_sample_is_refused(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):

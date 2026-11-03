@@ -390,6 +390,31 @@ Window {
         }
     }
 
+    // "Paste as…" targets: every catalog name, minus the copied ROI
+    // itself on the sample it was copied from (pasting it onto itself).
+    readonly property var pasteAsTargets: !roiWindow.roiClipboard ? [] : roiWindow.catalogRois.filter(function (r) {
+        return !(r.name === roiWindow.roiClipboard.name
+                 && roiWindow.selectedSample
+                 && roiWindow.roiClipboard.sample === roiWindow.selectedSample.name)
+    })
+    // Saves the clipboard shape as the existing ROI `name`, with no naming
+    // step: added if this sample doesn't have it, else its shape is
+    // replaced (Ctrl+Z restores the old one). Same offset rule as Paste.
+    function pasteAs(name, color) {
+        roiWindow.flushNudge()
+        var clip = roiWindow.roiClipboard
+        if (!clip || !roiWindow.selectedSample) return
+        var offset = clip.sample === roiWindow.selectedSample.name ? 5 : 0
+        var vertices = clip.vertices.map(function (v) { return [v[0] + offset, v[1] + offset] })
+        var replaced = roiWindow._savedRoi(name)
+        if (!roiWindow._saveGeometry(name, color, vertices)) return
+        if (replaced) {
+            roiWindow.moveHistory = roiWindow.moveHistory.concat(
+                [{name: name, color: replaced.color, vertices: replaced.vertices}])
+        }
+        roiWindow.selectedRoiName = name
+    }
+
     readonly property bool _canEditSelection: roiWindow.draftState === "idle" && roiWindow.selectedRoiName !== ""
     Shortcut { sequence: "Left"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(-1, 0) }
     Shortcut { sequence: "Right"; enabled: roiWindow._canEditSelection; onActivated: roiWindow.nudgeSelectedRoi(1, 0) }
@@ -744,6 +769,53 @@ Window {
                         enabled: roiWindow.roiClipboard !== null
                         onClicked: roiWindow.startPaste()
                         HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    }
+                }
+                Button {
+                    id: pasteAsButton
+                    objectName: "roiPasteAsButton"
+                    text: "Paste as…"
+                    Layout.fillWidth: true
+                    visible: roiWindow.draftState === "idle" && roiWindow.roiClipboard !== null
+                    enabled: roiWindow.pasteAsTargets.length > 0
+                    onClicked: pasteAsPopup.open()
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+
+                    Popup {
+                        id: pasteAsPopup
+                        objectName: "roiPasteAsPopup"
+                        y: pasteAsButton.height
+                        width: pasteAsButton.width
+                        padding: 4
+                        contentItem: ColumnLayout {
+                            spacing: 0
+                            Repeater {
+                                model: roiWindow.pasteAsTargets
+                                delegate: ItemDelegate {
+                                    id: pasteAsItem
+                                    objectName: "roiPasteAsItem_" + modelData.name
+                                    Layout.fillWidth: true
+                                    readonly property bool replaces: roiWindow._savedRoi(modelData.name) !== null
+                                    contentItem: RowLayout {
+                                        Rectangle {
+                                            width: 14; height: 14; radius: 2
+                                            color: modelData.color
+                                            border.color: palette.mid
+                                        }
+                                        Label {
+                                            text: modelData.name + (pasteAsItem.replaces ? " (replace)" : "")
+                                            Layout.fillWidth: true
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                    onClicked: {
+                                        pasteAsPopup.close()
+                                        roiWindow.pasteAs(modelData.name, modelData.color)
+                                    }
+                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                }
+                            }
+                        }
                     }
                 }
                 RowLayout {

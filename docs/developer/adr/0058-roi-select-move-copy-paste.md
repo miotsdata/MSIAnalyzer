@@ -99,3 +99,16 @@ Vertices are stored as floats, so repeated rotations don't drift; the pixel
 count can still change by a few since membership is whole pixels. Letters
 instead of `[` / `]`, which need AltGr on Italian/German layouts. A mouse
 rotation handle was left out.
+
+## Addendum (2026-11-03): Paste as…
+
+Pasting a copied shape as another ROI already in the analysis used to mean
+retyping its exact name in the naming step, which was error-prone. "Paste
+as…" opens a popup listing every catalog ROI (swatch + name, minus the
+copied ROI itself on its own sample); picking one saves the clipboard shape
+under that name and its registered color, with no naming step. If the
+sample already has that ROI, the row says "(replace)" and its shape is
+replaced; the old shape goes on `moveHistory`, so Ctrl+Z restores it (no
+confirmation dialog). Placement follows Paste: offset by 5 pixels on the
+sample it was copied from, same position elsewhere. Plain Paste (new name)
+is unchanged.
