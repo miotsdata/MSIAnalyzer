@@ -2401,7 +2401,7 @@ def delete_roi_catalog_entry(db_path: Path | str, name: str) -> bool:
     """Remove one ROI's catalog row (name/color registration only — does
     NOT touch any sample's h5ad; see `core/plotting/roi.py` for the
     per-sample and `merged.h5ad` deletion, which callers must do
-    separately, e.g. `AnalysisBridge.deleteRoiEverywhere`).
+    separately, e.g. `AnalysisBridge.deleteRoi`).
 
     Returns:
         True if a row was actually deleted.

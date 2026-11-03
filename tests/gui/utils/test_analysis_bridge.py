@@ -1715,7 +1715,7 @@ def test_delete_roi_from_sample_removes_it(tmp_path):
     assert bridge.getSampleRois(str(db_path), "s1") == []
 
 
-def test_delete_roi_everywhere_removes_catalog_and_every_sample(tmp_path):
+def test_delete_roi_removes_only_that_sample_and_keeps_catalog(tmp_path):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()
     _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
@@ -1725,13 +1725,27 @@ def test_delete_roi_everywhere_removes_catalog_and_every_sample(tmp_path):
     bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
     bridge.saveRoi(str(db_path), "s2", "liver", "#ff0000", _ROI_VERTICES)
 
-    result = bridge.deleteRoiEverywhere(str(db_path), ["s1", "s2"], "liver")
+    result = bridge.deleteRoi(str(db_path), "s1", ["s1", "s2"], "liver")
 
-    assert result["catalog_removed"] is True
-    assert set(result["samples_removed"]) == {"s1", "s2"}
-    assert bridge.getRois(str(db_path)) == []
+    assert result == {"removed": True, "catalog_removed": False}
     assert bridge.getSampleRois(str(db_path), "s1") == []
-    assert bridge.getSampleRois(str(db_path), "s2") == []
+    assert [r["name"] for r in bridge.getSampleRois(str(db_path), "s2")] == ["liver"]
+    assert [r["name"] for r in bridge.getRois(str(db_path))] == ["liver"]
+
+
+def test_delete_roi_from_last_sample_drops_catalog_entry(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+    _write_roi_sample_h5ad(tmp_path / "s2.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+
+    result = bridge.deleteRoi(str(db_path), "s1", ["s1", "s2"], "liver")
+
+    assert result == {"removed": True, "catalog_removed": True}
+    assert bridge.getRois(str(db_path)) == []
 
 
 def test_next_roi_color_cycles_by_catalog_size(tmp_path):

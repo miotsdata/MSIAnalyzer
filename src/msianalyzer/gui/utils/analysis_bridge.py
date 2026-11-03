@@ -2737,8 +2737,8 @@ class AnalysisBridge(QObject):
     def deleteRoiFromSample(self, analysis_db_path: str, sample_name: str, name: str) -> bool:
         """Remove one ROI from one sample only (and, if it exists,
         `merged.h5ad`) — the catalog entry and every other sample's own
-        copy are untouched; use `deleteRoiEverywhere` to also drop the
-        catalog row across every sample.
+        copy are untouched; `deleteRoi` also drops the catalog row once
+        no sample has this ROI any more.
 
         Returns:
             True if the sample actually had this ROI.
@@ -2773,31 +2773,35 @@ class AnalysisBridge(QObject):
                 f"ROI removed in MSIAnalyzer, but not from {Path(source).name} ({e})."
             )
 
-    @Slot(str, list, str, result=dict)
-    def deleteRoiEverywhere(self, analysis_db_path: str, sample_names: list, name: str) -> dict:
-        """Remove one ROI's catalog entry and its per-sample data from
-        every sample in `sample_names` — "delete this ROI" in ROI Design's
-        management list, which only has the analysis' full sample list on
-        hand, not which samples actually carry this ROI.
+    @Slot(str, str, list, str, result=dict)
+    def deleteRoi(
+        self, analysis_db_path: str, sample_name: str, sample_names: list, name: str
+    ) -> dict:
+        """ROI Design's ✕: remove one ROI from one sample only. Its catalog
+        entry (name + color) stays while any other sample still has it, so
+        the name is offered again as "Draw for this sample"; once the last
+        sample's copy is gone the catalog entry goes too.
 
         Args:
             analysis_db_path: The analysis' SQLite database.
-            sample_names: Every sample name to check/clean — normally
-                every sample of the analysis, not just the one currently
-                open in ROI Design.
+            sample_name: The sample to remove the ROI from.
+            sample_names: Every sample of the analysis, checked for a
+                remaining copy before the catalog entry is dropped.
             name: The ROI to remove.
 
         Returns:
-            `{"catalog_removed": bool, "samples_removed": [names...]}`.
+            `{"removed": bool, "catalog_removed": bool}`.
         """
-        removed_samples = [
-            sample_name for sample_name in sample_names
-            if self.deleteRoiFromSample(analysis_db_path, sample_name, name)
-        ]
+        removed = self.deleteRoiFromSample(analysis_db_path, sample_name, name)
         catalog_removed = False
-        if analysis_db_path and Path(analysis_db_path).exists():
+        still_used = any(
+            r["name"] == name
+            for other in sample_names if other != sample_name
+            for r in self.getSampleRois(analysis_db_path, other)
+        )
+        if not still_used and analysis_db_path and Path(analysis_db_path).exists():
             catalog_removed = analysis_db.delete_roi_catalog_entry(analysis_db_path, name)
-        return {"catalog_removed": catalog_removed, "samples_removed": removed_samples}
+        return {"removed": removed, "catalog_removed": catalog_removed}
 
     # -----------------------------------------------------------------
     # H&E image coregistration (see core/registration/)

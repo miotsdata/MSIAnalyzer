@@ -496,8 +496,10 @@ Window {
     function deleteSavedRoi(name) {
         roiWindow.flushNudge()
         if (!roiWindow.analysis) return
-        AnalysisBridge.deleteRoiEverywhere(
-            roiWindow.analysis.analysisDbPath,
+        // This sample only: the name stays under "Other ROIs" while
+        // another sample still has it (ADR 58 addendum).
+        AnalysisBridge.deleteRoi(
+            roiWindow.analysis.analysisDbPath, roiWindow.selectedSample.name,
             roiWindow.samples.map(function (s) { return s.name }), name)
         if (roiWindow.selectedRoiName === name) roiWindow.selectedRoiName = ""
         roiWindow.moveHistory = roiWindow.moveHistory.filter(function (m) { return m.name !== name })

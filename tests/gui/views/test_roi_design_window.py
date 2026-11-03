@@ -380,17 +380,20 @@ def test_zoom_buttons_change_canvas_zoom(
     assert canvas.property("zoom") == 1.0
 
 
-def test_delete_roi_removes_it_from_sample_and_catalog(
+def test_delete_roi_removes_it_from_this_sample_only(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
+    from msianalyzer.core.analysis_db import register_roi
     from msianalyzer.core.plotting import roi as roi_module
 
     out_dir = Path(visual_analysis_model.outDir)
     _write_grid_h5ad(out_dir / "s1.h5ad")
     _write_grid_h5ad(out_dir / "s2.h5ad")
-    roi_module.save_roi_to_sample(
-        out_dir / "s1.h5ad", "liver", "#ff0000", [[1, 1], [3, 1], [3, 3], [1, 3]]
-    )
+    for sample in ("s1", "s2"):
+        roi_module.save_roi_to_sample(
+            out_dir / f"{sample}.h5ad", "liver", "#ff0000", [[1, 1], [3, 1], [3, 3], [1, 3]]
+        )
+    register_roi(visual_analysis_model.analysisDbPath, "liver", "#ff0000")
 
     view = analysis_view(visual_analysis_model)
     root = view.rootObject()
@@ -411,8 +414,10 @@ def test_delete_roi_removes_it_from_sample_and_catalog(
     qtbot.wait(100)
 
     assert _as_list(window.property("savedRois")) == []
-    reread = ad.read_h5ad(out_dir / "s1.h5ad")
-    assert "roi_liver" not in reread.obs.columns
+    assert "roi_liver" not in ad.read_h5ad(out_dir / "s1.h5ad").obs.columns
+    # s2 keeps its copy, so the name is offered again on s1.
+    assert "roi_liver" in ad.read_h5ad(out_dir / "s2.h5ad").obs.columns
+    assert [r["name"] for r in _as_list(window.property("otherRois"))] == ["liver"]
 
 
 def test_saving_against_analysis_db_predating_rois_table_creates_it(

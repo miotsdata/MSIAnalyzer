@@ -76,3 +76,13 @@ sample, so the mask, `merged.h5ad` and an imported dataset's write-back
 - Moves aren't clamped to the image: an ROI dragged off the grid covers
   fewer (possibly zero) pixels until dragged back or undone.
 - Not included: editing single vertices, resize/rotate, multi-select.
+
+## Addendum (2026-11-03): ✕ deletes from one sample only
+
+The ✕ next to an ROI used to delete that name from every sample and from
+the catalog (`deleteRoiEverywhere`). It now removes the ROI from the
+sample shown only (`AnalysisBridge.deleteRoi`). The catalog entry
+(name + color) stays while any other sample still has the ROI, so the name
+reappears under "Other ROIs in analyses" with "Draw for this sample". Once
+the last sample's copy is gone the catalog entry is dropped too, so no
+orphan name lingers with no way to remove it.
