@@ -3,7 +3,7 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
-## Unreleased
+## 0.9.0 — 2026-11-05
 
 ### Added
 - **Get statistics** in Visual Inspection (ADR 68): violins of the selected
