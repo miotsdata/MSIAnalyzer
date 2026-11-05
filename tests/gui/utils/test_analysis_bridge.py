@@ -2730,7 +2730,7 @@ def _stats_params(**overrides):
         "spec": {"kind": "obs", "column": "tic", "numeric": True},
         "useRoi": False, "groupByRoi": False, "outsideRoi": False, "detectedOnly": False,
         "rows": 1, "cols": 2, "widthIn": 4, "heightIn": 3, "dpi": 100,
-        "proportion": False, "order": ["s2"], "roiOrder": [], "sampleOrder": [],
+        "proportion": False, "sharedY": True, "order": ["s2"], "roiOrder": [], "sampleOrder": [],
     }
     params.update(overrides)
     return params

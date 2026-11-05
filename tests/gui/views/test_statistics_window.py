@@ -129,3 +129,23 @@ def test_figure_always_fits_the_panel_and_only_zoom_overflows(
     window.setProperty("zoom", 200)
     zoomed = _wait_plot(window, qtbot, lambda r: r["width"] > result["width"] * 1.9)
     assert zoomed["width"] > flick.width()  # only zoom scrolls
+
+
+def test_shared_y_checkbox_reaches_the_plot(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot, monkeypatch
+):
+    from msianalyzer.core.plotting import stats_plot
+
+    _root, window = _open_statistics(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    _wait_plot(window, qtbot)
+    assert window.property("sharedY") is True
+    calls = []
+    original = stats_plot.render_stats_figure
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs.get("share_y"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(stats_plot, "render_stats_figure", spy)
+    window.setProperty("sharedY", False)
+    qtbot.waitUntil(lambda: False in calls and not window.property("loading"), timeout=8000)

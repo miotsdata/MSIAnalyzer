@@ -175,12 +175,12 @@ def _draw_bars(ax, groups: list[dict], categories, colors, proportion: bool) -> 
 def render_stats_figure(panels: list[dict], kind: str, rows: int, cols: int,
                         width_in: float, height_in: float, ylabel: str,
                         categories=(), colors=(), proportion: bool = False,
-                        dpi: int = 100) -> Figure:
+                        dpi: float = 100, share_y: bool = True) -> Figure:
     """The whole grid. `kind` is `"violin"` or `"bar"`. Unused cells are
-    removed; every panel shares the y axis."""
+    removed; panels share the y axis unless `share_y` is False."""
     rows, cols = grid_shape(len(panels), rows, cols)
     fig = Figure(figsize=(width_in, height_in), dpi=dpi, layout="constrained")
-    axes = fig.subplots(rows, cols, sharey=True, squeeze=False).flatten()
+    axes = fig.subplots(rows, cols, sharey=share_y, squeeze=False).flatten()
     for i, (ax, panel) in enumerate(zip(axes, panels)):
         groups = panel["groups"]
         if kind == "bar":

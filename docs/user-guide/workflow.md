@@ -284,7 +284,8 @@ samples are left out.
   **Pixels outside ROI** adds a grey `(no ROI)` group.
 - **Grouped by ROI**: one panel per ROI with the samples side by side;
   otherwise each violin has its own panel. Rows and Columns arrange the
-  panels; all share the y axis.
+  panels. **Shared y axis** (on by default) gives every panel the same
+  y range; turn it off when one group would flatten the others.
 - **Detected pixels only**: leaves out zeros (on for features).
 - **Proportion** (bars): every bar reaches 1, split by category.
 - **Width / Height** (inches): the figure's size, like `figsize` in

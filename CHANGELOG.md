@@ -9,7 +9,7 @@ ADRs under `docs/developer/adr/`.
 - **Get statistics** in Visual Inspection (ADR 68): violins of the selected
   feature or numeric obs column, or stacked bars (counts or proportions) of
   a categorical one, per sample or per sample × ROI. Options: Use ROI,
-  Grouped by ROI, Pixels outside ROI, Detected pixels only, rows/columns,
+  Grouped by ROI, Pixels outside ROI, Detected pixels only, Shared y axis, rows/columns,
   figure width/height (like `figsize`) and zoom, drag-and-drop reorder;
   right-click exports PNG/SVG/PDF.
 

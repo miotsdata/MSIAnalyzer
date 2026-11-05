@@ -1084,6 +1084,7 @@ class AnalysisBridge(QObject):
             float(params["widthIn"]), float(params["heightIn"]), ylabel,
             categories, colors, bool(params["proportion"]),
             dpi=max(10.0, float(params["dpi"])),
+            share_y=bool(params.get("sharedY", True)),
         )
         meta = {
             "kind": kind,

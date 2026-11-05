@@ -35,7 +35,8 @@ wanted the same plots one click away from Visual Inspection.
   - Otherwise one panel per violin. Bars without grouping share one panel
     (one stacked bar per panel says little).
   - Rows × columns arrange the panels; rows grow when the cells are too
-    few. Every panel shares the y axis.
+    few. **Shared y axis** (on by default; added after first use) gives
+    every panel the same y range; off, each panel gets its own.
 - **Figure size, like Jupyter** (revised twice the same day after
   real-use feedback): **Width** and **Height** in inches are the figure's
   `figsize`, set separately. The figure is always fitted into the panel, as

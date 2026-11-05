@@ -114,3 +114,11 @@ def test_render_bars_proportion_stacks_to_one():
         tops[x] = max(tops.get(x, 0), patch.get_y() + patch.get_height())
     assert tops == pytest.approx({0: 1.0, 1: 1.0})
     assert fig.legends  # one shared legend
+
+
+def test_render_without_shared_y_gives_each_panel_its_own_range():
+    groups = [make_group("s1", None, np.arange(10.0), False),
+              make_group("s2", None, np.arange(10.0) * 100, False)]
+    fig = render_stats_figure(build_panels(groups, False), "violin", 1, 2, 6, 3, "x", share_y=False)
+    a, b = fig.get_axes()
+    assert a.get_ylim()[1] < b.get_ylim()[1] / 10

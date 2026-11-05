@@ -94,6 +94,7 @@ Window {
     property bool outsideRoi: false
     property bool detectedOnly: !!statsWindow.spec && statsWindow.spec.kind === "feature"
     property bool proportion: false
+    property bool sharedY: true
     property int rows: 1
     property int cols: 4
     // Figure size in inches (figsize) and zoom in % (100 % = 100 dpi).
@@ -135,6 +136,7 @@ Window {
             "outsideRoi": statsWindow.outsideRoi,
             "detectedOnly": statsWindow.detectedOnly && !statsWindow.categorical,
             "proportion": statsWindow.proportion,
+            "sharedY": statsWindow.sharedY,
             "rows": statsWindow.rows,
             "cols": statsWindow.cols,
             "widthIn": statsWindow.widthIn,
@@ -167,6 +169,7 @@ Window {
     onOutsideRoiChanged: statsWindow.scheduleRefresh()
     onDetectedOnlyChanged: statsWindow.scheduleRefresh()
     onProportionChanged: statsWindow.scheduleRefresh()
+    onSharedYChanged: statsWindow.scheduleRefresh()
     onRowsChanged: statsWindow.scheduleRefresh()
     onColsChanged: statsWindow.scheduleRefresh()
     onWidthInChanged: statsWindow.scheduleRefresh()
@@ -296,6 +299,23 @@ Window {
                     text: "Proportion"
                     checked: statsWindow.proportion
                     onToggled: statsWindow.proportion = checked
+                }
+
+                RowLayout {
+                    AppCheckBox {
+                        objectName: "statsSharedYCheckBox"
+                        text: "Shared y axis"
+                        checked: statsWindow.sharedY
+                        onToggled: statsWindow.sharedY = checked
+                    }
+                    HelpButton {
+                        onClicked: statsWindow.openHelp("Shared y axis",
+                            "**General:** every panel uses the same y range, so heights compare "
+                            + "directly between panels. Turn it off to give each panel its own "
+                            + "range, when one group's values would flatten all the others.\n\n"
+                            + "**Interaction:** only matters with more than one panel. For bars "
+                            + "with Proportion on, every panel already goes from 0 to 1.")
+                    }
                 }
 
                 GridLayout {
