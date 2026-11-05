@@ -287,8 +287,10 @@ samples are left out.
   panels; all share the y axis.
 - **Detected pixels only**: leaves out zeros (on for features).
 - **Proportion** (bars): every bar reaches 1, split by category.
-- **Plot size**: draws the figure bigger (scroll to see it all), like a
-  larger `figsize` in Jupyter.
+- **Width / Height** (inches): the figure's size, like `figsize` in
+  Jupyter. The figure always fits the panel: a bigger size gives more room
+  (and smaller-looking text), one alone changes the proportions. **Zoom**
+  (or Ctrl+mouse wheel) magnifies it; above 100 % it scrolls.
 - **Reorder…**: drag names to change the order.
 - Right-click the plot → **Export image…** (PNG, SVG or PDF).
 

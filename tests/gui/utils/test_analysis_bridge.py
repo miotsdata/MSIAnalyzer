@@ -2729,7 +2729,7 @@ def _stats_params(**overrides):
         "sampleNames": ["s1", "s2"],
         "spec": {"kind": "obs", "column": "tic", "numeric": True},
         "useRoi": False, "groupByRoi": False, "outsideRoi": False, "detectedOnly": False,
-        "rows": 1, "cols": 2, "widthPx": 400, "heightPx": 300, "scale": 100,
+        "rows": 1, "cols": 2, "widthIn": 4, "heightIn": 3, "dpi": 100,
         "proportion": False, "order": ["s2"], "roiOrder": [], "sampleOrder": [],
     }
     params.update(overrides)
@@ -2744,6 +2744,7 @@ def test_request_stats_plot_emits_png_and_the_applied_order(tmp_path, qtbot):
     assert result["image"].startswith("data:image/png;base64,")
     assert result["kind"] == "violin"
     assert result["labels"] == ["s2", "s1"]
+    assert (result["width"], result["height"]) == (400, 300)  # figsize x dpi
 
 
 def test_request_stats_plot_categorical_is_a_bar_plot(tmp_path, qtbot):

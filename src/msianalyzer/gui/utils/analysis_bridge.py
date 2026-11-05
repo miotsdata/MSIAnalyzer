@@ -1076,16 +1076,14 @@ class AnalysisBridge(QObject):
             groups, group_by_roi, params["order"], params["roiOrder"], params["sampleOrder"],
             single_panel=(kind == "bar" and not group_by_roi),
         )
-        rows, cols = stats_plot.grid_shape(len(panels), int(params["rows"]), int(params["cols"]))
-        scale = float(params["scale"]) / 100.0
-        dpi = 100
-        # 100% fills the viewport; each row gets at least 220 px so a tall
-        # grid scrolls instead of squashing (like a big figsize in Jupyter).
-        width_in = float(params["widthPx"]) * scale / dpi
-        height_in = max(float(params["heightPx"]), rows * 220.0) * scale / dpi
+        # Width/height are the figure's own size, like Jupyter's figsize;
+        # the window picks the dpi that fits it into the panel (times the
+        # zoom), so the PNG is drawn at its display size and stays sharp.
         fig = stats_plot.render_stats_figure(
-            panels, kind, rows, cols, width_in, height_in, ylabel,
-            categories, colors, bool(params["proportion"]), dpi=dpi,
+            panels, kind, int(params["rows"]), int(params["cols"]),
+            float(params["widthIn"]), float(params["heightIn"]), ylabel,
+            categories, colors, bool(params["proportion"]),
+            dpi=max(10.0, float(params["dpi"])),
         )
         meta = {
             "kind": kind,
@@ -1101,6 +1099,7 @@ class AnalysisBridge(QObject):
         fig, meta = self._stats_figure(params)
         png = stats_plot.figure_png(fig)
         meta["image"] = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        meta["width"], meta["height"] = (round(v) for v in fig.get_size_inches() * fig.dpi)
         return meta
 
     @Slot("QVariantMap")

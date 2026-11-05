@@ -11,7 +11,11 @@ import "qrc:/Style"
 // Visual Inspection's selection live through `controls` (the same
 // HeatmapControlsPanel instance, like RoiDesignWindow). The figure is a
 // matplotlib PNG rendered off the GUI thread (AnalysisBridge.requestStatsPlot);
-// "Plot size" re-renders it bigger and scrolls, like a big figsize in Jupyter.
+// Width/Height are the figure's size in inches, like Jupyter's figsize, and
+// the figure is always fitted into the panel, as Jupyter shrinks a wide
+// figure to the cell: a bigger figure means more room and smaller text, never
+// scrolling. Only Zoom (also Ctrl+wheel) makes it bigger than the panel, and
+// then it scrolls. Both are done by choosing the render dpi, so text stays sharp.
 Window {
     id: statsWindow
     objectName: "statisticsWindow"
@@ -92,7 +96,16 @@ Window {
     property bool proportion: false
     property int rows: 1
     property int cols: 4
-    property int scale: 100
+    // Figure size in inches (figsize) and zoom in % (100 % = 100 dpi).
+    property int widthIn: 10
+    property int heightIn: 6
+    property int zoom: 100
+    // The dpi that fits widthIn x heightIn into the panel, times the zoom.
+    function renderDpi() {
+        var fit = Math.min((plotFlickable.width - 12) / statsWindow.widthIn,
+                           (plotFlickable.height - 12) / statsWindow.heightIn)
+        return Math.max(10, fit) * statsWindow.zoom / 100
+    }
     // Reorder dialog results: group labels (one panel each), or the ROI
     // panels and the samples along x when grouped by ROI.
     property var order: []
@@ -124,9 +137,9 @@ Window {
             "proportion": statsWindow.proportion,
             "rows": statsWindow.rows,
             "cols": statsWindow.cols,
-            "widthPx": Math.max(200, plotFlickable.width - 4),
-            "heightPx": Math.max(150, plotFlickable.height - 4),
-            "scale": statsWindow.scale,
+            "widthIn": statsWindow.widthIn,
+            "heightIn": statsWindow.heightIn,
+            "dpi": statsWindow.renderDpi(),
             "order": statsWindow.order,
             "roiOrder": statsWindow.roiOrder,
             "sampleOrder": statsWindow.sampleOrder,
@@ -156,7 +169,9 @@ Window {
     onProportionChanged: statsWindow.scheduleRefresh()
     onRowsChanged: statsWindow.scheduleRefresh()
     onColsChanged: statsWindow.scheduleRefresh()
-    onScaleChanged: statsWindow.scheduleRefresh()
+    onWidthInChanged: statsWindow.scheduleRefresh()
+    onHeightInChanged: statsWindow.scheduleRefresh()
+    onZoomChanged: statsWindow.scheduleRefresh()
     onOrderChanged: statsWindow.scheduleRefresh()
     onRoiOrderChanged: statsWindow.scheduleRefresh()
     onSampleOrderChanged: statsWindow.scheduleRefresh()
@@ -299,14 +314,43 @@ Window {
                         value: statsWindow.cols
                         onValueModified: statsWindow.cols = value
                     }
-                    Label { text: "Plot size" }
+                    Label { text: "Width (in)" }
                     SpinBox {
-                        objectName: "statsScaleSpinBox"
-                        from: 50; to: 400; stepSize: 25
-                        value: statsWindow.scale
+                        objectName: "statsWidthSpinBox"
+                        from: 2; to: 100
+                        editable: true
+                        value: statsWindow.widthIn
+                        onValueModified: statsWindow.widthIn = value
+                    }
+                    Label { text: "Height (in)" }
+                    SpinBox {
+                        objectName: "statsHeightSpinBox"
+                        from: 2; to: 100
+                        editable: true
+                        value: statsWindow.heightIn
+                        onValueModified: statsWindow.heightIn = value
+                    }
+                    Label { text: "Zoom" }
+                    SpinBox {
+                        objectName: "statsZoomSpinBox"
+                        from: 25; to: 400; stepSize: 25
+                        value: statsWindow.zoom
                         textFromValue: function (v) { return v + " %" }
                         valueFromText: function (t) { return parseInt(t) }
-                        onValueModified: statsWindow.scale = value
+                        onValueModified: statsWindow.zoom = value
+                    }
+                }
+                RowLayout {
+                    HelpButton {
+                        onClicked: statsWindow.openHelp("Figure size and zoom",
+                            "**General:** Width and Height are the figure's size in inches, like "
+                            + "`figsize=(width, height)` in a notebook. The figure is always shrunk "
+                            + "or grown to fit the panel, as Jupyter does with a wide figure: a "
+                            + "bigger size gives the violins more room and makes the text look "
+                            + "smaller; changing only one of them changes the proportions.\n\n"
+                            + "**Zoom** magnifies the fitted figure, text included (Ctrl+mouse wheel "
+                            + "over the plot does the same); above 100 % the plot scrolls.\n\n"
+                            + "**Interaction:** export uses Width and Height, not the zoom.")
                     }
                 }
                 Label {
@@ -339,6 +383,7 @@ Window {
                 contentWidth: plotImage.width
                 contentHeight: plotImage.height
                 boundsBehavior: Flickable.StopAtBounds
+                // The fit depends on the panel size.
                 onWidthChanged: statsWindow.scheduleRefresh()
                 onHeightChanged: statsWindow.scheduleRefresh()
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -354,6 +399,13 @@ Window {
                     TapHandler {
                         acceptedButtons: Qt.RightButton
                         onTapped: plotMenu.popup()
+                    }
+                    WheelHandler {
+                        acceptedModifiers: Qt.ControlModifier
+                        onWheel: (event) => {
+                            var step = event.angleDelta.y > 0 ? 25 : -25
+                            statsWindow.zoom = Math.max(25, Math.min(400, statsWindow.zoom + step))
+                        }
                     }
                 }
             }

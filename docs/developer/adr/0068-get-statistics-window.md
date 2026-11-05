@@ -36,10 +36,16 @@ wanted the same plots one click away from Visual Inspection.
     (one stacked bar per panel says little).
   - Rows × columns arrange the panels; rows grow when the cells are too
     few. Every panel shares the y axis.
-- **Plot size** (50–400 %) re-renders the figure larger, not a pixel zoom:
-  fonts keep their size, so there is more room per violin, and the panel
-  scrolls, like a big `figsize` in Jupyter. 100 % fills the panel, with at
-  least 220 px per row.
+- **Figure size, like Jupyter** (revised twice the same day after
+  real-use feedback): **Width** and **Height** in inches are the figure's
+  `figsize`, set separately. The figure is always fitted into the panel, as
+  Jupyter shrinks a figure wider than its cell: a bigger size gives more
+  room and smaller-looking text, never scrolling. Only **Zoom** (25–400 %,
+  also Ctrl+wheel) makes it bigger than the panel, and then it scrolls.
+  Both are done with the render dpi (`fit dpi × zoom`, computed by the
+  window from the panel size), so the PNG is drawn at its display size and
+  stays sharp; resizing the window re-fits it. Export uses Width × Height
+  at 200 dpi, whatever the zoom.
 - **Reorder…**: drag-and-drop list of the violins (or, grouped, of the ROI
   panels and of the samples). `ListModel.move()`, not a Repeater over a JS
   array. Names the order doesn't mention go last, so a new ROI or sample

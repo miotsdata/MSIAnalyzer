@@ -112,3 +112,20 @@ def test_get_statistics_disabled_on_local_moran_layer(
     assert button.property("enabled") is True
     controls.setProperty("dataLayer", "localMoran")
     assert button.property("enabled") is False
+
+
+def test_figure_always_fits_the_panel_and_only_zoom_overflows(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    _root, window = _open_statistics(analysis_view, visual_analysis_model, find_visual_child, qtbot)
+    flick = window.findChild(QQuickItem, "statsPlotFlickable")
+
+    def fits(r):
+        return r["width"] <= flick.width() and r["height"] <= flick.height()
+
+    _wait_plot(window, qtbot, fits)
+    window.setProperty("widthIn", 40)  # a huge figsize still fits
+    result = _wait_plot(window, qtbot, lambda r: fits(r) and r["width"] > r["height"] * 3)
+    window.setProperty("zoom", 200)
+    zoomed = _wait_plot(window, qtbot, lambda r: r["width"] > result["width"] * 1.9)
+    assert zoomed["width"] > flick.width()  # only zoom scrolls
