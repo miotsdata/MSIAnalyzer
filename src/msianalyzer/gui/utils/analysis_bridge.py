@@ -41,6 +41,7 @@ from msianalyzer.core.calibration.units import (
 from msianalyzer.core.plotting import roi
 from msianalyzer.core.plotting.heatmap import _RENDER_MZ_TOLERANCE_PPM, category_color
 from msianalyzer.core.plotting.mirror_plot_raster import render_mirror_plot_png
+from msianalyzer.core.plotting import stats_plot
 from msianalyzer.core.plotting.plotter import (
     Plotter,
     _read_raw_ms2_scan,
@@ -724,6 +725,7 @@ class AnalysisBridge(QObject):
     overlayRangeReady = Signal(dict)
     obsValueRangeReady = Signal(dict)
     obsCategoriesReady = Signal(list)
+    statsPlotReady = Signal(dict)  # ADR 68: {"image", "kind", "labels", "rois", "samples"} or {"error"}
     summaryReady = Signal(str, dict)  # analysis_db_path, counts
     # Imported analyzed .h5ad datasets (ADR 49)
     activeDatasetChanged = Signal()
@@ -807,6 +809,7 @@ class AnalysisBridge(QObject):
         self._feature_value_range_worker: HeatmapQueryWorker | None = None
         self._obs_value_range_worker: HeatmapQueryWorker | None = None
         self._obs_categories_worker: HeatmapQueryWorker | None = None
+        self._stats_plot_worker: HeatmapQueryWorker | None = None
         # Same pattern once more — one slot shared by every Export menu
         # action, since only one export can sensibly run at a time from
         # one workspace.
@@ -1042,6 +1045,97 @@ class AnalysisBridge(QObject):
             return  # superseded by a newer request — discard
         logger.warning("obs value range load failed: %s", message)
         self.obsValueRangeReady.emit({"vmin": 0, "vmax": 1})
+
+    # -----------------------------------------------------------------
+    # Get statistics (ADR 68)
+    # -----------------------------------------------------------------
+
+    def _stats_figure(self, params: dict) -> tuple:
+        """The "Get statistics" figure for `params` (StatisticsWindow.qml's
+        `plotParams()`), plus what the window needs back: the plot kind and
+        the order actually applied, for the Reorder dialog."""
+        spec = params["spec"]
+        names = list(params["sampleNames"])
+        use_roi = bool(params["useRoi"])
+        group_by_roi = use_roi and bool(params["groupByRoi"])
+        groups = self.heatmap_provider.collectStatsGroups(
+            names, spec, use_roi, bool(params["outsideRoi"]), bool(params["detectedOnly"]),
+        )
+        kind = "bar" if spec["kind"] == "obs" and not spec["numeric"] else "violin"
+        categories, colors = [], []
+        if kind == "bar":
+            legend = self.heatmap_provider.getObsCategories(names, spec["column"])
+            categories = [c["category"] for c in legend]
+            colors = [c["color"] for c in legend]
+            ylabel = "Proportion" if params["proportion"] else "Pixels"
+        elif spec["kind"] == "feature":
+            ylabel = f"m/z {float(spec['mz']):.4f} ({spec['layer']})"
+        else:
+            ylabel = spec["column"]
+        panels = stats_plot.build_panels(
+            groups, group_by_roi, params["order"], params["roiOrder"], params["sampleOrder"],
+            single_panel=(kind == "bar" and not group_by_roi),
+        )
+        rows, cols = stats_plot.grid_shape(len(panels), int(params["rows"]), int(params["cols"]))
+        scale = float(params["scale"]) / 100.0
+        dpi = 100
+        # 100% fills the viewport; each row gets at least 220 px so a tall
+        # grid scrolls instead of squashing (like a big figsize in Jupyter).
+        width_in = float(params["widthPx"]) * scale / dpi
+        height_in = max(float(params["heightPx"]), rows * 220.0) * scale / dpi
+        fig = stats_plot.render_stats_figure(
+            panels, kind, rows, cols, width_in, height_in, ylabel,
+            categories, colors, bool(params["proportion"]), dpi=dpi,
+        )
+        meta = {
+            "kind": kind,
+            "labels": [g["label"] for p in panels for g in p["groups"]],
+            "rois": [p["title"] for p in panels] if group_by_roi else [],
+            "samples": stats_plot.apply_order(
+                list(dict.fromkeys(g["sample"] for g in groups)), list(params["sampleOrder"])
+            ),
+        }
+        return fig, meta
+
+    def _stats_plot_png(self, params: dict) -> dict:
+        fig, meta = self._stats_figure(params)
+        png = stats_plot.figure_png(fig)
+        meta["image"] = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        return meta
+
+    @Slot("QVariantMap")
+    def requestStatsPlot(self, params: dict) -> None:
+        """Collect the values and render the "Get statistics" figure on a
+        background thread; the result arrives via `statsPlotReady`."""
+        worker = HeatmapQueryWorker(self._stats_plot_png, params, parent=self)
+        worker.succeeded.connect(self._onStatsPlotSucceeded)
+        worker.failed.connect(self._onStatsPlotFailed)
+        self._stats_plot_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _onStatsPlotSucceeded(self, result: dict) -> None:
+        if self.sender() is self._stats_plot_worker:
+            self.statsPlotReady.emit(result)
+
+    @Slot(str)
+    def _onStatsPlotFailed(self, message: str) -> None:
+        if self.sender() is self._stats_plot_worker:
+            self.statsPlotReady.emit({"error": message})
+
+    @Slot("QVariantMap", str)
+    def exportStatsPlot(self, params: dict, path: str) -> None:
+        """Write the current "Get statistics" figure to `path`; the format
+        (PNG/SVG/PDF) follows its extension. Runs like every Export menu
+        action (`exportFinished`/`exportFailed`)."""
+
+        def export(report) -> str:
+            report("Exporting statistics plot…")
+            fig, _meta = self._stats_figure(params)
+            fig.savefig(path, dpi=200)
+            return f"Statistics plot saved to {path}"
+
+        self._run_export(export)
 
     @Slot(list, str)
     def requestObsCategories(self, sample_names: list, obs_column: str) -> None:

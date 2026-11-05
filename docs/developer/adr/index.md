@@ -77,3 +77,4 @@ useful).
 | [65](0065-precursor-mz-annotation.md) | Annotation by precursor m/z alone, every candidate kept and ranked by ppm | Accepted |
 | [66](0066-feature-correlation.md) | Feature correlation: every feature pair per sample, stored in `varp`, its own tab | Accepted |
 | [67](0067-multi-feature-overlay.md) | Multi-feature overlay: up to 6 features in one image, additive or max blending | Accepted |
+| [68](0068-get-statistics-window.md) | "Get statistics" window: violins / stacked bars per sample or ROI, from Visual Inspection | Accepted |

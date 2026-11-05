@@ -272,6 +272,29 @@ Feature Correlation, right-click a row and choose **Add to overlay** to
 overlay it with the selected feature. See
 [ADR 67](../developer/adr/0067-multi-feature-overlay.md).
 
+## Statistics — violins and bar plots per sample or ROI
+
+In **Visual Inspection**, **Get statistics** opens a window that plots what
+the tab shows: a feature (on the current layer) or a numeric obs column as
+**violins**, a categorical obs column as **stacked bars** of pixel counts.
+It follows the selection, so picking another feature redraws it. Hidden
+samples are left out.
+
+- **Use ROI**: one violin per ROI in each sample, in the ROI's colour.
+  **Pixels outside ROI** adds a grey `(no ROI)` group.
+- **Grouped by ROI**: one panel per ROI with the samples side by side;
+  otherwise each violin has its own panel. Rows and Columns arrange the
+  panels; all share the y axis.
+- **Detected pixels only**: leaves out zeros (on for features).
+- **Proportion** (bars): every bar reaches 1, split by category.
+- **Plot size**: draws the figure bigger (scroll to see it all), like a
+  larger `figsize` in Jupyter.
+- **Reorder…**: drag names to change the order.
+- Right-click the plot → **Export image…** (PNG, SVG or PDF).
+
+Each **?** explains its option. See
+[ADR 68](../developer/adr/0068-get-statistics-window.md).
+
 ## After the run — target list without re-running
 
 Forgot some compounds, or have a new list? **Analyses → Match target list…**

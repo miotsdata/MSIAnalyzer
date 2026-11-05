@@ -3,6 +3,15 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
+## Unreleased
+
+### Added
+- **Get statistics** in Visual Inspection (ADR 68): violins of the selected
+  feature or numeric obs column, or stacked bars (counts or proportions) of
+  a categorical one, per sample or per sample × ROI. Options: Use ROI,
+  Grouped by ROI, Pixels outside ROI, Detected pixels only, rows/columns,
+  plot size, drag-and-drop reorder; right-click exports PNG/SVG/PDF.
+
 ## 0.8.0 — 2026-11-03
 
 ### Added

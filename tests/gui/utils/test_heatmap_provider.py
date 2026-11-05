@@ -588,3 +588,53 @@ def test_missing_sample_response_reports_an_error_not_an_empty_image(tmp_path, q
     response = provider.requestImageResponse("nope|100.0|raw|viridis|0|15", None)
     qtbot.waitUntil(lambda: response.done, timeout=5000)
     assert response.errorString() == "no image"
+
+
+# -- collectStatsGroups (ADR 68) ----------------------------------------------
+
+
+def _stats_provider(tmp_path):
+    from msianalyzer.core.plotting.roi import save_roi_to_sample
+
+    _write_sample_h5ad(tmp_path / "s1.h5ad", values=(0.0, 10.0, 5.0, 15.0),
+                       obs_columns={"tic": [1.0, 2.0, 3.0, 4.0], "kind": ["x", "y", "x", "x"]})
+    _write_sample_h5ad(tmp_path / "s2.h5ad", values=(20.0, 30.0, 25.0, 0.0),
+                       obs_columns={"tic": [5.0, 6.0, 7.0, 8.0], "kind": ["y", "y", "x", "y"]})
+    # Grid cells: a=(0,0) b=(1,0) c=(0,1) d=(1,1). "Top" = a, b; "Left" = a, c.
+    for name in ("s1", "s2"):
+        save_roi_to_sample(tmp_path / f"{name}.h5ad", "Top", "#ff0000", [[0, 0], [2, 0], [2, 1], [0, 1]])
+        save_roi_to_sample(tmp_path / f"{name}.h5ad", "Left", "#00ff00", [[0, 0], [1, 0], [1, 2], [0, 2]])
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    return provider
+
+
+def _by_label(groups):
+    return {g["label"]: g for g in groups}
+
+
+def test_collect_stats_groups_feature_per_sample(tmp_path):
+    provider = _stats_provider(tmp_path)
+    spec = {"kind": "feature", "mz": 100.0, "layer": "raw"}
+    groups = _by_label(provider.collectStatsGroups(["s1", "s2"], spec, False, False, False))
+    assert groups["s1"]["values"].tolist() == [0, 10, 5, 15]
+    assert groups["s2"]["values"].tolist() == [20, 30, 25, 0]
+    detected = _by_label(provider.collectStatsGroups(["s1", "s2"], spec, False, False, True))
+    assert detected["s2"]["values"].tolist() == [20, 30, 25]
+
+
+def test_collect_stats_groups_per_roi_with_roi_colors_and_outside(tmp_path):
+    provider = _stats_provider(tmp_path)
+    spec = {"kind": "obs", "column": "tic", "numeric": True}
+    groups = _by_label(provider.collectStatsGroups(["s1", "s2"], spec, True, True, False))
+    assert groups["s1 · Top"]["values"].tolist() == [1, 2]
+    assert groups["s1 · Left"]["values"].tolist() == [1, 3]  # a is in both
+    assert groups["s2 · (no ROI)"]["values"].tolist() == [8]
+    assert groups["s2 · Top"]["color"] == "#ff0000"
+
+
+def test_collect_stats_groups_categorical_keeps_strings(tmp_path):
+    provider = _stats_provider(tmp_path)
+    spec = {"kind": "obs", "column": "kind", "numeric": False}
+    groups = _by_label(provider.collectStatsGroups(["s1"], spec, False, False, True))
+    assert groups["s1"]["values"].tolist() == ["x", "y", "x", "x"]

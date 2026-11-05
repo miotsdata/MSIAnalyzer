@@ -14,6 +14,7 @@ from PySide6.QtQuick import QQuickAsyncImageProvider, QQuickImageResponse
 from msianalyzer.core.analysis_db import load_obs_category_colors
 from msianalyzer.core.imported_dataset import sample_h5ad_path
 from msianalyzer.core.plotting.heatmap import (
+    _rendered_feature_values,
     category_colors,
     feature_value_range,
     obs_categories,
@@ -22,6 +23,8 @@ from msianalyzer.core.plotting.heatmap import (
     render_heatmap_by_target,
 )
 from msianalyzer.core.plotting.light_sample import LightSample
+from msianalyzer.core.plotting.roi import load_sample_rois, roi_obs_column
+from msianalyzer.core.plotting.stats_plot import make_group, split_by_roi
 from msianalyzer.gui.utils.async_image import new_render_pool, start_render
 
 logger = logging.getLogger(__name__)
@@ -370,6 +373,51 @@ class HeatmapImageProvider(QQuickAsyncImageProvider):
             {"category": cat, "color": color, "custom": cat in overrides}
             for cat, color in zip(ordered, category_colors(ordered, overrides))
         ]
+
+    def collectStatsGroups(
+        self, sample_names: list[str], spec: dict, use_roi: bool,
+        outside_roi: bool, detected_only: bool,
+    ) -> list[dict]:
+        """Per-pixel values for the "Get statistics" window (ADR 68), as
+        `stats_plot.make_group` dicts: one per sample, or one per sample ×
+        ROI when `use_roi` (plus the pixels outside every ROI when
+        `outside_roi`).
+
+        Args:
+            spec: `{"kind": "feature", "mz", "layer"}` or `{"kind": "obs",
+                "column", "numeric"}` — what Visual Inspection shows.
+            detected_only: Drop zero values (numeric only).
+        """
+        groups = []
+        for name in sample_names:
+            h5ad_path = self._h5ad_path(name)
+            rois = load_sample_rois(h5ad_path) if use_roi and h5ad_path.exists() else {}
+            with self.lock:
+                sample = self._sample(name)
+                if sample is None:
+                    continue
+                adata = sample.adata
+                if spec["kind"] == "feature":
+                    sample.ensure_layer(spec["layer"])
+                    values = _rendered_feature_values(adata, float(spec["mz"]), spec["layer"])
+                else:
+                    sample.ensure_obs(spec["column"])
+                    column = adata.obs[spec["column"]]
+                    values = (column.to_numpy(dtype=float, na_value=np.nan) if spec["numeric"]
+                              else column.astype(str).to_numpy())
+                masks = None
+                if use_roi:
+                    masks = {}
+                    for roi_name in rois:
+                        column_name = roi_obs_column(roi_name)
+                        sample.ensure_obs(column_name)
+                        if column_name in adata.obs:
+                            masks[roi_name] = adata.obs[column_name].to_numpy(dtype=bool)
+                self._enforce_budget()
+            for roi_name, roi_values in split_by_roi(values, masks, outside_roi):
+                color = rois[roi_name]["color"] if roi_name in rois else None
+                groups.append(make_group(name, roi_name, roi_values, detected_only, color))
+        return groups
 
     # -- Qt entry points -----------------------------------------------------
 

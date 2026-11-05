@@ -2705,3 +2705,58 @@ def test_request_best_scan_plot_renders_the_raw_scan(tmp_path, qtbot):
     with qtbot.waitSignal(bridge.bestScanPlotReady, timeout=5000) as spy:
         bridge.requestBestScanPlot(str(raw_db), 999)
     assert spy.args[0] == ""
+
+
+# -- Get statistics (ADR 68) ---------------------------------------------------
+
+
+def _stats_bridge(tmp_path):
+    for name, tic in (("s1", [1.0, 2.0, 3.0, 4.0]), ("s2", [5.0, 6.0, 7.0, 9.0])):
+        adata = ad.AnnData(
+            X=csr_matrix(np.array([[1.0], [0.0], [3.0], [4.0]], dtype=np.float32)),
+            obs=pd.DataFrame({"tic": tic, "kind": ["x", "y", "x", "x"]}, index=list("abcd")),
+            var=pd.DataFrame({"mz": [100.0]}, index=["mz_100.0000"]),
+        )
+        adata.obsm["spatial"] = np.array([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)])
+        adata.write_h5ad(tmp_path / f"{name}.h5ad")
+    bridge = AnalysisBridge()
+    bridge.heatmap_provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+    return bridge
+
+
+def _stats_params(**overrides):
+    params = {
+        "sampleNames": ["s1", "s2"],
+        "spec": {"kind": "obs", "column": "tic", "numeric": True},
+        "useRoi": False, "groupByRoi": False, "outsideRoi": False, "detectedOnly": False,
+        "rows": 1, "cols": 2, "widthPx": 400, "heightPx": 300, "scale": 100,
+        "proportion": False, "order": ["s2"], "roiOrder": [], "sampleOrder": [],
+    }
+    params.update(overrides)
+    return params
+
+
+def test_request_stats_plot_emits_png_and_the_applied_order(tmp_path, qtbot):
+    bridge = _stats_bridge(tmp_path)
+    with qtbot.waitSignal(bridge.statsPlotReady, timeout=5000) as spy:
+        bridge.requestStatsPlot(_stats_params())
+    result = spy.args[0]
+    assert result["image"].startswith("data:image/png;base64,")
+    assert result["kind"] == "violin"
+    assert result["labels"] == ["s2", "s1"]
+
+
+def test_request_stats_plot_categorical_is_a_bar_plot(tmp_path, qtbot):
+    bridge = _stats_bridge(tmp_path)
+    params = _stats_params(spec={"kind": "obs", "column": "kind", "numeric": False}, proportion=True)
+    with qtbot.waitSignal(bridge.statsPlotReady, timeout=5000) as spy:
+        bridge.requestStatsPlot(params)
+    assert spy.args[0]["kind"] == "bar"
+
+
+def test_export_stats_plot_writes_the_requested_format(tmp_path, qtbot):
+    bridge = _stats_bridge(tmp_path)
+    dest = tmp_path / "stats.svg"
+    with qtbot.waitSignal(bridge.exportFinished, timeout=5000):
+        bridge.exportStatsPlot(_stats_params(), str(dest))
+    assert dest.read_text().lstrip().startswith("<?xml")

@@ -35,3 +35,5 @@ NormalizeFeatureDialog 1.0 NormalizeFeatureDialog.qml
 ReannotateDialog 1.0 ReannotateDialog.qml
 ConfigGroupForm 1.0 ConfigGroupForm.qml
 ScaleBarDialog 1.0 ScaleBarDialog.qml
+StatisticsWindow 1.0 StatisticsWindow.qml
+StatsReorderDialog 1.0 StatsReorderDialog.qml

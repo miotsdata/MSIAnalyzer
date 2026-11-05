@@ -43,6 +43,8 @@
         <file>Views/ReannotateDialog.qml</file>
         <file>Views/ConfigGroupForm.qml</file>
         <file>Views/ScaleBarDialog.qml</file>
+        <file>Views/StatisticsWindow.qml</file>
+        <file>Views/StatsReorderDialog.qml</file>
         <file>Utils/SearchQuery.js</file>
         <file>Utils/ConfigFields.js</file>
         <file>Utils/AffineTransform.js</file>

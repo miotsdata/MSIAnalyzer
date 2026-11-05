@@ -294,7 +294,27 @@ Item {
                     visualSection.scaleBar)
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
             }
+            // ADR 68. Local Moran's I is computed only while rendering,
+            // so it has no stored per-pixel values to summarize.
+            Button {
+                objectName: "openStatisticsButton"
+                text: "Get statistics"
+                enabled: !(controls.inspectionMode === "feature" && controls.dataLayer === "localMoran")
+                onClicked: {
+                    statisticsWindowLoader.active = true
+                    statisticsWindowLoader.item.openFor(visualSection.analysis, visualSection.samples, controls)
+                }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
             Item { Layout.fillWidth: true }
+        }
+
+        // Same lazy-Loader-plus-openFor pattern as roiDesignWindowLoader.
+        Loader {
+            id: statisticsWindowLoader
+            objectName: "statisticsWindowLoader"
+            active: false
+            sourceComponent: StatisticsWindow {}
         }
 
         // Lazy, so opening the Visual Inspection tab never eagerly builds
