@@ -114,3 +114,12 @@ def test_create_spatial_adata_still_works_after_fetch_extraction(three_pixel_db)
     # pixel with no 200.0 peak gets 0 there, not dropped.
     assert dense.shape == (3, 2)
     assert np.count_nonzero(dense) == 5  # 2 pixels x2 peaks + 1 pixel x1 peak
+
+
+def test_create_spatial_adata_counts_detected_features_per_pixel(three_pixel_db):
+    adata = create_spatial_adata(
+        db_path=three_pixel_db, target_mz_set={100.0, 200.0}, project_id="proj1", n_workers=1
+    )
+    expected = (adata.X.toarray() > 0).sum(axis=1)
+    assert adata.obs["nFeatures"].tolist() == expected.tolist()
+    assert sorted(expected.tolist()) == [1, 2, 2]

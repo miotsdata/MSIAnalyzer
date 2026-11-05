@@ -111,6 +111,23 @@ def test_ensure_schema_current_backfills_annotations_into_var(tmp_path):
     assert list(var["feature_id"]) == [7]
 
 
+def test_ensure_schema_current_backfills_n_features_into_samples_and_merged(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _seed_sample_with_h5ad(db_path, "sampleA")
+    ad.read_h5ad(tmp_path / "sampleA.h5ad").write_h5ad(tmp_path / "merged.h5ad")
+    assert "nFeatures" not in ad.read_h5ad(tmp_path / "sampleA.h5ad").obs
+
+    bridge = AnalysisBridge()
+    bridge.ensureSchemaCurrent(str(db_path))
+    bridge.wait_for_var_writes()
+
+    for name in ("sampleA.h5ad", "merged.h5ad"):
+        adata = ad.read_h5ad(tmp_path / name)
+        expected = (adata.X.toarray() > 0).sum(axis=1).tolist()
+        assert adata.obs["nFeatures"].tolist() == expected
+
+
 def test_request_schema_update_runs_in_the_background_then_signals(tmp_path, qtbot):
     db_path = tmp_path / "analysis.db"
     init_analysis_db(db_path).close()

@@ -1208,6 +1208,24 @@ class AnalysisBridge(QObject):
         analysis_db.init_analysis_db(analysis_db_path).close()
         # Backfill: an analysis run before annotations went into `.var`.
         self._refresh_var_annotations(analysis_db_path, only_if_missing=True)
+        # Backfill: an analysis run before the pipeline wrote obs["nFeatures"].
+        self._var_writes.submit(self._backfill_n_features, analysis_db_path)
+
+    def _backfill_n_features(self, analysis_db_path: str) -> None:
+        """Best effort, on the `.var` write thread: add `obs["nFeatures"]`
+        to every sample `.h5ad` and `merged.h5ad` that lacks it, then drop
+        the render cache so Visual Inspection lists the new column."""
+        try:
+            paths = list(self._pipeline_sample_paths(analysis_db_path).values())
+            merged = Path(analysis_db_path).parent / "merged.h5ad"
+            if merged.exists():
+                paths.append(merged)
+            added = [h5ad_io.ensure_n_features(p) for p in paths]
+        except (OSError, KeyError, ValueError, sqlite3.Error):
+            logger.exception("could not add nFeatures to %s", analysis_db_path)
+            return
+        if any(added):
+            self.heatmap_provider.clearCaches()
 
     @Slot(str)
     def requestSchemaUpdate(self, analysis_db_path: str) -> None:

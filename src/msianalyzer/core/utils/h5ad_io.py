@@ -102,3 +102,39 @@ def write_uns(f: h5py.File, key: str, value: Any) -> None:
     if value is None or (isinstance(value, dict) and not value):
         return
     ad.io.write_elem(uns, key, value)
+
+
+#: Per-pixel count of features with a value above 0 (detected), from `.X`
+#: (raw intensities; normalization only rescales a pixel, zeros stay zeros).
+N_FEATURES_COLUMN = "nFeatures"
+
+
+def count_detected_per_row(X, chunk_rows: int = 50_000) -> np.ndarray:
+    """Values > 0 per row of an on-disk `.X` (CSR group or dense dataset),
+    read `chunk_rows` rows at a time so a multi-GB `merged.h5ad` never has
+    to fit in memory."""
+    if isinstance(X, h5py.Group):  # CSR: indptr + data
+        indptr = X["indptr"][:]
+        n_rows = len(indptr) - 1
+        counts = np.zeros(n_rows, dtype=np.int64)
+        for start in range(0, n_rows, chunk_rows):
+            stop = min(start + chunk_rows, n_rows)
+            bounds = indptr[start:stop + 1] - indptr[start]
+            # Running count of detected values; a row's count is the
+            # difference at its two bounds (works for empty rows too).
+            running = np.concatenate([[0], np.cumsum(X["data"][indptr[start]:indptr[stop]] > 0)])
+            counts[start:stop] = np.diff(running[bounds])
+        return counts
+    return np.concatenate([
+        (X[start:start + chunk_rows] > 0).sum(axis=1) for start in range(0, X.shape[0], chunk_rows)
+    ]).astype(np.int64)
+
+
+def ensure_n_features(path, chunk_rows: int = 50_000) -> bool:
+    """Add `obs[N_FEATURES_COLUMN]` to an `.h5ad` made before the pipeline
+    wrote it. Returns True if it was added, False if already there."""
+    with open_for_write(path) as f:
+        if has_obs_column(f, N_FEATURES_COLUMN):
+            return False
+        set_obs_column(f, N_FEATURES_COLUMN, count_detected_per_row(f["X"], chunk_rows))
+    return True

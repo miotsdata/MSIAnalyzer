@@ -12,6 +12,7 @@ import pandas as pd
 from scipy.sparse import csr_matrix
 
 from msianalyzer.core.parser import blob_to_array
+from msianalyzer.core.utils.h5ad_io import N_FEATURES_COLUMN
 from msianalyzer.core.utils.logging_utils import log_call, worker_logging
 from msianalyzer.core.utils.lazy_import import lazy_module
 
@@ -255,6 +256,9 @@ def create_spatial_adata(
     var_df = pd.DataFrame(
         {"mz": target_mzs}, index=[f"mz_{mz:.4f}" for mz in target_mzs]
     )
+
+    # Features detected (value > 0) in each pixel, for pixel QC.
+    obs_df[N_FEATURES_COLUMN] = np.asarray((X_sparse > 0).sum(axis=1)).ravel()
 
     ad_obj = ad.AnnData(X=X_sparse, obs=obs_df, var=var_df)
 

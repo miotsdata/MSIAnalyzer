@@ -71,3 +71,19 @@ wanted the same plots one click away from Visual Inspection.
   per group (`KDE_MAX_POINTS`); quartiles, min and max use every pixel.
 - Not built: statistical tests between groups, log scale, a "(no ROI)"
   group without Use ROI (that is the plain per-sample violin).
+
+## Addendum — `obs["nFeatures"]`
+
+The QC notebook's main pixel-QC value, the number of features detected
+(value > 0) per pixel, had to be computed by hand, so it never showed in
+Visual Inspection or this window. The pipeline now writes it:
+
+- `create_spatial_adata` adds `obs["nFeatures"]` from `.X` (raw
+  intensities; normalization only rescales a pixel, so zeros stay zeros),
+  and `merged.h5ad` carries it through the concat.
+- Existing analyses get it on open (`AnalysisBridge.ensureSchemaCurrent`
+  → `h5ad_io.ensure_n_features`, on the `.var` write thread), for every
+  sample `.h5ad` and `merged.h5ad`; no re-run. `.X` is read in row chunks
+  (`count_detected_per_row`), so a multi-GB `merged.h5ad` is never loaded
+  whole. Explicitly stored zeros don't count. Imported datasets are left
+  alone (they may carry their own).

@@ -12,6 +12,11 @@ ADRs under `docs/developer/adr/`.
   Grouped by ROI, Pixels outside ROI, Detected pixels only, Shared y axis, rows/columns,
   figure width/height (like `figsize`) and zoom, drag-and-drop reorder;
   right-click exports PNG/SVG/PDF.
+- **`nFeatures` obs column**: the number of features detected in each
+  pixel, for pixel QC (ADR 68 addendum). Written by every new run, and
+  added to existing analyses (sample files and `merged.h5ad`) the first
+  time they are opened; no re-run needed. Shows in Visual Inspection and
+  Get statistics like `tic`.
 
 ## 0.8.0 — 2026-11-03
 
