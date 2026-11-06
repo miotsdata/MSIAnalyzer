@@ -9,10 +9,29 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Iterable, Sequence
 
-__all__ = ["safe_execute", "safe_executemany"]
+__all__ = ["safe_execute", "safe_executemany", "set_journal_mode"]
+
+logger = logging.getLogger(__name__)
+
+
+def set_journal_mode(db_path: str | Path, mode: str) -> str:
+    """Best effort `PRAGMA journal_mode = <mode>` (ADR 69). Returns the
+    resulting mode, or "" on failure (logged): switching out of WAL needs
+    every other connection on this computer closed.
+
+    WAL is only for a run's parallel writers. Its `-shm` file is shared
+    memory, which two computers on a network share can't share, so a
+    finished database goes back to DELETE (one self-contained file)."""
+    try:
+        with closing(sqlite3.connect(Path(db_path), timeout=5)) as con:
+            return con.execute(f"PRAGMA journal_mode = {mode}").fetchone()[0].lower()
+    except sqlite3.Error:
+        logger.warning("could not set journal_mode=%s on %s", mode, db_path, exc_info=True)
+        return ""
 
 _MAX_PARAMS_REPR = 600
 

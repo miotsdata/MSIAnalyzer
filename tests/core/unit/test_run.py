@@ -2110,3 +2110,29 @@ def test_run_to_dict_stores_config_path_relative_to_project(tmp_path):
     run.config_path = str(tmp_path / "configs" / "run_x.yaml")
 
     assert run.to_dict()["config_path"] == "configs/run_x.yaml"
+
+
+def test_end_run_dbs_switches_back_to_delete_and_releases_the_marker(tmp_path):
+    # ADR 69: WAL only while the run writes; DELETE afterwards so another
+    # computer on the share never depends on this one's -shm file.
+    import sqlite3
+
+    from msianalyzer.core.utils import in_use
+    from msianalyzer.core.utils.db import set_journal_mode
+
+    adb = tmp_path / "analysis_x.db"
+    raw = tmp_path / "s1.db"
+    for db in (adb, raw):
+        sqlite3.connect(db).close()
+        set_journal_mode(db, "wal")
+
+    run = Run()
+    run._claim = in_use.Claim(adb).acquire()
+    run._wal_dbs = [adb, raw]
+    run._end_run_dbs()
+
+    for db in (adb, raw):
+        with sqlite3.connect(db) as con:
+            assert con.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    assert not in_use.marker_path(adb).exists()
+    assert "_claim" not in run.to_dict() and "_wal_dbs" not in run.to_dict()

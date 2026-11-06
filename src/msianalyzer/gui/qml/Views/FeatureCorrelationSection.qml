@@ -224,6 +224,7 @@ Item {
                 objectName: "featureCorrelationComputeButton"
                 text: "Compute feature correlation"
                 enabled: !featureCorrelationSection.computing && featureCorrelationSection.dbPath !== ""
+                         && !AnalysisBridge.readOnly
                 onClicked: featureCorrelationSection.requestCompute()
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
             }

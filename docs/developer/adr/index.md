@@ -78,3 +78,4 @@ useful).
 | [66](0066-feature-correlation.md) | Feature correlation: every feature pair per sample, stored in `varp`, its own tab | Accepted |
 | [67](0067-multi-feature-overlay.md) | Multi-feature overlay: up to 6 features in one image, additive or max blending | Accepted |
 | [68](0068-get-statistics-window.md) | "Get statistics" window: violins / stacked bars per sample or ROI, from Visual Inspection | Accepted |
+| [69](0069-shared-drive-in-use-marker-and-delete-journal.md) | Shared drive: DELETE journal after a run + "in use elsewhere" marker (read-only) | Accepted |

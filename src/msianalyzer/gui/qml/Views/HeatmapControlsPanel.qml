@@ -1217,6 +1217,7 @@ Flickable {
                 text: "Reset colors"
                 flat: true
                 visible: controlsFlickable.obsCategoryLegend.some(function (c) { return c.custom })
+                enabled: !AnalysisBridge.readOnly
                 onClicked: {
                     AnalysisBridge.resetObsCategoryColors(
                         controlsFlickable.analysis.analysisDbPath, controlsFlickable.selectedObsColumn)

@@ -56,7 +56,8 @@ from msianalyzer.core.registration import (
 )
 from msianalyzer.core.spatial.feature_correlation import read_correlation_info, read_correlation_row
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
-from msianalyzer.core.utils import h5ad_io
+from msianalyzer.core.utils import h5ad_io, in_use
+from msianalyzer.core.utils.db import set_journal_mode
 from msianalyzer.core.utils import tic_normalization
 from msianalyzer.gui.utils.dataset_task_worker import DatasetTaskWorker
 from msianalyzer.gui.utils.export_worker import ExportWorker
@@ -182,6 +183,8 @@ def _update_schema(analysis_db_path: str) -> str:
     """`AnalysisBridge.requestSchemaUpdate`'s background job, including the
     one-off `.var` backfill: the page reads those files once it's done."""
     analysis_db.init_analysis_db(analysis_db_path).close()
+    # ADR 69: an analysis from before runs ended in DELETE mode.
+    set_journal_mode(analysis_db_path, "delete")
     AnalysisBridge._write_var_annotations(analysis_db_path, only_if_missing=True)
     return analysis_db_path
 
@@ -641,6 +644,39 @@ def _categorize_peaks(mz_array: np.ndarray, feature_categories: pd.DataFrame) ->
     return feature_category[idx]
 
 
+READ_ONLY_MESSAGE = "This analysis is open on another computer: read-only here."
+
+
+def _writes(fallback):
+    """ADR 69: the decorated slot writes to its analysis (first argument),
+    so on an analysis opened read-only it does nothing, logs, and returns
+    `fallback` — shaped like the slot's own error result, so QML shows
+    READ_ONLY_MESSAGE where it shows any other failure. A callable fallback
+    gets `(self, analysis_db_path)`: async slots emit their "failed" signal
+    so nothing waits forever. `@Slot` goes above."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(self, analysis_db_path, *args):
+            if self._read_only and analysis_db_path == self._claimed_path:
+                logger.warning("%s blocked: %s is read-only", fn.__name__, analysis_db_path)
+                return fallback(self, analysis_db_path) if callable(fallback) else fallback
+            return fn(self, analysis_db_path, *args)
+        return wrapper
+    return deco
+
+
+def _ERR(self, path):
+    return {"ok": False, "error": READ_ONLY_MESSAGE}
+
+
+def _fail(signal_name: str, with_path: bool = False):
+    """Fallback for an async write slot: emit its failure signal."""
+    def emit(self, path):
+        args = (path, READ_ONLY_MESSAGE) if with_path else (READ_ONLY_MESSAGE,)
+        getattr(self, signal_name).emit(*args)
+    return emit
+
+
 class AnalysisBridge(QObject):
     """Read-only data access for the Analysis workspace's sections.
 
@@ -748,6 +784,7 @@ class AnalysisBridge(QObject):
     annotationTaskFinished = Signal(str)  # message (re-annotate / restore, ADR 63)
     annotationTaskFailed = Signal(str)
     featureLayersChanged = Signal(str)  # analysis_db_path
+    readOnlyChanged = Signal()  # ADR 69
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -834,6 +871,52 @@ class AnalysisBridge(QObject):
         self._summary_cache: dict = {}
         self._feature_correlation_worker: TableQueryWorker | None = None
         self._feature_correlation_request: float | None = None
+        # ADR 69: the open analysis' in-use marker, or read-only when
+        # another computer holds it.
+        self._claim: in_use.Claim | None = None
+        self._claimed_path: str = ""
+        self._read_only = False
+        self._in_use_by = ""
+
+    @Slot(str, result=bool)
+    def claimAnalysis(self, analysis_db_path: str) -> bool:
+        """Called when an analysis workspace opens. Takes its in-use
+        marker, or — another computer holds it — opens it read-only.
+        Returns whether it is writable here."""
+        self.releaseAnalysis()
+        self._claimed_path = analysis_db_path
+        info = None
+        if analysis_db_path and Path(analysis_db_path).exists():
+            try:
+                self._claim = in_use.Claim(analysis_db_path).acquire()
+            except in_use.InUseError as e:
+                info = e.info
+        self._set_read_only(info)
+        return info is None
+
+    @Slot(str)
+    def releaseAnalysis(self, analysis_db_path: str = "") -> None:
+        """The workspace closed (or, with no path, the app quits): drop the
+        marker. A path other than the claimed one is a no-op, so a page
+        torn down late can't drop a newer page's claim."""
+        if analysis_db_path and analysis_db_path != self._claimed_path:
+            return
+        if self._claim is not None:
+            self._claim.release()
+            self._claim = None
+        self._set_read_only(None)
+        self._claimed_path = ""
+
+    def _set_read_only(self, info: dict | None) -> None:
+        if self._claimed_path:
+            in_use.set_read_only(self._claimed_path, info is not None)
+        read_only, by = info is not None, in_use.describe(info) if info else ""
+        if (read_only, by) != (self._read_only, self._in_use_by):
+            self._read_only, self._in_use_by = read_only, by
+            self.readOnlyChanged.emit()
+
+    readOnly = Property(bool, lambda self: self._read_only, notify=readOnlyChanged)
+    inUseBy = Property(str, lambda self: self._in_use_by, notify=readOnlyChanged)
 
     @Slot(str)
     def setHeatmapAnalysis(self, analysis_db_path: str) -> None:
@@ -1205,7 +1288,11 @@ class AnalysisBridge(QObject):
         """
         if not analysis_db_path or not Path(analysis_db_path).exists():
             return
+        if self._read_only and analysis_db_path == self._claimed_path:
+            return  # ADR 69: no writes on open either
         analysis_db.init_analysis_db(analysis_db_path).close()
+        # ADR 69: an analysis run before runs ended in DELETE mode.
+        set_journal_mode(analysis_db_path, "delete")
         # Backfill: an analysis run before annotations went into `.var`.
         self._refresh_var_annotations(analysis_db_path, only_if_missing=True)
         # Backfill: an analysis run before the pipeline wrote obs["nFeatures"].
@@ -1233,8 +1320,10 @@ class AnalysisBridge(QObject):
         analysis: adding an index to a big table after an update took
         seconds on the GUI thread. `schemaReady(analysis_db_path)` follows,
         also on failure (logged), so the page never waits forever."""
-        if not analysis_db_path or not Path(analysis_db_path).exists():
-            # Queued, not emitted now: the page may still be connecting.
+        read_only = self._read_only and analysis_db_path == self._claimed_path
+        if read_only or not analysis_db_path or not Path(analysis_db_path).exists():
+            # Read-only (ADR 69): no writes on open. Queued, not emitted
+            # now: the page may still be connecting.
             QTimer.singleShot(0, lambda p=analysis_db_path: self.schemaReady.emit(p))
             return
         worker = TableQueryWorker(_update_schema, analysis_db_path, self)
@@ -1633,6 +1722,7 @@ class AnalysisBridge(QObject):
         self.featuresForPredictionReady.emit(self._prediction_features_path, [])
 
     @Slot(str, list, dict)
+    @_writes(_fail("formulaPredictionFailed", with_path=True))
     def predictFormulas(
         self, analysis_db_path: str, feature_ids: list, settings_dict: dict
     ) -> None:
@@ -2183,6 +2273,7 @@ class AnalysisBridge(QObject):
         return True
 
     @Slot(str, str, str, str, "QVariantMap")
+    @_writes(_fail("datasetImportFailed"))
     def importH5ad(
         self, analysis_db_path: str, source_path: str, name: str,
         sample_column: str, sample_map: dict,
@@ -2225,6 +2316,7 @@ class AnalysisBridge(QObject):
         )
 
     @Slot(str, int, result=bool)
+    @_writes(False)
     def deleteImportedDataset(self, analysis_db_path: str, dataset_id: int) -> bool:
         """Delete an imported dataset's files and rows. The user's source
         file is kept. If it was the active dataset, the view falls back to
@@ -2240,6 +2332,7 @@ class AnalysisBridge(QObject):
         return removed
 
     @Slot(str, str, bool, bool)
+    @_writes(_fail("datasetMoranFailed"))
     def computeDatasetMoran(
         self, analysis_db_path: str, layer: str, run_global: bool, run_local: bool
     ) -> None:
@@ -2321,6 +2414,7 @@ class AnalysisBridge(QObject):
         )
 
     @Slot(str, str, str)
+    @_writes(_fail("datasetFeatureCorrelationFailed"))
     def computeDatasetFeatureCorrelation(self, analysis_db_path: str, layer: str, method: str) -> None:
         """Feature correlation over the active dataset (the pipeline output
         or an imported one), on a background thread (see
@@ -2384,6 +2478,7 @@ class AnalysisBridge(QObject):
         return {"rows": rows}
 
     @Slot(str, str, list, "QVariantMap", result=str)
+    @_writes(READ_ONLY_MESSAGE)
     def applyPostRunTargetList(
         self, analysis_db_path: str, run_id: str, rows: list, settings: dict
     ) -> str:
@@ -2404,6 +2499,7 @@ class AnalysisBridge(QObject):
         )
 
     @Slot(str, result=int)
+    @_writes(0)
     def removePostRunTargetList(self, analysis_db_path: str) -> int:
         """Undo every post-run match (the pipeline's own are kept)."""
         n = analysis_db.delete_command_target_list_rows(
@@ -2447,6 +2543,7 @@ class AnalysisBridge(QObject):
         return reannotation.load_history(analysis_db_path) if analysis_db_path else []
 
     @Slot(str, str, "QVariantMap", "QVariantMap", str)
+    @_writes(_fail("annotationTaskFailed"))
     def reannotate(
         self, analysis_db_path: str, run_id: str, settings: dict, run_config: dict,
         start_date: str,
@@ -2464,6 +2561,7 @@ class AnalysisBridge(QObject):
         )
 
     @Slot(str, int, "QVariantMap", str)
+    @_writes(_fail("annotationTaskFailed"))
     def restoreAnnotation(
         self, analysis_db_path: str, entry_id: int, run_config: dict, start_date: str
     ) -> None:
@@ -2479,6 +2577,7 @@ class AnalysisBridge(QObject):
         )
 
     @Slot(str, int, result=str)
+    @_writes(READ_ONLY_MESSAGE)
     def deleteAnnotationHistoryEntry(self, analysis_db_path: str, entry_id: int) -> str:
         """`""` on success, else an error message."""
         try:
@@ -2531,6 +2630,7 @@ class AnalysisBridge(QObject):
     # -----------------------------------------------------------------
 
     @Slot(str, str, int, float)
+    @_writes(_fail("featureNormalizationFailed"))
     def normalizeToFeature(
         self, analysis_db_path: str, run_id: str, feature_id: int, mz: float
     ) -> None:
@@ -2589,6 +2689,7 @@ class AnalysisBridge(QObject):
         self.featureNormalizationFinished.emit(result.layer_name, message)
 
     @Slot(str, str, int, result=str)
+    @_writes(READ_ONLY_MESSAGE)
     def removeFeatureLayer(self, analysis_db_path: str, run_id: str, feature_id: int) -> str:
         """Drop `feature_<id>` from every sample file and `merged.h5ad`;
         `""` on success, else an error message. Synchronous: deleting two
@@ -2736,6 +2837,7 @@ class AnalysisBridge(QObject):
         ]
 
     @Slot(str, str, str, str, list, result=dict)
+    @_writes(_ERR)
     def saveRoi(
         self, analysis_db_path: str, sample_name: str, name: str, color: str,
         vertices: list,
@@ -2886,6 +2988,7 @@ class AnalysisBridge(QObject):
             )
 
     @Slot(str, str, list, str, result=dict)
+    @_writes(_ERR)
     def deleteRoi(
         self, analysis_db_path: str, sample_name: str, sample_names: list, name: str
     ) -> dict:
@@ -3001,6 +3104,7 @@ class AnalysisBridge(QObject):
         return analysis_db.load_scale_bar(analysis_db_path)
 
     @Slot(str, str)
+    @_writes(None)
     def setScaleBar(self, analysis_db_path: str, settings_json: str) -> None:
         """Save the scale bar dialog's settings, passed as
         `JSON.stringify(...)` so the nested `pixel_um` map arrives as a
@@ -3008,6 +3112,7 @@ class AnalysisBridge(QObject):
         analysis_db.save_scale_bar(analysis_db_path, json.loads(settings_json))
 
     @Slot(str, str, str, str)
+    @_writes(None)
     def setObsCategoryColor(
         self, analysis_db_path: str, obs_column: str, category: str, color: str
     ) -> None:
@@ -3017,11 +3122,13 @@ class AnalysisBridge(QObject):
         analysis_db.save_obs_category_color(analysis_db_path, obs_column, category, color)
 
     @Slot(str, str)
+    @_writes(None)
     def resetObsCategoryColors(self, analysis_db_path: str, obs_column: str) -> None:
         """Back to the default palette for every category of `obs_column`."""
         analysis_db.reset_obs_category_colors(analysis_db_path, obs_column)
 
     @Slot(str, str, str, result=dict)
+    @_writes(_ERR)
     def attachHeImage(self, analysis_db_path: str, sample_name: str, image_path: str) -> dict:
         """Attach (or replace) `sample_name`'s H&E/brightfield image —
         `CoregistrationWindow`'s "Attach Image..." action.
@@ -3057,6 +3164,7 @@ class AnalysisBridge(QObject):
         }
 
     @Slot(str, str, list, str, result=dict)
+    @_writes(_ERR)
     def saveRegistration(
         self, analysis_db_path: str, sample_name: str, landmarks: list, transform_type: str,
     ) -> dict:
@@ -3236,6 +3344,7 @@ class AnalysisBridge(QObject):
         return curve or {}
 
     @Slot(str, str, str, float, float, str, float, str, result=dict)
+    @_writes(_ERR)
     def addCalibrationPoint(
         self,
         analysis_db_path: str,
@@ -3349,6 +3458,7 @@ class AnalysisBridge(QObject):
         return {"ok": True}
 
     @Slot(str, str, result=bool)
+    @_writes(False)
     def deleteCalibrationPoint(self, analysis_db_path: str, roi_name: str) -> bool:
         """Remove one calibration standard.
 
@@ -3360,6 +3470,7 @@ class AnalysisBridge(QObject):
         return analysis_db.delete_calibration_point(analysis_db_path, roi_name)
 
     @Slot(str, float, str, str, result=dict)
+    @_writes(_ERR)
     def fitCalibrationCurve(
         self, analysis_db_path: str, analyte_mz: float, fit_type: str, weighting: str
     ) -> dict:
@@ -3446,6 +3557,7 @@ class AnalysisBridge(QObject):
         return curve
 
     @Slot(str, str, str, float, float, str, result=dict)
+    @_writes(_ERR)
     def addCalibrationUnknown(
         self,
         analysis_db_path: str,
@@ -3535,6 +3647,7 @@ class AnalysisBridge(QObject):
         return {"ok": True}
 
     @Slot(str, int, result=bool)
+    @_writes(False)
     def deleteCalibrationUnknown(self, analysis_db_path: str, unknown_id: int) -> bool:
         """Remove one quantified ROI result.
 

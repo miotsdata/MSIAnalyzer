@@ -53,12 +53,21 @@ Page {
         analysisPage.featureCorrState = null
         analysisPage.overlayState = null
         analysisPage.schemaReady = false
+        if (analysisPage.claimedDbPath) AnalysisBridge.releaseAnalysis(analysisPage.claimedDbPath)
+        analysisPage.claimedDbPath = ""
         if (analysisPage.analysis && analysisPage.analysis.analysisDbPath
-                && !analysisPage.outputMissing)
+                && !analysisPage.outputMissing) {
+            // ADR 69: in-use marker first, so a read-only open skips the
+            // schema/backfill writes below.
+            analysisPage.claimedDbPath = analysisPage.analysis.analysisDbPath
+            AnalysisBridge.claimAnalysis(analysisPage.claimedDbPath)
             AnalysisBridge.requestSchemaUpdate(analysisPage.analysis.analysisDbPath)
-        else
+        } else
             analysisPage.schemaReady = true  // no database: nothing to update
     }
+    // The analysis this page holds the in-use marker for (ADR 69).
+    property string claimedDbPath: ""
+    Component.onDestruction: if (analysisPage.claimedDbPath) AnalysisBridge.releaseAnalysis(analysisPage.claimedDbPath)
 
     // The rest of opening an analysis, once its schema is up to date.
     function finishOpening() {
@@ -325,6 +334,7 @@ Page {
                     objectName: "removeDatasetButton"
                     text: "✕"
                     visible: datasetCombo.currentIndex > 0
+                    enabled: !AnalysisBridge.readOnly
                     ToolTip.visible: hovered
                     ToolTip.text: "Remove this imported dataset"
                     onClicked: removeDatasetDialog.open()
@@ -352,6 +362,21 @@ Page {
             Layout.fillWidth: true
             height: 1
             color: palette.mid
+        }
+
+        // ADR 69: another computer has this analysis open.
+        Label {
+            objectName: "readOnlyBanner"
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+            Layout.topMargin: 6
+            visible: AnalysisBridge.readOnly
+            wrapMode: Text.WordWrap
+            color: Theme.warningColor
+            font.bold: true
+            text: "Read-only: this analysis is open on " + AnalysisBridge.inUseBy
+                  + ". Close it there, then reopen it here to make changes."
         }
 
         Item {

@@ -49,7 +49,9 @@ from msianalyzer.core.spatial.local_moran import compute_local_moran_layer
 from msianalyzer.core.spatial.moran import compute_spatial_autocorr
 from msianalyzer.core.spectra.isotopes import run_detect_isotopes
 from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
+from msianalyzer.core.utils import in_use
 from msianalyzer.core.utils.create_adata import create_spatial_adata
+from msianalyzer.core.utils.db import set_journal_mode
 from msianalyzer.core.utils.logging_utils import log_call, run_log, worker_logging
 from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
 from msianalyzer.core.utils.tic_normalization import run_normalization
@@ -233,6 +235,10 @@ class Run:
         self.on_sample_progress: Callable[[int, int], None] | None = None
         # Step currently "started", so a failure can mark it "failed".
         self._current_step: str | None = None
+        # ADR 69: this run's hold on its analysis, and the databases it
+        # switched to WAL (back to DELETE when the run ends).
+        self._claim: in_use.Claim | None = None
+        self._wal_dbs: list[Path] = []
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise the run to a plain, YAML-friendly dict.
@@ -247,7 +253,8 @@ class Run:
         """
         d: dict[str, Any] = {}
         for key, value in vars(self).items():
-            if key in ("project", "on_step", "on_sample_progress", "_current_step"):
+            if key in ("project", "on_step", "on_sample_progress", "_current_step",
+                       "_claim", "_wal_dbs"):
                 continue
             if isinstance(value, datetime.datetime):
                 d[key] = str(value)
@@ -336,7 +343,10 @@ class Run:
                 Run._check_input_paths(self.config)
 
                 logger.info("run %s: pipeline started", self.id)
-                self.run_core()
+                try:
+                    self.run_core()
+                finally:
+                    self._end_run_dbs()
                 logger.info(
                     "run %s: pipeline complete in %s",
                     self.id,
@@ -729,6 +739,18 @@ class Run:
 
         return SampleResult(out_db_path=out_db_path, peaks_mzs=filtered_peaks_mzs)
 
+    def _end_run_dbs(self) -> None:
+        """ADR 69: back to DELETE journal mode (WAL's shared-memory `-shm`
+        doesn't work between computers on a network share), then release
+        the in-use marker. Best effort: a failure is logged, never raised."""
+        for db in self._wal_dbs:
+            if Path(db).exists():
+                set_journal_mode(db, "delete")
+        self._wal_dbs = []
+        if self._claim is not None:
+            self._claim.release()
+            self._claim = None
+
     def _emit_step(self, step: str, status: str) -> None:
         """Invoke `self.on_step(step, status)` when a callback is set.
 
@@ -779,7 +801,12 @@ class Run:
         adb_path = analysis_db.analysis_db_path(
             out_dir, analysis_id, config.analysis.db_name
         )
+        # ADR 69: refuse an analysis open on another computer; WAL only
+        # while this run's parallel workers write (see _end_run_dbs).
+        self._claim = in_use.Claim(adb_path).acquire()
         analysis_db.init_analysis_db(adb_path).close()
+        set_journal_mode(adb_path, "wal")
+        self._wal_dbs.append(adb_path)
         analysis_db.write_metadata(
             adb_path,
             {
@@ -880,6 +907,7 @@ class Run:
 
         out_db_paths = [r.out_db_path for r in results]
         all_peaks_mzs = [r.peaks_mzs for r in results]
+        self._wal_dbs.extend(out_db_paths)  # raw DBs are parsed in WAL
 
         return _SampleProcessingHead(
             out_dir=out_dir,

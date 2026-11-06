@@ -585,3 +585,55 @@ def test_summary_reloads_after_a_reannotation_and_says_when_nothing_is_shared(
     empty = find_visual_child(root, "backgroundFragmentsEmpty")
     assert empty.property("visible") is True
     assert "No fragment" in empty.property("text")
+
+
+def test_opening_takes_the_in_use_marker_and_switches_old_wal_db_to_delete(
+    analysis_view, analysis_model, application, qtbot
+):
+    # ADR 69: an analysis left in WAL by an older version ends up in
+    # DELETE mode once opened here, and this computer holds its marker.
+    from msianalyzer.core.utils import in_use
+    from msianalyzer.core.utils.db import set_journal_mode
+
+    db = analysis_model.analysisDbPath
+    set_journal_mode(db, "wal")
+    root = analysis_view(analysis_model).rootObject()
+    qtbot.waitUntil(lambda: root.property("schemaReady") is True, timeout=5000)
+
+    assert application.analysis_bridge.property("readOnly") is False
+    assert in_use.read_marker(db) is not None
+    with sqlite3.connect(db) as con:
+        assert con.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    application.analysis_bridge.releaseAnalysis(db)
+    assert not in_use.marker_path(db).exists()
+
+
+def test_analysis_open_on_another_computer_opens_read_only(
+    analysis_view, analysis_model, application, find_visual_child, qtbot
+):
+    import datetime
+    import json
+
+    from msianalyzer.core.utils import in_use
+
+    db = analysis_model.analysisDbPath
+    now = datetime.datetime.now().astimezone().isoformat()
+    foreign = {"host": "other-pc", "user": "mrossi", "pid": 1, "token": "t",
+               "since": now, "heartbeat": now}
+    in_use.marker_path(db).write_text(json.dumps(foreign))
+
+    root = analysis_view(analysis_model).rootObject()
+    qtbot.waitUntil(lambda: root.property("schemaReady") is True, timeout=5000)
+
+    bridge = application.analysis_bridge
+    assert bridge.property("readOnly") is True
+    banner = find_visual_child(root, "readOnlyBanner")
+    assert banner.property("visible") is True
+    assert "other-pc (mrossi)" in banner.property("text")
+    # Writes are refused, and the other computer's marker is untouched.
+    result = bridge.saveRoi(db, "s1", "roi", "#ff0000", [[0, 0], [1, 0], [1, 1]])
+    assert result["ok"] is False and "read-only" in result["error"]
+    assert json.loads(in_use.marker_path(db).read_text())["token"] == "t"
+    bridge.releaseAnalysis(db)
+    assert bridge.property("readOnly") is False
+    assert json.loads(in_use.marker_path(db).read_text())["token"] == "t"

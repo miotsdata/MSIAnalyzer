@@ -55,34 +55,28 @@ DEFAULT_DB_TEMPLATE = "analysis_{run_id}.db"
 
 #: how long a connection waits for a competing writer before raising
 #: ``SQLITE_BUSY``. The per-sample workers all append to this one file in
-#: parallel; WAL serialises writers, this makes them queue rather than fail.
+#: parallel; SQLite serialises writers, this makes them queue rather than fail.
 _BUSY_TIMEOUT_MS = 60_000
 
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
     """Open the analysis database the way every caller must.
 
-    WAL + a long busy timeout so the parallel per-sample workers queue on
-    the single-writer lock instead of racing or raising. Callers issue
-    **no** DDL — the schema is owned solely by :func:`create_analysis_schema`
+    A long busy timeout so the parallel per-sample workers queue on the
+    single-writer lock instead of racing or raising. Callers issue **no**
+    DDL — the schema is owned solely by :func:`create_analysis_schema`
     (see :func:`init_analysis_db`) so concurrent writers never take a
     schema lock.
 
-    The mode is only *set* to WAL when it isn't already — re-issuing
-    `PRAGMA journal_mode = WAL` is a no-op once the file header says WAL,
-    but it isn't a *read-only* no-op: several worker processes opening
-    fresh connections to the same file at nearly the same instant (as
-    happens right after `ProcessPoolExecutor` forks them) can still race
-    on it and corrupt the WAL/shm state. Checking first avoids issuing it
-    at all in the overwhelmingly common case (the schema step already put
-    the file in WAL mode), which is what actually closes the race —
-    "harmless because it's already WAL" was true for the file header, not
-    for concurrent callers touching it at once.
+    The journal mode is left as the file has it: a run switches the file
+    to WAL for its parallel writers and back to DELETE at the end (ADR 69,
+    `utils.db.set_journal_mode`), since WAL breaks across computers on a
+    network share. Not issuing `PRAGMA journal_mode` here also keeps
+    workers that connect at the same instant from racing on it, which
+    corrupted the WAL/shm state in the field.
     """
     con = sqlite3.connect(Path(db_path), timeout=_BUSY_TIMEOUT_MS / 1000)
     con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
-    if con.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-        con.execute("PRAGMA journal_mode = WAL")
     con.execute("PRAGMA synchronous = NORMAL")
     con.execute("PRAGMA foreign_keys = ON")
     return con
@@ -864,7 +858,7 @@ def init_analysis_db(db_path: Path | str) -> sqlite3.Connection:
     on a busy thread.
 
     Returns:
-        An open connection with WAL journalling and foreign keys enabled.
+        An open connection with foreign keys enabled.
     """
     con = connect(db_path)
     try:

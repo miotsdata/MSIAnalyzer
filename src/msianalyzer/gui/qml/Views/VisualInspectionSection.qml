@@ -241,6 +241,7 @@ Item {
                 id: openRoiDesignButton
                 objectName: "openRoiDesignButton"
                 text: "Draw ROI"
+                enabled: !AnalysisBridge.readOnly
                 onClicked: {
                     roiDesignWindowLoader.active = true
                     var win = roiDesignWindowLoader.item
@@ -273,6 +274,7 @@ Item {
                 id: openCoregistrationButton
                 objectName: "openCoregistrationButton"
                 text: "Coregister H&E Image"
+                enabled: !AnalysisBridge.readOnly
                 onClicked: {
                     coregistrationWindowLoader.active = true
                     var win = coregistrationWindowLoader.item
@@ -289,6 +291,7 @@ Item {
             Button {
                 objectName: "openScaleBarButton"
                 text: "Scale bar…"
+                enabled: !AnalysisBridge.readOnly
                 onClicked: scaleBarDialog.openFor(visualSection.analysis,
                     visualSection.samples.map(function (s) { return s.name }),
                     visualSection.scaleBar)

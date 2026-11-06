@@ -420,7 +420,7 @@ Item {
                 Button {
                     objectName: "openPredictFormulaButton"
                     text: "Predict formula…"
-                    enabled: !!(analysis && analysis.analysisDbPath)
+                    enabled: !!(analysis && analysis.analysisDbPath) && !AnalysisBridge.readOnly
                     onClicked: {
                         // Lazily constructs predictFormulaWindowLoader.item on
                         // first click, not before — see the Loader's own comment.

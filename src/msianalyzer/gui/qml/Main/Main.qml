@@ -204,6 +204,7 @@ ApplicationWindow {
                 text: "Import analyzed .h5ad…"
                 enabled: window.currentAnalysis !== null
                          && window.currentAnalysis.analysisType !== "targeted"
+                         && !AnalysisBridge.readOnly
                 onTriggered: importH5adDialog.openFor(window.currentAnalysis)
             }
             // Name features from a target list without re-running (ADR 60).
@@ -212,6 +213,7 @@ ApplicationWindow {
                 text: "Match target list…"
                 enabled: window.currentAnalysis !== null
                          && window.currentAnalysis.analysisType !== "targeted"
+                         && !AnalysisBridge.readOnly
                 onTriggered: targetListMatchDialog.openFor(window.currentAnalysis)
             }
             // Normalize to one feature without re-running (ADR 61).
@@ -220,6 +222,7 @@ ApplicationWindow {
                 text: "Normalize to feature…"
                 enabled: window.currentAnalysis !== null
                          && window.currentAnalysis.analysisType !== "targeted"
+                         && !AnalysisBridge.readOnly
                 onTriggered: normalizeFeatureDialog.openFor(window.currentAnalysis)
             }
             // Re-run MS2 annotation with new settings, with history (ADR 63).
@@ -228,6 +231,7 @@ ApplicationWindow {
                 text: "Re-annotate…"
                 enabled: window.currentAnalysis !== null
                          && window.currentAnalysis.analysisType !== "targeted"
+                         && !AnalysisBridge.readOnly
                 onTriggered: reannotateDialog.openFor(window.currentAnalysis)
             }
             Menu {

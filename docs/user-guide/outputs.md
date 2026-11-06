@@ -18,6 +18,7 @@ Everything else lands in the analysis' `io.out_dir`.
 | `summary_report.html` | `out_dir` | run | per-sample counts, feature-overlap UpSet plot, MS2 association (overall + per sample), a recheck of the unassociated MS2 against each sample's pre-filter MS1 peaks, the `precursor_frac` distribution of the **associated** MS2 (overall + per sample), a breakdown of *why* peak-based purity is unscored, and — when a library ran — an **MS2 annotation** section: features by best-hit confidence, best-score distribution, plausible-compounds-per-feature, cross-scan agreement, and top-compound / per-library tables |
 | `summary.json` | `out_dir` | run | the same numbers, machine-readable |
 | `run_<date>_<time>.log` | `out_dir` | run | this run's pipeline log at `analysis.log_level` (default `info`; `off` writes none), a new file per run |
+| `analysis_<run-id>.db.inuse` | `out_dir` | run | present while a computer has the analysis open or is running it: who and since when. Deleted on close; ignored after 5 minutes without a refresh (crash) |
 | `debug_<run-id>.log` | `<project>/logs/` | run | full-DEBUG trace of the run (always written); plus `run -l PATH` for a user log at the `-v` level |
 
 Regenerate the report from a finished database any time with `msianalyzer report

@@ -12,6 +12,15 @@ mark dotfiles Hidden, and Windows refuses to overwrite a hidden file, so runs
 failed. Such a project is migrated to `msianalyzer.yml` the first time it is
 opened; older MSIAnalyzer versions can no longer open it after that.
 
+### Opening a project on several computers
+
+An analysis can be open on only one computer at a time for changes. Open it
+on a second computer and it opens **read-only**: a banner names the computer
+that has it, and every action that would change it (ROIs, Moran's I,
+normalize, re-annotate, …) is disabled. Close it there, then reopen it here
+to make changes. Running an analysis that another computer has open is
+refused.
+
 ## The config file
 
 A run is driven by one config file (`.yaml`/`.yml` or `.toml`). It has a

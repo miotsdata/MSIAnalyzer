@@ -24,6 +24,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from msianalyzer.core.utils import in_use
 from msianalyzer.core.utils.lazy_import import lazy_module
 
 ad = lazy_module("anndata")
@@ -37,6 +38,7 @@ write_lock = threading.RLock()
 @contextmanager
 def open_for_write(path):
     """`h5py.File(path, "r+")`, one writer at a time across threads."""
+    in_use.check_writable(path)  # ADR 69: not into a read-only analysis
     with write_lock, h5py.File(path, "r+") as f:
         yield f
 

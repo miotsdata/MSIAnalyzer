@@ -224,6 +224,7 @@ Item {
                 text: "Compute Moran's I"
                 enabled: !spatialCorrelationSection.computing
                          && (globalMoranCheck.checked || localMoranCheck.checked)
+                         && !AnalysisBridge.readOnly
                 onClicked: spatialCorrelationSection.requestCompute()
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
             }

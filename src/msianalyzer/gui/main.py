@@ -177,6 +177,8 @@ def main() -> int:
     watchdog.start()
 
     exit_code = app.exec()
+    # ADR 69: drop the open analysis' in-use marker before os._exit below.
+    application.analysis_bridge.releaseAnalysis()
     watchdog.stop()
     crash_diagnostics.stop()
 

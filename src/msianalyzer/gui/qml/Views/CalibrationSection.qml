@@ -499,6 +499,7 @@ Item {
                             objectName: "addStandardButton"
                             text: "Add Standard"
                             enabled: calibrationSection.hasAnalyte && calibrationSection.pixelSize > 0
+                                     && !AnalysisBridge.readOnly
                             onClicked: {
                                 standardRoiWindowLoader.active = true
                                 standardRoiWindowLoader.item.openFor(
@@ -762,6 +763,7 @@ Item {
                             objectName: "addUnknownButton"
                             text: "Add Sample to Quantify"
                             enabled: calibrationSection.hasAnalyte && calibrationSection.pixelSize > 0
+                                     && !AnalysisBridge.readOnly
                             onClicked: {
                                 unknownRoiWindowLoader.active = true
                                 unknownRoiWindowLoader.item.openFor(
