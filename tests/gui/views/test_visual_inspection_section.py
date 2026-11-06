@@ -1564,9 +1564,47 @@ def test_feature_layer_combo_lists_post_run_layers(
     _open_visual_tab(view, root, find_visual_child, qtbot)
 
     section = find_visual_child(root, "controlsFlickable")
+    button = find_visual_child(root, "featureLayerButton")
     combo = find_visual_child(root, "featureLayerCombo")
-    assert combo.property("visible") is True
-    assert combo.property("displayText") == "Normalized to feature…"
-    combo.activated.emit(0)
+    assert button.property("visible") is True
+    # Hidden until a feature layer is the active one.
+    assert combo.property("visible") is False
+
+    def click(item):
+        center = item.mapToScene(item.boundingRect().center()).toPoint()
+        qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+        qtbot.wait(50)
+
+    click(button)  # no last pick yet: defaults to the first layer
     assert section.property("dataLayer") == "feature_1"
+    assert combo.property("visible") is True
     assert combo.property("displayText") == "Norm. to m/z 150.0000"
+
+    # Another layer hides the combo; the button returns to the last pick.
+    click(find_visual_child(root, "rawLayerButton"))
+    assert combo.property("visible") is False
+    click(button)
+    assert section.property("dataLayer") == "feature_1"
+
+
+def test_local_moran_hh_checkbox_switches_rendered_layer(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    checkbox = find_visual_child(root, "localMoranHHCheckBox")
+    assert checkbox.property("visible") is False
+
+    section.setProperty("dataLayer", "localMoran")
+    qtbot.wait(50)
+    assert checkbox.property("visible") is True
+    checkbox.setProperty("checked", True)
+    checkbox.toggled.emit()
+    assert section.property("localMoranHHOnly") is True
+    # The panel's own layer stays "localMoran"; only the render id changes.
+    assert section.property("dataLayer") == "localMoran"
+    tile = find_visual_child(root, "heatmapImage_s1")
+    qtbot.waitUntil(lambda: "%7ClocalMoranHH%7C" in tile.property("source").toString(), timeout=2000)

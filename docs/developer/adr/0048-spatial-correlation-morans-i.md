@@ -791,3 +791,16 @@ table updates with no new fetch involved.
   lock), and reads it back on later opens.
 - The layer itself is unchanged and still written. Visual Inspection's
   Local Moran's I map and "Show spatial distribution" never read it.
+
+## Addendum (2026-11-06): High-High only
+
+Plain `I_i` is positive for both High-High (clustered presence) and Low-Low
+(clustered absence), so the map can't tell the two apart.
+`local_moran_values(hh_only=True)` keeps `I_i` only where `z_i > 0` and the
+spatial lag `> 0` and sets every other pixel to 0 (no-neighbor pixels stay
+NaN). The GUI reaches it through a second reserved layer, `"localMoranHH"`,
+chosen in `tileTarget` when the "High-High only" checkbox is ticked. The
+panel's own `dataLayer` stays `"localMoran"`, so every existing
+`=== "localMoran"` check (range, colormap, statistics, export) still holds.
+Not persisted in tab memory. Image export still doesn't render local Moran's I
+(it was never supported there).

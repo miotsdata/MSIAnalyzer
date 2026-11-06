@@ -68,3 +68,12 @@ and logs a `remove_feature_layer` command.
   the run's normalized layer.
 - HDF5 doesn't reclaim the space of a deleted element, so the files keep
   their size until they are rewritten (for example with `h5repack`).
+
+## Addendum (2026-11-06): "Norm. to m/z" button
+
+The always-visible "Normalized to feature…" combo is replaced by a
+"Norm. to m/z" button beside Raw / TIC / Local Moran's I. The combo is shown
+only while a `feature_<id>` layer is active. The panel remembers the last
+one picked (`lastFeatureLayer`); the button returns to it, or to the first
+layer if there is none or it was removed. The layer buttons sit in a `Flow`
+so four of them wrap in a narrow panel.

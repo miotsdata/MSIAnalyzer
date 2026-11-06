@@ -132,6 +132,12 @@ applies everywhere — look at a sample's own color scale (it's centered on 0,
 so a pixel's color already tells you roughly how extreme it is) before
 picking a number to compare against.
 
+A positive local I means the pixel and its neighbors are on the **same side**
+of the sample's mean. That covers two very different cases: the feature is
+clustered *present* (High-High) **or** clustered *absent* (Low-Low, e.g. a
+large empty area). Tick **High-High only (where present)** under the layer
+buttons to color only the High-High pixels; every other pixel is shown as 0.
+
 If you'd rather see "which feature has the *most* high-value pixels" as a
 sortable table instead of eyeballing each feature's map one at a time, the
 opt-in `spatial_correlation.local_enabled` pipeline pass computes every

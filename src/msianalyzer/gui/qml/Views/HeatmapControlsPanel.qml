@@ -399,6 +399,16 @@ Flickable {
     property real draftVmax: vmax
     property bool autoScale: true
     property string dataLayer: "TIC"
+    // Local Moran's I: color only High-High pixels (feature present and
+    // clustered), not Low-Low (clustered absence), which plain I_i also
+    // scores positive. Rendered via the reserved "localMoranHH" layer.
+    property bool localMoranHHOnly: false
+    // Last picked `feature_<id>` layer, so "Norm. to m/z" returns to it.
+    property string lastFeatureLayer: ""
+    readonly property bool isFeatureLayer: controlsFlickable.dataLayer.indexOf("feature_") === 0
+    function featureLayerKeys() {
+        return controlsFlickable.featureLayers.map(function (l) { return l.layer })
+    }
     property var hiddenSamples: ({})
 
     // What autoscale is *actually* using right now — the real per-pixel
@@ -503,6 +513,8 @@ Flickable {
     // real range (autoRange) rather than carrying over a stale one.
     onDataLayerChanged: {
         controlsFlickable.autoScale = true
+        if (controlsFlickable.isFeatureLayer)
+            controlsFlickable.lastFeatureLayer = controlsFlickable.dataLayer
         // Local Moran's I values are signed — the sequential colormaps
         // (viridis/magma/...) that suit a one-sided intensity scale would
         // hide the sign; switch to the one diverging option automatically
@@ -613,8 +625,10 @@ Flickable {
             return sampleName + "|obs:" + controlsFlickable.selectedObsColumn + "|" + cats + ds
         }
         if (!controlsFlickable.selectedFeature) return ""
+        var layer = controlsFlickable.dataLayer === "localMoran" && controlsFlickable.localMoranHHOnly
+                    ? "localMoranHH" : controlsFlickable.dataLayer
         return sampleName + "|" + controlsFlickable.selectedFeature.mz + "|"
-               + controlsFlickable.dataLayer + "|" + controlsFlickable.colormap + "|"
+               + layer + "|" + controlsFlickable.colormap + "|"
                + controlsFlickable.vminToken() + "|" + controlsFlickable.vmaxToken() + ds
     }
 
@@ -838,7 +852,9 @@ Flickable {
             ToolTip.text: "\"X\" is the imported file's own main matrix; the others are its layers."
             HoverHandler { cursorShape: Qt.PointingHandCursor }
         }
-        RowLayout {
+        Flow {
+            Layout.fillWidth: true
+            spacing: 6
             visible: controlsFlickable.inspectionMode === "feature"
             // Plain (non-checkable) Buttons rather than RadioButton +
             // ButtonGroup — see VisualInspectionSection.qml's git history
@@ -943,19 +959,57 @@ Flickable {
                     cursorShape: Qt.PointingHandCursor
                 }
             }
+            // ADR 61 layers: one button; the combo below picks which one.
+            Button {
+                id: featureLayerButton
+                objectName: "featureLayerButton"
+                visible: !controlsFlickable.datasetActive && controlsFlickable.featureLayers.length > 0
+                text: "Norm. to m/z"
+                highlighted: controlsFlickable.isFeatureLayer
+                onClicked: {
+                    var keys = controlsFlickable.featureLayerKeys()
+                    controlsFlickable.dataLayer = keys.indexOf(controlsFlickable.lastFeatureLayer) >= 0
+                                                  ? controlsFlickable.lastFeatureLayer : keys[0]
+                }
+                background: Rectangle {
+                    radius: 4
+                    color: featureLayerButton.highlighted ? palette.highlight : palette.button
+                    border.color: palette.mid
+                }
+                contentItem: Label {
+                    text: featureLayerButton.text
+                    color: featureLayerButton.highlighted ? palette.highlightedText : palette.buttonText
+                    font.bold: featureLayerButton.highlighted
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
+        }
+        AppCheckBox {
+            id: localMoranHHCheckBox
+            objectName: "localMoranHHCheckBox"
+            visible: controlsFlickable.inspectionMode === "feature" && controlsFlickable.dataLayer === "localMoran"
+            text: "High-High only (where present)"
+            checked: controlsFlickable.localMoranHHOnly
+            onToggled: controlsFlickable.localMoranHHOnly = checked
+            ToolTip.visible: hovered
+            ToolTip.text: "Local Moran's I is also positive where the feature is "
+                + "clustered-absent (Low-Low). Checked: color only pixels that, "
+                + "with their neighbors, are above the mean."
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
         }
         // Layers added by "Normalize to feature…" (ADR 61), pipeline
-        // output only. No selection shows the placeholder text.
+        // output only. Shown only while one of them is the active layer.
         ComboBox {
             id: featureLayerCombo
             objectName: "featureLayerCombo"
             Layout.fillWidth: true
             visible: controlsFlickable.inspectionMode === "feature" && !controlsFlickable.datasetActive
-                     && controlsFlickable.featureLayers.length > 0
+                     && controlsFlickable.isFeatureLayer
             model: controlsFlickable.featureLayers.map(controlsFlickable.featureLayerLabel)
             currentIndex: controlsFlickable.featureLayers.map(function (l) { return l.layer })
                           .indexOf(controlsFlickable.dataLayer)
-            displayText: currentIndex < 0 ? "Normalized to feature…" : currentText
             onActivated: (index) => controlsFlickable.dataLayer = controlsFlickable.featureLayers[index].layer
             HoverHandler { cursorShape: Qt.PointingHandCursor }
         }

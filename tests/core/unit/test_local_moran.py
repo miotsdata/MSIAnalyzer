@@ -70,6 +70,22 @@ def test_local_moran_values_high_at_cluster_center_low_at_random_feature():
     assert np.nanmean(clustered_i) > np.nanmean(random_i)
 
 
+def test_local_moran_values_hh_only_keeps_hot_spot_drops_cold_spot():
+    # Plain I_i is positive both at the blob (High-High) and in the empty
+    # corner far from it (Low-Low); hh_only keeps only the former.
+    adata, xs, ys, center = _make_grid_sample()
+
+    plain = local_moran_values(adata, 100.0, layer="TIC")
+    hh = local_moran_values(adata, 100.0, layer="TIC", hh_only=True)
+
+    center_idx = np.argmin((xs - center) ** 2 + (ys - center) ** 2)
+    corner_idx = np.argmin(xs**2 + ys**2)
+    assert plain[corner_idx] > 0  # Low-Low: positive in the plain map
+    assert hh[corner_idx] == 0
+    assert hh[center_idx] == plain[center_idx] > 0
+    assert np.all(hh[np.isfinite(hh)] >= 0)
+
+
 def test_local_moran_values_constant_feature_is_all_nan():
     # m2 (population variance of the mean-centered values) is 0 for a
     # constant feature — no defined local Moran's I, not a divide-by-zero

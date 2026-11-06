@@ -49,6 +49,8 @@ _CATEGORY_PALETTE = "tab20"
 #: intensity" — see `render_heatmap_by_target`'s dispatch and
 #: `core.spatial.local_moran`.
 _LOCAL_MORAN_LAYER = "localMoran"
+#: Same, High-High LISA quadrant only (`local_moran_values(hh_only=True)`).
+_LOCAL_MORAN_HH_LAYER = "localMoranHH"
 
 
 def _feature_column_index(adata: ad.AnnData, mz: float) -> int:
@@ -475,7 +477,7 @@ def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -
     mz_str, layer, colormap, vmin_str, vmax_str = parts[1:6]
     vmin = None if vmin_str == "auto" else float(vmin_str)
     vmax = None if vmax_str == "auto" else float(vmax_str)
-    if layer == _LOCAL_MORAN_LAYER:
+    if layer in (_LOCAL_MORAN_LAYER, _LOCAL_MORAN_HH_LAYER):
         # Local import: core.spatial.local_moran pulls in squidpy (heavy —
         # scanpy/numba), and this module is on the GUI's startup path via
         # heatmap_provider.py; deferring the import keeps that cost paid
@@ -484,7 +486,8 @@ def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -
         from msianalyzer.core.spatial.local_moran import render_local_moran_heatmap
 
         return render_local_moran_heatmap(
-            adata, float(mz_str), colormap=colormap, vmin=vmin, vmax=vmax
+            adata, float(mz_str), colormap=colormap, vmin=vmin, vmax=vmax,
+            hh_only=layer == _LOCAL_MORAN_HH_LAYER,
         )
     return render_feature_heatmap(
         adata, float(mz_str), layer=layer, colormap=colormap, vmin=vmin, vmax=vmax,

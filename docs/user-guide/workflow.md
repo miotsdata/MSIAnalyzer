@@ -348,9 +348,11 @@ feature has no signal are 0. The dialog reports how many there are, so
 pick a feature present across the tissue.
 
 The result is a new layer, `feature_<id>`, in every sample `.h5ad` and in
-`merged.h5ad`. Nothing else changes. In Visual Inspection, pick it from
-**Normalized to feature…** under the Raw / TIC buttons. Normalizing to the
-same feature again replaces its layer.
+`merged.h5ad`. Nothing else changes. In Visual Inspection, click
+**Norm. to m/z** next to the Raw / TIC / Local Moran's I buttons; a list
+appears below to pick which feature. Clicking another layer button hides the
+list, and **Norm. to m/z** brings back the last feature you picked.
+Normalizing to the same feature again replaces its layer.
 
 The dialog lists the layers already added. Click ✕ next to one, then
 **Remove**, to delete it from every file. The files don't get smaller:

@@ -45,7 +45,9 @@ def _ensure_spatial_neighbors(adata: ad.AnnData, n_neighs: int = _N_NEIGHS) -> N
     sq.gr.spatial_neighbors_grid(adata, n_neighs=n_neighs)
 
 
-def local_moran_values(adata: ad.AnnData, mz: float, layer: str = "TIC") -> np.ndarray:
+def local_moran_values(
+    adata: ad.AnnData, mz: float, layer: str = "TIC", hh_only: bool = False
+) -> np.ndarray:
     """Per-pixel local Moran's I (LISA) for one feature, one already-open
     sample — the per-pixel analogue of `compute_spatial_autocorr`'s
     per-sample global score, for telling genuine within-tissue spatial
@@ -84,6 +86,10 @@ def local_moran_values(adata: ad.AnnData, mz: float, layer: str = "TIC") -> np.n
             or in-memory — only `.obsm["spatial"]`/`.X`/`.layers` are read).
         mz: The feature's consensus m/z — matched to the nearest `.var["mz"]`.
         layer: `"raw"` or `"TIC"` — which `adata.layers` entry to read.
+        hh_only: Keep only High-High pixels (LISA quadrant: the pixel *and*
+            its neighbors above the mean, i.e. where the feature is
+            present); every other pixel becomes 0. Plain `I_i` is also
+            positive for Low-Low (clustered absence), which this hides.
 
     Returns:
         A 1D array, one value per pixel, in `adata.obs` row order — the
@@ -110,6 +116,8 @@ def local_moran_values(adata: ad.AnnData, mz: float, layer: str = "TIC") -> np.n
     lag = np.asarray(weights_standardized @ z).reshape(-1)
 
     local_i = (z / m2) * lag
+    if hh_only:
+        local_i = np.where((z > 0) & (lag > 0), local_i, 0.0)
     return np.where(has_neighbors, local_i, np.nan)
 
 
@@ -120,6 +128,7 @@ def render_local_moran_heatmap(
     colormap: str = "coolwarm",
     vmin: float | None = None,
     vmax: float | None = None,
+    hh_only: bool = False,
 ) -> np.ndarray:
     """One feature's per-pixel local Moran's I as an RGBA `uint8` raster —
     the local/per-pixel analogue of
@@ -139,11 +148,12 @@ def render_local_moran_heatmap(
             around 0 (see below) rather than to the data's raw min.
         vmax: Upper color-scale bound. `None` autoscales symmetrically
             around 0 (see below) rather than to the data's raw max.
+        hh_only: Color only High-High pixels, see `local_moran_values`.
 
     Returns:
         An `(n_unique_y, n_unique_x, 4)` `uint8` array (RGBA).
     """
-    values = local_moran_values(adata, mz, layer=layer)
+    values = local_moran_values(adata, mz, layer=layer, hh_only=hh_only)
 
     if vmin is None and vmax is None:
         # `_colorize_grid`'s own default (raw data min/max) is wrong for a
