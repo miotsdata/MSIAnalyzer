@@ -3,6 +3,41 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
+## 0.10.0 — 2026-11-13
+
+### Added
+- **Fill blanks** (ADR 70, config v25). New opt-in config group
+  `fill_blanks`: a copy of a layer in which a feature's empty (0) pixels are
+  filled with the mean of their non-zero neighbours, only where most
+  neighbours have a value, so region borders don't grow. Written as
+  `<layer>_filled_r<radius>` to every sample and `merged.h5ad`; also from
+  **Analyses → Fill blanks…** after the run (replace/remove like Normalize
+  to feature). Shown under the new **Filled** layer button.
+- **Interpolation** in Visual Inspection (ADR 70): Off / ×2 / ×3 / ×4,
+  bilinear, display and image export only. ROI outlines and the scale bar
+  stay in place; ROI Design keeps the real pixels.
+- **Scale: Linear** for the log-stored normalized layers (ADR 71): shows
+  the normalized intensity instead of `log(1 + x)`, on screen and in image
+  export; nothing written to disk.
+- **Percentile color range** (ADR 71): with Autoscale off, vmin/vmax as
+  percentiles of the detected pixels, pooled over the visible samples.
+- **Shared-drive safety** (ADR 69): databases go back to DELETE journal
+  mode after a run; an analysis open on another computer opens read-only,
+  with a banner.
+- **Local Moran's I "High-High only"** checkbox, and a **Norm. to m/z**
+  layer button replacing the always-visible combo (ADR 48/61 addenda).
+- **ROI right-click menu** in ROI Design: Copy hex, and Change color
+  (applied to every sample of the analysis).
+- **Open Recent** projects in the Project menu and on the Start page.
+- **Match details** text in Annotations can be selected and copied.
+
+### Changed
+- **Ctrl + mouse wheel** zooms heatmap images (Visual Inspection, ROI
+  Design, Coregistration); the plain wheel scrolls. Touchpad scrolling is
+  accepted too.
+- Save/export and output-folder dialogs open in the project folder.
+- Disabled menu items are drawn grey, context menus included.
+
 ## 0.9.0 — 2026-11-05
 
 ### Added
