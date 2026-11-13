@@ -567,7 +567,7 @@ Item {
                                 id: annotationRowContextMenu
                                 objectName: "annotationRowContextMenu_" + modelData.feature_id
 
-                                MenuItem {
+                                AppMenuItem {
                                     objectName: "inspectVisuallyMenuItem_" + modelData.feature_id
                                     text: "Inspect visually"
                                     onTriggered: annotationsSection.inspectVisuallyRequested(modelData.mz)

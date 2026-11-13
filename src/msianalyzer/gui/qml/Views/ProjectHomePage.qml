@@ -157,20 +157,20 @@ Page {
                                     id: runContextMenu
                                     objectName: "runContextMenu_" + modelData.id
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "copyOutDirMenuItem_" + modelData.id
                                         text: "Copy output path"
                                         enabled: modelData.out_dir !== ""
                                         onTriggered: Router.copyToClipboard(modelData.out_dir)
                                     }
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "copyConfigPathMenuItem_" + modelData.id
                                         text: "Copy config path"
                                         enabled: modelData.config_path !== ""
                                         onTriggered: Router.copyToClipboard(modelData.config_path)
                                     }
                                     MenuSeparator {}
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "deleteRunMenuItem_" + modelData.id
                                         text: "Delete analysis…"
                                         onTriggered: deleteRunDialog.open()

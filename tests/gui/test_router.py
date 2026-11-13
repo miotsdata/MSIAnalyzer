@@ -927,3 +927,14 @@ def test_loading_a_project_adds_it_to_open_recent_menu(application, engine, qtbo
     assert item.property("text") == str(tmp_path.resolve())
     application.router.clearRecentProjects()
 
+
+def test_disabled_menu_items_are_grey(application, engine, qtbot):
+    window = engine.rootObjects()[0]
+    enabled_item = window.findChild(QObject, "openProjectMenuItem")
+    disabled_item = window.findChild(QObject, "closeProjectMenuItem")  # no project open
+    assert disabled_item.property("enabled") is False
+
+    enabled_color = enabled_item.property("contentItem").property("color")
+    disabled_color = disabled_item.property("contentItem").property("color")
+    assert disabled_color != enabled_color
+    assert disabled_color.lightness() < enabled_color.lightness()  # dark theme: dimmer

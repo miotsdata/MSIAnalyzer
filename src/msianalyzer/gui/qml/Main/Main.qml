@@ -150,6 +150,7 @@ ApplicationWindow {
         Menu {
             objectName: "projectMenu"
             title: "Project"
+            delegate: AppMenuItem {}
 
             AppMenuItem {
                 objectName: "newProjectMenuItem"

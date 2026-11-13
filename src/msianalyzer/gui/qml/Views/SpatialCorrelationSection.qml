@@ -441,7 +441,7 @@ Item {
                         Menu {
                             id: rowContextMenu
                             objectName: "spatialCorrelationRowContextMenu_" + cellDelegate.row
-                            MenuItem {
+                            AppMenuItem {
                                 objectName: "spatialCorrelationShowDistribution_" + cellDelegate.row
                                 text: "Show spatial distribution"
                                 onTriggered: spatialCorrelationSection.showSpatialDistributionRequested(cellDelegate.mz)
@@ -661,7 +661,7 @@ Item {
                         Menu {
                             id: localRowContextMenu
                             objectName: "localMoranSummaryRowContextMenu_" + localCellDelegate.row
-                            MenuItem {
+                            AppMenuItem {
                                 objectName: "localMoranSummaryShowDistribution_" + localCellDelegate.row
                                 text: "Show spatial distribution"
                                 onTriggered: spatialCorrelationSection.showLocalSpatialDistributionRequested(localCellDelegate.mz)
