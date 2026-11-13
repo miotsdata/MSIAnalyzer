@@ -890,3 +890,40 @@ def test_export_dialogs_start_in_the_project_folder(application, engine, qtbot, 
     ):
         dialog = window.findChild(QObject, dialog_name)
         assert dialog.property("currentFolder") == QUrl.fromLocalFile(str(tmp_path)), dialog_name
+
+
+def test_recent_projects_newest_first_deduplicated_and_capped(tmp_path):
+    from msianalyzer.gui.utils.router import MAX_RECENT_PROJECTS, Router
+
+    router = Router()
+    router.clearRecentProjects()
+    folders = [tmp_path / f"p{i}" for i in range(MAX_RECENT_PROJECTS + 2)]
+    for folder in folders:
+        router.add_recent_project(str(folder))
+    router.add_recent_project(str(folders[5]))  # reopened -> back to the top
+
+    recent = router.recentProjects
+    assert len(recent) == MAX_RECENT_PROJECTS
+    assert recent[0] == str(folders[5].resolve())
+    assert recent.count(str(folders[5].resolve())) == 1
+
+    router.clearRecentProjects()
+    assert router.recentProjects == []
+
+
+def test_loading_a_project_adds_it_to_open_recent_menu(application, engine, qtbot, tmp_path):
+    application.router.clearRecentProjects()
+    window = engine.rootObjects()[0]
+    menu = window.findChild(QObject, "openRecentMenu")
+    assert menu.property("enabled") is False
+
+    application.project_folder = str(tmp_path)
+    application._on_project_loaded(Project(name="p"))
+    qtbot.wait(50)
+
+    assert application.router.recentProjects == [str(tmp_path.resolve())]
+    assert menu.property("enabled") is True
+    item = window.findChild(QObject, "recentProjectMenuItem_0")
+    assert item.property("text") == str(tmp_path.resolve())
+    application.router.clearRecentProjects()
+

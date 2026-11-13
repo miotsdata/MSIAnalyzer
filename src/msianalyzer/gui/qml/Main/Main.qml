@@ -24,6 +24,8 @@ ApplicationWindow {
     // `runsList` for the "Analyses > Open" submenu, regardless of which
     // page happens to be on top of `stackView` right now.
     property var currentProject: null
+    // Guarded: the test harness nulls `Router` between tests.
+    readonly property var recentProjects: Router ? Router.recentProjects : []
 
     // The analysis workspace currently open, or null — same shape and
     // reasoning as currentProject above, so the menu bar can show/enable
@@ -158,6 +160,28 @@ ApplicationWindow {
                 objectName: "openProjectMenuItem"
                 text: "Open Project…"
                 onTriggered: openProjectDialog.open()
+            }
+            Menu {
+                id: openRecentMenu
+                objectName: "openRecentMenu"
+                title: "Open Recent"
+                enabled: window.recentProjects.length > 0
+                Instantiator {
+                    model: window.recentProjects
+                    delegate: AppMenuItem {
+                        objectName: "recentProjectMenuItem_" + index
+                        text: modelData
+                        onTriggered: Router.projectFolderChosen(modelData)
+                    }
+                    onObjectAdded: (index, object) => openRecentMenu.insertItem(index, object)
+                    onObjectRemoved: (index, object) => openRecentMenu.removeItem(object)
+                }
+                MenuSeparator {}
+                AppMenuItem {
+                    objectName: "clearRecentMenuItem"
+                    text: "Clear Recent"
+                    onTriggered: Router.clearRecentProjects()
+                }
             }
             MenuSeparator {}
             AppMenuItem {

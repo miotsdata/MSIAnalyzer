@@ -1,8 +1,17 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, QUrl, Slot
+from PySide6.QtCore import Property, QObject, QSettings, Signal, QUrl, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication
+
+
+MAX_RECENT_PROJECTS = 10
+
+
+def _settings() -> QSettings:
+    """The app's per-user settings (an INI file; tests redirect it with
+    `QSettings.setPath`, so they never touch the real one)."""
+    return QSettings(QSettings.IniFormat, QSettings.UserScope, "MSIAnalyzer", "MSIAnalyzer")
 
 
 class Router(QObject):
@@ -20,6 +29,28 @@ class Router(QObject):
     # project/project_model/project_folder state on this; Main.qml's own
     # Connections handler does the actual navigation back to StartPage.
     closeProjectRequested = Signal()
+    recentProjectsChanged = Signal()
+
+    @Property(list, notify=recentProjectsChanged)
+    def recentProjects(self) -> list:
+        """Recently opened project folders, newest first — Project >
+        Open Recent and the Start page's list."""
+        value = _settings().value("recentProjects", [])
+        # QSettings returns a bare str for a one-item list (INI format).
+        return [value] if isinstance(value, str) else list(value or [])
+
+    def add_recent_project(self, folder: str) -> None:
+        """Move `folder` to the top of the recent list (called whenever a
+        project loads), keeping at most `MAX_RECENT_PROJECTS`."""
+        folder = str(Path(folder).resolve())
+        recent = [folder] + [path for path in self.recentProjects if path != folder]
+        _settings().setValue("recentProjects", recent[:MAX_RECENT_PROJECTS])
+        self.recentProjectsChanged.emit()
+
+    @Slot()
+    def clearRecentProjects(self) -> None:
+        _settings().remove("recentProjects")
+        self.recentProjectsChanged.emit()
 
     @Slot(QUrl, result=str)
     def toLocalPath(self, url: QUrl) -> str:

@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import "qrc:/Style"
 
 Page {
     id: startPage
@@ -36,6 +37,37 @@ Page {
 
             HoverHandler {
                 cursorShape: Qt.PointingHandCursor
+            }
+        }
+
+        Label {
+            text: "Open recent"
+            font.bold: true
+            visible: recentRepeater.count > 0
+            Layout.topMargin: 16
+            Layout.alignment: Qt.AlignHCenter
+        }
+        Repeater {
+            id: recentRepeater
+            objectName: "recentProjectsRepeater"
+            model: Router ? Router.recentProjects : []
+            delegate: ItemDelegate {
+                objectName: "recentProjectButton_" + index
+                Layout.preferredWidth: 420
+                Layout.alignment: Qt.AlignHCenter
+                contentItem: ColumnLayout {
+                    spacing: 0
+                    Label { text: modelData.split(/[\\/]/).pop(); font.bold: true }
+                    Label {
+                        text: modelData
+                        color: Theme.mutedTextColor
+                        font.pixelSize: Theme.captionPixelSize
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
+                    }
+                }
+                onClicked: Router.projectFolderChosen(modelData)
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
             }
         }
     }

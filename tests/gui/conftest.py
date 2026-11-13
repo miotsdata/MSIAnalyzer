@@ -26,6 +26,14 @@ from PySide6.QtQuickControls2 import QQuickStyle
 
 QQuickStyle.setStyle("Fusion")
 
+# Per-user QSettings (recent projects, ...) go to a throwaway folder, never
+# the developer's real settings file.
+import tempfile
+
+from PySide6.QtCore import QSettings
+
+QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, tempfile.mkdtemp(prefix="msianalyzer-settings-"))
+
 from msianalyzer.core.project.project import Project
 from msianalyzer.gui.main import build_engine
 from msianalyzer.gui.utils import Router

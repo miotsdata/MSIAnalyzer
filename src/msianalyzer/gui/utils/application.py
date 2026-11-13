@@ -59,6 +59,8 @@ class Application(QObject):
     def _on_project_loaded(self, project: Project):
         self.project = project
         self.project_model = ProjectModel(project, self.project_folder, self)
+        if self.project_folder:
+            self.router.add_recent_project(self.project_folder)
         if self._pending_analysis_run_id is not None:
             run_id = self._pending_analysis_run_id
             self._pending_analysis_run_id = None
