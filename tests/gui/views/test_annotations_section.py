@@ -2,7 +2,7 @@ import re
 import sqlite3
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QMetaObject, QObject, Qt
 from PySide6.QtQuick import QQuickItem
 
 from msianalyzer.core.parser.mzml_parser import array_to_blob
@@ -789,3 +789,20 @@ def test_annotations_table_builds_only_visible_rows(
 
     assert find_visual_child(root, "annotationRow_100") is not None
     assert find_visual_child(root, "annotationRow_399") is None
+
+
+def test_match_details_text_is_selectable(
+    analysis_view, annotated_analysis_model, find_visual_child, qtbot
+):
+    # Names, m/z etc. can be selected and copied.
+    view = analysis_view(annotated_analysis_model)
+    root = view.rootObject()
+    _select_feature_7(view, root, find_visual_child, qtbot)
+
+    for name in ("statLabel_0", "statValue_0"):
+        item = find_visual_child(root, name)
+        assert item.property("selectByMouse") is True
+        assert item.property("readOnly") is True
+    value_0 = find_visual_child(root, "statValue_0")
+    QMetaObject.invokeMethod(value_0, "selectAll")
+    assert "Caffeine" in value_0.property("selectedText")

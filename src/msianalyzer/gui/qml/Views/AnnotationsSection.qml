@@ -826,6 +826,7 @@ Item {
                     spacing: 4
 
                     Label {
+                        id: matchDetailsTitle
                         text: "Match details:"
                         font.bold: true
                     }
@@ -864,16 +865,29 @@ Item {
                                 objectName: "statsRepeater"
                                 model: annotationsSection.statsRows
 
-                                delegate: Label {
+                                // Read-only TextEdit, not Label: names, m/z
+                                // etc. can be selected with the mouse and
+                                // copied (Ctrl+C). Long values wrap instead
+                                // of eliding, so nothing is hidden.
+                                delegate: TextEdit {
                                     objectName: index % 2 === 0
                                                 ? "statLabel_" + Math.floor(index / 2)
                                                 : "statValue_" + Math.floor(index / 2)
                                     Layout.column: index % 2
                                     Layout.row: Math.floor(index / 2)
                                     Layout.fillWidth: index % 2 === 1
+                                    Layout.preferredWidth: index % 2 === 1 ? 1 : implicitWidth
+                                    readOnly: true
+                                    selectByMouse: true
+                                    wrapMode: TextEdit.Wrap
+                                    color: palette.text
+                                    selectionColor: palette.highlight
+                                    selectedTextColor: palette.highlightedText
+                                    font.family: matchDetailsTitle.font.family
+                                    font.pointSize: matchDetailsTitle.font.pointSize
                                     font.bold: index % 2 === 0
-                                    elide: Text.ElideRight
                                     text: modelData
+                                    HoverHandler { cursorShape: Qt.IBeamCursor }
                                 }
                             }
                         }
