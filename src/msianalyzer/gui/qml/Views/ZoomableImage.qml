@@ -162,8 +162,14 @@ Flickable {
         }
     }
 
+    // Ctrl + wheel zooms, like the Statistics window; a plain wheel is
+    // left to the Flickables (pan when zoomed in, else scroll the tile
+    // list). Touchpads too: some mice' smooth wheels are reported as one,
+    // and a Mouse-only handler then silently ignored them.
     WheelHandler {
-        acceptedModifiers: Qt.NoModifier
+        objectName: "zoomWheelHandler"
+        acceptedModifiers: Qt.ControlModifier
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         onWheel: (event) => {
             root.zoom *= event.angleDelta.y > 0 ? 1.15 : (1 / 1.15)
         }

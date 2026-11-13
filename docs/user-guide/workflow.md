@@ -403,6 +403,10 @@ overlay stay on the real pixels, and ROI outlines and the scale bar are
 drawn in the same place on the interpolated image. **Export → Image** uses
 the same setting. The Overlay tab isn't interpolated.
 
+To look closer, **Ctrl + mouse wheel** (or touchpad scroll) zooms an image,
+in Visual Inspection, ROI Design and Coregistration alike. The plain wheel
+scrolls: it pans a zoomed-in image, otherwise it scrolls the list of samples.
+
 ## After the run — re-annotate
 
 Want another library, a different tolerance or a different flat-spectrum

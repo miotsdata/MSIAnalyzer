@@ -1676,3 +1676,28 @@ def test_interpolation_requests_bigger_tiles_but_keeps_real_pixel_size(
     assert content.property("sourceSize").width() == 12
     assert tile.property("imageSize").width() == 4
     assert tile.property("effectiveScale") == pytest.approx(scale_before)
+
+
+def test_ctrl_wheel_zooms_a_tile_and_plain_wheel_does_not(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QGuiApplication, QWheelEvent
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    tile = find_visual_child(root, "heatmapImage_s1")
+
+    def wheel(modifiers):
+        pos = tile.mapToScene(tile.boundingRect().center())
+        QGuiApplication.sendEvent(view, QWheelEvent(
+            QPointF(pos), QPointF(view.mapToGlobal(pos.toPoint())), QPoint(0, 0),
+            QPoint(0, 120), Qt.NoButton, modifiers, Qt.NoScrollPhase, False,
+        ))
+        qtbot.wait(50)
+
+    wheel(Qt.NoModifier)
+    assert tile.property("zoom") == pytest.approx(1.0)
+    wheel(Qt.ControlModifier)
+    assert tile.property("zoom") == pytest.approx(1.15)
