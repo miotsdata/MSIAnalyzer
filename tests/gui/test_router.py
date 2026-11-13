@@ -868,3 +868,25 @@ def test_match_target_list_menu_item_opens_the_dialog(application, engine, qtbot
     item.triggered.emit()
     qtbot.wait(50)
     assert window.findChild(QObject, "targetListMatchDialog").property("visible") is True
+
+
+def test_export_dialogs_start_in_the_project_folder(application, engine, qtbot, tmp_path):
+    from PySide6.QtCore import QUrl
+
+    from msianalyzer.gui.models.analysis import AnalysisModel
+
+    window = engine.rootObjects()[0]
+    (tmp_path / "out").mkdir()
+    project_model = ProjectModel(Project(name="p"), str(tmp_path), application)
+    analysis = AnalysisModel(
+        project_model, "run-1", {"id": "run-1", "config": {"io": {"out_dir": "out"}}}
+    )
+    application.router.showAnalysisRequested.emit(analysis)
+    qtbot.wait(100)
+
+    for dialog_name in (
+        "exportAnnotationDialog", "exportIntegrationFolderDialog",
+        "exportCalibrationFolderDialog", "exportImageFolderDialog",
+    ):
+        dialog = window.findChild(QObject, dialog_name)
+        assert dialog.property("currentFolder") == QUrl.fromLocalFile(str(tmp_path)), dialog_name

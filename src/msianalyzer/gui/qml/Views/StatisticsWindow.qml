@@ -462,6 +462,7 @@ Window {
     FileDialog {
         id: exportDialog
         objectName: "statsExportDialog"
+        currentFolder: statsWindow.analysis ? statsWindow.analysis.project.folderUrl : ""
         fileMode: FileDialog.SaveFile
         nameFilters: ["PNG image (*.png)", "SVG vector image (*.svg)", "PDF document (*.pdf)"]
         options: Qt.platform.pluginName === "offscreen" ? FileDialog.DontUseNativeDialog : 0

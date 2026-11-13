@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from msianalyzer.core.project.project import Project, project_file
 from msianalyzer.core.utils.paths import resolve_in_project
@@ -49,6 +49,12 @@ class ProjectModel(QObject):
     def folder(self) -> str:
         """The project's folder on disk (not stored on `Project` itself)."""
         return self._folder or ""
+
+    @Property(QUrl, notify=folderChanged)
+    def folderUrl(self) -> QUrl:
+        """`folder` as a `file:` URL, for a dialog's `currentFolder` — so
+        save/export pickers open in the project, not the app's cwd."""
+        return QUrl.fromLocalFile(self._folder) if self._folder else QUrl()
 
     def resolve_path(self, path: str | None) -> str:
         """A stored run path (`out_dir`, `config_path`) located in this

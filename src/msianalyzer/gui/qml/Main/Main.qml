@@ -519,6 +519,7 @@ ApplicationWindow {
     FileDialog {
         id: exportAnnotationDialog
         objectName: "exportAnnotationDialog"
+        currentFolder: window.currentProject ? window.currentProject.folderUrl : ""
         fileMode: FileDialog.SaveFile
         nameFilters: ["CSV files (*.csv)", "Text files (*.txt)"]
         options: Qt.platform.pluginName === "offscreen" ? FileDialog.DontUseNativeDialog : 0
@@ -598,6 +599,7 @@ ApplicationWindow {
     FolderDialog {
         id: exportIntegrationFolderDialog
         objectName: "exportIntegrationFolderDialog"
+        currentFolder: window.currentProject ? window.currentProject.folderUrl : ""
         options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
         onAccepted: {
             AnalysisBridge.exportIntegrationTables(
@@ -613,6 +615,7 @@ ApplicationWindow {
     FolderDialog {
         id: exportCalibrationFolderDialog
         objectName: "exportCalibrationFolderDialog"
+        currentFolder: window.currentProject ? window.currentProject.folderUrl : ""
         options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
         onAccepted: {
             AnalysisBridge.exportCalibrationResults(
@@ -749,6 +752,7 @@ ApplicationWindow {
     FolderDialog {
         id: exportImageFolderDialog
         objectName: "exportImageFolderDialog"
+        currentFolder: window.currentProject ? window.currentProject.folderUrl : ""
         options: Qt.platform.pluginName === "offscreen" ? FolderDialog.DontUseNativeDialog : 0
         onAccepted: {
             var snap = exportImageDialog.controlsSnapshot

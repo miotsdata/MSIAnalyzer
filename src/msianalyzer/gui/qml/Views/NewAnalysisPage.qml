@@ -500,6 +500,7 @@ Page {
     FolderDialog {
         id: outDirDialog
         objectName: "outDirDialog"
+        currentFolder: newAnalysisPage.project ? newAnalysisPage.project.folderUrl : ""
         // Native where available — the QML fallback dialog can't create a
         // new folder, the platform's own picker can (GTK/KDE both have a
         // "Create Folder" action).
