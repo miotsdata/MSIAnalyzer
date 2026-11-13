@@ -706,7 +706,7 @@ ApplicationWindow {
                 "mode": controls.inspectionMode,
                 "mz": controls.selectedFeature ? String(controls.selectedFeature.mz) : "",
                 "obsColumn": controls.selectedObsColumn || "",
-                "layer": controls.dataLayer,
+                "layer": controls.displayLayer(),
                 "colormap": controls.colormap,
                 "vmin": controls.vminToken(),
                 "vmax": controls.vmaxToken(),

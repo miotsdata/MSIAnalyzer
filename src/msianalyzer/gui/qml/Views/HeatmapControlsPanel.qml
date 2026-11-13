@@ -443,6 +443,44 @@ Flickable {
     // range from.
     property var autoRange: ({"vmin": 0, "vmax": 1})
 
+    // ADR 71. The run's normalized layers are stored as log1p; "Linear"
+    // shows them expm1-ed (`<layer>@linear`, display only) so differences
+    // between bright regions aren't compressed. Only offered for those
+    // layers: raw is linear already, Local Moran's I isn't an intensity.
+    property bool linearScale: false
+    readonly property bool isLogLayer: !controlsFlickable.datasetActive
+        && controlsFlickable.dataLayer !== "raw" && controlsFlickable.dataLayer !== "localMoran"
+        && controlsFlickable.dataLayer.indexOf("raw_filled_r") !== 0
+        && (controlsFlickable.dataLayer === controlsFlickable.normalizedLayerName
+            || controlsFlickable.isFeatureLayer || controlsFlickable.isFilledLayer)
+    // The layer token every consumer (tiles, value range, export) reads.
+    function displayLayer() {
+        return controlsFlickable.dataLayer
+               + (controlsFlickable.linearScale && controlsFlickable.isLogLayer ? "@linear" : "")
+    }
+    onLinearScaleChanged: {
+        // A manual absolute range means nothing on the other scale;
+        // a percentile range does, so it stays.
+        if (!controlsFlickable.percentileActive) controlsFlickable.autoScale = true
+        controlsFlickable.refreshAutoRange()
+    }
+
+    // ADR 71: with Autoscale off, vmin/vmax can be percentiles of the
+    // feature's detected (non-zero) pixels, pooled over the visible
+    // samples (AnalysisBridge.requestFeatureValueRange's pvmin/pvmax),
+    // so every tile shares one scale and it follows the selected feature.
+    property bool percentileRange: false
+    property real percentileLow: 1
+    property real percentileHigh: 99
+    property real draftPercentileLow: percentileLow
+    property real draftPercentileHigh: percentileHigh
+    readonly property bool percentileActive: controlsFlickable.percentileRange
+        && controlsFlickable.inspectionMode === "feature" && controlsFlickable.dataLayer !== "localMoran"
+    function percentileValue(key) {
+        var value = controlsFlickable.autoRange[key]
+        return value === undefined ? controlsFlickable.autoRange[key === "pvmin" ? "vmin" : "vmax"] : value
+    }
+
     function visibleSampleNames() {
         return controlsFlickable.samples
             .filter(function (s) { return !controlsFlickable.isHidden(s.name) })
@@ -510,7 +548,8 @@ Flickable {
             return
         }
         AnalysisBridge.requestFeatureValueRange(
-            names, controlsFlickable.selectedFeature.mz, controlsFlickable.dataLayer)
+            names, controlsFlickable.selectedFeature.mz, controlsFlickable.displayLayer(),
+            controlsFlickable.percentileLow, controlsFlickable.percentileHigh)
     }
 
     Connections {
@@ -593,6 +632,12 @@ Flickable {
     // every tile actually renders with — a deliberate action rather than
     // every drag tick re-rendering every visible tile.
     function applyColorRange() {
+        if (controlsFlickable.percentileActive) {
+            controlsFlickable.percentileLow = controlsFlickable.draftPercentileLow
+            controlsFlickable.percentileHigh = controlsFlickable.draftPercentileHigh
+            controlsFlickable.refreshAutoRange()  // new pvmin/pvmax
+            return
+        }
         controlsFlickable.vmin = controlsFlickable.draftVmin
         controlsFlickable.vmax = controlsFlickable.draftVmax
     }
@@ -600,10 +645,14 @@ Flickable {
     // Every tile shares this vmin/vmax unless autoscale is on, in which
     // case each tile scales independently to its own data.
     function vminToken() {
-        return controlsFlickable.autoScale ? "auto" : String(controlsFlickable.vmin)
+        if (controlsFlickable.autoScale) return "auto"
+        return String(controlsFlickable.percentileActive
+                      ? controlsFlickable.percentileValue("pvmin") : controlsFlickable.vmin)
     }
     function vmaxToken() {
-        return controlsFlickable.autoScale ? "auto" : String(controlsFlickable.vmax)
+        if (controlsFlickable.autoScale) return "auto"
+        return String(controlsFlickable.percentileActive
+                      ? controlsFlickable.percentileValue("pvmax") : controlsFlickable.vmax)
     }
 
     // Called by the owning page (VisualInspectionSection.qml /
@@ -652,7 +701,7 @@ Flickable {
         }
         if (!controlsFlickable.selectedFeature) return ""
         var layer = controlsFlickable.dataLayer === "localMoran" && controlsFlickable.localMoranHHOnly
-                    ? "localMoranHH" : controlsFlickable.dataLayer
+                    ? "localMoranHH" : controlsFlickable.displayLayer()
         return sampleName + "|" + controlsFlickable.selectedFeature.mz + "|"
                + layer + "|" + controlsFlickable.colormap + "|"
                + controlsFlickable.vminToken() + "|" + controlsFlickable.vmaxToken() + ds
@@ -1138,6 +1187,23 @@ Flickable {
             font.bold: true
             visible: controlsFlickable.showsColorScale
         }
+        RowLayout {
+            visible: controlsFlickable.showsColorScale && controlsFlickable.inspectionMode === "feature"
+                     && controlsFlickable.isLogLayer
+            Label { text: "Scale:" }
+            ComboBox {
+                objectName: "intensityScaleCombo"
+                Layout.fillWidth: true
+                model: ["Log (as stored)", "Linear"]
+                currentIndex: controlsFlickable.linearScale ? 1 : 0
+                onActivated: (index) => controlsFlickable.linearScale = index === 1
+                ToolTip.visible: hovered
+                ToolTip.text: "The normalized layer is stored as log(1 + x), which "
+                    + "compresses differences between bright regions. Linear shows x "
+                    + "itself (display and export only)."
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
+        }
         AppCheckBox {
             id: autoScaleCheckBox
             objectName: "autoScaleCheckBox"
@@ -1161,6 +1227,20 @@ Flickable {
                 cursorShape: Qt.PointingHandCursor
             }
         }
+        AppCheckBox {
+            objectName: "percentileCheckBox"
+            text: "Percentiles"
+            visible: controlsFlickable.showsColorScale && controlsFlickable.inspectionMode === "feature"
+                     && controlsFlickable.dataLayer !== "localMoran"
+            enabled: !controlsFlickable.autoScale
+            checked: controlsFlickable.percentileRange
+            onToggled: controlsFlickable.percentileRange = checked
+            ToolTip.visible: hovered
+            ToolTip.text: "vmin and vmax as percentiles of the pixels where the feature "
+                + "is detected (non-zero), over all visible samples: e.g. 1 and 99 "
+                + "ignore the faintest and brightest 1 %."
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+        }
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 2
@@ -1175,6 +1255,9 @@ Flickable {
                 text: "vmin: " + (controlsFlickable.autoScale
                                    ? (controlsFlickable.dataLayer === "localMoran"
                                       ? "auto" : controlsFlickable.autoRange.vmin.toFixed(3))
+                                   : controlsFlickable.percentileActive
+                                   ? "percentile " + controlsFlickable.percentileLow + " = "
+                                     + controlsFlickable.percentileValue("pvmin").toFixed(3)
                                    : controlsFlickable.draftVmin.toFixed(3))
             }
             RowLayout {
@@ -1191,18 +1274,27 @@ Flickable {
                     from: 0
                     // Autoscale's own vmax for this feature+layer — a
                     // real, data-driven ceiling instead of a fixed guess.
-                    to: Math.max(1, controlsFlickable.autoRange.vmax)
-                    value: controlsFlickable.draftVmin
-                    onMoved: controlsFlickable.draftVmin = value
+                    to: controlsFlickable.percentileActive ? 100 : Math.max(1, controlsFlickable.autoRange.vmax)
+                    stepSize: controlsFlickable.percentileActive ? 0.5 : 0
+                    value: controlsFlickable.percentileActive ? controlsFlickable.draftPercentileLow
+                                                              : controlsFlickable.draftVmin
+                    onMoved: {
+                        if (controlsFlickable.percentileActive) controlsFlickable.draftPercentileLow = value
+                        else controlsFlickable.draftVmin = value
+                    }
                 }
                 TextField {
                     id: vminField
                     objectName: "vminField"
                     Layout.preferredWidth: 80
-                    text: controlsFlickable.draftVmin.toFixed(3)
+                    text: controlsFlickable.percentileActive ? String(controlsFlickable.draftPercentileLow)
+                                                             : controlsFlickable.draftVmin.toFixed(3)
                     onEditingFinished: {
                         var v = parseFloat(text)
-                        if (!isNaN(v)) controlsFlickable.draftVmin = v
+                        if (isNaN(v)) return
+                        if (controlsFlickable.percentileActive)
+                            controlsFlickable.draftPercentileLow = Math.max(0, Math.min(100, v))
+                        else controlsFlickable.draftVmin = v
                     }
                 }
             }
@@ -1216,6 +1308,9 @@ Flickable {
                 text: "vmax: " + (controlsFlickable.autoScale
                                    ? (controlsFlickable.dataLayer === "localMoran"
                                       ? "auto" : controlsFlickable.autoRange.vmax.toFixed(3))
+                                   : controlsFlickable.percentileActive
+                                   ? "percentile " + controlsFlickable.percentileHigh + " = "
+                                     + controlsFlickable.percentileValue("pvmax").toFixed(3)
                                    : controlsFlickable.draftVmax.toFixed(3))
             }
             RowLayout {
@@ -1226,18 +1321,27 @@ Flickable {
                     objectName: "vmaxSlider"
                     Layout.fillWidth: true
                     from: 0
-                    to: Math.max(1, controlsFlickable.autoRange.vmax)
-                    value: controlsFlickable.draftVmax
-                    onMoved: controlsFlickable.draftVmax = value
+                    to: controlsFlickable.percentileActive ? 100 : Math.max(1, controlsFlickable.autoRange.vmax)
+                    stepSize: controlsFlickable.percentileActive ? 0.5 : 0
+                    value: controlsFlickable.percentileActive ? controlsFlickable.draftPercentileHigh
+                                                              : controlsFlickable.draftVmax
+                    onMoved: {
+                        if (controlsFlickable.percentileActive) controlsFlickable.draftPercentileHigh = value
+                        else controlsFlickable.draftVmax = value
+                    }
                 }
                 TextField {
                     id: vmaxField
                     objectName: "vmaxField"
                     Layout.preferredWidth: 80
-                    text: controlsFlickable.draftVmax.toFixed(3)
+                    text: controlsFlickable.percentileActive ? String(controlsFlickable.draftPercentileHigh)
+                                                             : controlsFlickable.draftVmax.toFixed(3)
                     onEditingFinished: {
                         var v = parseFloat(text)
-                        if (!isNaN(v)) controlsFlickable.draftVmax = v
+                        if (isNaN(v)) return
+                        if (controlsFlickable.percentileActive)
+                            controlsFlickable.draftPercentileHigh = Math.max(0, Math.min(100, v))
+                        else controlsFlickable.draftVmax = v
                     }
                 }
             }
@@ -1249,8 +1353,11 @@ Flickable {
             Layout.fillWidth: true
             visible: controlsFlickable.showsColorScale
             enabled: !controlsFlickable.autoScale
-                   && (controlsFlickable.draftVmin !== controlsFlickable.vmin
-                       || controlsFlickable.draftVmax !== controlsFlickable.vmax)
+                   && (controlsFlickable.percentileActive
+                       ? (controlsFlickable.draftPercentileLow !== controlsFlickable.percentileLow
+                          || controlsFlickable.draftPercentileHigh !== controlsFlickable.percentileHigh)
+                       : (controlsFlickable.draftVmin !== controlsFlickable.vmin
+                          || controlsFlickable.draftVmax !== controlsFlickable.vmax))
             onClicked: controlsFlickable.applyColorRange()
             HoverHandler {
                 objectName: "applyColorRangeButtonHover"

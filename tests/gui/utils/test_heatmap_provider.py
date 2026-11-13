@@ -3,6 +3,7 @@ from unittest.mock import patch
 import anndata as ad
 import numpy as np
 import pandas as pd
+import pytest
 from PySide6.QtGui import QImage
 from scipy.sparse import csr_matrix
 
@@ -259,7 +260,7 @@ def test_get_feature_value_range_combines_multiple_samples(tmp_path):
     result = provider.getFeatureValueRange(["s1", "s2"], 100.0, "raw")
 
     # min of every sample's min, max of every sample's max.
-    assert result == {"vmin": 0.0, "vmax": 100.0}
+    assert {key: result[key] for key in ("vmin", "vmax")} == {"vmin": 0.0, "vmax": 100.0}
 
 
 def test_get_feature_value_range_single_sample(tmp_path):
@@ -269,7 +270,7 @@ def test_get_feature_value_range_single_sample(tmp_path):
 
     result = provider.getFeatureValueRange(["s1"], 100.0, "raw")
 
-    assert result == {"vmin": 2.0, "vmax": 8.0}
+    assert {key: result[key] for key in ("vmin", "vmax")} == {"vmin": 2.0, "vmax": 8.0}
 
 
 def test_get_feature_value_range_skips_missing_samples(tmp_path):
@@ -279,7 +280,7 @@ def test_get_feature_value_range_skips_missing_samples(tmp_path):
 
     result = provider.getFeatureValueRange(["s1", "does_not_exist"], 100.0, "raw")
 
-    assert result == {"vmin": 2.0, "vmax": 8.0}
+    assert {key: result[key] for key in ("vmin", "vmax")} == {"vmin": 2.0, "vmax": 8.0}
 
 
 def test_get_feature_value_range_defaults_when_no_samples_resolve(tmp_path):
@@ -288,7 +289,7 @@ def test_get_feature_value_range_defaults_when_no_samples_resolve(tmp_path):
 
     result = provider.getFeatureValueRange(["does_not_exist"], 100.0, "raw")
 
-    assert result == {"vmin": 0.0, "vmax": 1.0}
+    assert {key: result[key] for key in ("vmin", "vmax")} == {"vmin": 0.0, "vmax": 1.0}
 
 
 def _write_3x3_sample_h5ad(path):
@@ -638,3 +639,28 @@ def test_collect_stats_groups_categorical_keeps_strings(tmp_path):
     spec = {"kind": "obs", "column": "kind", "numeric": False}
     groups = _by_label(provider.collectStatsGroups(["s1"], spec, False, False, True))
     assert groups["s1"]["values"].tolist() == ["x", "y", "x", "x"]
+
+
+def test_get_feature_value_range_percentiles_pool_detected_pixels(tmp_path):
+    # ADR 71: zeros (not detected) are left out, samples are pooled.
+    _write_sample_h5ad(tmp_path / "s1.h5ad", values=(0.0, 0.0, 1.0, 2.0))
+    _write_sample_h5ad(tmp_path / "s2.h5ad", values=(0.0, 3.0, 4.0, 5.0))
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getFeatureValueRange(["s1", "s2"], 100.0, "raw", 0.0, 50.0)
+
+    assert result["pvmin"] == pytest.approx(1.0)
+    assert result["pvmax"] == pytest.approx(3.0)  # median of 1..5
+
+
+def test_get_feature_value_range_linear_suffix_undoes_log1p(tmp_path):
+    values = np.log1p([0.0, 1.0, 3.0, 7.0])
+    _write_sample_h5ad(tmp_path / "s1.h5ad", values=tuple(values))
+    provider = HeatmapImageProvider()
+    provider.setAnalysisDbPath(str(tmp_path / "analysis.db"))
+
+    result = provider.getFeatureValueRange(["s1"], 100.0, "raw@linear")
+
+    assert result["vmin"] == pytest.approx(0.0)
+    assert result["vmax"] == pytest.approx(7.0)

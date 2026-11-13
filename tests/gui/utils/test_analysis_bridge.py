@@ -1280,7 +1280,7 @@ def test_request_feature_value_range_emits_range_from_heatmap_provider(tmp_path,
     with qtbot.waitSignal(bridge.featureValueRangeReady, timeout=2000) as spy:
         bridge.requestFeatureValueRange(["s1"], 100.0, "raw")
 
-    assert spy.args[0] == {"vmin": 5.0, "vmax": 20.0}
+    assert {key: spy.args[0][key] for key in ("vmin", "vmax")} == {"vmin": 5.0, "vmax": 20.0}
 
 
 def test_request_feature_value_range_stale_request_is_discarded(tmp_path, qtbot):

@@ -713,3 +713,15 @@ def test_render_heatmap_figure_interpolated_keeps_real_pixel_coordinates():
     assert image.get_extent() == [-0.5, 1.5, 1.5, -0.5]
     polygon = next(p for p in fig.axes[0].patches if isinstance(p, matplotlib.patches.Polygon))
     np.testing.assert_allclose(polygon.get_xy()[:3], [[0, 0], [1, 0], [1, 1]])
+
+
+def test_linear_display_suffix_reads_the_stored_layer_and_undoes_log1p():
+    # ADR 71: "TIC@linear" is never stored; it's TIC, expm1-ed.
+    from msianalyzer.core.plotting.heatmap import detected_feature_values
+
+    stored = np.log1p([0.0, 1.0, 3.0, 7.0])
+    adata = _make_grid_adata([9.0, 9.0, 9.0, 9.0], layers={"TIC": stored})
+
+    assert feature_value_range(adata, 100.0, "TIC@linear") == pytest.approx((0.0, 7.0))
+    np.testing.assert_allclose(detected_feature_values(adata, 100.0, "TIC@linear"), [1.0, 3.0, 7.0])
+    assert feature_value_range(adata, 100.0, "TIC") == pytest.approx((0.0, np.log1p(7.0)))

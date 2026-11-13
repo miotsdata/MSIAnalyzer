@@ -179,6 +179,11 @@ Item {
         "autoScale": controls.autoScale,
         "vmin": controls.vmin,
         "vmax": controls.vmax,
+        "interpolation": controls.interpolation,
+        "linearScale": controls.linearScale,
+        "percentileRange": controls.percentileRange,
+        "percentileLow": controls.percentileLow,
+        "percentileHigh": controls.percentileHigh,
     }, visualSection.pendingRestore || {}))  // left before the lists loaded: keep the old pick
 
     // The part of a restore that waits for the async feature/obs lists.
@@ -192,6 +197,11 @@ Item {
         controls.mzQuery = controls.draftMzQuery = s.mzQuery
         controls.dataLayer = s.dataLayer
         controls.colormap = s.colormap  // after dataLayer: localMoran forces coolwarm
+        controls.interpolation = s.interpolation || 1
+        controls.linearScale = !!s.linearScale  // autoScale is restored last, below
+        controls.percentileRange = !!s.percentileRange
+        controls.percentileLow = controls.draftPercentileLow = s.percentileLow !== undefined ? s.percentileLow : 1
+        controls.percentileHigh = controls.draftPercentileHigh = s.percentileHigh !== undefined ? s.percentileHigh : 99
         controls.hiddenSamples = s.hiddenSamples
         controls.inspectionMode = s.inspectionMode
         visualSection.showRois = s.showRois

@@ -403,6 +403,26 @@ overlay stay on the real pixels, and ROI outlines and the scale bar are
 drawn in the same place on the interpolated image. **Export → Image** uses
 the same setting. The Overlay tab isn't interpolated.
 
+## Color scale: linear intensities and percentiles
+
+The normalized layers (TIC, `mz_<value>`, **Norm. to m/z** and their
+**Filled** copies) are stored as `log(1 + x)`. With the default colour scale
+that is a log scale of intensity, good for features spanning orders of
+magnitude, but it squeezes together regions that are all clearly "on".
+**Scale: Linear** shows `x` itself, the normalized intensity, without
+changing anything on disk. The colour bar, the vmin/vmax values and
+**Export → Image** follow it. Raw intensities are linear already, so the
+choice only appears for the log layers.
+
+With **Autoscale** off, **Percentiles** turns vmin and vmax into
+percentiles, e.g. 1 and 99. They are computed over the pixels where the
+feature is detected (not 0), pooled over the visible samples, so every tile
+shares one scale and it follows the feature you pick. A few very bright
+pixels then no longer take the whole colour range, and the lowest colours
+go to the faintest detected pixels instead of to "not detected". The
+settings are remembered when you switch tabs. See
+[ADR 71](../developer/adr/0071-linear-scale-and-percentile-range.md).
+
 To look closer, **Ctrl + mouse wheel** (or touchpad scroll) zooms an image,
 in Visual Inspection, ROI Design and Coregistration alike. The plain wheel
 scrolls: it pans a zoomed-in image, otherwise it scrolls the list of samples.

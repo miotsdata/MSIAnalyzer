@@ -16,6 +16,7 @@ from msianalyzer.core.imported_dataset import sample_h5ad_path
 from msianalyzer.core.plotting.heatmap import (
     _rendered_feature_values,
     category_colors,
+    detected_feature_values,
     feature_value_range,
     obs_categories,
     obs_value_range,
@@ -246,7 +247,8 @@ class HeatmapImageProvider(QQuickAsyncImageProvider):
     # -- queries (HeatmapQueryWorker threads) ------------------------------
 
     def getFeatureValueRange(
-        self, sample_names: list[str], mz: float, layer: str
+        self, sample_names: list[str], mz: float, layer: str,
+        low_percentile: float = 1.0, high_percentile: float = 99.0,
     ) -> dict:
         """The real (min, max) of one feature's values across several
         samples — what autoscale is actually using, so a manual vmin/vmax
@@ -258,16 +260,22 @@ class HeatmapImageProvider(QQuickAsyncImageProvider):
             sample_names: Samples to combine — normally the currently
                 visible ones, so the range covers what's actually shown.
             mz: The feature's consensus m/z.
-            layer: `"raw"`, `"TIC"`, `"X"`, or an imported dataset's layer.
+            layer: `"raw"`, `"TIC"`, `"X"`, or an imported dataset's layer
+                (optionally with the `@linear` display suffix).
+            low_percentile, high_percentile: For the percentile color
+                range (ADR 71), 0-100.
 
         Returns:
-            `{"vmin": ..., "vmax": ...}`, the min of every sample's min
-            and the max of every sample's max. `{"vmin": 0.0, "vmax":
-            1.0}` if no sample resolves to real data (matches
+            `{"vmin", "vmax", "pvmin", "pvmax"}`: the min of every sample's
+            min and the max of every sample's max, and the two percentiles
+            of the detected (non-zero) values pooled over every sample, so
+            the tiles share one scale. `{"vmin": 0.0, "vmax": 1.0, ...}` if
+            no sample resolves to real data (matches
             `render_feature_heatmap`'s own all-missing fallback).
         """
         mins = []
         maxes = []
+        detected = []
         for name in sample_names:
             with self.lock:
                 try:
@@ -277,6 +285,7 @@ class HeatmapImageProvider(QQuickAsyncImageProvider):
                     sample.ensure_layer(layer)
                     self._enforce_budget()
                     vmin, vmax = feature_value_range(sample.adata, mz, layer)
+                    detected.append(detected_feature_values(sample.adata, mz, layer))
                 except Exception:
                     logger.exception(
                         "feature value range failed for sample %r, mz %r", name, mz
@@ -285,8 +294,15 @@ class HeatmapImageProvider(QQuickAsyncImageProvider):
             mins.append(vmin)
             maxes.append(vmax)
         if not mins:
-            return {"vmin": 0.0, "vmax": 1.0}
-        return {"vmin": min(mins), "vmax": max(maxes)}
+            return {"vmin": 0.0, "vmax": 1.0, "pvmin": 0.0, "pvmax": 1.0}
+        pooled = np.concatenate(detected) if detected else np.zeros(0)
+        if pooled.size:
+            pvmin, pvmax = (
+                float(v) for v in np.percentile(pooled, [low_percentile, high_percentile])
+            )
+        else:
+            pvmin, pvmax = min(mins), max(maxes)
+        return {"vmin": min(mins), "vmax": max(maxes), "pvmin": pvmin, "pvmax": pvmax}
 
     def getObsColumns(self, sample_names: list[str]) -> list:
         """Overlayable `obs` columns, from the first sample in

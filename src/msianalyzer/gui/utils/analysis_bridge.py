@@ -1000,8 +1000,11 @@ class AnalysisBridge(QObject):
             analysis_db_path, self._active_rel_dir(analysis_db_path)
         )
 
-    @Slot(list, float, str)
-    def requestFeatureValueRange(self, sample_names: list, mz: float, layer: str) -> None:
+    @Slot(list, float, str, float, float)
+    def requestFeatureValueRange(
+        self, sample_names: list, mz: float, layer: str,
+        low_percentile: float = 1.0, high_percentile: float = 99.0,
+    ) -> None:
         """Start fetching the real (min, max) of one feature's values
         across `sample_names` on a background thread — what autoscale is
         actually using for the Visual Inspection grid. Result arrives via
@@ -1021,10 +1024,13 @@ class AnalysisBridge(QObject):
             sample_names: Samples to combine — normally the currently
                 visible ones.
             mz: The feature's consensus m/z.
-            layer: `"raw"` or `"TIC"`.
+            layer: `"raw"` or `"TIC"` (optionally `"TIC@linear"`, ADR 71).
+            low_percentile, high_percentile: Also return these percentiles
+                of the detected values as `pvmin`/`pvmax` (ADR 71).
         """
         worker = HeatmapQueryWorker(
-            self.heatmap_provider.getFeatureValueRange, sample_names, mz, layer, parent=self
+            self.heatmap_provider.getFeatureValueRange, sample_names, mz, layer,
+            float(low_percentile), float(high_percentile), parent=self,
         )
         worker.succeeded.connect(self._onFeatureValueRangeSucceeded)
         worker.failed.connect(self._onFeatureValueRangeFailed)

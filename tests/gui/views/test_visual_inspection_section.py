@@ -1701,3 +1701,47 @@ def test_ctrl_wheel_zooms_a_tile_and_plain_wheel_does_not(
     assert tile.property("zoom") == pytest.approx(1.0)
     wheel(Qt.ControlModifier)
     assert tile.property("zoom") == pytest.approx(1.15)
+
+
+def test_linear_scale_and_percentile_range_reach_the_tiles(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # ADR 71: "Linear" renders the stored log1p layer expm1-ed; with
+    # Autoscale off, "Percentiles" turns vmin/vmax into pooled percentiles.
+    out = Path(visual_analysis_model.analysisDbPath).parent
+    for name in ("s1", "s2"):
+        coords = [(x, y) for y in range(2) for x in range(2)]
+        obs = pd.DataFrame({"tic": np.ones(4)}, index=[f"{name}_{i}" for i in range(4)])
+        var = pd.DataFrame({"mz": [150.0]}, index=["mz_150.0000"])
+        a = ad.AnnData(X=csr_matrix(np.array([[0.0], [1.0], [3.0], [7.0]], dtype=np.float32)), obs=obs, var=var)
+        a.obsm["spatial"] = np.array(coords, dtype=float)
+        a.layers["TIC"] = csr_matrix(np.log1p(a.X.toarray()).astype(np.float32))
+        a.write_h5ad(out / f"{name}.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "controlsFlickable")
+    tile = find_visual_child(root, "heatmapImage_s1")
+    combo = find_visual_child(root, "intensityScaleCombo")
+    assert combo.property("visible") is True
+
+    section.setProperty("linearScale", True)
+    qtbot.waitUntil(lambda: "%7CTIC@linear%7C" in tile.property("source").toString(), timeout=2000)
+    qtbot.waitUntil(lambda: _as_list(section.property("autoRange"))["vmax"] == pytest.approx(7.0), timeout=5000)
+
+    section.setProperty("autoScale", False)
+    section.setProperty("percentileRange", True)
+    section.setProperty("draftPercentileLow", 0)
+    section.setProperty("draftPercentileHigh", 100)
+    find_visual_child(root, "applyColorRangeButton").clicked.emit()
+    # Detected pixels pooled over both samples: 1, 3, 7 (zeros left out).
+    def color_range():
+        parts = tile.property("source").toString().split("%7C")
+        return [float(parts[4]), float(parts[5])]
+
+    qtbot.waitUntil(lambda: color_range() == pytest.approx([1.0, 7.0]), timeout=5000)
+
+    section.setProperty("dataLayer", "raw")
+    assert combo.property("visible") is False
+    assert "%7Craw%7C" in tile.property("source").toString()

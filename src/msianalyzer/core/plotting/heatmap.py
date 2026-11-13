@@ -82,12 +82,28 @@ def _rendered_feature_values(adata: ad.AnnData, mz: float, layer: str) -> np.nda
     return _layer_column(adata, layer, col_idx)
 
 
+#: Appended to a log1p layer's name (`"TIC@linear"`) to display it on a
+#: linear scale: values are read from the stored layer and `expm1`-ed
+#: (ADR 71). Display only; nothing with this name is ever written.
+LINEAR_SUFFIX = "@linear"
+
+
+def split_display_layer(layer: str) -> tuple[str, bool]:
+    """`("TIC", True)` for `"TIC@linear"`, `("TIC", False)` for `"TIC"`."""
+    if layer.endswith(LINEAR_SUFFIX):
+        return layer[: -len(LINEAR_SUFFIX)], True
+    return layer, False
+
+
 def _layer_column(adata: ad.AnnData, layer: str, col_idx: int) -> np.ndarray:
-    matrix = adata.layers[layer] if layer in adata.layers else adata.X
+    stored_layer, linear = split_display_layer(layer)
+    matrix = adata.layers[stored_layer] if stored_layer in adata.layers else adata.X
     column = matrix[:, col_idx]
     if hasattr(column, "toarray"):
         column = column.toarray()
-    return np.asarray(column).reshape(-1).astype(float)
+    values = np.asarray(column).reshape(-1).astype(float)
+    # Undo the normalization's log1p: the TIC-normalized intensity itself.
+    return np.expm1(values) if linear else values
 
 
 def feature_value_range(
@@ -115,6 +131,15 @@ def feature_value_range(
     if finite.size == 0:
         return 0.0, 1.0
     return float(finite.min()), float(finite.max())
+
+
+def detected_feature_values(adata: ad.AnnData, mz: float, layer: str = "TIC") -> np.ndarray:
+    """One feature's finite, non-zero per-pixel values — the pixels where
+    it was detected. What a percentile color range is computed over
+    (ADR 71): a 0 means "not detected", and counting the zeros would put
+    every low percentile of an on/off feature at 0."""
+    values = _rendered_feature_values(adata, mz, layer)
+    return values[np.isfinite(values) & (values != 0)]
 
 
 def pixel_grid_indices(

@@ -118,7 +118,11 @@ class LightSample:
 
     def ensure_layer(self, layer: str) -> None:
         """Make `layer` available the way `heatmap._layer_column` looks it
-        up: `adata.layers[layer]` if the file has that layer, else `.X`."""
+        up: `adata.layers[layer]` if the file has that layer, else `.X`.
+        A display suffix (`"TIC@linear"`) loads the stored layer."""
+        from msianalyzer.core.plotting.heatmap import split_display_layer
+
+        layer, _linear = split_display_layer(layer)
         if layer in self._layers_on_disk:
             if layer not in self.adata.layers:
                 with h5py.File(self.path, "r") as f:

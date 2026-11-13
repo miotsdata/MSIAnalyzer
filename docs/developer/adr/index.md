@@ -80,3 +80,4 @@ useful).
 | [68](0068-get-statistics-window.md) | "Get statistics" window: violins / stacked bars per sample or ROI, from Visual Inspection | Accepted |
 | [69](0069-shared-drive-in-use-marker-and-delete-journal.md) | Shared drive: DELETE journal after a run + "in use elsewhere" marker (read-only) | Accepted |
 | [70](0070-fill-blanks-and-interpolation.md) | Fill blanks as a layer (run stage + after the run) and display-only bilinear interpolation | Accepted |
+| [71](0071-linear-scale-and-percentile-range.md) | Linear display of log1p layers (`@linear`) and a pooled percentile color range | Accepted |
