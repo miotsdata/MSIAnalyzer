@@ -564,6 +564,23 @@ Window {
             roiWindow.saveError = result.error
         }
     }
+    // Recolors the ROI in every sample (one color per name, analysis-wide).
+    function changeRoiColor(name, color) {
+        if (!roiWindow.analysis) return
+        AnalysisBridge.setRoiColor(
+            roiWindow.analysis.analysisDbPath,
+            roiWindow.samples.map(function (s) { return s.name }), name, color)
+        roiWindow.refreshSavedRois()
+        roiWindow.refreshCatalogRois()
+    }
+
+    ColorDialog {
+        id: recolorDialog
+        objectName: "roiRecolorDialog"
+        property string roiName: ""
+        onAccepted: roiWindow.changeRoiColor(roiName, selectedColor.toString())
+    }
+
     function deleteSavedRoi(name) {
         roiWindow.flushNudge()
         if (!roiWindow.analysis) return
@@ -731,7 +748,32 @@ Window {
                     model: roiWindow.savedRois
 
                     delegate: RowLayout {
+                        id: roiListRow
                         objectName: "roiListRow_" + modelData.name
+                        // Right-click: copy the hex / recolor analysis-wide.
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            onTapped: roiRowMenu.popup()
+                        }
+                        Menu {
+                            id: roiRowMenu
+                            objectName: "roiRowMenu_" + modelData.name
+                            AppMenuItem {
+                                objectName: "roiCopyHex_" + modelData.name
+                                text: "Copy hex (" + modelData.color + ")"
+                                onTriggered: Router.copyToClipboard(modelData.color)
+                            }
+                            AppMenuItem {
+                                objectName: "roiChangeColor_" + modelData.name
+                                text: "Change color…"
+                                enabled: roiWindow.draftState === "idle"
+                                onTriggered: {
+                                    recolorDialog.roiName = modelData.name
+                                    recolorDialog.selectedColor = modelData.color
+                                    recolorDialog.open()
+                                }
+                            }
+                        }
                         Rectangle {
                             width: 14; height: 14; radius: 2
                             color: modelData.color

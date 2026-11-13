@@ -2391,6 +2391,23 @@ def load_rois(db_path: Path | str) -> pd.DataFrame:
 
 
 @log_call(source="db_path")
+def set_roi_color(db_path: Path | str, name: str, color: str) -> bool:
+    """Change one ROI's catalog color (`"#rrggbb"`). Per-sample h5ad
+    copies are the caller's job (`AnalysisBridge.setRoiColor`).
+
+    Returns:
+        True if a row was updated.
+    """
+    with connect(db_path) as con:
+        cur = safe_execute(
+            con, "UPDATE rois SET color = ? WHERE name = ?", (color, name),
+            table="rois", logger=logger, source=db_path,
+        )
+        con.commit()
+        return cur.rowcount > 0
+
+
+@log_call(source="db_path")
 def delete_roi_catalog_entry(db_path: Path | str, name: str) -> bool:
     """Remove one ROI's catalog row (name/color registration only — does
     NOT touch any sample's h5ad; see `core/plotting/roi.py` for the

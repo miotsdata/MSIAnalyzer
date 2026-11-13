@@ -1765,6 +1765,24 @@ def test_delete_roi_from_last_sample_drops_catalog_entry(tmp_path):
     assert bridge.getRois(str(db_path)) == []
 
 
+def test_set_roi_color_updates_catalog_and_every_sample(tmp_path):
+    db_path = tmp_path / "analysis.db"
+    init_analysis_db(db_path).close()
+    _write_roi_sample_h5ad(tmp_path / "s1.h5ad")
+    _write_roi_sample_h5ad(tmp_path / "s2.h5ad")
+
+    bridge = AnalysisBridge()
+    bridge.saveRoi(str(db_path), "s1", "liver", "#ff0000", _ROI_VERTICES)
+    bridge.saveRoi(str(db_path), "s2", "liver", "#ff0000", _ROI_VERTICES)
+
+    assert bridge.setRoiColor(str(db_path), ["s1", "s2"], "liver", "#00ff00") is True
+
+    assert bridge.getRois(str(db_path))[0]["color"] == "#00ff00"
+    for sample_name in ("s1", "s2"):
+        assert bridge.getSampleRois(str(db_path), sample_name)[0]["color"] == "#00ff00"
+    assert bridge.setRoiColor(str(db_path), ["s1"], "nope", "#00ff00") is False
+
+
 def test_next_roi_color_cycles_by_catalog_size(tmp_path):
     from msianalyzer.core.plotting.heatmap import category_color
 

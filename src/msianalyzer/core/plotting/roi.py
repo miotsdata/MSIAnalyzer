@@ -201,6 +201,23 @@ def load_sample_rois(h5ad_path: Path | str) -> dict:
     }
 
 
+@log_call(source="h5ad_path")
+def set_roi_color(h5ad_path: Path | str, name: str, color: str) -> bool:
+    """Recolor one ROI in `uns["rois"]`, in place. Works on a sample file
+    and on `merged.h5ad` alike (both keep `color` at `uns["rois"][name]`).
+
+    Returns:
+        True if the file had this ROI (and was rewritten).
+    """
+    with h5ad_io.open_for_write(h5ad_path) as f:
+        rois = _rois_dict(h5ad_io.read_uns(f, "rois"))
+        if name not in rois:
+            return False
+        rois[name]["color"] = color
+        h5ad_io.write_uns(f, "rois", rois)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # merged.h5ad sync — best effort, no-op if the file doesn't exist
 # ---------------------------------------------------------------------------

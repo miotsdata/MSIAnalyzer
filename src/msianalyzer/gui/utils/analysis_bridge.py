@@ -3018,6 +3018,30 @@ class AnalysisBridge(QObject):
             catalog_removed = analysis_db.delete_roi_catalog_entry(analysis_db_path, name)
         return {"removed": removed, "catalog_removed": catalog_removed}
 
+    @Slot(str, list, str, str, result=bool)
+    @_writes(False)
+    def setRoiColor(
+        self, analysis_db_path: str, sample_names: list, name: str, color: str
+    ) -> bool:
+        """ROI Design's "Change color": recolor `name` analysis-wide — the
+        catalog row, every sample's `uns["rois"]` copy and `merged.h5ad`
+        (when present), so the name keeps one color everywhere.
+
+        Returns:
+            True if the catalog row existed and was updated.
+        """
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return False
+        updated = analysis_db.set_roi_color(analysis_db_path, name, color)
+        for sample_name in sample_names:
+            h5ad_path = self._inspection_h5ad_path(analysis_db_path, sample_name)
+            if h5ad_path.exists() and roi.set_roi_color(h5ad_path, name, color):
+                self.heatmap_provider.invalidate(sample_name)
+        merged_path = self._merged_h5ad_path(analysis_db_path)
+        if not self._active_rel_dir(analysis_db_path) and merged_path.exists():
+            roi.set_roi_color(merged_path, name, color)
+        return updated
+
     # -----------------------------------------------------------------
     # H&E image coregistration (see core/registration/)
     # -----------------------------------------------------------------
