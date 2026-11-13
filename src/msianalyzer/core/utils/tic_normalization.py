@@ -288,17 +288,20 @@ def _write_feature_layer(
 
 
 def _write_merged_layer(
-    merged_path: Path, sample_paths: dict[str, Path], layer_name: str
+    merged_path: Path, sample_paths: dict[str, Path], layer_name: str,
+    scale_column: bool = True,
 ) -> None:
     """Stack the per-sample layers into `merged.h5ad`'s row order (its
-    `sample` obs column) and write them as one layer."""
+    `sample` obs column) and write them as one layer — plus their
+    `obs["norm_scale_<layer>"]` column when `scale_column`."""
     blocks, scales = {}, {}
     for name, path in sample_paths.items():
         with h5py.File(path, "r") as f:
             blocks[name] = ad.io.read_elem(f["layers"][layer_name]).tocsr()
-            scales[name] = np.asarray(
-                h5ad_io.read_obs_column(f, f"norm_scale_{layer_name}"), dtype=np.float32
-            )
+            if scale_column:
+                scales[name] = np.asarray(
+                    h5ad_io.read_obs_column(f, f"norm_scale_{layer_name}"), dtype=np.float32
+                )
     with h5ad_io.open_for_write(merged_path) as f:
         sample_col = np.asarray(h5ad_io.read_obs_column(f, "sample")).astype(str)
         rows = [np.flatnonzero(sample_col == name) for name in blocks]
@@ -310,14 +313,15 @@ def _write_merged_layer(
                 )
         order = np.argsort(np.concatenate(rows), kind="stable")
         stacked = vstack(list(blocks.values()), format="csr")[order]
-        scale = np.concatenate(list(scales.values()))[order]
         if stacked.shape[0] != sample_col.size:
             raise ValueError("merged.h5ad has rows of samples this analysis doesn't list")
         layers = f.require_group("layers")
         if layer_name in layers:
             del layers[layer_name]
         ad.io.write_elem(layers, layer_name, stacked)
-        h5ad_io.set_obs_column(f, f"norm_scale_{layer_name}", scale)
+        if scale_column:
+            scale = np.concatenate(list(scales.values()))[order]
+            h5ad_io.set_obs_column(f, f"norm_scale_{layer_name}", scale)
 
 
 @log_call(source="merged_path")

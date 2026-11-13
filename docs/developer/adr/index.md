@@ -79,3 +79,4 @@ useful).
 | [67](0067-multi-feature-overlay.md) | Multi-feature overlay: up to 6 features in one image, additive or max blending | Accepted |
 | [68](0068-get-statistics-window.md) | "Get statistics" window: violins / stacked bars per sample or ROI, from Visual Inspection | Accepted |
 | [69](0069-shared-drive-in-use-marker-and-delete-journal.md) | Shared drive: DELETE journal after a run + "in use elsewhere" marker (read-only) | Accepted |
+| [70](0070-fill-blanks-and-interpolation.md) | Fill blanks as a layer (run stage + after the run) and display-only bilinear interpolation | Accepted |

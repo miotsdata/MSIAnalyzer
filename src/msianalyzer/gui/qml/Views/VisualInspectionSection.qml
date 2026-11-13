@@ -451,7 +451,8 @@ Item {
                                     objectName: "heatmapImage_" + modelData.name
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    source: controls.tileSource(modelData.name)
+                                    source: controls.interpolatedTileSource(modelData.name)
+                                    pixelSubdivision: controls.interpolation
                                     scaleBarPixelUm: ScaleBar.pixelUm(visualSection.scaleBar, modelData.name)
                                     scaleBarUm: visualSection.scaleBar.bar_um || 0
                                     scaleBarColor: visualSection.scaleBar.color || "white"

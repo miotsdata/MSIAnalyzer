@@ -650,3 +650,66 @@ def test_render_heatmap_figure_draws_scale_bar_bottom_right():
 
     plain = render_heatmap_figure(adata, mode="feature", mz=100.0)
     assert not plain.axes[0].patches and not plain.axes[0].texts
+
+
+# ---------------------------------------------------------------------------
+# Interpolation (ADR 70)
+# ---------------------------------------------------------------------------
+
+
+def test_upsample_grid_is_bilinear_and_keeps_constant_regions():
+    from msianalyzer.core.plotting.heatmap import upsample_grid
+
+    grid = np.array([[0.0, 10.0]])
+    upsampled = upsample_grid(grid, 2)
+
+    assert upsampled.shape == (2, 4)
+    # Left half of the left pixel stays 0, the sub-pixels near the middle
+    # lean toward their own pixel: 0, 2.5, 7.5, 10.
+    np.testing.assert_allclose(upsampled[0], [0.0, 2.5, 7.5, 10.0])
+    np.testing.assert_allclose(upsample_grid(np.full((2, 2), 3.0), 3), np.full((6, 6), 3.0))
+    assert upsample_grid(grid, 1) is grid
+
+
+def test_upsample_grid_keeps_missing_pixels_missing_without_darkening_neighbors():
+    from msianalyzer.core.plotting.heatmap import upsample_grid
+
+    grid = np.array([[5.0, np.nan]])
+    upsampled = upsample_grid(grid, 2)
+
+    # The real pixel isn't pulled toward 0 by its missing neighbor...
+    np.testing.assert_allclose(upsampled[0, :2], [5.0, 5.0])
+    # ...and the missing pixel stays missing (black).
+    assert np.isnan(upsampled[0, 3])
+
+
+def test_render_heatmap_by_target_interpolation_suffix_scales_every_kind():
+    from msianalyzer.core.plotting.heatmap import render_heatmap_by_target
+
+    adata = _make_grid_adata(
+        [0.0, 10.0, 5.0, 15.0], obs_columns={"cluster": ["a", "b", "a", "b"]}
+    )
+    feature = render_heatmap_by_target(adata, "100.0", ["s", "100.0", "X", "viridis", "auto", "auto", "ds-1", "i3"])
+    plain = render_heatmap_by_target(adata, "100.0", ["s", "100.0", "X", "viridis", "auto", "auto", "ds-1"])
+    categories = render_heatmap_by_target(adata, "obs:cluster", ["s", "obs:cluster", "a=ff0000,b=0000ff", "ds-1", "i3"])
+
+    assert plain.shape[:2] == (2, 2)
+    assert feature.shape[:2] == (6, 6)
+    assert categories.shape[:2] == (6, 6)
+    # Categories are repeated, never blended.
+    assert tuple(categories[0, 2]) == (255, 0, 0, 255)
+    assert tuple(categories[0, 3]) == (0, 0, 255, 255)
+
+
+def test_render_heatmap_figure_interpolated_keeps_real_pixel_coordinates():
+    adata = _make_grid_adata([0.0, 10.0, 5.0, 15.0])
+    rois = {"liver": {"color": "#ff0000", "vertices": [[0, 0], [1, 0], [1, 1]]}}
+
+    fig = render_heatmap_figure(adata, mode="feature", mz=100.0, rois=rois, upsample=4)
+
+    image = fig.axes[0].images[0]
+    assert image.get_array().shape[:2] == (8, 8)
+    # Drawn over the 2x2 real grid, so the ROI polygon needs no rescaling.
+    assert image.get_extent() == [-0.5, 1.5, 1.5, -0.5]
+    polygon = next(p for p in fig.axes[0].patches if isinstance(p, matplotlib.patches.Polygon))
+    np.testing.assert_allclose(polygon.get_xy()[:3], [[0, 0], [1, 0], [1, 1]])

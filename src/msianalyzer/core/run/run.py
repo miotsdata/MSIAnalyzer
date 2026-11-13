@@ -52,6 +52,7 @@ from msianalyzer.core.spectra.mz_tools import align_mz_across_samples
 from msianalyzer.core.utils import in_use
 from msianalyzer.core.utils.create_adata import create_spatial_adata
 from msianalyzer.core.utils.db import set_journal_mode
+from msianalyzer.core.utils.fill_blanks import add_filled_layer
 from msianalyzer.core.utils.logging_utils import log_call, run_log, worker_logging
 from msianalyzer.core.utils.spectra_pixels_association import map_pixels_to_db
 from msianalyzer.core.utils.tic_normalization import run_normalization
@@ -83,6 +84,7 @@ RUN_STEPS: tuple[str, ...] = (
     "annotate_precursor",
     "ms2_consensus",
     "normalize_tic",
+    "fill_blanks",
     "spatial_correlation",
     "feature_correlation",
     "summary_report",
@@ -975,6 +977,42 @@ class Run:
             logger.info("Normalization disabled; skipping")
             self._emit_step("normalize_tic", "skipped")
 
+    def _run_fill_blanks_stage(self, head: _SampleProcessingHead) -> None:
+        """Add the filled copy of `config.fill_blanks.layer` (ADR 70) to
+        every sample `.h5ad` and `merged.h5ad`, if enabled. Untargeted
+        runs only."""
+        cfg = getattr(self.config, "fill_blanks", None)
+        if cfg is None or not getattr(cfg, "enabled", False):
+            logger.info("Fill blanks disabled; skipping")
+            self._emit_step("fill_blanks", "skipped")
+            return
+        self._emit_step("fill_blanks", "started")
+        if not analysis_db.is_command_already_run(
+            "fill_blanks", head.analysis_id, head.adb_path
+        ):
+            analysis_db.log_command(
+                head.adb_path,
+                command_name="fill_blanks",
+                arguments={**vars(cfg)},
+                run_id=head.analysis_id,
+            )
+            sample_paths = {
+                db_path.stem: head.out_dir / f"{db_path.stem}.h5ad"
+                for db_path in head.out_db_paths
+            }
+            # The run's normalized layer when normalization ran; raw otherwise.
+            layer = cfg.layer if self.config.normalization.enabled else "raw"
+            result = add_filled_layer(
+                sample_paths, head.out_dir / "merged.h5ad", layer,
+                cfg.radius, cfg.min_fraction,
+            )
+            logger.info(
+                "Filled %d empty values -> layer %s", result.n_filled, result.layer_name
+            )
+        else:
+            logger.debug("Already run fill_blanks")
+        self._emit_step("fill_blanks", "completed")
+
     def _run_spatial_correlation_stage(self, head: _SampleProcessingHead) -> None:
         """Compute Moran's I (global and/or local) for every sample's
         `.h5ad`, if `config.spatial_correlation` enables either sub-pass —
@@ -1341,6 +1379,7 @@ class Run:
 
         self._write_var_annotations(head)
         self._run_normalization_stage(head)
+        self._run_fill_blanks_stage(head)
         self._run_spatial_correlation_stage(head)
         self._run_feature_correlation_stage(head)
 

@@ -58,7 +58,7 @@ from msianalyzer.core.spatial.feature_correlation import read_correlation_info, 
 from msianalyzer.core.spectra.average_spectra import load_aggregated_spectra
 from msianalyzer.core.utils import h5ad_io, in_use
 from msianalyzer.core.utils.db import set_journal_mode
-from msianalyzer.core.utils import tic_normalization
+from msianalyzer.core.utils import fill_blanks, tic_normalization
 from msianalyzer.gui.utils.dataset_task_worker import DatasetTaskWorker
 from msianalyzer.gui.utils.export_worker import ExportWorker
 from msianalyzer.gui.utils.formula_prediction_worker import FormulaPredictionWorker
@@ -781,6 +781,8 @@ class AnalysisBridge(QObject):
     targetListMatchesChanged = Signal(str)  # analysis_db_path (ADR 60)
     featureNormalizationFinished = Signal(str, str)  # layer name, message (ADR 61)
     featureNormalizationFailed = Signal(str)
+    fillBlanksFinished = Signal(str, str)  # layer name, message (ADR 70)
+    fillBlanksFailed = Signal(str)
     annotationTaskFinished = Signal(str)  # message (re-annotate / restore, ADR 63)
     annotationTaskFailed = Signal(str)
     featureLayersChanged = Signal(str)  # analysis_db_path
@@ -864,6 +866,7 @@ class AnalysisBridge(QObject):
         self._dataset_task_worker: DatasetTaskWorker | None = None
         self._import_db_path: str | None = None
         self._normalization_db_path: str | None = None
+        self._fill_blanks_db_path: str | None = None
         self._annotation_task_db: str | None = None
         self._summary_worker: TableQueryWorker | None = None
         self._summary_worker_path: str | None = None
@@ -2740,6 +2743,110 @@ class AnalysisBridge(QObject):
         return sorted(rows, key=lambda r: r["mz"])
 
     # -----------------------------------------------------------------
+    # Fill blanks after the run (ADR 70)
+    # -----------------------------------------------------------------
+
+    @Slot(str, str, str, int, float)
+    @_writes(_fail("fillBlanksFailed"))
+    def fillBlanks(
+        self, analysis_db_path: str, run_id: str, source_layer: str, radius: int,
+        min_fraction: float,
+    ) -> None:
+        """Add `<source>_filled_r<radius>` (every sample + `merged.h5ad`)
+        on the shared dataset-task thread (`fill_blanks.add_filled_layer`).
+        Progress arrives via `datasetTaskProgress`, the result via
+        `fillBlanksFinished(layer, message)` / `fillBlanksFailed(message)`;
+        `featureLayersChanged(db)` then refreshes the layer pickers."""
+        self._fill_blanks_db_path = analysis_db_path
+        task = functools.partial(
+            self._run_fill_blanks, analysis_db_path, run_id, source_layer,
+            int(radius), float(min_fraction),
+        )
+        self._start_dataset_task(
+            task, self._onFillBlanksSucceeded, self.fillBlanksFailed.emit
+        )
+
+    @staticmethod
+    def _run_fill_blanks(db, run_id, source_layer, radius, min_fraction, progress):
+        paths = AnalysisBridge._pipeline_sample_paths(db)
+        if not paths:
+            raise ValueError("This analysis has no sample .h5ad files.")
+        result = fill_blanks.add_filled_layer(
+            paths, Path(db).parent / "merged.h5ad", source_layer, radius, min_fraction,
+            progress=progress,
+        )
+        analysis_db.log_command(
+            db, "fill_blanks",
+            {"layer": source_layer, "radius": radius, "min_fraction": min_fraction,
+             "output_layer": result.layer_name},
+            run_id=run_id,
+        )
+        return result
+
+    @Slot(object)
+    def _onFillBlanksSucceeded(self, result) -> None:
+        if self.sender() is not self._dataset_task_worker:
+            return
+        self.heatmap_provider.clearCaches()  # the files changed on disk
+        message = (
+            f"Layer {result.layer_name} added to {result.n_samples} sample(s)"
+            + (" and merged.h5ad" if result.merged_written else "")
+            + f": {result.n_filled:,} empty value(s) filled."
+        )
+        self.featureLayersChanged.emit(self._fill_blanks_db_path)
+        self.fillBlanksFinished.emit(result.layer_name, message)
+
+    @Slot(str, str, str, result=str)
+    @_writes(READ_ONLY_MESSAGE)
+    def removeFilledLayer(self, analysis_db_path: str, run_id: str, layer_name: str) -> str:
+        """Drop one filled layer from every sample file and `merged.h5ad`;
+        `""` on success, else an error message."""
+        if self._dataset_task_worker is not None and self._dataset_task_worker.isRunning():
+            return "Another import, Moran's I or normalization is still running."
+        try:
+            fill_blanks.remove_filled_layer(
+                self._pipeline_sample_paths(analysis_db_path),
+                Path(analysis_db_path).parent / "merged.h5ad", layer_name,
+            )
+            analysis_db.log_command(
+                analysis_db_path, "remove_filled_layer", {"layer": layer_name}, run_id=run_id,
+            )
+        except (OSError, ValueError, sqlite3.Error) as e:
+            return str(e)
+        self.heatmap_provider.clearCaches()
+        self.featureLayersChanged.emit(analysis_db_path)
+        return ""
+
+    @Slot(str, result=list)
+    def getSampleLayers(self, analysis_db_path: str) -> list:
+        """Layer names of the pipeline output's first sample file — what
+        "Fill blanks…" can fill (and what the heatmap can show)."""
+        if not analysis_db_path or not Path(analysis_db_path).exists():
+            return []
+        for name in analysis_db.load_samples(analysis_db_path).get("name", []):
+            path = imported_dataset.sample_h5ad_path(analysis_db_path, name)
+            if path.exists():
+                with h5py.File(path, "r") as f:
+                    return sorted(f["layers"].keys()) if "layers" in f else []
+        return []
+
+    @Slot(str, result=list)
+    def getFilledLayers(self, analysis_db_path: str) -> list:
+        """The pipeline output's filled layers: `[{"layer", "source",
+        "radius"}]`, by source then radius."""
+        rows = [
+            {"layer": layer, **parsed}
+            for layer in self.getSampleLayers(analysis_db_path)
+            if (parsed := fill_blanks.parse_filled_layer_name(layer)) is not None
+        ]
+        return sorted(rows, key=lambda row: (row["source"], row["radius"]))
+
+    @Slot(int, float, result=int)
+    def fillBlanksRequiredNeighbors(self, radius: int, min_fraction: float) -> int:
+        """For the dialog's "at least N of M neighbors" hint."""
+        return fill_blanks.required_neighbors(int(radius), float(min_fraction))
+
+    # -----------------------------------------------------------------
     # ROI Design
     # -----------------------------------------------------------------
 
@@ -3917,7 +4024,7 @@ class AnalysisBridge(QObject):
 
         self._run_export(_do_export)
 
-    @Slot(str, str, str, str, str, str, str, str, str, str, bool, bool, "QVariantList")
+    @Slot(str, str, str, str, str, str, str, str, str, str, bool, bool, "QVariantList", int)
     def exportVisualInspectionImages(
         self,
         analysis_db_path: str,
@@ -3933,6 +4040,7 @@ class AnalysisBridge(QObject):
         show_rois: bool,
         include_scale_bar: bool,
         hidden_categories: list,
+        interpolation: int = 1,
     ) -> None:
         """Start writing the Image export (one PNG/PDF/SVG per sample,
         matching Visual Inspection's own current display settings) on a
@@ -3962,6 +4070,8 @@ class AnalysisBridge(QObject):
                 checkbox (ADR 53).
             hidden_categories: Categories to export black and leave out of
                 the legend; `[]` exports every category.
+            interpolation: Visual Inspection's interpolation factor
+                (ADR 70); 1 = real pixels.
         """
         # Resolved now, on the GUI thread — the export follows whatever
         # dataset Visual Inspection is showing when the user clicked.
@@ -3986,6 +4096,7 @@ class AnalysisBridge(QObject):
                 rel_dir=rel_dir,
                 include_scale_bar=include_scale_bar,
                 hidden_categories=[str(c) for c in hidden_categories],
+                upsample=max(1, int(interpolation)),
                 progress=lambda done, total: report(f"Exporting images… {done}/{total}"),
             )
             return f"Images exported for {n} sample(s) to {dest_folder}"

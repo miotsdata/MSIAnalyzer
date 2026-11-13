@@ -250,6 +250,15 @@ ApplicationWindow {
                          && !AnalysisBridge.readOnly
                 onTriggered: normalizeFeatureDialog.openFor(window.currentAnalysis)
             }
+            // Fill isolated empty pixels as a new layer (ADR 70).
+            AppMenuItem {
+                objectName: "fillBlanksMenuItem"
+                text: "Fill blanks…"
+                enabled: window.currentAnalysis !== null
+                         && window.currentAnalysis.analysisType !== "targeted"
+                         && !AnalysisBridge.readOnly
+                onTriggered: fillBlanksDialog.openFor(window.currentAnalysis)
+            }
             // Re-run MS2 annotation with new settings, with history (ADR 63).
             AppMenuItem {
                 objectName: "reannotateMenuItem"
@@ -485,6 +494,9 @@ ApplicationWindow {
     NormalizeFeatureDialog {
         id: normalizeFeatureDialog
     }
+    FillBlanksDialog {
+        id: fillBlanksDialog
+    }
 
     ImportH5adDialog {
         id: importH5adDialog
@@ -701,6 +713,7 @@ ApplicationWindow {
                 "showRois": section.showRois,
                 "hiddenCategories": controls.inspectionMode === "obs" && !controls.isSelectedObsNumeric
                                     ? controls.hiddenObsCategories.slice() : [],
+                "interpolation": controls.interpolation,
             } : null
             imageShownCategoriesCheckBox.checked = true
             // Offered once any sample has a pixel size (ADR 53), checked
@@ -807,7 +820,8 @@ ApplicationWindow {
                 snap.vmax,
                 imageRoisCheckBox.checked,
                 imageScaleBarCheckBox.checked,
-                imageShownCategoriesCheckBox.checked ? snap.hiddenCategories : [])
+                imageShownCategoriesCheckBox.checked ? snap.hiddenCategories : [],
+                snap.interpolation)
         }
     }
 

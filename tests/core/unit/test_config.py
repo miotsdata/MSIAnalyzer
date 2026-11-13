@@ -352,7 +352,7 @@ def test_config_to_dict_converts_paths_to_strings(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     d = config.to_dict()
 
-    assert d["version"] == 24
+    assert d["version"] == 25
     assert d["analysis_type"] == "untargeted"
     assert isinstance(d["io"]["project_folder"], str)
     assert isinstance(d["io"]["mzml_paths"][0], str)
@@ -382,7 +382,7 @@ def test_config_to_dict_stores_paths_inside_project_relative(tmp_path: Path):
 def test_config_from_dict_success(sample_io_config: IOConfig):
     """Verify creating Config from a valid dictionary."""
     raw_data = {
-        "version": 24,
+        "version": 25,
         "io": {
             "project_folder": str(sample_io_config.project_folder),
             "mzml_paths": [str(p) for p in sample_io_config.mzml_paths],
@@ -420,7 +420,7 @@ def test_config_from_dict_targeted_without_reference_mz_raises(
     sample_io_config: IOConfig,
 ):
     raw_data = {
-        "version": 24,
+        "version": 25,
         "analysis_type": "targeted",
         "io": {
             "project_folder": str(sample_io_config.project_folder),
@@ -438,7 +438,7 @@ def test_config_from_dict_targeted_without_analyte_mzs_raises(
     sample_io_config: IOConfig,
 ):
     raw_data = {
-        "version": 24,
+        "version": 25,
         "analysis_type": "targeted",
         "io": {
             "project_folder": str(sample_io_config.project_folder),
@@ -462,7 +462,7 @@ def test_config_from_dict_version_mismatch():
 
 def test_config_from_dict_missing_required_io_fields():
     """Verify TypeError inside dataclasses wraps cleanly into ValueError."""
-    bad_data = {"version": 24, "io": {}}  # Missing required IO fields
+    bad_data = {"version": 25, "io": {}}  # Missing required IO fields
     with pytest.raises(ValueError, match="Invalid or incomplete config"):
         Config.from_dict(bad_data)
 
@@ -523,7 +523,7 @@ def test_config_str_representation(sample_io_config: IOConfig):
     config = Config(io=sample_io_config)
     output = str(config)
 
-    assert "Config(version=24, analysis_type='untargeted')" in output
+    assert "Config(version=25, analysis_type='untargeted')" in output
     assert "input/output:" in output
     assert "detect centroids:" in output
     assert "group MS2:" in output
@@ -585,7 +585,7 @@ def test_create_config_file_force_overwrite(tmp_path: Path):
     )
 
     loaded = Config.load(config_file)
-    assert loaded.version == 24
+    assert loaded.version == 25
 
 
 def test_create_config_file_nonexistent_project_folder(tmp_path: Path):
@@ -673,7 +673,7 @@ def test_groups_follow_pipeline_order():
     assert list(GROUPS) == [
         "io", "ms1", "centroid", "peak", "align", "target_list", "h5ad",
         "isotopes", "ms2_cleaning", "group_ms2", "purity", "annotate", "consensus",
-        "normalization", "spatial_correlation", "feature_correlation", "report", "analysis",
+        "normalization", "fill_blanks", "spatial_correlation", "feature_correlation", "report", "analysis",
     ]
 
 

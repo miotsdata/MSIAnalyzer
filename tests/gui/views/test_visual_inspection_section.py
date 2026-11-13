@@ -1587,6 +1587,41 @@ def test_feature_layer_combo_lists_post_run_layers(
     assert section.property("dataLayer") == "feature_1"
 
 
+def test_filled_layer_button_and_combo(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # ADR 70: a `<layer>_filled_r<radius>` layer on disk shows up under
+    # "Filled" and isn't mistaken for a feature-normalized layer.
+    out = Path(visual_analysis_model.analysisDbPath).parent
+    for name in ("s1", "s2"):
+        obs = pd.DataFrame({"tic": [1.0], "x": [0], "y": [0]}, index=[f"{name}_0"])
+        var = pd.DataFrame({"mz": [150.0]}, index=["mz_150.0000"])
+        a = ad.AnnData(X=csr_matrix(np.ones((1, 1), dtype=np.float32)), obs=obs, var=var)
+        a.layers["TIC_filled_r1"] = a.X.copy()
+        a.layers["feature_1_filled_r2"] = a.X.copy()
+        a.write_h5ad(out / f"{name}.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+
+    section = find_visual_child(root, "controlsFlickable")
+    button = find_visual_child(root, "filledLayerButton")
+    combo = find_visual_child(root, "filledLayerCombo")
+    assert button.property("visible") is True
+    assert find_visual_child(root, "featureLayerButton").property("visible") is False
+    assert combo.property("visible") is False
+
+    center = button.mapToScene(button.boundingRect().center()).toPoint()
+    qtbot.mouseClick(view, Qt.LeftButton, pos=center)
+    qtbot.wait(50)
+
+    assert section.property("dataLayer") == "TIC_filled_r1"
+    assert section.property("isFeatureLayer") is False
+    assert combo.property("visible") is True
+    assert combo.property("displayText") == "TIC · filled, radius 1"
+
+
 def test_local_moran_hh_checkbox_switches_rendered_layer(
     analysis_view, visual_analysis_model, find_visual_child, qtbot
 ):
@@ -1608,3 +1643,36 @@ def test_local_moran_hh_checkbox_switches_rendered_layer(
     assert section.property("dataLayer") == "localMoran"
     tile = find_visual_child(root, "heatmapImage_s1")
     qtbot.waitUntil(lambda: "%7ClocalMoranHH%7C" in tile.property("source").toString(), timeout=2000)
+
+
+def test_interpolation_requests_bigger_tiles_but_keeps_real_pixel_size(
+    analysis_view, visual_analysis_model, find_visual_child, qtbot
+):
+    # ADR 70: a 4x4 sample stays 4x4 on screen (ROIs, scale bar, size
+    # label), only the tile image is N times finer.
+    out = Path(visual_analysis_model.analysisDbPath).parent
+    for name in ("s1", "s2"):
+        coords = [(x, y) for y in range(4) for x in range(4)]
+        obs = pd.DataFrame({"tic": np.ones(16)}, index=[f"{name}_{i}" for i in range(16)])
+        var = pd.DataFrame({"mz": [150.0]}, index=["mz_150.0000"])
+        a = ad.AnnData(X=csr_matrix(np.arange(16, dtype=np.float32).reshape(-1, 1)), obs=obs, var=var)
+        a.obsm["spatial"] = np.array(coords, dtype=float)
+        a.layers["TIC"] = a.X.copy()
+        a.write_h5ad(out / f"{name}.h5ad")
+
+    view = analysis_view(visual_analysis_model)
+    root = view.rootObject()
+    _open_visual_tab(view, root, find_visual_child, qtbot)
+    section = find_visual_child(root, "controlsFlickable")
+    tile = find_visual_child(root, "heatmapImage_s1")
+    qtbot.waitUntil(lambda: tile.property("imageSize").width() == 4, timeout=5000)
+    scale_before = tile.property("effectiveScale")
+
+    section.setProperty("interpolation", 3)
+    qtbot.waitUntil(lambda: tile.property("source").toString().endswith("%7Ci3"), timeout=2000)
+    qtbot.waitUntil(lambda: tile.property("loadedSubdivision") == 3, timeout=5000)
+
+    content = find_visual_child(tile, "zoomableImageContent")
+    assert content.property("sourceSize").width() == 12
+    assert tile.property("imageSize").width() == 4
+    assert tile.property("effectiveScale") == pytest.approx(scale_before)

@@ -6,6 +6,17 @@ Flickable {
     objectName: "zoomableImage"
 
     property alias source: image.source
+    // Image pixels per real pixel along each axis (ADR 70: an interpolated
+    // heatmap tile is N times larger). Everything here is sized from
+    // `gridSize`, the real pixel grid, so zoom, overlays (ROIs) and the
+    // scale bar are unchanged; the extra image pixels just fill each cell.
+    property int pixelSubdivision: 1
+    // The subdivision of the image actually on screen: it only follows
+    // `pixelSubdivision` once the new tile has loaded, so the old tile is
+    // never drawn at the new factor's size in between.
+    property int loadedSubdivision: 1
+    readonly property size gridSize: Qt.size(image.sourceSize.width / Math.max(1, loadedSubdivision),
+                                             image.sourceSize.height / Math.max(1, loadedSubdivision))
     property real zoom: 1.0
     readonly property real minZoom: 1.0
     readonly property real maxZoom: 8.0
@@ -16,13 +27,12 @@ Flickable {
     // ratio exactly matches — this fits the *whole* image inside the
     // viewport at zoom 1 instead, preserving its aspect ratio, and scales
     // that uniformly as zoom increases.
-    readonly property real baseScale: (image.sourceSize.width > 0 && image.sourceSize.height > 0)
-        ? Math.min(root.width / image.sourceSize.width, root.height / image.sourceSize.height)
+    readonly property real baseScale: (gridSize.width > 0 && gridSize.height > 0)
+        ? Math.min(root.width / gridSize.width, root.height / gridSize.height)
         : 1.0
     readonly property real effectiveScale: baseScale * zoom
-    // One source pixel per spatial pixel, so this is the sample's own
-    // width x height in pixels once loaded (0x0 before).
-    readonly property size imageSize: image.sourceSize
+    // The sample's own width x height in real pixels once loaded (0x0 before).
+    readonly property size imageSize: gridSize
 
     // Scale bar (ADR 53): hidden while either length is 0 (bar off, or
     // this sample's pixel size unknown). Pixels are assumed square.
@@ -32,8 +42,8 @@ Flickable {
 
     clip: true
     boundsBehavior: Flickable.StopAtBounds
-    contentWidth: Math.max(width, image.sourceSize.width * effectiveScale)
-    contentHeight: Math.max(height, image.sourceSize.height * effectiveScale)
+    contentWidth: Math.max(width, gridSize.width * effectiveScale)
+    contentHeight: Math.max(height, gridSize.height * effectiveScale)
 
     onZoomChanged: {
         if (zoom < minZoom) zoom = minZoom
@@ -66,8 +76,8 @@ Flickable {
         // real image by the time a user can click — CoregistrationWindow
         // is the first caller that can legitimately open with a pane
         // whose image hasn't resolved yet.
-        width: image.status === Image.Ready ? sourceSize.width * root.effectiveScale : root.width
-        height: image.status === Image.Ready ? sourceSize.height * root.effectiveScale : root.height
+        width: image.status === Image.Ready ? root.gridSize.width * root.effectiveScale : root.width
+        height: image.status === Image.Ready ? root.gridSize.height * root.effectiveScale : root.height
         // Centered when smaller than the viewport (contentWidth/Height
         // floor at the viewport size) rather than stuck in the top-left
         // corner with blank space around it.
@@ -82,6 +92,7 @@ Flickable {
         // want for reading discrete per-pixel values off a heatmap.
         smooth: false
         cache: false
+        onStatusChanged: if (status === Image.Ready) root.loadedSubdivision = root.pixelSubdivision
         // Heatmap tiles come from HeatmapImageProvider, a
         // QQuickAsyncImageProvider (ADR 50), so they always load off the
         // GUI thread whatever `asynchronous` says. They render one at a

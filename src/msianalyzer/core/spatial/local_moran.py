@@ -13,6 +13,7 @@ from msianalyzer.core.plotting.heatmap import (
     _feature_column_index,
     _layer_column,
     _reconstruct_grid,
+    upsample_grid,
 )
 from msianalyzer.core.utils import h5ad_io
 from msianalyzer.core.utils.logging_utils import log_call
@@ -129,6 +130,7 @@ def render_local_moran_heatmap(
     vmin: float | None = None,
     vmax: float | None = None,
     hh_only: bool = False,
+    upsample: int = 1,
 ) -> np.ndarray:
     """One feature's per-pixel local Moran's I as an RGBA `uint8` raster —
     the local/per-pixel analogue of
@@ -173,7 +175,7 @@ def render_local_moran_heatmap(
             if bound > 0:
                 vmin, vmax = -bound, bound
 
-    grid = _reconstruct_grid(adata, values)
+    grid = upsample_grid(_reconstruct_grid(adata, values), upsample)
     return _colorize_grid(grid, colormap, vmin, vmax)
 
 

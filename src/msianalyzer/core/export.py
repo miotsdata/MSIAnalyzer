@@ -386,6 +386,7 @@ def export_visual_inspection_images(
     rel_dir: str | None = None,
     include_scale_bar: bool = False,
     hidden_categories: list[str] | None = None,
+    upsample: int = 1,
     progress: Callable[[int, int], None] | None = None,
 ) -> int:
     """Write `<dest_folder>/<sample_name>.<image_format>` for every
@@ -427,6 +428,8 @@ def export_visual_inspection_images(
         hidden_categories: Categories switched off in Visual Inspection,
             exported black and left out of the legend (the export dialog's
             "Only the categories shown"). `None` exports every category.
+        upsample: Visual Inspection's interpolation factor (ADR 70);
+            1 = real pixels.
         progress: Called with `(done, total)` after each sample.
 
     Each sample is read as a `LightSample` (only the layer or obs column
@@ -510,6 +513,7 @@ def export_visual_inspection_images(
             title=sample_name,
             scale_bar=scale_bar,
             hidden_categories=set(hidden_categories or ()),
+            upsample=upsample,
         )
         dest_path = dest_folder / f"{sample_name}.{ext}"
         fig.savefig(dest_path, bbox_inches="tight")

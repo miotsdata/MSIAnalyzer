@@ -411,3 +411,28 @@ def test_normalize_to_feature_adds_a_layer_and_lists_it(analysis, qtbot):
         assert con.execute(
             "SELECT COUNT(*) FROM commands WHERE command_name = 'normalize_feature'"
         ).fetchone()[0] == 1
+
+
+def test_fill_blanks_adds_lists_and_removes_a_filled_layer(analysis, qtbot):
+    # ADR 70: pipeline output only, like ADR 61.
+    db, _src, result = analysis
+    bridge = AnalysisBridge()
+    assert bridge.getFilledLayers(str(db)) == []
+    assert "TIC" in bridge.getSampleLayers(str(db))
+
+    with qtbot.waitSignal(bridge.featureLayersChanged, timeout=60000), \
+            qtbot.waitSignal(bridge.fillBlanksFinished, timeout=60000) as blocker:
+        bridge.fillBlanks(str(db), "run1", "TIC", 1, 0.6)
+
+    layer, message = blocker.args
+    assert layer == "TIC_filled_r1"
+    assert "3 sample(s)" in message
+    assert bridge.getFilledLayers(str(db)) == [{"layer": "TIC_filled_r1", "source": "TIC", "radius": 1}]
+    for name in SAMPLES:
+        assert "TIC_filled_r1" in ad.read_h5ad(sample_h5ad_path(db, name)).layers
+        assert "TIC_filled_r1" not in ad.read_h5ad(sample_h5ad_path(db, name, result.rel_dir)).layers
+
+    assert bridge.removeFilledLayer(str(db), "run1", "TIC_filled_r1") == ""
+    assert bridge.getFilledLayers(str(db)) == []
+    assert bridge.removeFilledLayer(str(db), "run1", "TIC") != ""  # never the run's own layers
+    assert bridge.fillBlanksRequiredNeighbors(1, 0.6) == 5

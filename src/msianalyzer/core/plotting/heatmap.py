@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Collection
 import matplotlib
 import matplotlib.cm
@@ -171,6 +172,44 @@ def _reconstruct_grid(adata: ad.AnnData, values: np.ndarray) -> np.ndarray:
     return grid
 
 
+#: Interpolation factors Visual Inspection offers (ADR 70); 1 = off.
+INTERPOLATION_FACTORS = (1, 2, 3, 4)
+
+
+def upsample_grid(grid: np.ndarray, factor: int) -> np.ndarray:
+    """Bilinear interpolation of a value grid (ADR 70): every cell becomes
+    `factor x factor` cells, each a distance-weighted mean of the nearest
+    original cells, for display only.
+
+    `NaN` cells (no spectrum) don't pull their neighbors toward 0: values
+    and coverage are interpolated separately and divided, and a new cell
+    stays `NaN` when less than half its weight comes from real cells, so
+    the edge of the sample stays where it is. `grid_mode` makes cell
+    `(r, c)` cover exactly the new cells `r*factor..`, `c*factor..`, so
+    anything drawn in grid coordinates (ROI outlines) still lines up.
+    """
+    if factor <= 1:
+        return grid
+    from scipy.ndimage import zoom
+
+    present = np.isfinite(grid)
+    values = zoom(np.where(present, grid, 0.0), factor, order=1, grid_mode=True, mode="nearest")
+    weight = zoom(present.astype(float), factor, order=1, grid_mode=True, mode="nearest")
+    upsampled = np.full(values.shape, np.nan)
+    covered = weight >= 0.5
+    upsampled[covered] = values[covered] / weight[covered]
+    return upsampled
+
+
+def repeat_grid(grid: np.ndarray, factor: int) -> np.ndarray:
+    """Each cell repeated `factor x factor` times — the categorical
+    counterpart of `upsample_grid` (categories can't be averaged), so
+    every tile of an interpolated view has the same size."""
+    if factor <= 1:
+        return grid
+    return np.repeat(np.repeat(grid, factor, axis=0), factor, axis=1)
+
+
 def _colorize_grid(
     grid: np.ndarray,
     colormap: str,
@@ -228,6 +267,7 @@ def render_feature_heatmap(
     colormap: str = "viridis",
     vmin: float | None = None,
     vmax: float | None = None,
+    upsample: int = 1,
 ) -> np.ndarray:
     """One feature's per-pixel intensity as an RGBA `uint8` raster.
 
@@ -241,12 +281,14 @@ def render_feature_heatmap(
         colormap: Any registered Matplotlib colormap name.
         vmin: Lower color-scale bound. `None` autoscales to the data's min.
         vmax: Upper color-scale bound. `None` autoscales to the data's max.
+        upsample: Interpolation factor (`upsample_grid`); 1 = real pixels.
 
     Returns:
-        An `(n_unique_y, n_unique_x, 4)` `uint8` array (RGBA).
+        An `(n_unique_y * upsample, n_unique_x * upsample, 4)` `uint8`
+        array (RGBA).
     """
     values = _rendered_feature_values(adata, mz, layer)
-    grid = _reconstruct_grid(adata, values)
+    grid = upsample_grid(_reconstruct_grid(adata, values), upsample)
     return _colorize_grid(grid, colormap, vmin, vmax)
 
 
@@ -306,6 +348,7 @@ def render_obs_heatmap(
     colormap: str = "viridis",
     vmin: float | None = None,
     vmax: float | None = None,
+    upsample: int = 1,
 ) -> np.ndarray:
     """One numeric `obs` column's per-pixel value as an RGBA `uint8`
     raster — the `obs`-column analogue of `render_feature_heatmap`.
@@ -321,7 +364,7 @@ def render_obs_heatmap(
         An `(n_unique_y, n_unique_x, 4)` `uint8` array (RGBA).
     """
     values = adata.obs[obs_column].to_numpy(dtype=float)
-    grid = _reconstruct_grid(adata, values)
+    grid = upsample_grid(_reconstruct_grid(adata, values), upsample)
     return _colorize_grid(grid, colormap, vmin, vmax)
 
 
@@ -370,7 +413,7 @@ def _hex_rgba(color: str) -> tuple[int, int, int, int]:
 
 def render_obs_categories_heatmap(
     adata: ad.AnnData, obs_column: str, categories: list[str],
-    colors: list[str] | None = None,
+    colors: list[str] | None = None, upsample: int = 1,
 ) -> np.ndarray:
     """One discrete `obs` column's per-pixel category as an RGBA `uint8`
     raster — each category colored by its position in `categories`
@@ -401,7 +444,7 @@ def render_obs_categories_heatmap(
     for i, cat in enumerate(categories):
         codes[(values == cat) & (~is_null)] = i
 
-    grid = _reconstruct_grid(adata, codes)
+    grid = repeat_grid(_reconstruct_grid(adata, codes), upsample)
 
     rgba = np.zeros((*grid.shape, 4), dtype=np.uint8)
     rgba[..., 3] = 255
@@ -432,12 +475,16 @@ def parse_category_colors(field: str) -> tuple[list[str], list[str]]:
 
 
 def render_feature_overlay(
-    adata: ad.AnnData, channels: list[Channel], layer: str = "TIC", mode: str = "add"
+    adata: ad.AnnData, channels: list[Channel], layer: str = "TIC", mode: str = "add",
+    upsample: int = 1,
 ) -> np.ndarray:
     """Several features in one RGBA `uint8` raster, one color each (ADR 67;
     see `feature_overlay.composite`), on the same grid as
     `render_feature_heatmap`. Automatic contrast is per sample."""
-    grids = [_reconstruct_grid(adata, _rendered_feature_values(adata, c.mz, layer)) for c in channels]
+    grids = [
+        upsample_grid(_reconstruct_grid(adata, _rendered_feature_values(adata, c.mz, layer)), upsample)
+        for c in channels
+    ]
     return composite(grids, channels, mode)
 
 
@@ -459,20 +506,32 @@ def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -
     Returns:
         An RGBA `uint8` array, as returned by whichever `render_*` this
         dispatches to.
+
+    A trailing `i<N>` part (ADR 70, Visual Inspection only) interpolates
+    the tile `N` times (`upsample_grid`); it is removed before the
+    positional parts are read.
     """
+    upsample = 1
+    if parts and re.fullmatch(r"i\d+", parts[-1]):
+        upsample = max(1, min(int(parts[-1][1:]), max(INTERPOLATION_FACTORS)))
+        parts = parts[:-1]
     if target.startswith("obs:"):
         obs_column = target[len("obs:") :]
         if is_numeric_obs_column(adata, obs_column):
             colormap, vmin_str, vmax_str = parts[2], parts[3], parts[4]
             vmin = None if vmin_str == "auto" else float(vmin_str)
             vmax = None if vmax_str == "auto" else float(vmax_str)
-            return render_obs_heatmap(adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax)
+            return render_obs_heatmap(
+                adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax, upsample=upsample,
+            )
         categories, colors = parse_category_colors(parts[2])
-        return render_obs_categories_heatmap(adata, obs_column, categories, colors)
+        return render_obs_categories_heatmap(adata, obs_column, categories, colors, upsample=upsample)
 
     if target == "overlay":
         # "<sample>|overlay|<layer>|<mode>|<channels>" (ADR 67)
-        return render_feature_overlay(adata, parse_channels(parts[4]), layer=parts[2], mode=parts[3])
+        return render_feature_overlay(
+            adata, parse_channels(parts[4]), layer=parts[2], mode=parts[3], upsample=upsample,
+        )
 
     mz_str, layer, colormap, vmin_str, vmax_str = parts[1:6]
     vmin = None if vmin_str == "auto" else float(vmin_str)
@@ -487,10 +546,11 @@ def render_heatmap_by_target(adata: ad.AnnData, target: str, parts: list[str]) -
 
         return render_local_moran_heatmap(
             adata, float(mz_str), colormap=colormap, vmin=vmin, vmax=vmax,
-            hh_only=layer == _LOCAL_MORAN_HH_LAYER,
+            hh_only=layer == _LOCAL_MORAN_HH_LAYER, upsample=upsample,
         )
     return render_feature_heatmap(
         adata, float(mz_str), layer=layer, colormap=colormap, vmin=vmin, vmax=vmax,
+        upsample=upsample,
     )
 
 
@@ -532,6 +592,7 @@ def render_heatmap_figure(
     title: str | None = None,
     scale_bar: dict | None = None,
     hidden_categories: Collection[str] = (),
+    upsample: int = 1,
 ) -> matplotlib.figure.Figure:
     """A real Matplotlib `Figure` for one sample's spatial heatmap —
     what `export_visual_inspection_images` writes to PNG/PDF/SVG, unlike
@@ -574,6 +635,9 @@ def render_heatmap_figure(
         hidden_categories: `mode="obs_categorical"` only — categories
             switched off in Visual Inspection: drawn black, like pixels
             with no value, and left out of the legend.
+        upsample: Interpolation factor (ADR 70, `upsample_grid`). The
+            raster is drawn over the real pixel grid's extent, so ROIs
+            and the scale bar keep their real-pixel coordinates.
 
     Returns:
         A standalone `Figure` (not tied to `pyplot`'s global current-figure
@@ -592,7 +656,7 @@ def render_heatmap_figure(
         if mz is None:
             raise ValueError("mode='feature' requires mz")
         rgba = render_feature_heatmap(
-            adata, mz, layer=layer, colormap=colormap, vmin=vmin, vmax=vmax
+            adata, mz, layer=layer, colormap=colormap, vmin=vmin, vmax=vmax, upsample=upsample,
         )
         eff_vmin, eff_vmax = vmin, vmax
         if eff_vmin is None or eff_vmax is None:
@@ -604,7 +668,7 @@ def render_heatmap_figure(
         if not obs_column:
             raise ValueError("mode='obs_numeric' requires obs_column")
         rgba = render_obs_heatmap(
-            adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax
+            adata, obs_column, colormap=colormap, vmin=vmin, vmax=vmax, upsample=upsample,
         )
         eff_vmin, eff_vmax = vmin, vmax
         if eff_vmin is None or eff_vmax is None:
@@ -619,12 +683,14 @@ def render_heatmap_figure(
             "#000000" if cat in hidden_categories else color
             for cat, color in zip(categories or [], colors or category_colors(categories or []))
         ]
-        rgba = render_obs_categories_heatmap(adata, obs_column, categories or [], colors)
+        rgba = render_obs_categories_heatmap(
+            adata, obs_column, categories or [], colors, upsample=upsample,
+        )
         legend_kind = "categories"
     else:
         raise ValueError(f"unknown mode {mode!r}")
 
-    _draw_raster(ax, rgba, rois, scale_bar)
+    _draw_raster(ax, rgba, rois, scale_bar, upsample)
 
     if legend_kind == "colorbar":
         if eff_vmax <= eff_vmin:
@@ -651,11 +717,16 @@ def render_heatmap_figure(
     return fig
 
 
-def _draw_raster(ax, rgba: np.ndarray, rois: dict | None, scale_bar: dict | None) -> None:
+def _draw_raster(
+    ax, rgba: np.ndarray, rois: dict | None, scale_bar: dict | None, upsample: int = 1,
+) -> None:
     """`imshow` an RGBA raster, then each ROI's outline and the scale bar
     (bottom-right) on top — shared by `render_heatmap_figure` and
-    `render_overlay_figure`."""
-    ax.imshow(rgba, origin="upper")
+    `render_overlay_figure`. An `upsample`d raster is stretched over the
+    real grid's extent, so everything on top stays in grid coordinates."""
+    height, width = rgba.shape[0] // upsample, rgba.shape[1] // upsample
+    # imshow's default extent for a raster of the real grid's size.
+    ax.imshow(rgba, origin="upper", extent=(-0.5, width - 0.5, height - 0.5, -0.5))
 
     for info in (rois or {}).values():
         vertices = info["vertices"]
@@ -669,7 +740,6 @@ def _draw_raster(ax, rgba: np.ndarray, rois: dict | None, scale_bar: dict | None
 
     if scale_bar:
         # imshow's extent is [-0.5, w-0.5] x [h-0.5 (bottom), -0.5 (top)].
-        height, width = rgba.shape[:2]
         pad = 0.04 * width
         thickness = max(0.5, 0.015 * height)
         right, bottom = width - 0.5 - pad, height - 0.5 - pad

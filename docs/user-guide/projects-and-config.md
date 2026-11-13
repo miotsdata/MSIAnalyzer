@@ -30,7 +30,7 @@ write out every field, only the ones you want to change from the defaults shown
 below.
 
 ```yaml
-version: 24
+version: 25
 io:
   project_folder: .
   mzml_paths: [data/s1.mzML, data/s2.mzML]
@@ -76,7 +76,7 @@ every tab anyway.
 Sections run in this order during a pipeline execution, which is also the
 order of the GUI's tabs: `ms1` → `centroid` → `peak` → `align` →
 `target_list` → `h5ad` → `isotopes` → `ms2_cleaning` → `group_ms2` → `purity` → `annotate` →
-`consensus` → `normalization` → `spatial_correlation` → `feature_correlation` → `report`.
+`consensus` → `normalization` → `fill_blanks` → `spatial_correlation` → `feature_correlation` → `report`.
 `io` isn't a "stage" as such — it's the input/output paths every other stage
 reads from or writes into — and `analysis` only names the analysis database.
 
@@ -326,6 +326,21 @@ compresses the result.
 | key | default | meaning |
 |---|---|---|
 | `enabled` | `true` | add `layers['raw']` (untouched) / `layers['TIC']` (normalized) to every `<sample>.h5ad` and write the cross-sample `merged.h5ad`. `false` skips this entirely — only raw intensities remain, saving processing time/disk space if TIC normalization doesn't apply to your data. |
+
+### `fill_blanks` — fill isolated empty pixels (opt-in, off by default)
+
+Writes a copy of a layer in which a feature's 0 pixels ("not detected")
+are filled with the mean of their non-zero neighbors, when enough
+neighbors have a value. See [Workflow](workflow.md) (Stage 11.2) and
+[ADR 70](../developer/adr/0070-fill-blanks-and-interpolation.md). Can also
+be run after the run: **Analyses → Fill blanks…**.
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | run the stage. Each sample file grows by about the size of the layer. |
+| `layer` | `"TIC"` | the layer to fill (`"raw"` for raw intensities). Follows `mz_<value>` automatically for a reference-m/z normalization while left at `"TIC"`. |
+| `radius` | `1` | neighborhood half-size in pixels: 8 neighbors at 1, 24 at 2, 48 at 3. The layer name includes it (`TIC_filled_r1`). |
+| `min_fraction` | `0.6` | share of neighbors (with a spectrum) that must be non-zero for a 0 to be filled: 0.6 = at least 5 of 8 at radius 1. Lower values let regions grow at their borders. |
 
 ### `spatial_correlation` — per-feature spatial autocorrelation (opt-in, off by default)
 

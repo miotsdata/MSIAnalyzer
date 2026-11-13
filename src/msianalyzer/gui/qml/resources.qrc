@@ -40,6 +40,7 @@
         <file>Views/ImportH5adDialog.qml</file>
         <file>Views/TargetListMatchDialog.qml</file>
         <file>Views/NormalizeFeatureDialog.qml</file>
+        <file>Views/FillBlanksDialog.qml</file>
         <file>Views/ReannotateDialog.qml</file>
         <file>Views/ConfigGroupForm.qml</file>
         <file>Views/ScaleBarDialog.qml</file>

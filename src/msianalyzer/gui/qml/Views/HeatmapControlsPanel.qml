@@ -89,9 +89,27 @@ Flickable {
     // [{layer, feature_id, mz}], see AnalysisBridge.getFeatureLayers.
     property var featureLayers: []
 
+    // `<layer>_filled_r<radius>` layers (ADR 70): [{layer, source, radius}].
+    property var filledLayers: []
+
     function refreshFeatureLayers() {
-        controlsFlickable.featureLayers = controlsFlickable.analysis
-            ? AnalysisBridge.getFeatureLayers(controlsFlickable.analysis.analysisDbPath) : []
+        var db = controlsFlickable.analysis ? controlsFlickable.analysis.analysisDbPath : ""
+        controlsFlickable.featureLayers = db ? AnalysisBridge.getFeatureLayers(db) : []
+        controlsFlickable.filledLayers = db ? AnalysisBridge.getFilledLayers(db) : []
+    }
+
+    function filledLayerKeys() {
+        return controlsFlickable.filledLayers.map(function (l) { return l.layer })
+    }
+
+    function filledLayerLabel(l) {
+        var source = l.source === "raw" ? "Raw"
+                   : l.source.indexOf("feature_") === 0 ? controlsFlickable.featureLayers
+                         .filter(function (f) { return f.layer === l.source })
+                         .map(controlsFlickable.featureLayerLabel)[0] || l.source
+                   : l.source.indexOf("mz_") === 0 ? "m/z " + l.source.replace("mz_", "")
+                   : l.source
+        return source + " · filled, radius " + l.radius
     }
 
     function featureLayerLabel(l) {
@@ -122,6 +140,7 @@ Flickable {
             // means nothing here any more.
             if (["raw", controlsFlickable.normalizedLayerName, "localMoran"]
                     .concat(controlsFlickable.featureLayers.map(function (l) { return l.layer }))
+                    .concat(controlsFlickable.filledLayerKeys())
                     .indexOf(controlsFlickable.dataLayer) < 0)
                 controlsFlickable.dataLayer = controlsFlickable.normalizedLayerName
             return
@@ -156,9 +175,10 @@ Flickable {
                 return
             controlsFlickable.refreshFeatureLayers()
             // The layer on screen was removed: back to the run's own.
-            if (controlsFlickable.dataLayer.indexOf("feature_") === 0
-                    && controlsFlickable.featureLayers.map(function (l) { return l.layer })
-                       .indexOf(controlsFlickable.dataLayer) < 0)
+            if ((controlsFlickable.isFeatureLayer
+                     && controlsFlickable.featureLayerKeys().indexOf(controlsFlickable.dataLayer) < 0)
+                    || (controlsFlickable.isFilledLayer
+                        && controlsFlickable.filledLayerKeys().indexOf(controlsFlickable.dataLayer) < 0))
                 controlsFlickable.dataLayer = controlsFlickable.normalizedLayerName
             controlsFlickable.refresh()
         }
@@ -405,7 +425,11 @@ Flickable {
     property bool localMoranHHOnly: false
     // Last picked `feature_<id>` layer, so "Norm. to m/z" returns to it.
     property string lastFeatureLayer: ""
+    readonly property bool isFilledLayer: /_filled_r\d+$/.test(controlsFlickable.dataLayer)
     readonly property bool isFeatureLayer: controlsFlickable.dataLayer.indexOf("feature_") === 0
+                                           && !controlsFlickable.isFilledLayer
+    // Last picked filled layer, so "Filled" returns to it.
+    property string lastFilledLayer: ""
     function featureLayerKeys() {
         return controlsFlickable.featureLayers.map(function (l) { return l.layer })
     }
@@ -515,6 +539,8 @@ Flickable {
         controlsFlickable.autoScale = true
         if (controlsFlickable.isFeatureLayer)
             controlsFlickable.lastFeatureLayer = controlsFlickable.dataLayer
+        if (controlsFlickable.isFilledLayer)
+            controlsFlickable.lastFilledLayer = controlsFlickable.dataLayer
         // Local Moran's I values are signed — the sequential colormaps
         // (viridis/magma/...) that suit a one-sided intensity scale would
         // hide the sign; switch to the one diverging option automatically
@@ -639,6 +665,18 @@ Flickable {
     function tileSource(sampleName) {
         var target = controlsFlickable.tileTarget(sampleName)
         return target ? "image://heatmap/" + target : ""
+    }
+
+    // Display-only interpolation (ADR 70): each real pixel drawn as
+    // N x N bilinear-interpolated pixels. Only Visual Inspection's tiles
+    // (and its image export) use it: ROI Design and the H&E overlay build
+    // their sources from tileSource/tileTarget, which stay on real pixels.
+    property int interpolation: 1
+
+    function interpolatedTileSource(sampleName) {
+        var source = controlsFlickable.tileSource(sampleName)
+        return source && controlsFlickable.interpolation > 1
+               ? source + "|i" + controlsFlickable.interpolation : source
     }
 
     ColumnLayout {
@@ -985,6 +1023,35 @@ Flickable {
                 }
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
             }
+            // ADR 70 filled layers: one button; the combo below picks which one.
+            Button {
+                id: filledLayerButton
+                objectName: "filledLayerButton"
+                visible: !controlsFlickable.datasetActive && controlsFlickable.filledLayers.length > 0
+                text: "Filled"
+                highlighted: controlsFlickable.isFilledLayer
+                onClicked: {
+                    var keys = controlsFlickable.filledLayerKeys()
+                    controlsFlickable.dataLayer = keys.indexOf(controlsFlickable.lastFilledLayer) >= 0
+                                                  ? controlsFlickable.lastFilledLayer : keys[0]
+                }
+                ToolTip.visible: hovered
+                ToolTip.text: "Layers from Analyses → Fill blanks…: empty pixels filled "
+                    + "with the mean of their neighbors (estimates, not measurements)."
+                background: Rectangle {
+                    radius: 4
+                    color: filledLayerButton.highlighted ? palette.highlight : palette.button
+                    border.color: palette.mid
+                }
+                contentItem: Label {
+                    text: filledLayerButton.text
+                    color: filledLayerButton.highlighted ? palette.highlightedText : palette.buttonText
+                    font.bold: filledLayerButton.highlighted
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
         }
         AppCheckBox {
             id: localMoranHHCheckBox
@@ -1011,6 +1078,34 @@ Flickable {
             currentIndex: controlsFlickable.featureLayers.map(function (l) { return l.layer })
                           .indexOf(controlsFlickable.dataLayer)
             onActivated: (index) => controlsFlickable.dataLayer = controlsFlickable.featureLayers[index].layer
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+        }
+        // Layers added by "Fill blanks…" (ADR 70). Shown only while one is active.
+        ComboBox {
+            id: filledLayerCombo
+            objectName: "filledLayerCombo"
+            Layout.fillWidth: true
+            visible: controlsFlickable.inspectionMode === "feature" && !controlsFlickable.datasetActive
+                     && controlsFlickable.isFilledLayer
+            model: controlsFlickable.filledLayers.map(controlsFlickable.filledLayerLabel)
+            currentIndex: controlsFlickable.filledLayerKeys().indexOf(controlsFlickable.dataLayer)
+            onActivated: (index) => controlsFlickable.dataLayer = controlsFlickable.filledLayers[index].layer
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+        }
+
+        Label { text: "Interpolation"; font.bold: true }
+        ComboBox {
+            id: interpolationCombo
+            objectName: "interpolationCombo"
+            Layout.fillWidth: true
+            readonly property var factors: [1, 2, 3, 4]
+            model: ["Off (real pixels)", "×2", "×3", "×4"]
+            currentIndex: factors.indexOf(controlsFlickable.interpolation)
+            onActivated: (index) => controlsFlickable.interpolation = factors[index]
+            ToolTip.visible: hovered
+            ToolTip.text: "Display only: each pixel is split into N × N, each a "
+                + "distance-weighted mean of the nearest pixels. The data, ROIs "
+                + "and statistics stay on the real pixels."
             HoverHandler { cursorShape: Qt.PointingHandCursor }
         }
 

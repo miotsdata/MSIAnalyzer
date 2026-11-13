@@ -1578,6 +1578,82 @@ class NormalizationConfig:
 
 
 @dataclass
+class FillBlanksConfig:
+    """Fill isolated empty pixels in a layer (ADR 70) — a new layer, the
+    source layer stays as it is.
+
+    `core.utils.fill_blanks`: runs right after `normalization`. In a
+    pixel that has a spectrum but where a feature wasn't detected, the
+    value is 0, so the image of a feature that covers a region shows
+    scattered holes. This stage writes a copy of `layer` in which each
+    such 0 is replaced by the mean of the non-zero values around it —
+    but only when most of the pixels around it have a value, so the
+    border of a region doesn't spread outward. Positions with no
+    spectrum at all are never filled. The new layer is named
+    `<layer>_filled_r<radius>` (e.g. `TIC_filled_r1`), in every sample
+    file and in `merged.h5ad`, and can be picked in Visual Inspection
+    ("Filled"). It can also be added after the run (**Analyses → Fill
+    blanks…**).
+
+    Attributes:
+        enabled: Run this stage. Off by default.
+
+            The filled layer is a full copy of `layer` with more non-zero
+            values, so each sample file grows by about the size of that
+            layer.
+
+            **Interaction:** The filled values are estimates, not
+            measurements. Statistics computed on this layer (Get
+            statistics, correlations) count them as detected.
+        layer: Which layer to fill. Default `"TIC"`; `"raw"` fills the
+            raw intensities.
+
+            **Interaction:** With `normalization.mode="reference_mz"` the
+            normalized layer is `mz_<value>`, which this follows
+            automatically while it is left at `"TIC"`.
+        radius: How far around each pixel to look, in pixels.
+
+            Formula: the neighbors are the `(2 * radius + 1)² - 1` pixels
+            of the square around the pixel: **8** at radius 1, **24** at
+            radius 2, **48** at radius 3.
+
+            Range: **1**-**3**. A larger radius fills bigger holes but
+            averages over a wider area, so small details get smeared.
+            Default **1**.
+
+            **Interaction:** The layer name includes it, so layers with
+            different radii can coexist.
+        min_fraction: The share of neighbors that must have a value for
+            a 0 pixel to be filled.
+
+            Formula: a 0 pixel with `n` neighbors (positions with a
+            spectrum) is filled when at least `ceil(min_fraction * n)` of
+            them are non-zero. Its new value is the mean of those non-zero
+            neighbors.
+
+            Range: **0.5**-**1**. At radius 1, **0.6** means at least 5 of
+            8 neighbors; **1** fills only holes completely surrounded by
+            detected pixels. Lower values start to grow regions at their
+            borders. Default **0.6**.
+
+            **Interaction:** None.
+    """
+
+    enabled: bool = False
+    layer: str = "TIC"
+    radius: int = 1
+    min_fraction: float = 0.6
+
+    def __post_init__(self) -> None:
+        if self.radius < 1:
+            raise ValueError(f"fill_blanks: radius must be at least 1, got {self.radius}")
+        if not 0 < self.min_fraction <= 1:
+            raise ValueError(
+                f"fill_blanks: min_fraction must be in (0, 1], got {self.min_fraction}"
+            )
+
+
+@dataclass
 class SpatialCorrelationConfig:
     """Per-feature, per-sample spatial autocorrelation (Moran's I) — two
     independent, opt-in passes.
@@ -1810,6 +1886,7 @@ GROUPS: dict[str, type] = {
     "annotate": AnnotateConfig,
     "consensus": ConsensusConfig,
     "normalization": NormalizationConfig,
+    "fill_blanks": FillBlanksConfig,
     "spatial_correlation": SpatialCorrelationConfig,
     "feature_correlation": FeatureCorrelationConfig,
     "report": ReportConfig,
@@ -1832,6 +1909,7 @@ GROUP_TITLES: dict[str, str] = {
     "annotate": "annotate MS2",
     "consensus": "MS2 consensus",
     "normalization": "normalization",
+    "fill_blanks": "fill blanks",
     "spatial_correlation": "spatial correlation",
     "feature_correlation": "feature correlation",
     "report": "summary report",
@@ -1844,8 +1922,9 @@ class Config:
 
     Wraps one settings object per stage (`io`, `ms1`, `centroid`, `peak`,
     `align`, `target_list`, `h5ad`, `isotopes`, `ms2_cleaning`, `group_ms2`, `purity`,
-    `annotate`, `consensus`, `normalization`, `spatial_correlation`,
-    `feature_correlation`, `report`, `analysis`) and provides
+    `annotate`, `consensus`, `normalization`, `fill_blanks`,
+    `spatial_correlation`, `feature_correlation`, `report`, `analysis`)
+    and provides
     (de)serialization to and from YAML and TOML. Only `io` is required; the
     remaining groups fall back to their dataclass defaults.
 
@@ -1890,12 +1969,13 @@ class Config:
         normalization: Normalization parameters (TIC, or a reference
             feature's own intensity). The only normalization option for a
             `targeted` run — see `NormalizationConfig.mode`.
+        fill_blanks: Fill-blanks layer parameters (ADR 70).
         spatial_correlation: Spatial autocorrelation (Moran's I) parameters.
         feature_correlation: Feature x feature correlation parameters.
         analysis: Per-analysis database parameters.
     """
 
-    version: int = 24
+    version: int = 25
 
     def __init__(
         self,
@@ -1914,6 +1994,7 @@ class Config:
         report: ReportConfig | None = None,
         h5ad: H5adConfig | None = None,
         normalization: NormalizationConfig | None = None,
+        fill_blanks: FillBlanksConfig | None = None,
         spatial_correlation: SpatialCorrelationConfig | None = None,
         feature_correlation: FeatureCorrelationConfig | None = None,
         analysis: AnalysisConfig | None = None,
@@ -1942,6 +2023,7 @@ class Config:
         self.normalization: NormalizationConfig = (
             normalization or NormalizationConfig()
         )
+        self.fill_blanks: FillBlanksConfig = fill_blanks or FillBlanksConfig()
         self.spatial_correlation: SpatialCorrelationConfig = (
             spatial_correlation or SpatialCorrelationConfig()
         )
@@ -1975,6 +2057,11 @@ class Config:
             self.spatial_correlation.layer = (
                 f"mz_{self.normalization.reference_mz:.4f}"
             )
+        if (
+            self.normalization.mode == "reference_mz"
+            and self.fill_blanks.layer == "TIC"
+        ):
+            self.fill_blanks.layer = f"mz_{self.normalization.reference_mz:.4f}"
         if (
             self.normalization.mode == "reference_mz"
             and self.feature_correlation.layer == "TIC"

@@ -203,6 +203,24 @@ samples concatenated with a `sample` obs column — needed to compute the
 median and kept for future cross-sample analyses. Controlled by
 `normalization.*`; set `normalization.enabled: false` to skip.
 
+## Stage 11.2 — Fill blanks (opt-in)
+
+Off by default (`fill_blanks.enabled: false`). A pixel where a feature
+wasn't detected holds 0, so the image of a feature that covers a region
+shows scattered empty pixels. When enabled,
+`core.utils.fill_blanks.add_filled_layer()` writes a copy of
+`fill_blanks.layer` (the TIC-normalized layer by default) in which such a 0
+is replaced by the mean of the non-zero pixels around it, within
+`fill_blanks.radius` pixels. A 0 is only filled when at least
+`fill_blanks.min_fraction` of its neighbors have a value (by default 5 of
+the 8 at radius 1), so the border of a region doesn't spread outward.
+Positions with no spectrum are never filled.
+
+The new layer is `<layer>_filled_r<radius>` (e.g. `TIC_filled_r1`), in
+every sample `.h5ad` and in `merged.h5ad`; the source layer is unchanged.
+Filled values are estimates: statistics on this layer count them as
+detected. See [ADR 70](../developer/adr/0070-fill-blanks-and-interpolation.md).
+
 ## Stage 11.5 — Spatial correlation (opt-in)
 
 Off by default (`spatial_correlation.enabled: false`). When enabled,
@@ -357,6 +375,33 @@ Normalizing to the same feature again replaces its layer.
 The dialog lists the layers already added. Click ✕ next to one, then
 **Remove**, to delete it from every file. The files don't get smaller:
 HDF5 keeps the freed space.
+
+## After the run — fill blanks
+
+**Analyses → Fill blanks…** adds the same filled layer as the
+`fill_blanks` stage (Stage 11.2) to a finished untargeted analysis. Pick the
+layer to fill (TIC, raw, or a **Normalize to feature** layer), the radius
+(1-3 pixels) and the share of neighbors that must have a value; the dialog
+shows what that means ("at least 5 of 8"). Click **Fill**. It runs in the
+background with a progress bar and reports how many values were filled.
+
+In Visual Inspection, click **Filled** next to the other layer buttons; a
+list below picks which filled layer. Filling the same layer with the same
+radius again replaces it. As with normalized layers, ✕ then **Remove**
+deletes a filled layer from every file.
+
+## Interpolation (display only)
+
+Visual Inspection's **Interpolation** setting (Off, ×2, ×3, ×4) draws each
+pixel as N × N smaller pixels, each a distance-weighted mean of the nearest
+real pixels (bilinear interpolation), so the images look less blocky.
+Positions with no spectrum stay black. Categorical `obs` columns are only
+enlarged, never blended.
+
+It only changes the picture. The data, statistics, ROI Design and the H&E
+overlay stay on the real pixels, and ROI outlines and the scale bar are
+drawn in the same place on the interpolated image. **Export → Image** uses
+the same setting. The Overlay tab isn't interpolated.
 
 ## After the run — re-annotate
 
