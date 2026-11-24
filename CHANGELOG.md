@@ -3,7 +3,12 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
-## Unreleased
+## 0.11.0 — 2026-11-24
+
+### Added
+- **Go back to config** after a failed run: the Running Analysis page
+  shows a button that returns to the New Analysis form with every field as
+  it was, and the error stays visible at the bottom while you fix it.
 
 ### Changed
 - **`centroid.merge_ppm` must be at least `h5ad.integration_ppm`** (ADR 72):
@@ -12,6 +17,8 @@ ADRs under `docs/developer/adr/`.
   duplicate features with the same image. Help and docs updated; the
   `integration_ppm` help now says it takes the maximum in the window, not
   the sum.
+- Error and export-result messages are now in-window dialogs instead of
+  native message boxes.
 
 ## 0.10.0 — 2026-11-13
 
