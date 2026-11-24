@@ -3,6 +3,16 @@
 Notable changes to MSIAnalyzer, newest first. Design details are in the
 ADRs under `docs/developer/adr/`.
 
+## Unreleased
+
+### Changed
+- **`centroid.merge_ppm` must be at least `h5ad.integration_ppm`** (ADR 72):
+  a run is refused otherwise. Peaks of one sample closer than the
+  integration window (e.g. Orbitrap side lobes ~10 ppm from lactate) became
+  duplicate features with the same image. Help and docs updated; the
+  `integration_ppm` help now says it takes the maximum in the window, not
+  the sum.
+
 ## 0.10.0 — 2026-11-13
 
 ### Added

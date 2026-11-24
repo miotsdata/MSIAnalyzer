@@ -137,7 +137,7 @@ above it.
 | `baseline_percentile` | `10` | percentile of non-zero intensities used as the noise floor, e.g. `10` = the value below which the lowest 10% of intensities fall |
 | `local_window` | `501` | rolling window size, in bins, for local baseline estimation (only used when `baseline_method` is `"local"`) |
 | `smooth_sigma` | `10` | Gaussian smoothing sigma, in bins, applied to the local baseline to soften jumps between windows |
-| `merge_ppm` | `5` | ppm tolerance for merging two adjacent detected peaks that are really one real peak split by noise |
+| `merge_ppm` | `5` | ppm tolerance for merging nearby detected peaks of one sample: the most intense is kept, every weaker one within this distance is dropped (not averaged). Cleans up a peak split by noise and the Orbitrap side lobes (~0.3 % satellites ~10 ppm either side of very intense peaks, e.g. lactate m/z 89.0244). **Must be at least `h5ad.integration_ppm`** (the run is refused otherwise; a small margin above is recommended, e.g. `12` when integration is `10`): two peaks of one sample closer than the integration window can't be quantified separately — the weaker feature's image becomes a copy of the stronger one. `align.align_ppm` can't remove them, since it never merges two peaks of the same sample. |
 
 ### `peak` — intensity filtering
 
@@ -162,7 +162,7 @@ keyed on these features, not on any one sample's raw peaks.
 
 | key | default | meaning |
 |---|---|---|
-| `align_ppm` | `5.0` | how close two peaks from different samples must be (ppm) to be treated as the same feature. Example: at `5.0` ppm, m/z 400 in one sample and 400.002 in another (5 ppm apart) are just barely grouped; 400.003 is not. Too tight splits one real compound into several features; too loose merges distinct close-mass compounds. Usually a bit looser than `centroid.merge_ppm`, since it also has to absorb run-to-run calibration drift. |
+| `align_ppm` | `5.0` | how close two peaks from different samples must be (ppm) to be treated as the same feature. Example: at `5.0` ppm, m/z 400 in one sample and 400.002 in another (5 ppm apart) are just barely grouped; 400.003 is not. Too tight splits one real compound into several features; too loose merges distinct close-mass compounds. Usually about the same as `h5ad.integration_ppm` (both absorb run-to-run calibration drift). Each sample contributes at most one peak per feature, so two peaks of the same sample are never merged here — that's `centroid.merge_ppm`'s job. |
 | `sample_names` | `null` | *not exposed in the GUI* — optional per-sample column names for the aligned feature table (e.g. `["control_1", "treated_1"]` instead of the mzML file names). A GUI-started run always uses the mzML file names; set this only by hand-editing or scripting a config file. |
 | `mz_decimals` | `4` | decimal places a feature's consensus m/z is rounded to for display, e.g. `4` shows `400.1234`. Cosmetic only — doesn't change which peaks get grouped (that's `align_ppm`). |
 
@@ -309,7 +309,7 @@ used by this project's Visual Inspection view) — one `.h5ad` file per sample.
 
 | key | default | meaning |
 |---|---|---|
-| `integration_ppm` | `5.0` | window (ppm around each feature's m/z) summed over when quantifying that feature at each pixel — wider tolerates more per-pixel drift at the risk of picking up a neighboring peak, narrower is more mass-specific but can miss drifted signal |
+| `integration_ppm` | `5.0` | window (ppm around each feature's m/z) searched when quantifying that feature at each pixel; the value is the **highest** peak intensity inside the window (not the sum). Wider tolerates more per-pixel drift at the risk of picking up a neighboring peak (a weak feature next to a strong one reports the strong one's intensity), narrower is more mass-specific but can miss drifted signal. Must not exceed `centroid.merge_ppm` (the run is refused otherwise). |
 | `batch_size` | `1000` | spectra per processing chunk (memory/speed only) |
 | `scan_handling` | `"average"` | `"average"` uses each pixel's averaged MS1 spectrum (smooths noise, the robust default); `"first"` uses only the first raw scan recorded at that pixel (faster, closer to a single instantaneous reading, but noisier) |
 | `n_workers` | `null` | parallel CPU workers; `null` uses `os.cpu_count()` |

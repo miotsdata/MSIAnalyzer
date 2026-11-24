@@ -319,14 +319,30 @@ class CentroidConfig:
             other, they're merged into one — cleans up a single real peak
             that got split into two adjacent local maxima by noise.
 
+            The merge is not an average: the most intense peak is kept
+            (its m/z and intensity) and every weaker peak within this
+            many ppm of it is dropped. This also removes the small
+            Orbitrap side lobes (ringing) that sit symmetrically around
+            very intense peaks — e.g. two satellites at ~0.3 % height,
+            ~10 ppm either side of lactate at m/z 89.0244 — which would
+            otherwise become separate features.
+
             Range: **0** and up. Default **5**. Near **0**: almost
             nothing merges, close-but-distinct peaks stay separate.
             Higher: more aggressive merging, risks combining two
             genuinely distinct nearby peaks.
 
-            **Interaction:** Not the same as `align.align_ppm`, which
-            merges peaks *across* different samples rather than within
-            one.
+            **Interaction:** **Must be at least
+            `h5ad.integration_ppm`** (the run is refused otherwise,
+            ADR 72); a small margin above it is recommended (e.g. **12**
+            when integration is **10**). Two peaks of one sample closer
+            than the integration window cannot be quantified separately:
+            each feature's window contains the other's peak, so the
+            weaker feature's image becomes a copy of the stronger one.
+            Keeping both only adds a duplicate feature. Not the same as
+            `align.align_ppm`, which merges peaks *across* different
+            samples rather than within one — and never merges two peaks
+            of the same sample, so it cannot remove these duplicates.
     """
 
     prominence_factor: float = 0.1
@@ -428,11 +444,13 @@ class AlignMzSamples:
             Too loose (higher): distinct, close-mass compounds get
             merged into one.
 
-            **Interaction:** Should usually be a bit looser than
-            `centroid.merge_ppm` (peaks within one sample are already
-            merged at that tolerance) since it also has to absorb
-            run-to-run calibration drift. `group_ms2.assoc_ppm` should in
-            turn usually be looser than this.
+            **Interaction:** Usually about the same as
+            `h5ad.integration_ppm`: both must absorb run-to-run
+            calibration drift. Each sample contributes at most one peak
+            per feature, so two peaks of the same sample are never merged
+            here, however close — that is `centroid.merge_ppm`'s job.
+            `group_ms2.assoc_ppm` should in turn usually be looser than
+            this.
         sample_names: Optional column/label name for each sample in the
             aligned feature table, in the same order as `io.mzml_paths`
             (e.g. `["control_1", "control_2", "treated_1"]` instead of the
@@ -1365,16 +1383,21 @@ class H5adConfig:
 
     Attributes:
         integration_ppm: How wide a window (in ppm around each feature's
-            m/z) to sum intensity over when quantifying that feature at
-            each pixel.
+            m/z) to search when quantifying that feature at each pixel:
+            the feature's value is the **highest** peak intensity inside
+            the window (not the sum).
 
-            Range: **0** and up. Default **5.0** (integrates +/-5 ppm
-            around the feature's m/z at every pixel). Narrower: more
-            mass-specific, but can miss signal on pixels with slightly
-            larger drift. Wider: tolerates more per-pixel mass drift, at
-            the risk of picking up a neighboring peak's signal.
+            Range: **0** and up. Default **5.0** (+/-5 ppm around the
+            feature's m/z at every pixel). Narrower: more mass-specific,
+            but can miss signal on pixels with slightly larger drift.
+            Wider: tolerates more per-pixel mass drift, at the risk of
+            picking up a neighboring peak's signal — because the maximum
+            is taken, a weak feature next to a strong one reports the
+            strong one's intensity wherever it falls in the window.
 
-            **Interaction:** None.
+            **Interaction:** Must not exceed `centroid.merge_ppm` (the
+            run is refused otherwise, ADR 72), so no two features of one
+            sample are close enough to share their windows.
         batch_size: Number of spectra processed per chunk while building
             the object — a memory/speed tuning knob only, doesn't affect
             the result.
@@ -2044,6 +2067,20 @@ class Config:
                 "normalization.analyte_mzs value — a targeted run has no "
                 "feature-discovery stage, so every compound to quantify "
                 "must be named up front"
+            )
+        # ADR 72: two peaks of one sample closer than the integration window
+        # would become two features whose windows overlap — the weaker one's
+        # image a copy of the stronger. Targeted runs don't centroid.
+        if (
+            self.analysis_type == "untargeted"
+            and self.centroid.merge_ppm < self.h5ad.integration_ppm
+        ):
+            raise ValueError(
+                f"centroid.merge_ppm ({self.centroid.merge_ppm:g}) must be at "
+                f"least h5ad.integration_ppm ({self.h5ad.integration_ppm:g}): "
+                "peaks of one sample closer than the integration window become "
+                "duplicate features with the same image. Raise merge_ppm, "
+                "ideally slightly above integration_ppm (e.g. 12 for 10)."
             )
         # SpatialCorrelationConfig.layer defaults to "TIC", which doesn't
         # exist on a reference-mz-normalized .h5ad — auto-correct rather

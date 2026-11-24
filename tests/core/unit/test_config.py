@@ -246,6 +246,26 @@ def test_config_rejects_invalid_analysis_type(sample_io_config: IOConfig):
         Config(io=sample_io_config, analysis_type="sideways")
 
 
+def test_config_rejects_merge_ppm_below_integration_ppm(sample_io_config: IOConfig):
+    with pytest.raises(ValueError, match="merge_ppm .* must be at least h5ad.integration_ppm"):
+        Config(io=sample_io_config, centroid=CentroidConfig(merge_ppm=5),
+               h5ad=H5adConfig(integration_ppm=10))
+
+
+@pytest.mark.parametrize("merge_ppm", [10, 12])
+def test_config_accepts_merge_ppm_at_or_above_integration_ppm(sample_io_config: IOConfig, merge_ppm):
+    config = Config(io=sample_io_config, centroid=CentroidConfig(merge_ppm=merge_ppm),
+                    h5ad=H5adConfig(integration_ppm=10))
+    assert config.centroid.merge_ppm == merge_ppm
+
+
+def test_config_targeted_skips_merge_ppm_check(sample_io_config: IOConfig):
+    config = Config(io=sample_io_config, analysis_type="targeted",
+                    centroid=CentroidConfig(merge_ppm=5), h5ad=H5adConfig(integration_ppm=10),
+                    normalization=NormalizationConfig(reference_mz=500.0, analyte_mzs=[300.0]))
+    assert config.analysis_type == "targeted"
+
+
 def test_config_targeted_requires_reference_mz(sample_io_config: IOConfig):
     with pytest.raises(ValueError, match="requires normalization.reference_mz"):
         Config(io=sample_io_config, analysis_type="targeted")

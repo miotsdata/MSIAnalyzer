@@ -52,7 +52,10 @@ attributed to the sample and to a `commands` row.
 
 `detect_ms1_centroids()` estimates a baseline (`centroid.baseline_method` and
 friends), finds peaks above it, and merges peaks closer than
-`centroid.merge_ppm`. Output: a centroided peak list in `aggregated_spectra`.
+`centroid.merge_ppm` (keeping the most intense). `merge_ppm` must be at least
+`h5ad.integration_ppm` (ADR 72): closer peaks of one sample would become
+separate features with overlapping integration windows, i.e. duplicate images.
+Output: a centroided peak list in `aggregated_spectra`.
 
 ## Stage 5 — Filter peaks (→ analysis DB)
 

@@ -137,6 +137,29 @@ def test_run_analysis_invalid_config_emits_invalidConfig(tmp_path):
     assert "Invalid" in received[0] or "invalid" in received[0]
 
 
+def test_run_analysis_merge_ppm_below_integration_ppm_emits_invalidConfig(tmp_path):
+    bridge = CoreBridge()
+    received = []
+    bridge.invalidConfig.connect(received.append)
+
+    bridge.run_analysis(
+        {
+            "io": {
+                "mzml_paths": [str(tmp_path / "a.mzML")],
+                "xml_paths": [str(tmp_path / "a.xml")],
+                "out_dir": str(tmp_path / "out"),
+                "db_paths": [],
+            },
+            "centroid": {"merge_ppm": 5},
+            "h5ad": {"integration_ppm": 10},
+        },
+        str(tmp_path),
+    )
+
+    assert len(received) == 1
+    assert "merge_ppm" in received[0]
+
+
 def test_run_analysis_valid_config_writes_yaml_and_completes(tmp_path, mocker, qtbot):
     (tmp_path / "configs").mkdir()
     bridge = CoreBridge()
