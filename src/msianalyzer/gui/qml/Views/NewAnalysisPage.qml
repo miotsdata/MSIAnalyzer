@@ -16,6 +16,10 @@ Page {
     // config-group tabs are shown (see visibleGroups) and whether
     // target_list matching is offered at all.
     property string analysisType: "untargeted"
+    // Set by RunningAnalysisPage's "Go back to config" after a failed run,
+    // shown above the Run button while the user fixes the config; cleared
+    // when Run is pressed again.
+    property string runErrorMessage: ""
     // The generic-groups stack pages (stack index = index + 2, after the
     // bespoke io and target-list pages). The tab *buttons* are shown in
     // pipeline order instead: groupsBefore, then target list, then
@@ -1406,13 +1410,26 @@ Page {
             }
         }
 
+        Label {
+            id: runErrorText
+            objectName: "runErrorText"
+            visible: newAnalysisPage.runErrorMessage !== ""
+            text: "Last run failed: " + newAnalysisPage.runErrorMessage
+            color: Theme.errorColor
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+        }
+
         Button {
             id: runButton
             objectName: "runButton"
             text: "Run"
             enabled: (sampleRows.length > 0 || dbOnlyPaths.length > 0)
                      && outDirField.text.trim() !== "" && allSampleRowsFilled()
-            onClicked: Router.runAnalysisRequested(project, collectConfig())
+            onClicked: {
+                newAnalysisPage.runErrorMessage = ""
+                Router.runAnalysisRequested(project, collectConfig())
+            }
 
             HoverHandler {
                 cursorShape: Qt.PointingHandCursor

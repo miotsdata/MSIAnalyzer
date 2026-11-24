@@ -505,11 +505,25 @@ ApplicationWindow {
                         window.currentAnalysis.analysisDbPath, datasetId)
     }
 
-    MessageDialog {
+    // An in-window message box, not QtQuick.Dialogs' MessageDialog: that
+    // one is a separate native window on Linux, and after switching to
+    // another app it kept popping back up after OK.
+    component MessageBox: Dialog {
+        property alias text: messageLabel.text
+        modal: true
+        standardButtons: Dialog.Ok
+        anchors.centerIn: Overlay.overlay
+        Label {
+            id: messageLabel
+            width: Math.min(implicitWidth, 480)
+            wrapMode: Text.Wrap
+        }
+    }
+
+    MessageBox {
         id: errorDialog
         objectName: "errorDialog"
-        buttons: MessageDialog.Ok
-        modality: Qt.ApplicationModal
+        title: "Error"
     }
 
     Dialog {
@@ -869,11 +883,10 @@ ApplicationWindow {
         }
     }
 
-    MessageDialog {
+    MessageBox {
         id: exportResultDialog
         objectName: "exportResultDialog"
-        buttons: MessageDialog.Ok
-        modality: Qt.ApplicationModal
+        title: "Export"
     }
 
     Dialog {

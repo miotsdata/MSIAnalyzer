@@ -53,6 +53,33 @@ Page {
                 Layout.fillWidth: true
             }
 
+            // After a failure: back to the New Analysis page the run was
+            // launched from. It is still on the StackView under this page,
+            // so popping returns every field exactly as the user left it;
+            // the error is handed over so it stays visible while editing.
+            Button {
+                id: backToConfigButton
+                objectName: "backToConfigButton"
+                text: "Go back to config"
+                readonly property Item configPage: {
+                    var view = runningAnalysisPage.StackView.view
+                    var index = runningAnalysisPage.StackView.index
+                    if (!view || index < 1)
+                        return null
+                    var previous = view.get(index - 1, StackView.DontLoad)
+                    return previous && previous.objectName === "newAnalysisPage" ? previous : null
+                }
+                visible: errorMessage !== "" && configPage !== null
+                onClicked: {
+                    configPage.runErrorMessage = errorMessage
+                    runningAnalysisPage.StackView.view.pop()
+                }
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
+
             Button {
                 id: backButton
                 objectName: "backButton"

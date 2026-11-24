@@ -1,6 +1,6 @@
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickItem
-from PySide6.QtCore import QUrl, QObject, Qt
+from PySide6.QtCore import QMetaObject, QUrl, QObject, Qt
 from pathlib import Path
 
 from msianalyzer.gui.models.project import ProjectModel
@@ -69,7 +69,7 @@ def test_invalidCreateProjectName_shows_message(application, engine, qtbot):
     message_dialog = window.findChild(QObject, "errorDialog")
     assert message_dialog is not None
     assert message_dialog.property("visible") is False
-    assert message_dialog.property("modality") == Qt.ApplicationModal
+    assert message_dialog.property("modal") is True  # in-window, not a native MessageDialog
 
     error_message = "Invalid name"
     application.core_bridge.invalidCreateProjectName.emit(error_message)
@@ -775,6 +775,13 @@ def test_export_finished_shows_result_dialog(application, engine, qtbot):
     assert result_dialog.property("visible") is True
     assert "out.csv" in result_dialog.property("text")
 
+    # In-window, not a native MessageDialog (that one kept coming back
+    # after OK once the user had switched to another app): OK closes it.
+    QMetaObject.invokeMethod(result_dialog, "accept")
+    qtbot.waitUntil(lambda: result_dialog.property("visible") is False, timeout=2000)
+    qtbot.wait(100)
+    assert result_dialog.property("visible") is False
+
 
 def test_export_failed_shows_result_dialog_with_failure_message(application, engine, qtbot):
     window = engine.rootObjects()[0]
@@ -938,3 +945,50 @@ def test_disabled_menu_items_are_grey(application, engine, qtbot):
     disabled_color = disabled_item.property("contentItem").property("color")
     assert disabled_color != enabled_color
     assert disabled_color.lightness() < enabled_color.lightness()  # dark theme: dimmer
+
+
+def _open_new_analysis_then_start_run(application, project, engine, qtbot):
+    window = engine.rootObjects()[0]
+    stack_view = window.findChild(QQuickItem, "stackView")
+    project_model = ProjectModel(project, "/tmp/proj", application)
+    application.router.newAnalysisPageRequested.emit(project_model, "untargeted")
+    qtbot.wait(100)
+    config_page = stack_view.property("currentItem")
+    application.core_bridge.runStarted.emit("run-1", "untargeted")
+    qtbot.wait(100)
+    # window and project_model returned so the caller keeps them alive: once
+    # Python drops their wrappers, the window and its pages are torn down mid-test
+    return window, stack_view, config_page, project_model
+
+
+def test_failed_run_go_back_to_config_returns_to_the_filled_form_with_the_error(
+    application, project, engine, qtbot
+):
+    _window, stack_view, config_page, _project_model = _open_new_analysis_then_start_run(application, project, engine, qtbot)
+    filled_rows = [{"mzml": "/data/sample_1.mzML", "xml": "/data/sample_1.xml"}]
+    config_page.setProperty("sampleRows", filled_rows)
+    running_page = stack_view.property("currentItem")
+    assert running_page.objectName() == "runningAnalysisPage"
+    back_to_config = running_page.findChild(QQuickItem, "backToConfigButton")
+    assert back_to_config.property("visible") is False
+
+    application.core_bridge.runFailed.emit("No such file: sample_1.mzML")
+    qtbot.waitUntil(lambda: back_to_config.property("visible") is True, timeout=2000)
+    QMetaObject.invokeMethod(back_to_config, "clicked")
+    qtbot.waitUntil(lambda: stack_view.property("currentItem").objectName() == "newAnalysisPage", timeout=2000)
+
+    # the same page instance the run was launched from: every field as the user left it
+    current_page = stack_view.property("currentItem")
+    assert current_page.property("sampleRows") == filled_rows
+    run_error = current_page.findChild(QQuickItem, "runErrorText")
+    assert run_error.property("visible") is True
+    assert "No such file: sample_1.mzML" in run_error.property("text")
+
+
+def test_go_back_to_config_hidden_while_the_run_is_going(application, project, engine, qtbot):
+    _window, stack_view, _, _project_model = _open_new_analysis_then_start_run(application, project, engine, qtbot)
+    running_page = stack_view.property("currentItem")
+    application.core_bridge.runStepChanged.emit("process_samples", "started")
+    qtbot.wait(50)
+    back_to_config = running_page.findChild(QQuickItem, "backToConfigButton")
+    assert back_to_config.property("visible") is False
